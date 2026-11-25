@@ -23,6 +23,8 @@ export interface Actor {
   reportsTo?: string;
   /** The Assistant (Tico itself), which is no teammate on the chart. */
   assistant?: boolean;
+  /** An agent's template (templates/catalog/<template>), when it has one. */
+  template?: string;
   /** An agent's status line (what it is on now). */
   status?: string;
   /** For `Avatar`'s `hue`: the old app's colour per person (from the name) and per agent (from the slug). */
@@ -144,6 +146,7 @@ export function buildDirectory(org: GetOrgResponse, lines: StatusLine[]): Direct
       teamId: teamId(b.team),
       hue: agentHue(slug),
       ...(row.template === 'assistant' ? { assistant: true } : {}),
+      ...(text(row.template) ? { template: row.template } : {}),
       ...(text(b.status) ? { lifecycle: b.status } : {}),
       ...statusOf(statuses.get(b.id)),
     };

@@ -22,6 +22,9 @@ def mcp(api, name, args, token):
         def post(self, path, body=None, key=None):
             return self.call("POST", path, body or {}, key)
 
+        def patch(self, path, body=None, key=None):
+            return self.call("PATCH", path, body or {}, key)
+
     try:
         return False, hubtools.BY_NAME[name]["fn"](Turn(), args)
     except APIError as refused:

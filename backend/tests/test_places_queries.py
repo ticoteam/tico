@@ -6,7 +6,7 @@ import contextlib
 from backend.tests.helpers import api as T
 from backend.tests.helpers.api_app import api_client
 from backend.tests.helpers.api import post, put  # noqa: F401  (the api fixture)
-from backend.tests.helpers.cards import page, task
+from backend.tests.helpers.cards import page, patch, task
 
 # Card kinds a Dashboard can take, each read per card.
 KINDS = [
@@ -20,6 +20,7 @@ KINDS = [
     ("needs_attention", {}),
     ("automation_runs", {}),
     ("spend", {}),
+    ("tasks_by_stage", {"pipeline": "general"}),
 ]
 
 
@@ -67,7 +68,7 @@ def fill(api, count):
 
 def test_the_dashboard_takes_the_same_statements_however_many_pins_it_shows(tmp_path, monkeypatch):
     counted = {}
-    for name, count in (("small", 1), ("big", 5)):
+    for name, count in (("small", 1), ("big", 4)):
         (tmp_path / name).mkdir()
         install = api_client(tmp_path / name, None)
         api = next(install)
@@ -80,6 +81,33 @@ def test_the_dashboard_takes_the_same_statements_however_many_pins_it_shows(tmp_
     few, many = counted["small"], counted["big"]
     assert few > 0 and many > 0, (few, many)
     assert many - few <= 4, (
-        f"GET /api/v2/places/dashboard takes {many} statements with 5 more pins a kind against {few} with 1: a read "
+        f"GET /api/v2/places/dashboard takes {many} statements with 4 pins a kind against {few} with 1: a read "
         "runs once per pin again instead of once for the whole place. Batch it (see cards.prime_pins)."
     )
+
+
+def test_tasks_by_stage_takes_the_same_statements_however_many_stages_have_tasks(api, monkeypatch):
+    """One read for the counts and the first titles of every stage, not one per stage: a pipeline with a task in each
+    of 12 stages takes what one with 2 does."""
+    from backend import task_engine as E
+    from backend.store import H
+    from backend.tests.helpers.engine import pipeline
+
+    with api.app.state.store.transaction() as c:
+        for pid, n in (("few", 2), ("many", 12)):
+            names = [f"Stage {k}" for k in range(n)]
+            pipeline(c, pid, pid.title(), stages=[{"name": name, "owner": "assignee"} for name in names])
+            for name in names:
+                tid = H.task_create(c, "human:ana", f"{pid} {name}", "Details.", "bot:ops", pipeline=pid, lint=False)[
+                    "id"
+                ]
+                if name != names[0]:
+                    E.move(c, tid, name, "human:ana", "for the test")
+    card = post(api, "cards", {"template": "tasks_by_stage", "settings": {"pipeline": "few"}, "place": "bot:ops"})
+    counted = {}
+    for pid, n in (("few", 2), ("many", 12)):
+        patch(api, "cards/" + card["card"]["id"], {"settings": {"pipeline": pid}})
+        body, counted[pid] = place_statements(api, monkeypatch, "bot:ops")
+        shown = next(p["card"] for p in body["pins"] if "card" in p)
+        assert len(shown["data"]["stages"]) == n, shown
+    assert counted["many"] == counted["few"], counted

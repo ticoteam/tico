@@ -45,6 +45,7 @@ grid is one column.
 | Card | Shows | Settings |
 |---|---|---|
 | Tasks by status | Open, and done this week | team |
+| Tasks by stage | A pipeline's open tasks by stage: each stage's count and first titles, the stage list's order | pipeline, agent (only its tasks; empty for everyone's), count (titles per stage, 1 to 10, 3 by default) |
 | Done per week | Tasks done each week | team, weeks (4 to 26, 8 by default) |
 | Needs you | The reader's own count and top three; with a team, the items its bots are behind | team |
 | Spend | This month's spend against the monthly budget | team |

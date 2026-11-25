@@ -50,6 +50,9 @@ from .api_contract import api_v2
 
 SIZES = ("small", "medium", "large")
 PLACE_MAX = 60  # pins at one place: a page of cards, not an archive
+# The furthest place a pin may be put: past the end of the fullest agent sidebar a layout may save, whose positions
+# count its built-in sections too (models.SIDEBAR_WIDGETS), so every position listed is one a pin may be moved to.
+SPOT_MAX = M.SIDEBAR_WIDGETS
 CARDS_MAX = 2000
 LIST_MAX = 100
 IDS_MAX = 50
@@ -58,6 +61,12 @@ PAGE_SCAN = 200  # newest pages read to find the ones a reader may see
 # template -> its name and settings: "team" ("" is the company), "kpi", or (low, high, default) for a number.
 TEMPLATES = {
     "tasks_by_status": {"name": "Tasks by status", "fields": {"team": "team"}},
+    # A pipeline's open, not snoozed tasks by stage: `agent` (a bot; empty is everyone's) keeps the ones it has,
+    # `count` titles each.
+    "tasks_by_stage": {
+        "name": "Tasks by stage",
+        "fields": {"pipeline": "pipeline", "agent": "agent", "count": (1, 10, 3)},
+    },
     "done_per_week": {"name": "Done per week", "fields": {"team": "team", "weeks": (4, 26, 8)}},
     "needs_you": {"name": "Needs you", "fields": {"team": "team"}},
     "spend": {"name": "Spend", "fields": {"team": "team"}},
@@ -128,6 +137,7 @@ class CardAdd(M.Contract):
     settings: dict = Field(default_factory=dict)
     place: str = Field(default="", max_length=200)
     size: str = Field(default="medium", max_length=10)
+    position: int | None = Field(default=None, ge=0, le=SPOT_MAX)
 
 
 class CardEdit(M.Contract):
@@ -139,12 +149,12 @@ class PinAdd(M.Contract):
     place: str = Field(max_length=200)
     item: str = Field(max_length=200)
     size: str = Field(default="medium", max_length=10)
-    position: int | None = Field(default=None, ge=0, le=PLACE_MAX)
+    position: int | None = Field(default=None, ge=0, le=SPOT_MAX)
 
 
 class PinEdit(M.Contract):
     size: str | None = Field(default=None, max_length=10)
-    position: int | None = Field(default=None, ge=0, le=PLACE_MAX)
+    position: int | None = Field(default=None, ge=0, le=SPOT_MAX)
 
 
 class PlaceAudience(M.Contract):
@@ -235,6 +245,9 @@ class Ctx:
     def visible(self):
         return self.memo("visible", lambda: self.auth.task_sql(self.c, self.who))
 
+    def sees_bot(self, bot):
+        return self.memo(("sees", bot), lambda: bool(self.auth.visible_bot(self.c, self.who, bot)))
+
     def team_bots(self, gid):
         def make():
             below = P.group_and_below(gid, self.roster)
@@ -300,7 +313,9 @@ class Ctx:
 # ---- settings
 
 
-def clean_settings(ctx, template, given):
+def clean_settings(ctx, template, given, kept=frozenset()):
+    """`given` checked and normalised. `kept`: the keys an edit left as saved, which may name what the editor may not
+    see (a hidden agent): those are kept as they are, and no error names their value."""
     if template not in TEMPLATES:
         raise bad("Unknown card: " + str(template) + ". Cards are " + ", ".join(TEMPLATES))
     fields = TEMPLATES[template]["fields"]
@@ -310,16 +325,41 @@ def clean_settings(ctx, template, given):
     out = {}
     for key, kind in fields.items():
         value = given.get(key)
+
+        def missing(word, value, key=key):
+            return bad(f"Its saved {word} is gone: pick another" if key in kept else f"Unknown {word}: {value}")
+
+        if kind == "agent" and key in kept:
+            out[key] = value  # as saved: its editor's See is checked on the agent they name, not one they left
+            continue
         if kind == "team":
             value = str(value or "").strip()
             if value and value not in ctx.groups:
-                raise bad("Unknown team: " + value)
+                raise missing("team", value)
         elif kind == "kpi":
             value = str(value or "").strip()
             if not value:
                 raise bad("Pick a KPI")
             if not kpi_record(ctx, value):
                 raise Problem("not_found", "Unknown KPI", 404)
+        elif kind == "pipeline":
+            value = str(value or "").strip()
+            # Its id, then its name, then its name in any case.
+            found = ctx.c.execute(
+                "SELECT id FROM pipelines WHERE (id=? OR lower(name)=lower(?)) AND retired_at IS NULL "
+                "ORDER BY id<>?, name<>? LIMIT 1",
+                (value, value, value, value),
+            ).fetchone()
+            if not found:
+                raise bad("Pick a pipeline") if not value else missing("pipeline", value)
+            value = found["id"]
+        elif kind == "agent":
+            value = str(value or "").strip()
+            if value:
+                found = H.resolve_bot(ctx.c, value)
+                if not found or not ctx.sees_bot(found["id"]):  # a hidden agent is as unknown as a missing one
+                    raise missing("agent", value)
+                value = found["id"]
         elif kind == "metric":
             value = str(value or "").strip()
             if value not in METRICS:
@@ -329,7 +369,7 @@ def clean_settings(ctx, template, given):
 
             value = str(value or "").strip()
             if value and value not in {ch["slug"] for ch in G.channels(ctx.c)}:
-                raise bad("Unknown channel: " + value)
+                raise missing("channel", value)
         else:
             low, high, default = kind
             value = default if value is None else value
@@ -377,6 +417,55 @@ def tasks_by_status(ctx, s):
         (*args, monday()),
     ).fetchone()[0]
     return {"counts": counts}
+
+
+def tasks_by_stage(ctx, s):
+    """A pipeline's open, not snoozed tasks the reader may read, by stage in the pipeline's order: each stage with any,
+    its count and its first `count` titles in the stage list's queue order; with `agent`, only the tasks that agent
+    has. One read over the reader's visibility (as the board's), so a private task they may not read is in no count
+    and no row; nothing to show (no such pipeline, or no task the reader may read) is None, so the card stays out of
+    sight."""
+    c = ctx.c
+    pipeline = c.execute(
+        "SELECT id, name FROM pipelines WHERE id=? AND retired_at IS NULL", (s["pipeline"],)
+    ).fetchone()
+    if not pipeline:
+        return None
+    from . import task_depends
+
+    where, args = ["pipeline_id=?", "status='open'"], [pipeline["id"]]
+    visible = ctx.visible()
+    if visible and visible != "1":
+        where.append(f"({visible})")
+    if s["agent"]:
+        where.append("+owner_id=?")  # `+`: the stage index, not every task the agent has (tasks_open_owner_flow)
+        args.append(H.bot_actor(s["agent"]))
+    # The board's snoozed rule (H.tasks snoozed="hide"): a blocked task is listed, a snoozed one is not.
+    where.append(f"NOT ({H.SNOOZED % 'tasks'} AND NOT {task_depends.BLOCKED % 'tasks'})")
+    # One read from the pipeline's stages: each one's count and then its first titles, both through the stage index
+    # (tasks_stage), so it reads this pipeline's tasks and sorts no more than a stage; MATERIALIZED, so each count is
+    # taken once. The order's bare columns are the task's: `counts` has none of those names.
+    match, order = " AND ".join(where), H.TASK_ORDERS["queue"]
+    rows = c.execute(
+        "WITH counts AS MATERIALIZED (SELECT st.id AS stage_id, st.name AS stage_name, st.position AS stage_at, "
+        f"(SELECT COUNT(*) FROM tasks WHERE stage_id=st.id AND {match}) AS n "
+        "FROM stages st WHERE st.pipeline_id=? AND st.retired_at IS NULL) "
+        "SELECT counts.stage_id, counts.stage_name, counts.n, t.id, t.number, t.pipeline_id, t.title, t.updated_at "
+        "FROM counts JOIN tasks t "
+        f"ON t.id IN (SELECT id FROM tasks WHERE stage_id=counts.stage_id AND {match} ORDER BY {order} LIMIT ?) "
+        f"WHERE counts.n>0 ORDER BY counts.stage_at, counts.stage_id, {order}",
+        (*args, pipeline["id"], *args, s["count"]),
+    ).fetchall()
+    stages = []
+    for r in rows:
+        if not stages or stages[-1]["id"] != r["stage_id"]:
+            stages.append({"id": r["stage_id"], "name": r["stage_name"], "count": r["n"], "tasks": []})
+        stages[-1]["tasks"].append(
+            {k: r[k] for k in ("id", "number", "pipeline_id", "updated_at")} | {"title": r["title"] or ""}
+        )
+    if not stages:
+        return None
+    return {"pipeline": pipeline["name"], "count": sum(st["count"] for st in stages), "stages": stages}
 
 
 def done_per_week(ctx, s):
@@ -1190,6 +1279,7 @@ def growth_board(ctx, s):
 
 DATA = {
     "tasks_by_status": tasks_by_status,
+    "tasks_by_stage": tasks_by_stage,
     "done_per_week": done_per_week,
     "needs_you": needs_you,
     "spend": spend,
@@ -1228,7 +1318,11 @@ def card_view(ctx, row):
     template = row["template"]
     team = settings.get("team") or ""
     data = None
-    if template in DATA and (not team or team in ctx.groups):
+    # A card about an agent its reader may not see shows them nothing, and not which agent it is.
+    unseen = bool(settings.get("agent")) and not ctx.sees_bot(settings["agent"])
+    if unseen:
+        settings = {k: v for k, v in settings.items() if k != "agent"}
+    if template in DATA and (not team or team in ctx.groups) and not unseen:
         data = card_data(
             ctx,
             template,
@@ -1555,6 +1649,14 @@ def place_view(ctx, place, timings=None):
         costs[name] = costs.get(name, 0) + ms
     if timings is not None:
         timings.update(prep=prep, cards=total, kinds=costs)
+    if kind == "bot":
+        from . import bot_task_tabs as T
+
+        # A position on an agent's sidebar counts its built-in sections too, and only what its reader may know is there
+        # (bot_task_tabs.spot), as moving a pin there does: a pin moved to the position it is listed at stays put.
+        spots = {w["id"]: at for at, w in enumerate(T.known(ctx, T.saved_widgets(ctx, ident)))}
+        for view in shown:
+            view["position"] = spots.get(view["item"], view["position"])
     if kind == "task":
         by_id = {p["id"]: p for p in pins}
         for pin in shown:
@@ -1754,7 +1856,12 @@ def edit_pin(ctx, pid, size=None, position=None):
     require_manage(ctx, pin["place"])
     if size is not None:
         ctx.c.execute("UPDATE pins SET size=? WHERE id=?", (size_of(size), pid))
-    if position is not None:
+    if position is not None and kind == "bot":
+        from . import bot_task_tabs as T
+
+        # On an agent's sidebar a position counts everything drawn there, its built-ins too, as pinning one does.
+        T.edit_widget(ctx, ident, pin["item"], position=position)
+    elif position is not None:
         order = [p["id"] for p in pins_at(ctx.c, pin["place"]) if p["id"] != pid]
         order.insert(min(position, len(order)), pid)
         reorder(ctx, pin["place"], order)
@@ -1885,8 +1992,11 @@ def edit_card(ctx, cid, title=None, settings=None):
     if title is not None:
         fields["title"] = title.strip()
     if settings is not None:
-        merged = {**json.loads(row["settings"]), **settings}
-        fields["settings"] = json.dumps(clean_settings(ctx, row["template"], merged))
+        saved = json.loads(row["settings"])
+        merged = {**saved, **settings}
+        fields["settings"] = json.dumps(
+            clean_settings(ctx, row["template"], merged, kept=frozenset(saved) - frozenset(settings))
+        )
     if fields:
         fields.update(updated_at=H.now(), updated_by_id=ctx.who.actor)
         ctx.c.execute("UPDATE cards SET " + ",".join(k + "=?" for k in fields) + " WHERE id=?", (*fields.values(), cid))
@@ -1897,6 +2007,11 @@ def edit_card(ctx, cid, title=None, settings=None):
             {"fields": sorted(k for k in fields if k != "updated_at")},
             on_person_place(card_places(ctx, row)),
         )
+        from . import events
+
+        for place in card_places(ctx, row):
+            if place.startswith("bot:"):  # an agent's open page draws it again
+                events.sidebar_moved(ctx.c, place[4:])
     return card_view(ctx, card_row(ctx.c, cid))
 
 
@@ -2005,6 +2120,18 @@ def choices(ctx, team="", place=""):
         "pages": pages_for(ctx, team if team in ctx.groups else "", LIST_MAX),
         "metrics": [{"id": k, "label": v[0]} for k, v in METRICS.items()],
         "channels": [{"slug": ch["slug"], "name": ch["name"]} for ch in G.channels(ctx.c)],
+        # Tasks by stage: its pipelines, and the agents its reader may see.
+        "pipelines": [
+            {"id": r["id"], "name": r["name"]}
+            for r in ctx.c.execute("SELECT id, name FROM pipelines WHERE retired_at IS NULL ORDER BY name, id")
+        ],
+        "agents": [
+            {"id": r["id"], "slug": r["slug"], "name": r["display_name"] or r["slug"]}
+            for r in ctx.c.execute(
+                "SELECT id, slug, display_name FROM bots WHERE state IS NOT 'archived' ORDER BY slug"
+            )
+            if ctx.sees_bot(r["id"])
+        ],
     }
 
 
@@ -2181,7 +2308,7 @@ def install(app, store, auth, mutate, settings, task_view):
             cid = make_card(ctx, body.template, body.title, body.settings, private)
             out = {"card": card_view(ctx, card_row(c, cid))}
             if body.place:
-                out["pin"] = add_pin(ctx, body.place, "card:" + cid, body.size)
+                out["pin"] = add_pin(ctx, body.place, "card:" + cid, body.size, body.position)
             return out
 
         return mutate(request, body, work)

@@ -47,6 +47,35 @@ const pins = {
       card: { id: 'c1', template: 'needs_you', heading: 'Waiting on Pat', settings: {}, hidden: false, data: { count: 1, items: [{ id: 'q1', kind: 'ask', title: 'Approve the storyboard', task_id: 't9', act: 'ok' }] } },
     },
     { id: 'p3', item: 'card:c2', position: 2, size: 'medium', card: { id: 'c2', template: 'spend', heading: 'Spend', settings: {}, hidden: true, data: null } },
+    {
+      id: 'p4',
+      item: 'card:c3',
+      position: 3,
+      size: 'medium',
+      card: {
+        id: 'c3',
+        template: 'tasks_by_stage',
+        heading: 'Video stages',
+        settings: { pipeline: 'videos', agent: '0190-ana', count: 3 },
+        hidden: false,
+        data: {
+          pipeline: 'Videos',
+          count: 3,
+          stages: [
+            {
+              id: 'videos-concept',
+              name: 'Concept',
+              count: 2,
+              tasks: [
+                { id: 't1', number: 4, pipeline_id: 'videos', title: 'Spring promo', updated_at: '2026-11-20T10:00:00Z' },
+                { id: 't2', number: 5, pipeline_id: 'videos', title: 'Beach clean', updated_at: '2026-11-20T10:00:00Z' },
+              ],
+            },
+            { id: 'videos-draft', name: 'Draft', count: 1, tasks: [{ id: 't3', number: 7, pipeline_id: 'videos', title: 'Host intro', updated_at: '2026-11-20T10:00:00Z' }] },
+          ],
+        },
+      },
+    },
   ],
 };
 
@@ -101,7 +130,7 @@ const pinsReply = (body: unknown) => (u: string) => (u.includes('/api/v2/places/
 /** A read of what it holds that has come (the page drew from it). */
 const settled = (key: unknown[]) => waitFor(() => expect(queryClient.getQueryState(key)?.status).toBe('success'));
 
-const SECTIONS = ['Latest update', 'Dream', 'Tasks', 'Files', 'Videos by stage', 'Waiting on Pat', 'Spend'];
+const SECTIONS = ['Latest update', 'Dream', 'Tasks', 'Files', 'Videos by stage', 'Waiting on Pat', 'Spend', 'Video stages'];
 /** The sidebar's sections in the order they are drawn. */
 const order = () => screen.getAllByRole('region').map((r) => r.getAttribute('aria-label') ?? '').filter((n) => SECTIONS.includes(n));
 
@@ -265,5 +294,14 @@ describe("An agent's own sidebar", () => {
     await screen.findByRole('region', { name: 'Latest update' });
     await settled(['team', 'files', 'ana']);
     expect(document.querySelector('.side-sized')).toBeNull();
+  });
+
+  it('draws tasks by stage: each stage and its count, then its tasks, each opening its task', async () => {
+    open([w('card:c3'), w('tasks'), w('updates'), w('files')]);
+    const card = await screen.findByRole('region', { name: 'Video stages' });
+    expect([...card.querySelectorAll('.stage-fold')].map((s) => s.textContent)).toEqual(['Concept2', 'Draft1']);
+    const href = (title: string) => within(card).getByText(title).closest('a')?.getAttribute('href');
+    expect([href('Spring promo'), href('Beach clean'), href('Host intro')]).toEqual(['/tasks/videos/4', '/tasks/videos/5', '/tasks/videos/7']);
+    await waitFor(() => expect(order()).toEqual(['Video stages', 'Tasks', 'Latest update', 'Files']));
   });
 });

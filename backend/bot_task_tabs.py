@@ -320,12 +320,31 @@ def write_widgets(ctx, bot, widgets):
         (bot, viewer_key(settings, who, bot), tabs, json.dumps(widgets), H.now(), who.actor),
     )
     if not personal(settings, bot):
+        from . import events
+
         cards.sync_bot(ctx, bot, widgets)
+        events.sidebar_moved(c, bot)
 
 
 def saved_widgets(ctx, bot):
     row = stored(ctx.c, ctx.settings, ctx.who, bot)
     return widgets_of(json.loads(row["widgets"]) if row and row["widgets"] else None)
+
+
+def known(ctx, widgets):
+    """The widgets this reader may know are there, as `read` gives them: a page they may not read leaves no trace."""
+    from . import cards
+
+    return [w for w in widgets if cards.readable_item(ctx, w["id"])]
+
+
+def spot(ctx, widgets, position):
+    """Where in the saved list a widget put at `position` goes. A position counts the widgets its reader may know,
+    0 the top: before the one there, or after them all, so a page they may not read keeps its place among the rest."""
+    seen = known(ctx, widgets)
+    if position is None or position >= len(seen):
+        return len(widgets)
+    return next(i for i, w in enumerate(widgets) if w["id"] == seen[position]["id"])
 
 
 def add_widget(ctx, bot, item, position=None):
@@ -334,8 +353,25 @@ def add_widget(ctx, bot, item, position=None):
         raise Problem("conflict", "Already pinned here", 409)
     if len([w for w in widgets if ITEM.fullmatch(w["id"])]) >= M.SIDEBAR_ITEMS:
         raise Problem("too_many", f"A sidebar holds {M.SIDEBAR_ITEMS} pages and cards", 409)
-    entry = {"id": item, "hidden": False, "height": None}
-    widgets.insert(len(widgets) if position is None else min(position, len(widgets)), entry)
+    widgets.insert(spot(ctx, widgets, position), {"id": item, "hidden": False, "height": None})
+    write_widgets(ctx, bot, widgets)
+
+
+def edit_widget(ctx, bot, wid, hidden=None, position=None):
+    """Hide, show or move one widget (a built-in, or a pinned page or card) in the saved list, as it stands in this
+    write: nothing else in it, and none of the tabs, changes. A position counts the widgets its reader may know (spot),
+    0 the top."""
+    widgets = saved_widgets(ctx, bot)
+    at = next((i for i, w in enumerate(widgets) if w["id"] == wid), None)
+    if at is None:
+        raise Problem("not_found", "Not on this sidebar", 404)
+    seen = [w["id"] for w in known(ctx, widgets)]
+    entry = widgets.pop(at)
+    if hidden is not None:
+        entry["hidden"] = bool(hidden)
+    # Moved to where its reader already sees it: it stays put, a page they may not read beside it too.
+    stays = position is None or wid in seen and seen.index(wid) == position
+    widgets.insert(at if stays else spot(ctx, widgets, position), entry)
     write_widgets(ctx, bot, widgets)
 
 
@@ -592,7 +628,10 @@ def install(app, store, auth, mutate, settings, task_views=None):
                 if not viewer:
                     from . import cards
 
+                    from . import events
+
                     cards.sync_bot(ctx, bot, DEFAULT_WIDGETS)
+                    events.sidebar_moved(c, bot)
             else:
                 if not body.tabs:
                     raise bad("Keep at least one tab")
@@ -610,11 +649,51 @@ def install(app, store, auth, mutate, settings, task_views=None):
                         if not any(ITEM.fullmatch(w["id"]) for w in saved_widgets(ctx, bot)):
                             c.execute("UPDATE bot_task_tabs SET widgets=NULL WHERE bot=? AND viewer=?", (bot, viewer))
                     else:
-                        write_widgets(ctx, bot, keep_unread(ctx, saved_widgets(ctx, bot), clean_widgets(body.widgets)))
+                        widgets = keep_unread(ctx, saved_widgets(ctx, bot), clean_widgets(body.widgets))
+                        # Built-ins left out come back, and pages its writer may not read stay: the whole list is what
+                        # positions count, so it never runs past the furthest position a pin may be moved to.
+                        if len(widgets) > M.SIDEBAR_WIDGETS:
+                            raise bad(f"A sidebar holds {M.SIDEBAR_WIDGETS} widgets, its built-in sections among them")
+                        write_widgets(ctx, bot, widgets)
             if not viewer:
                 H.event(
                     c, who.actor, "bot.task_tabs_changed", bot, {"tabs": None if body.tabs is None else len(body.tabs)}
                 )
+            return {**read(c, settings, who, bot, ctx), "can_edit": True}
+
+        return mutate(request, body, work)
+
+    @app.patch(
+        "/api/v2/bots/{bot}/task-tabs/widgets/{widget}",
+        **api_v2(
+            "Bots",
+            "updateBotSidebarWidget",
+            "Hide, show or move one thing on a bot's sidebar (updates, tasks, files, page:<id> or card:<id>); a position "
+            "counts everything there, 0 the top",
+            "BotSidebar",
+        ),
+    )
+    def task_tabs_widget(request: Request, bot: str, widget: str, body: M.BotSidebarWidgetEdit):
+        """One widget hidden, shown or moved in the same write that reads the list, so a pin or a tab saved meanwhile
+        stays."""
+        with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
+
+        def work(c):
+            who = request.state.identity
+            if not H.bot(c, bot):
+                raise Problem("not_found", "Bot not found", 404)
+            auth.require_see(c, who, bot)
+            if not may_edit(c, auth, settings, who, bot):
+                raise Problem("forbidden", "Only the bot or a person who manages it changes its sidebar", 403)
+            from . import cards
+
+            ctx = Ctx(c, auth, who, settings)
+            if not cards.readable_item(ctx, widget):
+                raise Problem("not_found", "Not on this sidebar", 404)
+            edit_widget(ctx, bot, widget, body.hidden, body.position)
+            if not viewer_key(settings, who, bot):
+                H.event(c, who.actor, "bot.task_tabs_changed", bot, {"widget": widget})
             return {**read(c, settings, who, bot, ctx), "can_edit": True}
 
         return mutate(request, body, work)

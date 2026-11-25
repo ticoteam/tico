@@ -24,3 +24,4 @@ shared_files:
   - .claude/skills/build-the-page
   - .claude/skills/catch-up
   - .claude/skills/fill-a-role
+base_skip: [.claude/skills/arrange-your-sidebar]

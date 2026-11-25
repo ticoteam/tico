@@ -186,6 +186,7 @@ OLD_SERVER_MEDIA = (
 # ----------------------------------------------------------------------------- cards and pins (docs/overview.md)
 CARD_TEMPLATES = (
     "tasks_by_status",
+    "tasks_by_stage",
     "done_per_week",
     "needs_you",
     "spend",
@@ -217,8 +218,10 @@ CARD_SETTINGS = {
     "count": {
         "type": "integer",
         "description": "Latest pages, Unread threads, My tasks, Updates: how many, "
-        "1 to 10; Growth channels 1 to 20; Growth board 1 to 5 per lane",
+        "1 to 10; Tasks by stage: titles per stage, 1 to 10; Growth channels 1 to 20; Growth board 1 to 5 per lane",
     },
+    "pipeline": _s("Tasks by stage (open, not snoozed): the pipeline, by id or name"),
+    "agent": _s("Tasks by stage: only this agent's tasks (its slug); empty for everyone's"),
     "kpi": _s("KPI: the KPI id"),
     "metric": _s(
         "Growth number: new_customers, spend, bot_cost, cac, revenue_month, margin_pct, ltv, "
@@ -268,6 +271,7 @@ def card_list(api, args):
         "title": _s("Its heading; empty uses the card's name"),
         "place": PLACE,
         "size": SIZE,
+        "position": {"type": "integer", "description": "Where it goes at the place: 0 is first; left out, last"},
         **CARD_SETTINGS,
     },
     required=("template",),
@@ -281,6 +285,8 @@ def card_add(api, args):
         "place": args.get("place") or "",
         "size": args.get("size") or "medium",
     }
+    if args.get("position") is not None:
+        body["position"] = args["position"]
     return _as_person(api).post("cards", body, key=_key(args))
 
 
@@ -325,20 +331,44 @@ def pin_add(api, args):
     return _as_person(api).post("pins", body, key=_key(args))
 
 
+SIDEBAR_BUILTINS = ("updates", "tasks", "files")  # an agent sidebar's own sections (backend/bot_task_tabs.py WIDGETS)
+
+
 @tool(
     "tico_pin_update",
-    "Resize or move a pin.",
+    "Resize or move a pin. On an agent's sidebar a position counts everything there, its built-in sections too, and "
+    "pin may also be one of them (updates, tasks, files): hidden hides or shows it.",
     {
-        "pin": _s("Pin id, from `card list --place`"),
+        "pin": _s("Pin id, from `card list --place`; or updates, tasks or files"),
+        "place": _s("A built-in's sidebar: bot:<slug>; left out, your own"),
         "size": SIZE,
         "position": {"type": "integer", "description": "0 is first"},
+        "hidden": {"type": "boolean", "description": "A built-in: true hides it, false shows it again"},
     },
     required=("pin",),
     writes=True,
 )
 def pin_update(api, args):
+    if args["pin"] in SIDEBAR_BUILTINS:
+        return _sidebar_builtin(api, args)
+    if args.get("hidden") is not None:
+        raise ValueError("hidden is for updates, tasks or files; remove a page or card with tico_pin_remove")
     body = {k: args[k] for k in ("size", "position") if args.get(k) is not None}
     return _as_person(api).patch("pins/" + args["pin"], body, key=_key(args))
+
+
+def _sidebar_builtin(api, args):
+    """Hide, show or move a built-in section of an agent's sidebar, in one write on the server that changes nothing
+    else there (PATCH bots/{bot}/task-tabs/widgets/{widget})."""
+    if args.get("size"):
+        raise ValueError("A built-in has no size")
+    place = args.get("place") or str(api.get("me").get("actor") or "")
+    kind, _, bot = place.partition(":")
+    if kind != "bot" or not bot:
+        raise ValueError("A built-in is on an agent's sidebar: give place bot:<slug>")
+    body = {k: args[k] for k in ("hidden", "position") if args.get(k) is not None}
+    path = f"bots/{quote(bot, safe='')}/task-tabs/widgets/{args['pin']}"
+    return _as_person(api).call("PATCH", path, body, _key(args))
 
 
 @tool(
@@ -1113,7 +1143,15 @@ CARD = (
 PIN = (
     Group("pin", "pin a page or a card at a place"),
     Command("pin add", "pin page:<file id> or card:<id> at a place", example="tico pin add dashboard card:c1"),
-    Command("pin update", "resize or move a pin", example="tico pin update p1 --size large"),
+    Command(
+        "pin update",
+        "resize or move a pin, or hide, show or move an agent sidebar's built-in",
+        example="tico pin update p1 --size large",
+        args=(
+            Arg("hidden", "--hide", action="store_const", const=True),
+            Arg("hidden", "--show", action="store_const", const=False),
+        ),
+    ),
     Command("pin remove", "unpin", example="tico pin remove p1"),
 )
 

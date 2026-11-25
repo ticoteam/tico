@@ -27,6 +27,86 @@ afterEach(() => {
 const open = ['tasks', 'list', { status: 'open', pipeline: 'p1' }];
 const done = ['tasks', 'list', { status: 'done', pipeline: 'p1' }];
 
+it('reads an agent sidebar again when it changed, and the sidebars counting tasks when a task changed', () => {
+  const held = (slug: string, template: string) => {
+    queryClient.setQueryData(['team', 'tabs', slug], { tabs: [], widgets: [] });
+    queryClient.setQueryData(['team', 'pins', slug], { pins: [{ item: 'card:c1', card: { template } }] });
+  };
+  const stale = (key: unknown[]) => queryClient.getQueryState(key)?.isInvalidated;
+  held('ops', 'tasks_by_stage');
+  held('sales', 'stat');
+  FakeEventSource.last.feed(frame(901, 'bots', { bot: 'b-sales', status: null, sidebar: 'sales' }));
+  flushFrame();
+  expect([stale(['team', 'tabs', 'sales']), stale(['team', 'pins', 'sales'])]).toEqual([true, true]);
+  expect([stale(['team', 'tabs', 'ops']), stale(['team', 'pins', 'ops'])]).toEqual([false, false]);
+  FakeEventSource.last.feed(taskFrame(902, task('t9')));
+  flushFrame();
+  expect([stale(['team', 'pins', 'ops']), stale(['team', 'tabs', 'ops'])]).toEqual([true, false]);
+});
+
+it('reads a sidebar counting tasks again on any change to a task but a run: a snooze, a relation, access lost and won back', () => {
+  const pins = ['team', 'pins', 'ops'];
+  const send = (seq: number | null, event: Record<string, unknown>) => {
+    vi.advanceTimersByTime(1000); // past the gap between two reads of one key
+    queryClient.setQueryData(pins, { pins: [{ item: 'card:c1', card: { template: 'tasks_by_stage' } }] });
+    FakeEventSource.last.feed(frame(seq, 'tasks', { ...(seq !== null && { seq, actor: 'human:p1', at: AT }), ...event }));
+    flushFrame();
+    return !!queryClient.getQueryState(pins)?.isInvalidated;
+  };
+  const t1 = (kind: string, over: Record<string, unknown> = {}) => ({ id: 't1', kind, kinds: [kind], task: task('t1', { pipeline_id: 'p1', stage_id: 's1', ...over }) });
+  expect(send(901, t1('run'))).toBe(false);
+  expect(send(902, t1('status'))).toBe(false);
+  expect(send(903, t1('shots'))).toBe(false);
+  expect(send(904, t1('snooze', { snoozed: true }))).toBe(true);
+  expect(send(905, t1('snooze', { snoozed: false }))).toBe(true);
+  expect(send(906, t1('relation', { snoozed: true }))).toBe(true);
+  expect(send(null, { task_id: 't1', gone: true })).toBe(true);
+  expect(send(907, t1('update'))).toBe(true); // shared with the reader again, as it was
+  expect(send(908, t1('update', { stage_id: 's2' }))).toBe(true);
+  expect(send(909, { kind: 'bulk', kinds: ['bulk'], bulk: true })).toBe(true);
+  expect(send(910, t1('update', { stage_id: 's1' }))).toBe(true); // back where it was before the bulk change
+  expect(send(911, { ...t1('insert'), id: 't2' })).toBe(true);
+});
+
+it("reads an agent's sidebar again after a read in flight when the sidebar changes meanwhile", async () => {
+  const pins = ['team', 'pins', 'ops'];
+  const reads: (() => void)[] = [];
+  queryClient.setQueryData(pins, { pins: [] });
+  const read = () => new Promise((done) => reads.push(() => done({ pins: [] })));
+  const seen = new QueryObserver(queryClient, { queryKey: pins, queryFn: read, staleTime: Infinity });
+  const stop = seen.subscribe(() => {});
+  try {
+    void queryClient.invalidateQueries({ queryKey: pins, exact: true });
+    expect(reads).toHaveLength(1);
+    // the pin moves while that read is out: its reply may predate the move, so the sidebar reads once more after it
+    FakeEventSource.last.feed(frame(901, 'bots', { bot: 'b-ops', status: null, sidebar: 'ops' }));
+    flushFrame();
+    await act(() => reads.splice(0).forEach((go) => go()));
+    expect(reads).toHaveLength(1);
+  } finally {
+    stop();
+  }
+});
+
+it('reads a sidebar again after its first read when a task changes while that read is out', async () => {
+  const pins = ['team', 'pins', 'sales'];
+  const reads: (() => void)[] = [];
+  const read = () => new Promise((done) => reads.push(() => done({ pins: [{ item: 'card:c1', card: { template: 'tasks_by_stage' } }] })));
+  const seen = new QueryObserver(queryClient, { queryKey: pins, queryFn: read, staleTime: Infinity });
+  const stop = seen.subscribe(() => {});
+  try {
+    await act(async () => {});
+    expect(reads).toHaveLength(1); // nothing known of it yet
+    vi.advanceTimersByTime(1000);
+    FakeEventSource.last.feed(taskFrame(901, task('t1', { pipeline_id: 'p1', stage_id: 's2' })));
+    flushFrame();
+    await act(() => reads.splice(0).forEach((go) => go()));
+    expect(reads).toHaveLength(1); // its reply may predate the move: it reads once more
+  } finally {
+    stop();
+  }
+});
+
 it('refreshes only the agent whose run state changed', () => {
   const payer = (bot: string) => [...keys.team.paidBy(), bot, true];
   queryClient.setQueryData(payer('ops'), { last_turn: null });

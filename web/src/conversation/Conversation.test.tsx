@@ -527,6 +527,40 @@ describe('the page it sits beside', () => {
     expect((screen.getByRole('textbox', { name: 'Message Ana' }) as HTMLTextAreaElement).value).toBe('What needs me on Tasks?');
     expect(sends()).toHaveLength(0);
   });
+
+  it('a starter left open ends where the typing goes on, in a focused box, and never replaces words typed there', async () => {
+    seed([]);
+    serve(() => ({ status: 200, body: {} }));
+    render(<Conversation id={T} variant="side" title="Ana" actor="bot:qa" from={FROM} starters={['Add a widget showing…', 'What did you make?']} />, {
+      wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+    });
+    const box = (await screen.findByRole('textbox', { name: 'Message Ana' })) as HTMLTextAreaElement;
+    fireEvent.click(await screen.findByRole('button', { name: 'Add a widget showing…' }));
+    expect(box.value).toBe('Add a widget showing ');
+    expect(document.activeElement).toBe(box);
+    expect(box.selectionStart).toBe('Add a widget showing '.length);
+    fireEvent.change(box, { target: { value: 'Hide Files please' } });
+    fireEvent.click(screen.getByRole('button', { name: 'What did you make?' }));
+    expect(box.value).toBe('Hide Files please');
+    expect(sends()).toHaveLength(0);
+  });
+
+  it("a starter's words stay in the chat they were pressed in: another chat shown in its place neither takes them nor the focus", async () => {
+    seed([]);
+    queryClient.setQueryData(['thread', 't2', 'timeline'], { pages: [{ messages: [], next_cursor: null, read_marks: {} }], pageParams: [null] });
+    serve(() => ({ status: 200, body: {} }));
+    const starters = ['Add a widget showing…'];
+    const { rerender } = render(<Conversation id={T} variant="side" title="Ana" actor="bot:qa" from={FROM} starters={starters} />, {
+      wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'Add a widget showing…' }));
+    expect((screen.getByRole('textbox', { name: 'Message Ana' }) as HTMLTextAreaElement).value).toBe('Add a widget showing ');
+    (document.activeElement as HTMLElement).blur();
+    rerender(<Conversation id="t2" variant="side" title="Bob" actor="bot:bob" from={FROM} />);
+    const bob = (await screen.findByRole('textbox', { name: 'Message Bob' })) as HTMLTextAreaElement;
+    expect(bob.value).toBe('');
+    expect(document.activeElement).not.toBe(bob);
+  });
 });
 
 describe('scrolled up', () => {

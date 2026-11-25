@@ -575,11 +575,23 @@ function patchMessages(batch: MessageEvent[]): void {
 
 // ---------------------------------------------------------------- agents' status lines
 
-/** backend/events.py `_bots`: an agent's status line; `status` is null before it has one. */
+/** backend/events.py `_bots`: an agent's status line; `status` is null before it has one. `sidebar`: its slug, when its
+    sidebar's sections or pins changed. */
 interface BotEvent {
   bot?: string;
   status?: StatusLine | null;
+  sidebar?: string;
 }
+
+/** A held sidebar with a card that counts tasks (backend/cards.py `tasks_by_stage`). */
+const countsTasks = (place: unknown) =>
+  !!(place as { pins?: { card?: { template?: string } | null }[] } | undefined)?.pins?.some((p) => p.card?.template === 'tasks_by_stage');
+
+/** A task sent again only for its run or what it waits on (backend task_reads `run_moved`, `status_moved`): it moves no
+    tasks-by-stage count. Any other change may (a move, a snooze, a relation, access gained or lost...): a sidebar
+    holding one reads again, at most once a second (`refetchSoon`). */
+const RUN_KINDS = new Set(['run', 'status', 'shots']);
+const runOnly = (e: TaskEvent) => !e.gone && !e.bulk && (e.kinds?.length ? e.kinds : [e.kind ?? '']).every((k) => RUN_KINDS.has(k));
 
 function patchDirectory(batch: BotEvent[]): void {
   const held = queryClient.getQueryData<Directory>(keys.directory());
@@ -744,10 +756,24 @@ export function installPatchers(): void {
   onTopic<BotEvent>('bots', patchDirectory);
   // A task left the reader (who may read it changed, or it went): a page pinned to an agent's sidebar may have gone
   // with it, so the sidebars and their pins read again (backend/bot_task_tabs.py, cards.py place_view). A task's file
-  // or page changed (a new version, a pin on it): a pinned one shows its new version. An agent's own page and its
-  // sidebar's pins send no change of their own yet.
-  // A read already in flight answered from before the change: another follows it.
-  onRefetch<TaskEvent>('tasks', (e) => (e.gone ? [['team', 'tabs'], ['team', 'pins']] : e.kinds?.includes('files') ? [['team', 'pins']] : []), true);
+  // or page changed (a new version, a pin on it): a pinned one shows its new version. Any other change but a run's
+  // (`runOnly`): the sidebars holding a tasks-by-stage card read again. A read already in flight answered from before
+  // the change: another follows it.
+  onRefetch<TaskEvent>(
+    'tasks',
+    (e) => {
+      if (e.gone) return [['team', 'tabs'], ['team', 'pins']];
+      if (e.kinds?.includes('files')) return [['team', 'pins']];
+      if (runOnly(e)) return [];
+      // a sidebar on its first read may hold one too: it reads again after that read
+      const pins = queryClient.getQueryCache().findAll({ queryKey: ['team', 'pins'] });
+      return pins.filter((q) => countsTasks(q.state.data) || (q.state.data === undefined && q.state.fetchStatus !== 'idle')).map((q) => q.queryKey);
+    },
+    true,
+  );
+  // Its sections or pins changed (backend/events.py `sidebar_moved`): an open page of it reads its sidebar again, after
+  // any read in flight, which may predate the change.
+  onRefetch<BotEvent>('bots', (e) => (e.sidebar ? [['team', 'tabs', e.sidebar], ['team', 'pins', e.sidebar]] : []), true);
   onRefetch<{ bot_id?: string; state?: string }>('runs', (e) => {
     if (!e.bot_id || !e.state) return [];
     const key = [...keys.team.paidBy(), e.bot_id, true];

@@ -2456,6 +2456,7 @@ class BotTaskTab(Contract):
 
 
 SIDEBAR_ITEMS = 60  # pages and cards on one bot's sidebar (backend/cards.py PLACE_MAX)
+SIDEBAR_WIDGETS = 4 + SIDEBAR_ITEMS  # widgets on one saved sidebar layout, its built-ins with them; a position <= this
 
 
 class BotSidebarWidget(Contract):
@@ -2470,11 +2471,18 @@ class BotSidebarWidget(Contract):
     height: int | None = Field(default=None, ge=80, le=2000)
 
 
+class BotSidebarWidgetEdit(Contract):
+    """One widget hidden or shown, or moved: a position counts every widget on the sidebar, 0 the top."""
+
+    hidden: bool | None = None
+    position: int | None = Field(default=None, ge=0, le=SIDEBAR_WIDGETS)
+
+
 class BotTaskTabs(Contract):
     # No cap on how many tabs (Task-list tabs spec): the request body limit bounds one write. Leaving widgets out keeps
     # the saved ones.
     tabs: list[BotTaskTab] | None
-    widgets: list[BotSidebarWidget] | None = Field(default=None, max_length=4 + SIDEBAR_ITEMS)
+    widgets: list[BotSidebarWidget] | None = Field(default=None, max_length=SIDEBAR_WIDGETS)
 
 
 class BotTransitionCreate(Contract):

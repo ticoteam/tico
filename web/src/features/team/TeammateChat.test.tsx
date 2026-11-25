@@ -3,13 +3,13 @@ import { act, render, screen, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { directoryQuery, queryClient, type Actor } from '@/data';
-import { TeammateChat } from './TeammateChat';
+import { NO_SIDEBAR_SKILL, TeammateChat } from './TeammateChat';
 
 vi.mock('@/conversation', async () => ({
   timelineQuery: (await import('@/conversation/queries')).timelineQuery,
-  Conversation: ({ id, mentionOnly, foot }: { id: string; mentionOnly?: readonly string[]; foot?: ReactNode }) => (
+  Conversation: ({ id, mentionOnly, starters, foot }: { id: string; mentionOnly?: readonly string[]; starters?: readonly string[]; foot?: ReactNode }) => (
     <>
-      <div data-testid="conversation" data-mention-only={mentionOnly?.join(' ')}>
+      <div data-testid="conversation" data-mention-only={mentionOnly?.join(' ')} data-starters={starters?.join('|')}>
         {id}
       </div>
       {foot}
@@ -83,6 +83,47 @@ describe('TeammateChat', () => {
     expect(asked.find((u) => u.includes('/threads/dm'))).toContain('with=bot%3A0190-ana');
     // its @ list offers the teammate alone: the server refuses an @ of anyone outside a direct chat
     expect(chat.getAttribute('data-mention-only')).toBe('bot:0190-ana');
+  });
+
+  it("offers an agent's empty chat two starters", async () => {
+    show('ana');
+    await act(async () => {
+      answerMe();
+    });
+    const chat = await screen.findByTestId('conversation');
+    expect(chat.getAttribute('data-starters')).toBe('Add a widget showing…|What did you make this week?');
+  });
+
+  it('offers no widget starter to an agent whose card leaves out the sidebar skill (Agent Ops)', async () => {
+    const ops: Actor = { id: 'bot:0190-ops', kind: 'agent', name: 'Agent Ops', slug: 'agent-ops', template: 'agent-ops' };
+    queryClient.setQueryData(directoryQuery.queryKey, { actors: [pat, ops], byId: { 'human:p1': pat, p1: pat, 'bot:0190-ops': ops, 'agent-ops': ops } });
+    show('agent-ops');
+    await act(async () => {
+      answerMe();
+    });
+    const chat = await screen.findByTestId('conversation');
+    expect(chat.getAttribute('data-starters')).toBe('What did you make this week?');
+  });
+
+  it('knows the very templates whose card leaves out the sidebar skill', async () => {
+    const fs = (await import(/* @vite-ignore */ 'node:' + 'fs')) as {
+      readdirSync(dir: URL): string[];
+      readFileSync(file: URL, encoding: 'utf8'): string;
+    };
+    const here = import.meta.url; // not inline: Vite would turn `new URL('…', import.meta.url)` into an asset import
+    const catalog = new URL('../../../../templates/catalog/', here);
+    const card = (t: string) => {
+      try {
+        return fs.readFileSync(new URL(`${t}/card.yaml`, catalog), 'utf8');
+      } catch {
+        return '';
+      }
+    };
+    // `base_skip:` and its list, inline or one item a line
+    const skips = (t: string) => /^base_skip:(.*(?:\n[ \t]+-.*)*)/m.exec(card(t))?.[1]?.includes('arrange-your-sidebar') ?? false;
+    const skipping = fs.readdirSync(catalog).filter(skips);
+    expect(skipping.length).toBeGreaterThan(0);
+    expect(new Set(skipping)).toEqual(NO_SIDEBAR_SKILL);
   });
 
   it("pins the agent's question to me over the box, with the answers it offers", async () => {

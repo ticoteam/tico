@@ -27,3 +27,4 @@ recommend_when: [always]
 shared_files:
   - .claude/skills/build-the-page
   - .claude/skills/catch-up
+base_skip: [.claude/skills/arrange-your-sidebar]

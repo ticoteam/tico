@@ -167,6 +167,14 @@ def needs_moved(c, people, kind):
     )
 
 
+def sidebar_moved(c, bot):
+    """A `bots` row (kind `sidebar`) for the bot: its sidebar's widgets or pins changed (backend/bot_task_tabs.py,
+    cards.py), so an open page of it reads its sidebar again; who may see the bot is checked as for its status."""
+    c.execute(
+        "INSERT INTO changes(topic,kind,subject_id,bot,created_at) VALUES('bots','sidebar',?,?,?)", (bot, bot, H.now())
+    )
+
+
 def stage_order_moved(c, person, stage):
     """A `setup` row (area `stage_order`, the stage as its `ref`) for the person alone (`subject_id`, as `needs` rows
     are): Tico saved a new order of the stage for them (backend/stage_order.py), so their open lists of it read again."""
@@ -3057,9 +3065,11 @@ def run_step(c, auth, who, run_id, seq):
 
 
 def _bots(view, rows):
-    last = {}
+    last, sidebar = {}, set()
     for row in rows:
         last[row["subject_id"]] = row
+        if row["kind"] == "sidebar":
+            sidebar.add(row["subject_id"])
     out = []
     default = None
     for slug, row in last.items():
@@ -3069,7 +3079,10 @@ def _bots(view, rows):
             from . import usage_limits
 
             default = usage_limits.company(view.c)
-        out.append((row, {"bot": slug, "status": status_line(view.c, view.who, slug, default, auth=view.auth)}))
+        entry = {"bot": slug, "status": status_line(view.c, view.who, slug, default, auth=view.auth)}
+        if slug in sidebar:  # its page reads its sidebar again, by its id or its slug (bot_task_tabs.py)
+            entry["sidebar"] = (view.c.execute("SELECT slug FROM bots WHERE id=?", (slug,)).fetchone() or [slug])[0]
+        out.append((row, entry))
     return out
 
 
