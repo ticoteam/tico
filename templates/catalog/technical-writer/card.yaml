@@ -55,5 +55,6 @@ recommend_when: [sells_software, uses_docs]
 shared_files:
   - .claude/skills/build-the-page
   - .claude/skills/catch-up
+  - .claude/skills/work-with-software
   - .claude/skills/ship-a-release
   - .claude/skills/get-found-and-cited

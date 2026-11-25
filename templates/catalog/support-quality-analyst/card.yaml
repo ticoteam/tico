@@ -58,4 +58,5 @@ when: "A support team whose replies nobody reviews, or whose quality depends on 
 shared_files:
   - .claude/skills/build-the-page
   - .claude/skills/catch-up
+  - .claude/skills/work-with-software
   - .claude/skills/answer-a-customer

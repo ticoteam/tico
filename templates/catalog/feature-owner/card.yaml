@@ -74,6 +74,7 @@ recommend_when: [sells_software, uses_tickets, uses_meetings, uses_github]
 shared_files:
   - .claude/skills/build-the-page
   - .claude/skills/catch-up
+  - .claude/skills/work-with-software
   - .claude/skills/quick-perf-check
   - .claude/skills/answer-each-review-comment
   - .claude/skills/get-the-checks-green-at-the-head

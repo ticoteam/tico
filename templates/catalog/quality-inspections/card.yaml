@@ -58,5 +58,6 @@ recommend_when: [onsite_jobs, sells_to_consumers, small_team]
 shared_files:
   - .claude/skills/build-the-page
   - .claude/skills/catch-up
+  - .claude/skills/work-with-software
   - .claude/skills/review-hardware-for-manufacture
   - .claude/skills/source-and-certify-hardware

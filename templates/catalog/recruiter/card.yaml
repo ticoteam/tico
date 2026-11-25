@@ -58,4 +58,5 @@ recommend_when: [uses_email, uses_docs, small_team]
 shared_files:
   - .claude/skills/build-the-page
   - .claude/skills/catch-up
+  - .claude/skills/work-with-software
   - .claude/skills/fill-a-role

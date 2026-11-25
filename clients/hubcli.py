@@ -500,6 +500,7 @@ def parser():
     from clients.commands import browser as browser_commands, logins
     from clients.commands import tools as tools_commands
     from clients.commands import tools_admin
+    from clients.commands import tool_guides as tool_guides_commands
 
     sub.add_parser("whoami", help="who you are, to which company, and through which profile").set_defaults(fn="whoami")
     cli_plumbing.add_parsers(sub)  # tico auth, tico token, tico events tail (clients/cli_plumbing.py)
@@ -994,6 +995,7 @@ def parser():
     s.set_defaults(fn="tool call")
     cli_spec.add(sub, tools_commands.TOOL_AFTER_CALL, parents={("tool",): tools})
     cli_spec.add(sub, tools_admin.TOOL_CLI, parents={("tool",): tools})  # clients/commands/tools_admin.py
+    cli_spec.add(sub, tool_guides_commands.CLI, parents={("tool",): tools})  # clients/commands/tool_guides.py
 
     # Automations (clients/commands/automations.py): every leaf but create, update and inbox, which stay here.
     cli_spec.add(sub, automations_commands.AUTOMATION)

@@ -68,6 +68,7 @@ recommend_when: [publishes_content, sells_to_consumers, small_team]
 shared_files:
   - .claude/skills/build-the-page
   - .claude/skills/catch-up
+  - .claude/skills/work-with-software
   - playbooks/watch.md
   - playbooks/find-ideas.md
   - playbooks/build-a-bet.md

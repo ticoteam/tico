@@ -1469,6 +1469,32 @@ class ToolUpdate(Contract):
     title_prefix: str = Field(default="", max_length=100)
 
 
+class ToolGuideNeedWrite(Contract):
+    tool: str = Field(min_length=1, max_length=61, pattern=r"^[a-z0-9][a-z0-9-]*$")
+    level: Literal["read", "write"] = "read"
+
+
+class ToolGuideWrite(Contract):
+    """A Tools registry guide (backend/tool_guides.py): only what is sent changes; "" clears a field and the shipped
+    guide's words show again. A built tool needs a summary and instructions. Never a credential value."""
+
+    name: str | None = Field(default=None, max_length=80)
+    origin: Literal["vendor", "built"] | None = None
+    category: str | None = Field(default=None, max_length=40)
+    summary: str | None = Field(default=None, max_length=200)
+    instructions: str | None = Field(default=None, max_length=20000)
+    guidance: str | None = Field(default=None, max_length=20000)
+    commands: list[Annotated[str, Field(pattern=r"^[A-Za-z0-9._-]{1,60}$")]] | None = Field(default=None, max_length=20)
+    source: str | None = Field(default=None, max_length=500)
+    needs: list[ToolGuideNeedWrite] | None = Field(default=None, max_length=20)
+
+
+class BotToolGuideNote(Contract):
+    """An agent's own list of tools (backend/tool_guides.py): what it uses this one for."""
+
+    note: str = Field(default="", max_length=500)
+
+
 class MailRequest(Contract):
     """What a bot's bot.yaml says of its mail, as its computer still reports it (runner-rs/src/declared_access.rs
     `mail_request`). Accepted and ignored: sending is the server's sending policy alone (backend/email_sending.py)."""

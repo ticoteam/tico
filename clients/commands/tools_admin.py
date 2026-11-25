@@ -775,6 +775,10 @@ ROUTES = {
     "POST /api/v2/bots/{bot}/tools/{tool_id}/delete": "tico_tool_remove",
     "POST /api/v2/tools/{service}/learnings": "tico_tool_learn",
     "POST /api/v2/tools/{service}/learnings/{lid}/delete": "tico_tool_forget",
+    "PUT /api/v2/tool-guides/{slug}": "tico_tool_guide_write",
+    "DELETE /api/v2/tool-guides/{slug}": "tico_tool_guide_archive",
+    "PUT /api/v2/bots/{bot}/tool-guides/{slug}": "tico_tool_mine_add",
+    "DELETE /api/v2/bots/{bot}/tool-guides/{slug}": "tico_tool_mine_remove",
 }
 
 # Tools write routes no tool calls, and why.

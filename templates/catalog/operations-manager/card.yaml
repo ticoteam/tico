@@ -64,6 +64,7 @@ recommend_when: [uses_docs, uses_email, small_team]
 shared_files:
   - .claude/skills/build-the-page
   - .claude/skills/catch-up
+  - .claude/skills/work-with-software
   - .claude/skills/manage-insurance
   - .claude/skills/manage-leases-and-real-estate
   - .claude/skills/run-the-operating-cadence

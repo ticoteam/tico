@@ -350,6 +350,46 @@ anyone else sees their own rows and those of the bots they may see. CLI: `tico t
 [--result refused]`; MCP: `tico_tool_activity`, which adds a summary of repeated calls and errors (ids in paths folded
 to `:id`) and who added the tool's keys. The Tools Owner reads it daily to learn how each tool is used.
 
+## Tools registry
+
+The registry is every tool agents may reach for, with words on how to use it: the guides Tico ships
+(`templates/tool-guides/`: gh, git, aws, stripe, psql, sqlite3, duckdb, jq, ffmpeg, pandoc, playwright, curl), the
+company's own guides and the tools agents built here (a script in a repository), and every vendor in the Tools list you
+may see. A vendor nobody has written words on shows **No guide yet**. A vendor's guide has the vendor's id as its slug
+(`stripe`, `github`), so `gh`, `psql` or `sqlite3` find their guide too.
+
+An agent's skill `work-with-software` and the standing line of every bot's instructions say how it is used: run
+`tico tool find` before exact, bulk or repeated work by hand; the third time a model-heavy job comes back, write a
+script, test it, commit it and register it as a built tool; list the tools you use with what for.
+
+`GET /api/v2/tool-guides?q=&category=&origin=vendor|built&bot=&limit=&cursor=` answers `{tool_guides: [{slug, name,
+origin, category, summary, connections, used_by, last_used_at, has_guide}], next}`, most used first, at most 500 rows
+and 192 KB a page. `connections` counts the vendor's Tools rows you may see; `used_by` the agents that list it or used
+it through Tools in the last 30 days.
+
+`GET /api/v2/tool-guides/{slug}` adds `instructions` (the company's words over the shipped guide's), `guidance` (the
+company's own), `commands`, `source` and `needs` (a built tool's repository and the tools it needs), `owner`,
+`shipped`, and:
+- `access`: for each of the vendor's Tools rows, your `level` (`none`, `read`, `write`), how a run reaches it
+  (`arrives`: `proxy`, `env` or `login`), its keys' variable names (`env`) and a proxied tool's address variable
+  (`url_env`), never a value; an agent with no level gets the exact `request` command (`tico access request
+  tool:<id> --level read`). An API tool for Everyone you hold nothing on is listed by name, to ask for.
+- `used_by`: the agents you may see that list it (with their note) or used it in the last 30 days.
+- `learnings`: what agents learned using the vendor's tools (`tico tool learn`).
+
+Anyone signed in writes a guide (`PUT /api/v2/tool-guides/{slug}`, only the fields sent; the events log keeps who
+changed what). A new slug no vendor has is a built tool and needs a summary and instructions. Text that holds a key is
+refused: a guide names the variable. Archiving (`DELETE`) hides the guide, a shipped one too, and is for the tool's
+owner, the Tools Owner, the Tools page's owner, credential admins and the company's owner; writing it again brings it
+back. The Tools Owner's weekly review writes guides for used vendors that have none, merges duplicates, fixes
+categories and archives built tools unused for 60 days once their owner agrees.
+
+An agent's list: `GET /api/v2/bots/{bot}/tool-guides` answers `{bot, tool_guides: [{slug, name, origin, category,
+note, access, uses, last_used_at, built, listed}], next}`: the tools it lists, the ones it holds in Tools
+(`access`: `proxy` or `key`) and the ones it used in the last 30 days (`uses`: calls through the proxy and keys read).
+`PUT /api/v2/bots/{bot}/tool-guides/{slug} {note}` lists one, `DELETE` takes it off; the agent itself, anyone who may
+manage it, Agent Ops and the Assistant for them keep the list, as with a bot's tool notes. Its grants are not touched.
+
 ## Every Tools change from the CLI and MCP
 
 Nothing on the Tools page needs the page: each change is a `tico` command and a Tico MCP tool of the same name
@@ -391,6 +431,11 @@ write route has no command, or a command calls another route.
 | A bot's `bot.yaml` tool notes | `POST bots/{bot}/tools`, `…/update`, `…/delete` | `tico tool add`, `update`, `remove` | `tico_tool_add`, `tico_tool_update`, `tico_tool_remove` |
 | Learnings | `POST tools/{service}/learnings`, `…/{id}/delete` | `tico tool learn`, `tico tool forget` | `tico_tool_learn`, `tico_tool_forget` |
 | A tool's calls and last uses | `GET api-tools/{id}/activity` | `tico tool activity` | `tico_tool_activity` |
+| Find a tool in the registry | `GET tool-guides` | `tico tool find [words] [--category] [--built] [--mine]` | `tico_tool_find` |
+| One tool's guide, your access, who uses it | `GET tool-guides/{slug}` | `tico tool guide` | `tico_tool_guide` |
+| Write or change a guide; register a built tool | `PUT tool-guides/{slug}` | `tico tool guide-write [--built]` | `tico_tool_guide_write` |
+| Archive a guide | `DELETE tool-guides/{slug}` | `tico tool guide-archive` | `tico_tool_guide_archive` |
+| An agent's own tools: list, add, remove | `GET`, `PUT`, `DELETE bots/{bot}/tool-guides` | `tico tool mine`, `mine add`, `mine remove` | `tico_tool_mine`, `tico_tool_mine_add`, `tico_tool_mine_remove` |
 
 Only a person does these, in the app: reveal a value (`POST credentials/{id}/reveal`), type a value into a key card
 (`…/save`), tap Grant on a key card (`POST tools-chat/proposals/{id}/grant`), and watch or drive a website sign-in's live

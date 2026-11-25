@@ -9,10 +9,11 @@ from clients.commands import tools_admin
 from clients.remotecli import tool_name
 
 # The Tools section's routes: API and MCP tools, keys and settings, vendors, website tools, the vault and its key cards,
-# the Tools chat and a bot's bot.yaml tool entries. A route added under any of these needs a line in ROUTES or UI_ONLY.
+# the Tools chat, a bot's bot.yaml tool entries, the Tools registry and an agent's list in it. A route added under any
+# of these needs a line in ROUTES or UI_ONLY.
 SCOPE = re.compile(
     r"/api/v2/(api-tools|tool-|tools/|tools-chat/|mcp-tools|website-tools|credentials"
-    r"|credential-(requests|set|imports)|bots/\{[^}/]+\}/tools)"
+    r"|credential-(requests|set|imports)|bots/\{[^}/]+\}/tool(s|-guides))"
 )
 WRITES = {"POST", "PUT", "PATCH", "DELETE"}
 
@@ -157,6 +158,10 @@ ARGS = {
     "POST /api/v2/bots/{bot}/tools/{tool_id}/delete": {"bot": "ops", "id": "t1"},
     "POST /api/v2/tools/{service}/learnings": {"service": "linear", "text": "Paginate with first: 50"},
     "POST /api/v2/tools/{service}/learnings/{lid}/delete": {"service": "linear", "id": "l1"},
+    "PUT /api/v2/tool-guides/{slug}": {"slug": "refund-report", "summary": "Refunds by reason"},
+    "DELETE /api/v2/tool-guides/{slug}": {"slug": "refund-report"},
+    "PUT /api/v2/bots/{bot}/tool-guides/{slug}": {"bot": "ops", "slug": "duckdb", "note": "Weekly revenue"},
+    "DELETE /api/v2/bots/{bot}/tool-guides/{slug}": {"bot": "ops", "slug": "duckdb"},
 }
 
 

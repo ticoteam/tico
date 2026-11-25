@@ -60,4 +60,5 @@ recommend_when: [small_team, uses_meetings, uses_docs]
 shared_files:
   - .claude/skills/build-the-page
   - .claude/skills/catch-up
+  - .claude/skills/work-with-software
   - .claude/skills/write-investor-and-board-updates

@@ -32,5 +32,6 @@ recommend_when: [always]
 shared_files:
   - .claude/skills/build-the-page
   - .claude/skills/catch-up
+  - .claude/skills/work-with-software
   - .claude/skills/measure-unit-economics
   - .claude/skills/run-the-operating-cadence
