@@ -14,6 +14,7 @@ import { Pill } from '@/kit/Pill';
 import { Row } from '@/kit/Row';
 import { Select } from '@/kit/Select';
 import { PageMore, Section, SkRows } from '@/pagekinds';
+import { agentsQuery } from '@/features/team/exports';
 import { AddDialog, ConnectDialog, type Adding } from './AddTool';
 import { Face, Foot, press } from './parts';
 import { Confirm } from './ToolDialogs';
@@ -50,12 +51,17 @@ export function GuideView({ slug: named, origin: asked }: { slug: string; origin
   const [adding, setAdding] = useState<Adding | null>(null);
   const [editing, setEditing] = useState(false);
   const [archiving, setArchiving] = useState(false);
-  // The page waits on the guide; a vendor the registry cannot answer still shows its connections.
-  const read = built || !g.isError ? g : vendor;
+  // The page waits on the guide; a vendor the registry does not know (404) still shows its connections. Any other
+  // failure is the page's: a blank guide there could be saved over the real one.
+  const unknown = (g.error as { status?: number } | null)?.status === 404;
+  const read = built || !unknown ? g : vendor;
   // A company row (written, or archived and back) is what Archive hides; a shipped guide may be hidden too.
   const archivable = !!guide && (!!guide.updated_at || guide.shipped);
   const name = guide?.name || vendor.data?.name || slug;
   const users = guide?.used_by ?? [];
+  // Used by answers bot ids; an agent's page is under its slug.
+  const roster = useQuery(agentsQuery).data;
+  const slugOfBot = (id: string) => roster?.find((r) => r.id === id)?.slug ?? id;
   const learnings = guide?.learnings ?? [];
   return (
     <ToolPage
@@ -127,7 +133,7 @@ export function GuideView({ slug: named, origin: asked }: { slug: string; origin
       {users.length > 0 && (
         <Section name="Used by" count={users.length} target={`tool-used:${slug}`}>
           {users.map((u) => (
-            <Row key={u.id} className="wrow" title={u.name} href={`/team/${encodeURIComponent(u.id)}`}>
+            <Row key={u.id} className="wrow" title={u.name} href={`/team/${encodeURIComponent(slugOfBot(u.id))}`}>
               <Face actor={`bot:${u.id}`} name={u.name} />
               <span className="row-title">{u.name}</span>
               {u.note && <span className="row-ctx">{u.note}</span>}

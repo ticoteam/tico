@@ -155,15 +155,22 @@ export function AddDialog({ adding, onClose }: { adding: Adding; onClose: () => 
 /* ---------------------------------------------------------------- a tool built here */
 
 /** `stripe:read gh:write`, or names alone (read): what a built tool needs from the company's other tools. */
-export const needsOf = (text: string): ToolNeed[] =>
-  text
-    .split(/[\s,]+/)
-    .filter(Boolean)
-    .map((w) => {
-      const [tool = '', level] = w.toLowerCase().split(':');
-      return { tool, level: level === 'write' ? ('write' as const) : ('read' as const) };
-    })
-    .filter((n) => !!n.tool);
+export const needsOf = (text: string): ToolNeed[] => {
+  const by = new Map<string, ToolNeed>();
+  for (const w of text.split(/[\s,]+/).filter(Boolean)) {
+    const [tool = '', level] = w.toLowerCase().split(':');
+    if (tool) by.set(tool, { tool, level: level === 'write' ? 'write' : 'read' });
+  }
+  return [...by.values()];
+};
+
+/** What is wrong with a Needs line the server would refuse: a word that is no tool's slug, or more than 20. */
+export const needsFault = (text: string): string | undefined => {
+  const all = needsOf(text);
+  if (all.length > 20) return 'At most 20';
+  const odd = all.find((n) => n.tool.length > 61 || !/^[a-z0-9][a-z0-9-]*$/.test(n.tool));
+  return odd ? `Not a tool: ${odd.tool}` : undefined;
+};
 
 /** Add tool › Built here: a script, a small MCP server or a report built in-house, with how to use it. */
 export function BuiltDialog({ onClose }: { onClose: () => void }) {
@@ -177,7 +184,8 @@ export function BuiltDialog({ onClose }: { onClose: () => void }) {
   const [taken, setTaken] = useState<string | null>(null);
   const slug = slugOf(name);
   const clash = !!slug && taken === slug;
-  const ready = !!slug && !clash && !!summary.trim() && !!instructions.trim();
+  const needFault = needsFault(needs);
+  const ready = !!slug && !clash && !needFault && !!summary.trim() && !!instructions.trim();
   const add = async () => {
     setBusy(true);
     const free = await guideTaken(slug).then(
@@ -212,7 +220,7 @@ export function BuiltDialog({ onClose }: { onClose: () => void }) {
       <Field label="Summary" value={summary} onValueChange={setSummary} placeholder="One line" />
       <Field label="Instructions" area value={instructions} onValueChange={setInstructions} placeholder="What it is for and how to run it" />
       <Field label="Source" value={source} onValueChange={setSource} placeholder="acme/tools scripts/churn.py" />
-      <Field label="Needs" value={needs} onValueChange={setNeeds} placeholder="stripe:read" />
+      <Field label="Needs" value={needs} onValueChange={setNeeds} placeholder="stripe:read" error={needFault} />
     </Dialog>
   );
 }

@@ -11,7 +11,7 @@ import { queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
 import { newAddressFor } from '@/oldAddress/map';
 import { sendsMore } from './actions';
-import { AddDialog, nameFromUrl, ReplaceLoginDialog } from './AddTool';
+import { AddDialog, nameFromUrl, needsFault, needsOf, ReplaceLoginDialog } from './AddTool';
 import {
   addressGrantsQuery,
   agentSendingQuery,
@@ -2229,5 +2229,17 @@ describe('the tools registry', () => {
     fireEvent.change(within(dialog).getByLabelText('Summary'), { target: { value: 'Crashes, ours' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(writes(sent)).toEqual([{ url: '/api/v2/tool-guides/raygun', method: 'PUT', body: { origin: 'vendor', summary: 'Crashes, ours' } }]));
+  });
+});
+
+describe('a built tool’s Needs line', () => {
+  it('keeps one entry per tool and names a word the server would refuse', () => {
+    expect(needsOf('stripe gh:write stripe:write')).toEqual([
+      { tool: 'stripe', level: 'write' },
+      { tool: 'gh', level: 'write' },
+    ]);
+    expect(needsFault('stripe:read gh:write')).toBeUndefined();
+    expect(needsFault('google_drive:read')).toBe('Not a tool: google_drive');
+    expect(needsFault(Array.from({ length: 21 }, (_, i) => `t${i}`).join(' '))).toBe('At most 20');
   });
 });

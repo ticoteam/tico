@@ -93,7 +93,8 @@ export function AddToolDialog({ slug, name, onClose }: { slug: string; name: str
   const found = useInfiniteQuery({ ...findToolsQuery(words.trim()), placeholderData: keepPreviousData });
   const rows = (found.data?.pages.flatMap((p) => p.tool_guides ?? []) ?? []).filter((t) => !has.has(t.slug));
   // Only a tool the search still shows counts as chosen: one the words filtered out is never added unseen.
-  const chosen = picked && rows.some((t) => t.slug === picked) ? picked : null;
+  // Rows from the last search while the new one loads do not count either.
+  const chosen = picked && !found.isPlaceholderData && rows.some((t) => t.slug === picked) ? picked : null;
   const save = async () => {
     if (!chosen) return;
     const r = await add.run({ slug, tool: chosen, note: note.trim() || undefined });
@@ -130,6 +131,7 @@ export function AddToolDialog({ slug, name, onClose }: { slug: string; name: str
           </button>
         ))}
         {found.isSuccess && !rows.length && !found.hasNextPage && <p className="now-step">Nothing matches</p>}
+        {found.isError && <p className="now-step">Search did not load</p>}
       </div>
       {found.hasNextPage && (
         <button className="verb" type="button" disabled={found.isFetchingNextPage} onClick={() => void found.fetchNextPage()}>
