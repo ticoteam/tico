@@ -1,6 +1,6 @@
 ---
 name: build-the-page
-description: Build any page a person reads - a spec, a Review page, a QA page, a release report, a Checked in production page, a plan or a report - as one clear HTML page from a ready template. Title, one line saying what the page is, clickable contents, then short sections of bullets, charts and real screenshots. page.py embeds the screenshots, checks the page against the eight rules and renders the published copy. Read before you write any page a person reads.
+description: Build any page a person reads - a spec, a Review page, a QA page, a release report, a Checked in production page, a plan, a report or a sidebar widget - as one clear HTML page from a ready template, with the page kit's stats, charts, tables and lists in Tico's look. Title, one line saying what the page is, clickable contents, then short sections of bullets, charts and real screenshots. page.py embeds the screenshots, checks the page against the eight rules and renders the published copy. Read before you write any page a person reads.
 metadata:
   function: tico
 ---
@@ -79,6 +79,31 @@ Crop to what matters. Never show one person's real data: use your own view, the 
 `data-arrows="1: 600,120 -> 420,1500; 2: 80,300 -> 160,420"` (arrow 1 from its numbered tail to its head). A phone
 picture from `app-shot` is 780 px wide for 390. At most five a picture; the same number for the same thing in the
 before, the after and the criterion that checks it. One line per number in the caption.
+
+## The page kit
+
+Tico draws these tags in its own look, dark and light. Use them for figures, charts, tables and lists on any page;
+plain HTML still works, and no page needs them. Tico adds the kit when the page uses a tag, so add no script for it.
+Without the kit a tag shows what is inside it.
+
+| Tag | Shows |
+|---|---|
+| `<tico-stat label value sub trend>` | One figure. `trend="+12%"` draws ▲ 12% |
+| `<tico-chart kind="bars" label>` | Bars, or `kind="line"`. Rows in `data="Mon 10, Tue 20"` or as `<li>Mon 10</li>` inside it |
+| `<tico-table>` | Wraps a normal `<table>`; figures align right |
+| `<tico-list>` | Wraps a `<ul>`: a title per row, marks (`<tico-badge>`, `<small>`, `<time>`) on the right |
+| `<tico-badge tone>` | A small mark; `tone="warn"` for late, `tone="strong"` for the one that matters |
+
+    <tico-stat label="Signups" value="1,204" trend="+12%" sub="this week"></tico-stat>
+    <tico-chart kind="bars" label="Signups by source"><ul><li>Search 640</li><li>Ads 410</li></ul></tico-chart>
+
+**Widgets.** A widget is a page pinned to your sidebar; it shows the page's card view, as a chat card does. In the card
+view (`html[data-tico-view=card]`) show one stat or one chart and hide the rest (`[data-tico-view=card] .full
+{display:none}`); the card's Expand opens the full page. `examples/widget.html` is one. Pin it at the top:
+`tico pin add bot:<your slug> page:<file id> --position 0` (arrange-your-sidebar has the rest).
+
+`page.py kit <page>.html` names a tag or attribute the kit does not know; `check` shows the same hints. Neither
+fails on them.
 
 ## Steps
 

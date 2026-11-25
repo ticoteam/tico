@@ -156,6 +156,22 @@ Needs you, the task page and the Library, so a viewer never sees a title, a coun
 A page with live blocks is shown only through its visual address, never the shared hosted copy, since each viewer
 gets a different page.
 
+## The page kit
+
+Display tags that draw a page in Tico's look, dark and light. A page needs none of them; plain HTML still works.
+
+- `<tico-stat label value sub trend>`: one figure. `trend="+12%"` draws ▲ 12%.
+- `<tico-chart kind="bars|line" label data="Mon 10, Tue 20">`: bars or a line. Rows can also be `<li>Mon 10</li>`
+  inside it; a row's value is its last figure (`$1,200`, `4.5%`).
+- `<tico-table>` around a normal `<table>`: Tico's rows, figures aligned right.
+- `<tico-list>` around a `<ul>`: one title per row, marks (`<tico-badge>`, `<small>`, `<time>`) on the right.
+- `<tico-badge tone="warn|strong">`: a small mark.
+
+When a page uses a kit tag, Tico adds the kit's script when it serves the page, after the height script. Each page
+version keeps the kit it was published with, so a later kit never changes a published page. Without the kit (the still
+preview in the file viewer) a tag shows what is inside it. The tags draw only what the page holds; live data is the
+live blocks' job.
+
 ## Where pages show
 
 - **A card** shows the page at the card's width, at a small, medium or large size. Tap it to open the page full size at

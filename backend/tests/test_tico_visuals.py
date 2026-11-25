@@ -16,7 +16,7 @@ from backend.tests.helpers.storage_delivery import task
 from backend.tests.helpers.tico_storage import ADDRESS, SIGNING, Owner, on, tico  # noqa: F401
 from backend.tests.helpers.visuals import task_with_file
 
-PAGE = '<p>funnel</p><img src="https://tracker.example/p.gif"><script>steal()</script>'
+PAGE = '<p>funnel</p><tico-badge>Live</tico-badge><img src="https://tracker.example/p.gif"><script>steal()</script>'
 SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>'
 
 
@@ -127,9 +127,10 @@ def test_a_page_and_an_svg_uploaded_to_tico_storage_show_inline_from_the_company
         )
         if kind == "page":
             assert kind_type == "text/html; charset=utf-8"
-            assert body == PAGE.encode() + b"<script>" + V.REPORTER.encode() + b"</script>", (
-                "as written, plus the reporter"
-            )
+            assert (
+                body
+                == PAGE.encode() + b"<script>" + V.REPORTER.encode() + b"</script><script>" + V.KITS[1] + b"</script>"
+            ), "as written, plus the reporter and the page kit it uses"
         else:
             assert kind_type == "image/svg+xml"
             assert body == V.clean(SVG.encode(), "svg")[0]
@@ -348,8 +349,8 @@ def test_an_svgs_hosted_copy_keeps_its_name_and_closed_template_so_an_edge_not_y
 
 def test_purging_a_deleted_page_removes_its_copy_from_before_pages_ran_as_written_too(tmp_path):
     """A page copied before this release has its copy at the old name (copy 2, policy 1, the reporter of then in its
-    script slot). Nothing reads it now, so purging the page's bytes deletes that copy as well as the current one; an
-    SVG has one name."""
+    script slot). Nothing reads it now, so purging the page's bytes deletes that copy as well as the current one and
+    one per page kit; an SVG has one name."""
     import threading
     from types import SimpleNamespace
 
@@ -381,6 +382,7 @@ def test_purging_a_deleted_page_removes_its_copy_from_before_pages_ran_as_writte
         f"acme/blobs/{digest[:2]}/{digest}",
         "acme" + current,
         f"acme/visuals/{old[:2]}/{old}",
+        *("acme" + tico_storage._visual(digest, "page", ancestors, kit)[0] for kit in V.KITS),
     ]
     deleted.clear()
     Blobs.purge(blobs, digest, "svg")

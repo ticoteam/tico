@@ -33,6 +33,7 @@ from pydantic import Field
 from . import models as M
 from .auth import Identity
 from .blobs import register
+from .visuals import kit_for
 from .store import H, Problem, encode, repo_url
 from . import bot_home_merge
 from . import file_library
@@ -1682,7 +1683,7 @@ class Files:
         if changed:
             version += 1
             c.execute(
-                "INSERT INTO bot_file_versions(file_id,version,blob_id,digest,source_digest,size,name,mime,commit_sha,repo_path,attempt_id,actor,created_at,media_state) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')",
+                "INSERT INTO bot_file_versions(file_id,version,blob_id,digest,source_digest,size,name,mime,commit_sha,repo_path,attempt_id,actor,created_at,media_state,page_kit) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'pending',?)",
                 (
                     row["id"],
                     version,
@@ -1697,6 +1698,7 @@ class Files:
                     attempt or None,
                     version_actor or actor,
                     version_time or now,
+                    kit_for(mime),
                 ),
             )
         action = "created" if created else "modified" if changed else "published"
@@ -2018,9 +2020,21 @@ class Files:
     @staticmethod
     def insert_task_version(c, fid, number, blob, digest, size, name, mime, actor, created, *, pending=True):
         c.execute(
-            "INSERT INTO bot_file_versions(file_id,version,blob_id,digest,size,name,mime,actor,created_at,media_state) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?)",
-            (fid, number, blob, digest, size, name, mime, actor, created, "pending" if pending else "none"),
+            "INSERT INTO bot_file_versions(file_id,version,blob_id,digest,size,name,mime,actor,created_at,media_state,page_kit) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                fid,
+                number,
+                blob,
+                digest,
+                size,
+                name,
+                mime,
+                actor,
+                created,
+                "pending" if pending else "none",
+                kit_for(mime),
+            ),
         )
         if not pending:
             from .file_metadata import FIELDS

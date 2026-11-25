@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Spend by angle</title>
+<style>
+  body{margin:0;padding:16px 20px;font-family:system-ui,sans-serif}
+  h1{margin:0 0 16px;font-size:22px}
+  h2{margin:24px 0 8px;font-size:16px}
+  /* The card view (a chat card, a sidebar widget) shows the one chart; the full view shows the rest too. */
+  [data-tico-view=card] .full{display:none}
+  [data-tico-view=card] body{padding:12px}
+</style>
+</head>
+<body>
+<h1 class="full">Spend by angle</h1>
+<div class="full">
+  <tico-stat label="Spend this week" value="$4,210" trend="+8%" sub="Meta and Google"></tico-stat>
+  <tico-stat label="Cost per signup" value="$31" trend="-4%"></tico-stat>
+</div>
+<tico-chart kind="bars" label="Spend by angle, this week">
+  <ul><li>Price $1,640</li><li>Speed $1,210</li><li>Trust $860</li><li>Before and after $500</li></ul>
+</tico-chart>
+<section class="full">
+  <h2>Last six weeks</h2>
+  <tico-chart kind="line" data="W1 $3100, W2 $3350, W3 $2980, W4 $3720, W5 $3890, W6 $4210"></tico-chart>
+  <h2>Ads</h2>
+  <tico-table>
+    <table>
+      <thead><tr><th>Ad</th><th>Angle</th><th>Spend</th><th>Signups</th></tr></thead>
+      <tbody>
+        <tr><td>Half the price</td><td>Price</td><td>$1,020</td><td>41</td></tr>
+        <tr><td>Clean by Friday</td><td>Speed</td><td>$880</td><td>26</td></tr>
+        <tr><td>4.9 stars</td><td>Trust</td><td>$860</td><td>22</td></tr>
+      </tbody>
+    </table>
+  </tico-table>
+  <h2>Next</h2>
+  <tico-list>
+    <ul>
+      <li>Refresh the Price creative <tico-badge tone="warn">Tired</tico-badge></li>
+      <li>Test a second Trust ad <time>Mon</time></li>
+      <li>Pause Before and after <tico-badge>Low</tico-badge></li>
+    </ul>
+  </tico-list>
+</section>
+</body>
+</html>

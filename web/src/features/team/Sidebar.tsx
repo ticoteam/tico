@@ -1,7 +1,8 @@
+import { useQuery } from '@tanstack/react-query';
 import { Fragment, type ReactNode } from 'react';
 import { run } from '@/actions';
 import type { Card, Place } from '@/api/schema';
-import { PageCard } from '@/conversation';
+import { fileFactsQuery, LivePage, PageCard } from '@/conversation';
 import { Ago } from '@/kit/Ago';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { Link } from '@/kit/Link';
@@ -74,21 +75,27 @@ function CardRow({ title, href, file, at, pills }: { title: string; href?: strin
     is its live preview when `live`, else its row. */
 export function PinnedItem({ pin, live = true }: { pin: Pin | undefined; live?: boolean }) {
   if (!pinShows(pin)) return null;
-  if (pin.page) {
-    const { file_id: id, title, updated_at, version } = pin.page;
-    // its address changes with each version, so a new one is read, never the cached last one
-    const src: `/api/${string}` = version ? `${fileHref(id)}?v=${version}` : `${fileHref(id)}?at=${encodeURIComponent(updated_at)}`;
-    return (
-      <section className="stage pk-sec side-page" aria-label={title} data-target={`page:${id}`}>
-        {live ? (
-          <PageCard src={src} title={title} onOpen={() => void run('files.preview', version ? { file: id, version } : { file: id }, { via: 'click' })} />
-        ) : (
-          <CardRow title={title} file={id} at={updated_at} />
-        )}
-      </section>
-    );
-  }
+  if (pin.page) return <PinnedPage page={pin.page} live={live} />;
   return pin.card ? <CardSection card={pin.card} /> : null;
+}
+
+/** A pinned page live: its card view running as written (a widget), as a page shows in a chat (LivePage), where this
+    install shows pages live; else its still preview. Past the first few, its row. */
+function PinnedPage({ page, live }: { page: NonNullable<Pin['page']>; live: boolean }) {
+  const { file_id: id, title, updated_at, version } = page;
+  const facts = useQuery({ ...fileFactsQuery(id), enabled: live });
+  // its address changes with each version, so a new one is read, never the cached last one
+  const src: `/api/${string}` = version ? `${fileHref(id)}?v=${version}` : `${fileHref(id)}?at=${encodeURIComponent(updated_at)}`;
+  const still = <PageCard src={src} title={title} onOpen={() => void run('files.preview', version ? { file: id, version } : { file: id }, { via: 'click' })} />;
+  return (
+    <section className="stage pk-sec side-page" aria-label={title} data-target={`page:${id}`}>
+      {!live ? (
+        <CardRow title={title} file={id} at={updated_at} />
+      ) : facts.isPending ? null : (
+        <LivePage src={facts.data?.visual_src} title={title} id={`${id}@${facts.data?.version ?? version ?? updated_at}`} fallback={still} />
+      )}
+    </section>
+  );
 }
 
 /* ---------------------------------------------------------------- cards (backend/cards.py DATA) */
