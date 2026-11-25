@@ -61,11 +61,10 @@ export function trailOf(path: string, n: TrailNames): TrailPart[] {
       page = '';
       break;
     case 'tasks':
-    case 'task':
       add('Tasks', '/tasks');
       // `all` holds the tasks with no pipeline of their own; `<pipeline>/<n>/<tab>`'s tab is the page's own tab row
-      if (top === 'tasks' && a && a !== 'all') add(n.pipelines?.find((p) => p.id === a)?.name ?? '', at('tasks', a));
-      if (top === 'tasks' && b === 'edit') add('Edit', at('tasks', a!, 'edit'));
+      if (a && a !== 'all') add(n.pipelines?.find((p) => p.id === a)?.name ?? '', at('tasks', a));
+      if (b === 'edit') add('Edit', at('tasks', a!, 'edit'));
       break;
     case 'needs-you':
       // Needs you is the top of Tasks; its views (All, Snoozed, Done) are under it, by their own name

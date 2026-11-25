@@ -54,7 +54,7 @@ export const closeChat = defineAction({
   did: () => copy.didCloseChat,
 });
 
-const sheet = z.enum(['tico', 'menu', 'list', 'widgets', 'side'] as const);
+const sheet = z.enum(['tico', 'menu', 'widgets', 'side'] as const);
 
 const behind =
   <const T>(input: T) =>

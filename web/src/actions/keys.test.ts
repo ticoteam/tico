@@ -79,4 +79,10 @@ describe('with a task open over the page', () => {
       expect(keys[k]!(at({ view: 'list' }))).toHaveProperty('sheet');
     }
   });
+
+  it('folds no list sheet: the list is the task’s own, in its layer', async () => {
+    const { fold } = await import('./base');
+    expect(fold.input.safeParse({ sheet: 'list' }).success).toBe(false);
+    expect(fold.input.safeParse({ sheet: 'menu' }).success).toBe(true);
+  });
 });
