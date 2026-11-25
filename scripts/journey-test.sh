@@ -532,8 +532,14 @@ step_new_runner() {
   [ "$state" = "present on-disk " ] || { say "the worktree from before the upgrade is $state"; return 1; }
   fixture_intact || { say "the older releases' rows did not survive the upgrade"; return 1; }
   # A computer that lost the harness's own sessions (a move, a new HOME, cleaned files) still answers, on a fresh
-  # thread, instead of failing every turn on the one it remembers.
+  # thread, instead of failing every turn on the one it remembers. The runner keeps a thread's Codex app-server
+  # between turns, and that process still holds the thread in memory, so the loss is a restarted runner too: only a
+  # new app-server has to find the thread on disk, as one does after a move.
   docker exec "$RUNNER" find /home/runner/journey-threads -maxdepth 1 -type f -name 'journey-*' -delete || return 1
+  before="$(last_seen)"
+  start_runner "$CAND" --code "" || return 1
+  retry 120 seen_since "$before" || { say "the candidate runner did not reconnect after its sessions were lost"; return 1; }
+  retry 120 agent_ops_ready || { say "Agent Ops is not ready on the restarted candidate runner"; return 1; }
   ask moved || { say "the bot stopped answering once its saved session was gone"; return 1; }
   [ "$(fact resumed)" = no ] && [ "$(fact thread)" != "$SEED_THREAD" ] || { say "the turn after the session was lost: $(cat "$WORK/reply")"; return 1; }
 }
