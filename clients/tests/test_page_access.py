@@ -62,3 +62,19 @@ def test_page_card_sends_the_rows_to_the_card_route_and_only_bots_are_offered_it
         )
     ]
     assert _access.AUDIENCE['tico_page_card'] == _access.BOTS
+
+
+def test_duplicate_passes_the_same_title_and_idempotency_to_the_page_api():
+    from clients.commands.content import pages_duplicate
+    from clients.commands import _access
+
+    class Api:
+        _tico_is_agent_ops = False
+
+        def post(self, path, body, key=None):
+            assert (path, body, key) == ("pages/file-123/duplicate", {"title": "New plan"}, "copy-once")
+            return {"page": {"file_id": "file-copy"}}
+
+    parsed = hubcli.parser().parse_args(["page", "duplicate", "file-123", "--title", "New plan"])
+    assert pages_duplicate(Api(), {**vars(parsed), "operation_id": "copy-once"})["page"]["file_id"] == "file-copy"
+    assert _access.AUDIENCE["tico_page_duplicate"] == _access.KINDS

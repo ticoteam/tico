@@ -268,6 +268,23 @@ holds any JSON up to 64 KB, and a page keeps at most 10,000 rows and 20 MB. Each
 Deleting a page for good deletes its rows. Over MCP: `tico_page_data_list`, `tico_page_data_get`,
 `tico_page_data_set` and `tico_page_data_rm`.
 
+### Library › Pages
+
+Open **Library › Pages** to find the pages you can read. Search matches their titles and text.
+Use **Writer**, **Linked to**, **Kind**, **Stale**, or **Tag** to narrow the list. Page rows mark
+apps, live blocks, missed update cadences and current versions that have a person's approval.
+A page is stale once its current version is older than one and a half times its cadence.
+
+In a page's **⋯** menu, **Who can see it** controls its audience. **Versions** opens a stored
+version and **What's changed** compares its text with an earlier one. **Pin to a sidebar**
+adds or removes the page on an agent's sidebar you can edit. **Archive** moves it out of
+search and the main list. Open it from **Show archived** and choose **Restore** to bring it back.
+
+Tag a page `template` to find it under **Templates**. **Duplicate** starts a new page in the
+source's scope with its current HTML, cadence and audience. The file's **Made from** field
+points to the source. The copy starts with one version and an empty page data store.
+Agents can use `tico page duplicate ID --title "Quarterly plan"` or `tico_page_duplicate`.
+
 ## Archiving
 
 The maintainer bot, people who manage it, admins and the owner archive a page (`tico page archive ID`, or **Archive**

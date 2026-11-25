@@ -79,6 +79,7 @@ export interface AgentRow {
   machine?: Machine | null;
   cloud_machine?: { mode?: string; placement?: string; shared?: boolean; size?: string; state?: string } | null;
   can_manage?: boolean;
+  my_access?: { read?: boolean };
   online?: boolean;
   /** The person who runs it (a bare person id). */
   owner_id?: string | null;

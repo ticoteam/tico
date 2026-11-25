@@ -2,7 +2,7 @@
 """The answers of the Files routes (backend/openapi_v2.py gathers them)."""
 
 from ..api_contract import ref
-from ._base import ACTORS, SCHEMAS, items, obj
+from ._base import ACTORS, SCHEMAS, items, merge, obj
 
 SCHEMAS.update(
     {
@@ -179,25 +179,35 @@ SCHEMAS.update(
             required=["id", "bot", "title", "kind", "library_kind", "version", "last_activity_at"],
         ),
         "FileLibrary": obj({"files": items(ref("LibraryFile")), "has_more": "b", "next_cursor": "n"}),
-        "FileSearchHit": obj(
-            {
-                "id": "s",
-                "title": "s",
-                "kind": "s",
-                "library_kind": "s",
-                "bot": "s",
-                "bot_name": "s",
-                "version": "i",
-                "updated_at": "s",
-                "url": "n",
-                "page": "b",
-                "excerpt": "s",
-                "score": "f",
-                "links": {**items(ref("PageLinkView")), "maxItems": 5},
-                "links_more": "i",
-                "writers": items(ref("PageWriter")),
-                "may_write": "b",
-            }
+        "FileSearchHit": merge(
+            obj(
+                {
+                    "id": "s",
+                    "title": "s",
+                    "kind": "s",
+                    "library_kind": "s",
+                    "bot": "s",
+                    "bot_name": "s",
+                    "version": "i",
+                    "updated_at": "s",
+                    "url": "n",
+                    "page": "b",
+                    "excerpt": "s",
+                    "score": "f",
+                    "links": {**items(ref("PageLinkView")), "maxItems": 5},
+                    "links_more": "i",
+                    "writers": items(ref("PageWriter")),
+                    "may_write": "b",
+                }
+            ),
+            obj(
+                {
+                    "page_marks": obj(
+                        {"has_app": "b", "live": "b", "approved": "b", "stale_days": {"type": ["integer", "null"]}}
+                    )
+                },
+                required=[],
+            ),
         ),
         "FileSearch": obj({"results": items(ref("FileSearchHit"))}),
         "FileDeleted": obj({"deleted": "s", "versions": "i"}),

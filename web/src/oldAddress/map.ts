@@ -263,7 +263,7 @@ export const ROWS: readonly Row[] = [
   },
   { page: 'Library › Files', path: new RegExp(`^#/library/files${tail}$`), to: (_m, q) => at('/library/files', { kind: q.get('kind'), q: q.get('q') }) },
   // A page (a file of kind page) full view: opened in Library › Files.
-  { page: 'Page full view', path: /^#\/page\/([^/]+)$/, to: ([id], q) => at('/library/files', { file: dec(id), v: version(q) }) },
+  { page: 'Page full view', path: /^#\/page\/([^/]+)$/, to: ([id], q) => at('/library/pages', { file: dec(id), v: version(q) }) },
   { page: 'Strategy › Goals', path: /^#\/strategy\/goals(?:\/([^/]+))?$/, to: ([id]) => at('/company/strategy/goals', { panel: id ? `goal:${dec(id)}` : null }) },
   { page: 'Strategy › Org', path: new RegExp(`^#/strategy/org${tail}$`), to: () => '/company/strategy/org' },
   // Budget is not a Strategy tab in the new design: budgets are Finance's Budgets tab.

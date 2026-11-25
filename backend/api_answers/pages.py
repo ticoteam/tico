@@ -68,6 +68,12 @@ class Page(TypedDict):
     """Where to frame the page; null means open it (GET /api/v2/files/{fid}/versions/{number})"""
     app: NotRequired[PageAppAccess]
     """Only on a current version published as an app: what it may read through Tico's bridge (framed sealed)"""
+    has_app: NotRequired[bool]
+    """On a list: its current version declares app access"""
+    live: NotRequired[bool]
+    """On a list: its current version has live blocks"""
+    approved: NotRequired[bool]
+    """On a list: a person approved its current version"""
 
 
 @answer

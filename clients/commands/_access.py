@@ -300,6 +300,7 @@ AUDIENCE = {
     **{name: BOTS for name in ("tico_file_publish", "tico_file_link", "tico_file_touch", "tico_file_import")},
     "tico_email_attachment_file": BOTS,  # an email's attachment saved as a file is a bot's file, as a publish is
     "tico_page_publish": KINDS,  # people publish too; until wave 2 a person's page is stored under their Assistant bot
+    "tico_page_duplicate": KINDS,  # a copy is a publish by the caller
     # A hard delete is the owner's alone; Agent Ops asks the owner who asked for it to confirm (backend/agent_ops_act.py).
     "tico_file_delete": ("owner", "botops"),
     "tico_page_card": BOTS,  # only the page's owner bot, for a person who just wrote to it there (the route checks)

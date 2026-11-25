@@ -85,8 +85,10 @@ def test_an_ok_from_its_preview_approves_the_pinned_version_only(c):
     _ok(c, rid)
     found = _verdict(c, one)
     assert (found["approved"], found["by"], found["task"], found["question"]) == (True, ANA, task, rid)
+    assert F.approved_current(c, Identity(ANA, "owner"), [one]) == {fid}
     two = _version(c, fid, 2, "d2")
     assert not _verdict(c, two)["approved"]  # a new version is a new review
+    assert not F.approved_current(c, Identity(ANA, "owner"), [two])
 
 
 def test_a_plain_ok_on_an_ask_that_only_shows_the_file_approves_nothing(c):

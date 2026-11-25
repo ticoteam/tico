@@ -63,3 +63,27 @@ def seed(b):
         c.execute("UPDATE jobs SET state='completed' WHERE id=?", (job,))
 
     b.write(finish)
+
+    b.at(days=3)
+    template = b.call(
+        "POST",
+        "pages",
+        {
+            "name": "launch-checklist.html",
+            "title": "Launch checklist",
+            "task": task,
+            "cadence": "daily",
+            "text": "<h2>Before launch</h2><p>Check the campaign assets.</p>",
+        },
+    )["page"]["file_id"]
+    b.at(days=2)
+    b.call(
+        "POST",
+        "pages",
+        {
+            "page": template,
+            "text": '<h2>Before launch</h2><p>Check the campaign assets and budget.</p><tico-tasks waiting-on="viewer"></tico-tasks>',
+        },
+    )
+    b.call("POST", "tags", {"key": "template", "label": "Template"})
+    b.call("POST", "files/" + template + "/tags", {"add": ["template"]})

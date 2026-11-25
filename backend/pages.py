@@ -27,6 +27,7 @@ from .store import H, Problem
 from . import visual_specs
 from .api_contract import api_v2
 from .api_answers.pages import PageList, PagePublished, PageShown, PageUnlinked
+from .live_blocks import has_live
 from clients import bot_files as BF
 
 CADENCES = {"none": 0, "daily": 1, "weekly": 7, "monthly": 30}
@@ -40,6 +41,10 @@ AS_OF = re.compile(r"\d{4}-\d{2}-\d{2}")
 class PageLink(M.Contract):
     target: str = Field(min_length=1, max_length=200)
     role: str = Field(default="related", min_length=1, max_length=40)
+
+
+class PageDuplicate(M.Contract):
+    title: str = Field(default="", max_length=200)
 
 
 class PageEdit(M.Contract):
@@ -80,6 +85,73 @@ def stale_days(updated, cadence, now=None):
     now = now or H.parse_ts(H.now())  # the hub's clock, which the scenarios freeze
     days = (now - when).total_seconds() / 86400
     return int(days) if days > period * STALE_FACTOR else None
+
+
+def page_list_filters(c, *, kind="", stale=False):
+    """Predicates shared by the page list and the existing Files text search."""
+    where, args = [], []
+    if kind:
+        if kind not in ("app", "live", "static"):
+            raise Problem("validation", "Page kind is app, live or static", 422)
+        app = (
+            "(SELECT v.app IS NOT NULL FROM bot_file_versions v WHERE v.file_id=f.id AND v.version=f.current_version)"
+            if app_version_column(c)
+            else "0"
+        )
+        where.append(
+            {
+                "app": app,
+                "live": "p.live=1",
+                "static": f"p.live=0 AND NOT COALESCE({app},0)",
+            }[kind]
+        )
+    if stale:
+        periods = [(cadence, days * STALE_FACTOR) for cadence, days in CADENCES.items() if days]
+        cutoff = "CASE p.cadence" + " WHEN ? THEN ?" * len(periods) + " END"
+        where.append(
+            "(SELECT julianday(v.created_at) FROM bot_file_versions v WHERE v.file_id=f.id AND v.version=f.current_version) "
+            "< julianday(?) - " + cutoff
+        )
+        args.extend([H.now(), *(value for period in periods for value in period)])
+    return where, args
+
+
+def app_version_column(c):
+    return read_cache.one(c, "SELECT 1 FROM pragma_table_info('bot_file_versions') WHERE name='app'", ()) is not None
+
+
+def list_marks(c, who, rows):
+    """Version marks for rows the caller already may read."""
+    from . import file_reviews
+
+    current = sorted({r["id"] for r in rows if r["current_version"]})
+    if not current:
+        return {}
+    version_data = {}
+    app = "v.app IS NOT NULL" if app_version_column(c) else "0"
+    for part in H.chunks(current):
+        marks = ",".join("?" * len(part))
+        version_data.update(
+            (v["file_id"], v)
+            for v in c.execute(
+                "SELECT v.file_id,v.version,COALESCE(v.source_digest,v.digest) AS digest,v.created_at,p.cadence,p.live,"
+                f"{app} AS has_app FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id AND f.current_version=v.version "
+                f"JOIN pages p ON p.file_id=f.id WHERE v.file_id IN ({marks})",
+                part,
+            )
+        )
+    approved = file_reviews.approved_current(
+        c, who, [(v["file_id"], v["version"], v["digest"]) for v in version_data.values()]
+    )
+    return {
+        fid: {
+            "has_app": bool(v["has_app"]),
+            "live": bool(v["live"]),
+            "approved": fid in approved,
+            "stale_days": stale_days(v["created_at"], v["cadence"]),
+        }
+        for fid, v in version_data.items()
+    }
 
 
 VIEW_VERSION_SQL = "SELECT version,actor,created_at,app FROM bot_file_versions WHERE file_id=? AND version=?"
@@ -287,10 +359,27 @@ class Pages:
                 out.add(v["actor"])
         return out
 
-    def listing(self, who, *, bot="", task="", linked="", role="", writer="", archived=False, limit=20, cursor=""):
-        """Pages `who` may read, newest first; archived ones only when asked. Paged; no totals, so a count never
-        says what the reader may not see."""
-        from .file_library import scan
+    def listing(
+        self,
+        who,
+        *,
+        bot="",
+        task="",
+        linked="",
+        role="",
+        writer="",
+        stale=False,
+        page_kind="",
+        tag="",
+        archived=False,
+        limit=20,
+        cursor="",
+    ):
+        """Pages `who` may read, newest first; archived ones only when asked, only stale ones with `stale`. Paged; no
+        totals, so a count never says what the reader may not see. Each row also says whether it has live blocks and
+        whether a person approved its current version (the Pages list's marks)."""
+        from . import file_details
+        from .file_library import TAG_SQL, scan
 
         where = [
             "f.state<>'deleted'",
@@ -313,11 +402,17 @@ class Pages:
             if task:
                 self.auth.task(c, who, task)
             cache = {}
+            predicates, values = page_list_filters(c, kind=page_kind, stale=stale)
+            where.extend(predicates)
+            params.extend(values)
+            if tag:
+                where.append(TAG_SQL)
+                params.append(file_details.tag_id(c, who, tag) or "")
             with page_links.visible_filters(c, self.auth, who, linked, role, writer) as (sql, args):
                 found, nxt = scan(
                     c,
-                    "SELECT f.*,p.cadence,p.as_of,p.replaced_by_id,p.audience,p.archived AS page_archived FROM pages p "
-                    "JOIN bot_files f ON f.id=p.file_id",
+                    "SELECT f.*,p.cadence,p.as_of,p.replaced_by_id,p.audience,p.archived AS page_archived,p.live "
+                    "FROM pages p JOIN bot_files f ON f.id=p.file_id",
                     [*where, *sql],
                     [*params, *args],
                     limit,
@@ -327,8 +422,15 @@ class Pages:
                 )
             prime_views(c, found)
             known = names.lookup(c, {"bot:" + r["bot_id"] for r in found} | self._authors(c, found))
+            marks = list_marks(c, who, found)
             return {
-                "pages": [self.view(c, who, r, self.page_of(r), cache, known) for r in found],
+                "pages": [
+                    {
+                        **self.view(c, who, r, self.page_of(r), cache, known),
+                        **marks.get(r["id"], {}),
+                    }
+                    for r in found
+                ],
                 "has_more": nxt is not None,
                 "next_cursor": nxt,
             }
@@ -379,14 +481,15 @@ class Pages:
         app = page_apps.parse(fields.get("app"))
         etag = hashlib.sha256(data + (b"\0app:" + app.encode() if app else b"")).hexdigest()
         fields = {**fields, "name": name, "etag": etag, "app": app or ""}
+        live = int(has_live(data.decode("utf-8", errors="replace")))
 
         def extra(c, row, changed, editor, linked_task):
             now = H.now()
             was = c.execute("SELECT archived FROM pages WHERE file_id=?", (row["id"],)).fetchone()
             c.execute(
-                "INSERT INTO pages(file_id,cadence,as_of,created_at,updated_at,spec) VALUES(?,?,?,?,?,?) "
+                "INSERT INTO pages(file_id,cadence,as_of,created_at,updated_at,spec,live) VALUES(?,?,?,?,?,?,?) "
                 "ON CONFLICT(file_id) DO UPDATE SET cadence=COALESCE(?,cadence),as_of=?,updated_at=?,"
-                "spec=COALESCE(?,spec),archived=CASE WHEN ? THEN 0 ELSE archived END",
+                "spec=COALESCE(?,spec),archived=CASE WHEN ? THEN 0 ELSE archived END,live=?",
                 (
                     row["id"],
                     cadence or "none",
@@ -394,11 +497,13 @@ class Pages:
                     now,
                     now,
                     visual_specs.CARD if spec else None,
+                    live,
                     cadence,
                     as_of,
                     now,
                     visual_specs.CARD if spec else None,
                     int(bool(changed)),
+                    live,
                 ),
             )
             if changed and was and was[0]:
@@ -481,6 +586,85 @@ class Pages:
                 **({"audience": audience} if audience_set else {}),
             },
         )
+
+    def duplicate(self, request, fid, title=""):
+        """Copy the source's current version in its own scope, keeping that version's provenance and audience."""
+        from . import file_details, file_library
+        from .auth import Identity
+        from .blobs import register
+        from .files import stored_version, version_refusal
+
+        who = request.state.identity
+        if who.role not in ("owner", "human", "bot"):
+            raise Problem("forbidden", "People and agents duplicate pages", 403)
+
+        def work(c):
+            source = self.rows(c, [fid]).get(fid)
+            original = stored_version(c, fid, source["current_version"]) if source else None
+            if (
+                not source
+                or not original
+                or version_refusal(c, self.auth, who, source, source["current_version"], original)
+            ):
+                raise Problem("not_found", "Page not found", 404)
+            H._writer(c, who.actor, task_id=source["task_id"], attempt_id=who.attempt_id)
+            # A separate blob row lets the source and the copy keep their own access, while storage shares the bytes.
+            blob = register(
+                c,
+                Identity("bot:" + source["bot_id"], "bot"),
+                original["digest"],
+                original["size"],
+                original["name"],
+                original["mime"],
+            )
+            app = {"app": original["app"]} if "app" in original.keys() else {}
+            row, created, _ = self.files.add_version(
+                c,
+                bot=source["bot_id"],
+                actor=who.actor,
+                scope=source["scope"],
+                task=source["task_id"],
+                conversation=source["conversation_id"],
+                attempt=original["attempt_id"],
+                identity="page-copy:" + H.new_id(),
+                title=(title.strip() or "Copy of " + source["title"])[:200],
+                name=original["name"],
+                mime=original["mime"],
+                blob_id=blob["id"],
+                digest=original["digest"],
+                source_digest=original["source_digest"],
+                size=original["size"],
+                version_actor=original["actor"],
+                **app,
+            )
+            now = H.now()
+            c.execute(
+                "INSERT INTO pages(file_id,cadence,as_of,created_at,updated_at,audience,live)"
+                " SELECT ?,cadence,as_of,?,?,audience,live FROM pages WHERE file_id=?",
+                (row["id"], now, now, fid),
+            )
+            file_details.set_parent(c, self.auth, who, row, fid)
+            page_links.link(c, row["id"], who.actor, "writer", who.actor)
+            if not self.files.visible(c, who, row, {}):
+                raise Problem("forbidden", "You cannot create a page where this one is filed", 403)
+            if file_library.has_fts(c):
+                before = c.execute(
+                    "SELECT t.text FROM file_text_state s JOIN file_text t ON t.rowid=s.doc WHERE s.file_id=? AND s.version=?",
+                    (fid, original["version"]),
+                ).fetchone()
+                if before:
+                    file_library.index(c, row["id"], 1, row["title"], before[0])
+            H.event(
+                c, who.actor, "file.publish", row["id"], {"bot": row["bot_id"], "version": 1, "size": original["size"]}
+            )
+            page = self.rows(c, [row["id"]])[row["id"]]
+            return {
+                "page": self.view(c, who, row, self.page_of(page), {}, include_audience=True),
+                "unembedded": [],
+                "created": created,
+            }
+
+        return self.files.write(request, who, {"id": fid, "title": title}, work)
 
     def change_link(self, request, fid, target, role, *, remove=False):
         who = request.state.identity
@@ -777,7 +961,7 @@ def install_pages(app, store, auth, files):
         **api_v2(
             "Pages",
             "listPages",
-            "Pages the caller may read: `ids` (up to 50) in that order, leaving out the unreadable; else newest first by bot or task (filed on or pinned to it)",
+            "Pages the caller may read: `ids` (up to 50) in that order, leaving out the unreadable; else newest first by bot or task (filed on or pinned to it), link, writer or staleness, with live and approved marks",
             PageList,
         ),
     )
@@ -789,12 +973,16 @@ def install_pages(app, store, auth, files):
         linked: str = "",
         role: str = "",
         writer: str = "",
+        stale: bool = False,
+        page_kind: str = "",
+        tag: str = "",
         archived: bool = False,
         limit: int = 20,
         cursor: str = "",
     ):
         """Pages the caller may read. `ids` (up to 50, comma-separated) reads those pages in that order and leaves out
-        the unreadable; otherwise the newest first, filtered by bot or task (filed or pinned there)."""
+        the unreadable; otherwise the newest first, filtered by bot or task (filed or pinned there), link, writer or
+        staleness, each with its `live` and `approved` marks."""
         who = request.state.identity
         if ids:
             return pages.many(who, [i.strip() for i in ids.split(",")])
@@ -805,6 +993,9 @@ def install_pages(app, store, auth, files):
             linked=linked,
             role=role,
             writer=writer,
+            stale=stale,
+            page_kind=page_kind,
+            tag=tag,
             archived=archived,
             limit=max(1, min(limit, LIST_MAX)),
             cursor=cursor,
@@ -835,6 +1026,20 @@ def install_pages(app, store, auth, files):
     )
     def unlink_page(request: Request, fid: str, target: str, role: str = "related"):
         return pages.change_link(request, fid, target, role, remove=True)
+
+    @app.post(
+        "/api/v2/pages/{fid}/duplicate",
+        **api_v2(
+            "Pages",
+            "duplicatePage",
+            "Copy a page's current version in its own scope, with the source as Made from and an empty data store",
+            PagePublished,
+        ),
+    )
+    async def duplicate(request: Request, fid: str, body: PageDuplicate):
+        """A copy of the current version, filed where the source is and with its audience. Give it a `title` or use
+        "Copy of" followed by the page's title."""
+        return await asyncio.to_thread(pages.duplicate, request, fid, body.title)
 
     @app.patch(
         "/api/v2/pages/{fid}",

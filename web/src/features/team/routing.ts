@@ -54,3 +54,5 @@ export async function loadWho(qc: QueryClient, who: string, tab: Tab | undefined
   if (found?.kind === 'person' && tab === 'slack') return qc.ensureQueryData(slackQuery(bareId(found.actor.id)));
   if (found) return qc.ensureQueryData(openTasksQuery(found.actor.id));
 }
+
+export { peopleQuery, sidebarPinsQuery } from './queries';

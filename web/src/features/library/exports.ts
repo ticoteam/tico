@@ -33,3 +33,5 @@ export {
   type SkillsSearch,
   type ToolsSearch,
 } from './search';
+
+export { PagesPage } from './PagesPage';

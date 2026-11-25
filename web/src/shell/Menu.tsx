@@ -109,7 +109,7 @@ const ROWS: { id: MenuRowId; label: string; icon: IconName }[] = [
 ];
 const KIDS: Partial<Record<MenuRowId, string[]>> = {
   company: ['Strategy', 'Finance', 'Growth', 'Products', 'Risk', 'Routines', 'Listening', 'Rules', 'Usage'],
-  library: ['Files', 'Docs', 'Tools', 'Skills', 'Contacts'],
+  library: ['Files', 'Docs', 'Tools', 'Skills', 'Contacts', 'Pages'],
 };
 const slug = (s: string) => s.toLowerCase();
 type Shown = Record<string, boolean>;

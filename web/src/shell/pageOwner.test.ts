@@ -30,6 +30,7 @@ const ROUTES: Record<string, [path: string, page: string, owner: 'page' | 'tico'
   'library.contacts.tsx': ['/library/contacts', 'contacts', 'page'],
   'library.docs.tsx': ['/library/docs', 'docs', 'page'],
   'library.files.tsx': ['/library/files', 'docs', 'page'],
+  'library.pages.tsx': ['/library/pages', 'docs', 'page'],
   'library.index.tsx': ['/library', 'docs', 'page'],
   'library.skills.tsx': ['/library/skills', 'skills', 'page'],
   'library.tools.tsx': ['/library/tools', 'tools', 'page'],

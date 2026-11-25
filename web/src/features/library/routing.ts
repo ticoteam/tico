@@ -100,3 +100,5 @@ export const loadContacts = (qc: QueryClient, s: Pick<ContactsSearch, 'type' | '
   if (s.panel) void qc.prefetchQuery(cardQuery(s.panel));
   return qc.ensureInfiniteQueryData(contactsQuery(s.type ?? 'person', s.q ?? '', s.link ?? ''));
 };
+
+export { libraryPageQuery, pageKinds } from './queries';

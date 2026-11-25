@@ -394,13 +394,25 @@ def pin_remove(api, args):
         "q": _s("Words to find"),
         "kind": {"enum": ["page", "document", "image", "data", "media", "other"]},
         "tag": _s("A tag's key, e.g. client:acme"),
+        "linked": _s("Pages linked to this target"),
+        "role": _s("Pages linked with this role"),
+        "writer": _s("Pages this actor has written"),
+        "page_kind": {"enum": ["static", "live", "app"]},
+        "stale": {"type": "boolean", "description": "Only stale pages"},
         "limit": {"type": "integer", "minimum": 1, "maximum": 50},
     },
 )
 def files_search(api, args):
     if not args.get("q") and not args.get("tag"):
         raise ValueError("Give words to find, a tag, or both")
-    return api.get("files/search", q=args.get("q"), tag=args.get("tag"), limit=args.get("limit"), kind=args.get("kind"))
+    return api.get(
+        "files/search",
+        **{
+            key: args[key]
+            for key in ("q", "tag", "limit", "kind", "linked", "role", "writer", "page_kind", "stale")
+            if args.get(key) is not None
+        },
+    )
 
 
 def _fid(value):
@@ -737,7 +749,9 @@ def pages_card(api, args):
        "linked": _s("Pages linked to this target in any role: task:<id>, bot:<id>, human:<slug>, "
                     "goal:<id> or page:<id>"),
        "role": _s("Only pages linked with this role: writer, related, or a document name such as Spec"),
-       "writer": _s("Only pages this actor wrote a version of: human:<slug> or bot:<id>")})  # fmt: skip
+       "writer": _s("Only pages this actor wrote a version of: human:<slug> or bot:<id>"),
+       "stale": {"type": "boolean", "description": "Only pages not updated within 1.5x their cadence"},
+       "kind": {"enum": ["static", "live", "app"]}, "tag": _s("A file tag key")})  # fmt: skip
 def pages_list(api, args):
     return api.get(
         "pages",
@@ -749,6 +763,23 @@ def pages_list(api, args):
         linked=args.get("linked"),
         role=args.get("role"),
         writer=args.get("writer"),
+        stale=args.get("stale") or None,
+        page_kind=args.get("kind"),
+        tag=args.get("tag"),
+    )
+
+
+@tool(
+    "tico_page_duplicate",
+    "Make a new page from a page's current version (a template: a page tagged template): its HTML, cadence and "
+    "audience. It stays where the source is filed, with empty page data and Made from set to the source.",
+    {"id": _s("Page id"), "title": _s("The copy's title")},
+    required=("id",),
+    writes=True,
+)
+def pages_duplicate(api, args):
+    return _as_person(api).post(
+        f"pages/{_fid(args['id'])}/duplicate", {"title": args.get("title") or ""}, key=_key(args)
     )
 
 
@@ -1265,10 +1296,15 @@ PAGE = (
     ),
     Command(
         "page list",
-        "pages you may read, newest first; --linked, --role and --writer narrow them",
+        "pages you may read, newest first; --linked, --role, --writer and --stale narrow them",
         example="tico page list --linked task:T1 --role Spec",
     ),
     Command("page show", "one page's status, pins, links and writers", example="tico page show p1"),
+    Command(
+        "page duplicate",
+        "a new page from a page's current version, with its cadence and audience",
+        example="tico page duplicate p1 --title 'Q3 plan'",
+    ),
     Command("page access", "show or change who can see a page", example="tico page access p1 --audience everyone"),
     Command(
         "page archive",
