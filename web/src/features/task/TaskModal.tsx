@@ -102,7 +102,8 @@ export function TaskModal() {
     if (fileOpen) return;
     if (esc) {
       const layer = box?.closest('.vw');
-      if (esc.defaultPrevented || !layer || !(esc.target instanceof Node && layer.contains(esc.target))) return;
+      const other = esc.target instanceof Element ? esc.target.closest('[role="dialog"],[role="alertdialog"]') : null;
+      if (esc.defaultPrevented || !layer || (other && !layer.contains(other))) return;
       if (listUp) return setListUp(false);
     }
     closeTask(router as unknown as Steps);

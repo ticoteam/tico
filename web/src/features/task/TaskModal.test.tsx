@@ -172,9 +172,10 @@ describe('Esc', () => {
     expect(modal()!.classList.contains('is-list-up')).toBe(false);
     expect(open(router)?.task).toBe('12');
     // Cmd+K's search, a layer of its own over it: its Esc is its own
-    const search = document.createElement('input');
+    const search = document.createElement('div');
+    search.setAttribute('role', 'dialog');
     document.body.append(search);
-    esc(search);
+    esc(search.appendChild(document.createElement('input')));
     search.remove();
     expect(open(router)?.task).toBe('12');
     // a field that keeps its Esc (a title being edited)
@@ -184,7 +185,8 @@ describe('Esc', () => {
     esc(title);
     title.remove();
     expect(open(router)?.task).toBe('12');
-    esc(sheet);
+    // nothing has the focus (a link opened cold, a file closed over it): the task's
+    esc(document.body);
     await waitFor(() => expect(open(router)).toBeNull());
   });
 });
