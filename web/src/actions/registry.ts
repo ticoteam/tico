@@ -29,9 +29,9 @@ export function buildRegistry(sources: Record<string, Record<string, unknown> | 
 /* Every actions file imports `@/actions`, which holds this registry, and the registry imports every actions file: a
    loop. Whichever file loads first is still running when the registry loads, so its exports are not set yet. The
    registry therefore reads its files on first use, never while modules load (cycle.test.ts tries every load order).
-   The glob stays inside `all`: Vite turns it into an object of the files' namespaces, and in the build some come from
-   other chunks still loading when this one runs. Made at load, that object kept one unset and every page failed
-   (v0.6.282); made at first use, each is set. */
+   The glob stays inside `all`: Vite turns it into an object of the files' namespaces, and in the build a file's
+   namespace can be set after this module runs. Made at load, that object kept support/actions.ts unset and every page
+   failed (v0.6.282); made at first use, each is set. */
 let built: ReadonlyMap<string, AnyAction> | null = null;
 const all = () =>
   (built ??= buildRegistry({
