@@ -1,4 +1,4 @@
-import { useEffect, useState, type RefObject } from 'react';
+import { useEffect, useState, useSyncExternalStore, type RefObject } from 'react';
 import { ApiError, api } from '@/api/client';
 
 /* A page app's bridge, the app's side (docs/pages.md#apps, backend/page_apps.py). The page is framed sealed (no
@@ -20,6 +20,36 @@ interface Call {
   args?: unknown;
 }
 
+/** One line of a confirm sheet, as the server words it from Tico's own records (backend/page_app_writes.py). */
+export interface ActLine {
+  kind: string;
+  label: string;
+  detail: string;
+}
+
+/** What a page app asks to write, waiting for the viewer's tap. `answer` sends it, and settles when the server has. */
+export interface ActSheet {
+  page: string;
+  lines: ActLine[];
+  answer: (confirm: boolean) => Promise<void>;
+}
+
+/* The sheet on screen: one at a time for the whole app, drawn outside every frame (conversation/AppActSheet). */
+let shown: ActSheet | null = null;
+// One ask at a time in the whole app, taken before the server is asked: a second page (or a second click) never swaps
+// the sheet under the viewer's finger.
+let slot: object | null = null;
+const watchers = new Set<() => void>();
+const show = (sheet: ActSheet | null) => {
+  shown = sheet;
+  for (const w of watchers) w();
+};
+const watch = (w: () => void) => {
+  watchers.add(w);
+  return () => watchers.delete(w);
+};
+export const useActSheet = (): ActSheet | null => useSyncExternalStore(watch, () => shown);
+
 const go = (href: string, live: () => boolean) => {
   // the router imports most of the app: loaded when an app first opens something; a frame gone meanwhile goes nowhere
   void import('@/router').then(({ router }) => {
@@ -29,10 +59,14 @@ const go = (href: string, live: () => boolean) => {
 
 /** Listens for `frame`'s handshake and serves its calls; returns the cleanup. `onOpen` takes the app to an address. */
 export function bridge(frame: HTMLIFrameElement, app: AppPage, onOpen: (href: string, live: () => boolean) => void = go): () => void {
+  const base = `/api/v2/pages/${encodeURIComponent(app.page)}/app` as const;
   let port: MessagePort | null = null;
   let done = false;
+  let asking: ActSheet | null = null;
   const close = () => {
     done = true;
+    // Closing the page cancels what it asked; the server holds it only for its key.
+    void asking?.answer(false);
     port?.close();
     port = null;
     window.removeEventListener('message', hear);
@@ -57,18 +91,59 @@ export function bridge(frame: HTMLIFrameElement, app: AppPage, onOpen: (href: st
       const call = (m.data ?? {}) as Call;
       const args = call.args && typeof call.args === 'object' ? call.args : {};
       if (typeof call.op !== 'string') return;
+      const fail = (err: unknown) => {
+        const code = err instanceof ApiError ? err.code : 'failed';
+        const detail = err instanceof Error ? err.message : 'The call failed';
+        port?.postMessage({ id: call.id, error: { code, detail } });
+      };
+      if (call.op === 'act') {
+        if (slot) return fail(new ApiError(409, 'busy', 'An action is already waiting'));
+        const mine = {};
+        slot = mine;
+        const free = () => void (slot === mine && (slot = null));
+        // The server checks the actions as the viewer and holds them under a key that stays here, never in the frame.
+        void api
+          .post<{ result: { key: string; page: string; lines: ActLine[] } }>(base, { version: app.version, nonce, op: 'act', args }, { once: true })
+          .then(({ result }) => {
+            if (done) {
+              free();
+              return void api.post(`${base}/act`, { key: result.key, confirm: false }, { once: true }).catch(() => undefined);
+            }
+            let settled = false;
+            const sheet: ActSheet = {
+              page: result.page,
+              lines: result.lines,
+              answer: (confirm) => {
+                if (settled) return Promise.resolve();
+                settled = true;
+                return api
+                  .post<{ status: string; items: unknown[] }>(`${base}/act`, { key: result.key, confirm }, { once: true })
+                  .then((r) => void port?.postMessage({ id: call.id, result: r }))
+                  .catch(fail)
+                  .finally(() => {
+                    asking = null;
+                    free();
+                    if (shown === sheet) show(null);
+                  });
+              },
+            };
+            asking = sheet;
+            show(sheet);
+          })
+          .catch((e: unknown) => {
+            free();
+            fail(e);
+          });
+        return;
+      }
       api
-        .post<{ result: Record<string, unknown> }>(`/api/v2/pages/${encodeURIComponent(app.page)}/app`, { version: app.version, nonce, op: call.op, args }, { once: true })
+        .post<{ result: Record<string, unknown> }>(base, { version: app.version, nonce, op: call.op, args }, { once: true })
         .then((r) => {
           if (done) return;
           if (call.op === 'open' && typeof r.result.href === 'string') onOpen(r.result.href, () => !done);
           port?.postMessage({ id: call.id, result: r.result });
         })
-        .catch((err: unknown) => {
-          const code = err instanceof ApiError ? err.code : 'failed';
-          const detail = err instanceof Error ? err.message : 'The call failed';
-          port?.postMessage({ id: call.id, error: { code, detail } });
-        });
+        .catch(fail);
     };
   };
   window.addEventListener('message', hear);

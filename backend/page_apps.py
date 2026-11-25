@@ -32,15 +32,16 @@ from pydantic import Field
 
 from . import models as M
 from . import names
+from . import page_app_writes
 from . import page_links
 from . import teammate_access
 from . import visuals
-from .api_answers.pages import PageAppAnswer, PageDataList, PageDataRemoved, PageDataRow
+from .api_answers.pages import PageAppActAnswer, PageAppAnswer, PageDataList, PageDataRemoved, PageDataRow
 from .api_contract import api_v2
 from .store import H, Problem
 
 READS = ("tasks", "files", "pages", "kpis", "contacts", "store")
-OPS = ("me", "query", "thumb", "open", "store.get", "store.list")
+OPS = ("me", "query", "thumb", "open", "store.get", "store.list") + page_app_writes.OPS
 ROWS_MAX = 200  # rows in one reply
 REPLY_MAX = 1024 * 1024  # bytes in one reply
 RATE = 20  # calls a second, per frame (its key)
@@ -62,23 +63,30 @@ def parse(text: Any) -> str | None:
     if not text:
         return None
     reads: set[str] = set()
+    writes: set[str] = set()
     for clause in re.split(r"[;\s]+", text):
         if not clause:
             continue
         key, _, names_ = clause.partition("=")
+        if key == "writes":
+            writes.update(page_app_writes.parse_writes(names_.split(","), check_collection))
+            continue
         if key != "reads":
-            raise Problem("validation", "app declares reads=" + ",".join(READS), 422)
+            raise Problem("validation", "app declares reads=" + ",".join(READS) + " and writes=...", 422)
         for name in filter(None, names_.split(",")):
             if name not in READS:
                 raise Problem("validation", f"app reads one of {', '.join(READS)}; not {name[:40]}", 422)
             reads.add(name)
-    if not reads:
+    if not reads and not writes:
         return None
-    return json.dumps({"reads": sorted(reads)}, separators=(",", ":"))
+    found: dict[str, list[str]] = {"reads": sorted(reads)}
+    if writes:
+        found["writes"] = sorted(writes)
+    return json.dumps(found, separators=(",", ":"))
 
 
 def declared(value: Any) -> dict[str, Any]:
-    """The declaration stored on a version: {"reads": [...]}, or {} for a page that is no app."""
+    """The declaration stored on a version: {"reads": [...], "writes": [...]?}, or {} for a page that is no app."""
     try:
         found = json.loads(value) if value else None
     except (TypeError, ValueError):
@@ -269,7 +277,7 @@ def _pick(row: Any, fields: tuple[str, ...]) -> dict[str, Any]:
 class PageApps:
     def __init__(self, app: Any, store: Any, auth: Any, files: Any, pages: Any, visible_tasks: Any) -> None:
         self.app, self.store, self.auth, self.files, self.pages = app, store, auth, files, pages
-        self.visible_tasks, self.rate = visible_tasks, Rate()
+        self.visible_tasks, self.rate, self.pending = visible_tasks, Rate(), page_app_writes.Pending()
 
     def key(self) -> bytes:
         return cast(bytes, cast(Any, visuals.key_for)(self.app, self.store.settings))
@@ -290,31 +298,62 @@ class PageApps:
         return writer
 
     # ------------------------------------------------------------------ the call
+    def check_open(
+        self, c: Any, who: Any, fid: str, version: int, nonce: str | None = None
+    ) -> tuple[dict[str, Any], Any, Any]:
+        """The declaration, writer and page row for a call on `version`, or a refusal: the page gone from the viewer,
+        archived, a newer version out, no app, the frame's key (`nonce`, when given) not this viewer's or over its rate,
+        or the writer gone."""
+        row = self._page(c, who, fid)
+        if row["archived"] or row["page_archived"]:
+            raise Problem("app_stopped", "This page is archived; its app is stopped", 409)
+        if version != row["current_version"]:
+            raise Problem("version_replaced", "A newer version of this page is out; reload it", 409)
+        v = c.execute(
+            "SELECT app,actor FROM bot_file_versions WHERE file_id=? AND version=?", (fid, version)
+        ).fetchone()
+        decl = declared(v["app"] if v else None)
+        if not decl.get("reads") and not decl.get("writes"):
+            raise Problem("not_an_app", "This page version is not an app", 409)
+        if nonce is not None:
+            if not nonce_ok(self.key(), nonce, who.actor, fid, version):
+                raise Problem("forbidden", "This frame's key is not for you, this page and this version", 403)
+            if not self.rate.take(nonce):
+                raise Problem("rate_limited", "At most 20 calls a second", 429, True)
+        return decl, self._writer(c, v["actor"]), row
+
+    def keeps_data(self, c: Any, writer: Any, row: Any) -> None:
+        """The page's data is its writers': an author who is no longer one, or no longer sees the page, lends their app
+        none of it, to read or to write. Its maintainer agent is excepted alone: as itself it never sees a chat's
+        page."""
+        from . import pages
+
+        maintainer = writer.role == "bot" and cast(Any, pages).may_manage(c, self.auth, writer, row)
+        if not page_links.may_write(c, self.auth, writer, row) or not (
+            maintainer or self.files.visible(c, writer, row, {})
+        ):
+            raise Problem("writer_gone", "This app's writer no longer keeps this page's data", 403)
+
     def call(self, who: Any, fid: str, body: AppCall) -> dict[str, Any]:
         if body.op not in OPS:
             raise Problem("validation", "op is one of " + ", ".join(OPS), 422)
         # One snapshot: the version checked current is the one whose data the op reads.
         with self.store.read_transaction() as c:
-            row = self._page(c, who, fid)
-            if row["archived"] or row["page_archived"]:
-                raise Problem("app_stopped", "This page is archived; its app is stopped", 409)
-            if body.version != row["current_version"]:
-                raise Problem("version_replaced", "A newer version of this page is out; reload it", 409)
-            v = c.execute(
-                "SELECT app,actor FROM bot_file_versions WHERE file_id=? AND version=?", (fid, body.version)
-            ).fetchone()
-            reads: list[str] = declared(v["app"] if v else None).get("reads") or []
-            if not reads:
-                raise Problem("not_an_app", "This page version is not an app", 409)
-            if not nonce_ok(self.key(), body.nonce, who.actor, fid, body.version):
-                raise Problem("forbidden", "This frame's key is not for you, this page and this version", 403)
-            if not self.rate.take(body.nonce):
-                raise Problem("rate_limited", "At most 20 calls a second", 429, True)
-            writer = self._writer(c, v["actor"])
-            result = self.op(c, who, writer, row, reads, body.op, body.args)
-        if len(json.dumps(result, default=str)) > REPLY_MAX:
-            raise Problem("too_large", "A reply is at most 1 MB; ask for fewer rows", 413)
-        return {"result": result}
+            decl, writer, row = self.check_open(c, who, fid, body.version, body.nonce)
+            if body.op == "act":
+                return {"result": page_app_writes.hold(self, c, who, writer, fid, body, decl)}
+            if body.op not in page_app_writes.STORE_OPS:
+                result = self.op(c, who, writer, row, decl.get("reads") or [], body.op, body.args)
+                if len(json.dumps(result, default=str)) > REPLY_MAX:
+                    raise Problem("too_large", "A reply is at most 1 MB; ask for fewer rows", 413)
+                return {"result": result}
+
+        def opened(c: Any) -> dict[str, Any]:  # checked again under the write lock: the page may have changed
+            decl, writer, row = self.check_open(c, who, fid, body.version)
+            self.keeps_data(c, writer, row)
+            return decl
+
+        return {"result": page_app_writes.store_write(self, who, fid, body, opened)}
 
     def op(self, c: Any, who: Any, writer: Any, row: Any, reads: list[str], op: str, args: dict[str, Any]) -> Any:
         fid = row["id"]
@@ -327,15 +366,7 @@ class PageApps:
             return self.thumb(c, who, writer, str(args.get("file") or ""))
         if op.startswith("store."):
             need(reads, "store")
-            from . import pages
-
-            # The page's data is its writers': an author who is no longer one, or no longer sees the page, lends their
-            # app none of it. Its maintainer agent is excepted alone: as itself it never sees a chat's page.
-            maintainer = writer.role == "bot" and cast(Any, pages).may_manage(c, self.auth, writer, row)
-            if not page_links.may_write(c, self.auth, writer, row) or not (
-                maintainer or self.files.visible(c, writer, row, {})
-            ):
-                raise Problem("writer_gone", "This app's writer no longer keeps this page's data", 403)
+            self.keeps_data(c, writer, row)
             if op == "store.get":
                 return {"row": data_get(c, fid, args.get("collection"), args.get("id"))}
             return data_list(c, fid, args.get("collection"), args.get("after") or "", _limit(args))
@@ -580,14 +611,32 @@ def install_page_apps(app: Any, store: Any, auth: Any, files: Any, pages: Any) -
         **api_v2(
             "Pages",
             "callPageApp",
-            "A page app's call through Tico's bridge, as the viewer: me, query, thumb, open, store.get or store.list",
+            "A page app's call through Tico's bridge, as the viewer: me, query, thumb, open, store.get, store.list, "
+            "store.set and store.rm in a collection the version opens, or act, which holds declared Tico writes for the "
+            "viewer's confirm (POST /api/v2/pages/{fid}/app/act)",
             PageAppAnswer,
-            idempotency="Not needed: an app call reads only.",
+            idempotency="Not needed: reads, and store writes by row id, are safe to repeat; act only holds actions.",
         ),
     )
     def call(request: Request, fid: str, body: AppCall) -> dict[str, Any]:  # pyright: ignore[reportUnusedFunction]
         """One call from an app frame. Reads are the viewer's, cut to what the page's writer may also read."""
         return apps.call(request.state.identity, fid, body)
+
+    @app.post(
+        "/api/v2/pages/{fid}/app/act",
+        **api_v2(
+            "Pages",
+            "answerPageAppAct",
+            "The viewer's own tap on a page app's confirm sheet: confirm runs the held actions once, as the viewer, "
+            "each through its own route; or cancel. Never callable by a bot, the Assistant or a token",
+            PageAppActAnswer,
+            idempotency="Not needed: the key works once.",
+        ),
+    )
+    async def act(  # pyright: ignore[reportUnusedFunction]
+        request: Request, fid: str, body: page_app_writes.ActAnswer
+    ) -> dict[str, Any]:
+        return await page_app_writes.answer(apps, request, fid, body)
 
     @app.get(
         "/api/v2/pages/{fid}/data",

@@ -3,7 +3,7 @@ import { useRef } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { api } from '@/api/client';
 import type * as Client from '@/api/client';
-import { APP_FRAMES, bridge, useAppBridge, useAppSlot } from './pageApp';
+import { APP_FRAMES, bridge, useActSheet, useAppBridge, useAppSlot, type ActSheet } from './pageApp';
 
 vi.mock('@/api/client', async (real) => ({ ...(await real<typeof Client>()), api: { post: vi.fn() } }));
 const post = vi.mocked(api.post);
@@ -74,6 +74,56 @@ describe('a page app’s bridge', () => {
     const second = fakePort();
     hello(container.querySelector('iframe')!.contentWindow, second);
     expect(second.onmessage).not.toBeNull();
+  });
+
+  it('holds an act for the viewer’s tap outside the frame: the key never reaches the page, and closing cancels', async () => {
+    let sheet: ActSheet | null = null;
+    function Watch() {
+      sheet = useActSheet();
+      return null;
+    }
+    render(<Watch />);
+    const frame = document.body.appendChild(document.createElement('iframe'));
+    const stop = bridge(frame, { page: 'file-1', version: 3 });
+    const port = fakePort();
+    hello(frame.contentWindow, port);
+    const lines = [{ kind: 'comment', label: 'Comment on #12 Spring launch', detail: 'Ship it' }];
+    const asked = { actions: [{ kind: 'comment', payload: { task: 't1', text: 'Ship it' } }] };
+
+    post.mockResolvedValueOnce({ result: { key: 'held-1', page: 'Creative library', lines } });
+    port.onmessage?.({ data: { id: 1, op: 'act', args: asked } } as MessageEvent);
+    // a second ask before the server answers the first is refused: the sheet never changes under the viewer
+    port.onmessage?.({ data: { id: 9, op: 'act', args: asked } } as MessageEvent);
+    expect(port.postMessage).toHaveBeenCalledWith({ id: 9, error: { code: 'busy', detail: expect.any(String) } });
+    port.postMessage.mockClear();
+    await act(flush);
+    expect(post).toHaveBeenCalledWith('/api/v2/pages/file-1/app', { version: 3, nonce: 'key-1', op: 'act', args: asked }, { once: true });
+    expect(sheet).toMatchObject({ page: 'Creative library', lines });
+    expect(port.postMessage).not.toHaveBeenCalled(); // nothing goes back to the page until the tap
+    expect(post).toHaveBeenCalledTimes(1);
+
+    // a second ask while one waits is refused, not stacked
+    port.onmessage?.({ data: { id: 2, op: 'act', args: asked } } as MessageEvent);
+    expect(port.postMessage).toHaveBeenCalledWith({ id: 2, error: { code: 'busy', detail: expect.any(String) } });
+
+    post.mockResolvedValueOnce({ status: 'done', items: [{ ok: true, error: null }] });
+    await act(() => sheet!.answer(true));
+    expect(post).toHaveBeenLastCalledWith('/api/v2/pages/file-1/app/act', { key: 'held-1', confirm: true }, { once: true });
+    expect(port.postMessage).toHaveBeenLastCalledWith({ id: 1, result: { status: 'done', items: [{ ok: true, error: null }] } });
+    expect(sheet).toBeNull();
+    expect(JSON.stringify(port.postMessage.mock.calls)).not.toContain('held-1');
+
+    // the page going away while a sheet waits cancels it
+    post.mockResolvedValueOnce({ result: { key: 'held-2', page: 'Creative library', lines } });
+    port.onmessage?.({ data: { id: 3, op: 'act', args: asked } } as MessageEvent);
+    await act(flush);
+    post.mockResolvedValueOnce({ status: 'cancelled', items: [] });
+    await act(async () => {
+      stop();
+      await flush();
+    });
+    expect(post).toHaveBeenLastCalledWith('/api/v2/pages/file-1/app/act', { key: 'held-2', confirm: false }, { once: true });
+    expect(sheet).toBeNull();
   });
 
   it('runs at most APP_FRAMES app frames at once; the next one runs when one goes', () => {

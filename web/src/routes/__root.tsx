@@ -3,7 +3,7 @@ import { CatchBoundary, Link, Outlet, createRootRouteWithContext, useLocation, u
 import { Suspense, lazy, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { ActionsRoot, run } from '@/actions';
 import { reportCallToDesktop, useCallWindow } from '@/desktop';
-import { ticoRoomQuery } from '@/conversation';
+import { AppActSheet, ticoRoomQuery } from '@/conversation';
 import {
   configQuery,
   meQuery,
@@ -358,6 +358,8 @@ function App() {
       <Later on={!!adding}>{adding ? <AddTeammate step={adding} team={addTo ?? ''} /> : null}</Later>
       <ActionsRoot dot={dotEl} fold={foldSheet} />
       <Toasts />
+      {/* what a page app asks to write, over whatever frame asked */}
+      <AppActSheet />
       {/* a task over any page (`?task=`), and over it the file `files.view` opens */}
       <Later on={taskOpen}>
         <TaskCatch>
