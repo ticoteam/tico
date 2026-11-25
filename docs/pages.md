@@ -305,8 +305,9 @@ Stable v2 (`GET /api/v2/openapi.json`, tag **Pages**):
 | `POST /api/v2/pages/{file_id}/links` | Body `{"target": "task:<id>", "role": "Spec"}` (`task:`, `bot:`, `human:`, `goal:` or `page:`; `role` defaults to `related`). Returns the page read |
 | `DELETE /api/v2/pages/{file_id}/links?target=...&role=...` | Removes that link. Returns the page read |
 | `GET /api/v2/pages?ids=a,b` | Up to 50 pages in that order, leaving out any the caller may not read |
-| `GET /api/v2/pages?bot=&task=&linked=&role=&writer=` | Pages newest first, paged with `limit` and `cursor`, all filters optional. `task` and `bot` include pages linked to them in any role, and pages filed or stored there; `linked` is a target in any role; `role` is a link's role; `writer` is an actor who wrote a version |
-| `GET /api/v2/files` and `GET /api/v2/files/search` | Both take `linked`, `role` and `writer`. Page rows and hits include writers, up to five links and a count of the remaining visible links |
+| `GET /api/v2/pages?bot=&task=&linked=&role=&writer=&page_kind=&stale=&tag=` | Pages newest first, paged with `limit` and `cursor`. `task` and `bot` include pages filed or linked there. `linked`, `role` and `writer` select a target, link role or version writer. `page_kind` takes `static`, `live` or `app` |
+| `GET /api/v2/files` and `GET /api/v2/files/search` | Both take `linked`, `role`, `writer` and `tag`. Search takes `page_kind` and `stale` for pages. Page hits include visible links and writers |
+| `POST /api/v2/pages/{file_id}/duplicate` | A page writer creates a new page in the source's scope. An optional `title` names the copy |
 | `GET /api/v2/tasks/{id}/files?all=1` | Up to 200 readable task files and linked or pinned pages, with links on page rows and up to 50 versions per file |
 | `PATCH /api/v2/pages/{file_id}` | `cadence`, `as_of`, `replaced_by`, `archived`, `audience` (null clears it) |
 | `POST /api/v2/pages/{file_id}/app` | An app frame's call, as the viewer: `{version, nonce, op, args}` (op `me`, `query`, `thumb`, `open`, `store.get` or `store.list`). The web app sends these; the key comes with the frame |

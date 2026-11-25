@@ -622,7 +622,8 @@ class Pages:
                 original["mime"],
             )
             # Only the original author can carry forward the access they declared for this HTML.
-            app = {"app": original["app"]} if "app" in original.keys() and original["actor"] == who.actor else {}
+            apps = getattr(self.app.state, "page_apps", None)
+            app = {"app": original["app"]} if apps is not None and original["actor"] == who.actor else {}
             row, created, _ = self.files.add_version(
                 c,
                 bot=source["bot_id"],
