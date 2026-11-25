@@ -165,6 +165,8 @@ describe('Conversation', () => {
   it('grows a streamed reply in place, then hands it to the posted message', () => {
     show();
     emit('runs', [{ run_id: 'r1', conversation_id: T, bot_id: 'qa', state: 'running' }]);
+    // the server's bot status names the run: its row
+    emit('threads', [{ kind: 'bot_status', thread_id: T, bots: [{ actor: 'bot:qa', name: 'QA', state: 'working', detail: 'Thinking', since: at(3), run_id: 'r1', fix: null, message_id: 'm2' }] }]);
     const row = document.querySelector('.msg.is-live');
     expect(row?.textContent).toContain('Thinking');
 
@@ -182,6 +184,7 @@ describe('Conversation', () => {
   it('says what a running reply is doing from its tool step label, and keeps it while the call ends', () => {
     show();
     emit('runs', [{ run_id: 'r1', conversation_id: T, bot_id: 'qa', state: 'running' }]);
+    emit('threads', [{ kind: 'bot_status', thread_id: T, bots: [{ actor: 'bot:qa', name: 'QA', state: 'working', detail: 'Thinking', since: at(3), run_id: 'r1', fix: null, message_id: 'm2' }] }]);
     const tool = (seq: number, label?: string) => ({ run_id: 'r1', conversation_id: T, output: { kind: 'tool', compact: true, seq, ...(label && { label }) } });
     emit('runs', [tool(1, 'Reading Finance')]);
     const row = document.querySelector('.msg.is-live');

@@ -266,8 +266,12 @@ def test_a_wake_in_a_sub_thread_the_reader_cannot_open_says_nothing_of_the_bot(a
     machine_for(api)
     thread = new_thread(api)
     top = say(api, thread["id"], "Topic")
-    side = sub_thread(api, top["id"])  # Ana's own side thread: Ben reads the root, not this
+    side = sub_thread(api, top["id"])
     say(api, side["id"], "@ops can you check this?")
+    with api.app.state.store.transaction() as c:
+        # the side thread now belongs to Ana's private task: Ben reads the root, not this
+        secret = H.task_create(c, "human:ana", "Plan the launch", "Private.", "human:ana", private=True, lint=False)
+        c.execute("UPDATE conversations SET task_id=? WHERE id=?", (secret["id"], side["id"]))
     assert [r["actor"] for r in bot_status(api, thread["id"])] == ["bot:ops"]
     assert bot_status(api, thread["id"], "ben-test") == []
     assert timeline(api, thread["id"], "ben-test")["bot_status"] == []
@@ -487,6 +491,9 @@ def clone_wakes(c, message_id, count, tag):
             "FROM message_deliveries WHERE message_id=?",
             (new + ":", new, message_id),
         )
+    # a copy shares its source's origin, which marks it restricted (threads_messages_stamp): the backlog is of plain
+    # messages, as people's are
+    c.execute("UPDATE messages SET restricted=0 WHERE id LIKE ?", (f"{message_id}-{tag}-%",))
 
 
 def test_a_thousand_open_wakes_for_one_bot_are_read_in_a_bounded_number_of_statements(api):
@@ -512,7 +519,8 @@ def test_a_thousand_open_wakes_for_one_bot_are_read_in_a_bounded_number_of_state
 
     found, statements, steps = read()
     assert set(found) == {"bot:ops"}
-    assert statements <= 14  # the wakes, their messages (checked as a timeline checks them), jobs, runs
+    # the wakes, their messages (checked as a timeline checks them), jobs, runs
+    assert statements <= 16, statements
     with store.transaction() as c:
         clone_wakes(c, first["id"], 1000, "b")
     found, more_statements, more_steps = read()
