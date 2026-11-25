@@ -66,29 +66,38 @@ def test_proxy_blocks_off_domain_and_mixed_public_private_dns(monkeypatch, reque
     assert reason in response
 
 
-def test_partial_report_omits_console_errors_caused_by_blocked_assets(tmp_path):
-    good = tmp_path / "good"
-    good.mkdir()
-    (good / "lighthouse.json").write_text(
-        json.dumps(
-            {
-                "requestedUrl": "https://acme.example/about",
-                "categories": {
-                    "best-practices": {
-                        "score": 0.9,
-                        "auditRefs": [{"id": "errors-in-console", "weight": 1}, {"id": "doctype", "weight": 1}],
-                    },
-                },
-                "audits": {"errors-in-console": {"score": 0}, "doctype": {"score": 0, "title": "Add a doctype"}},
-            }
-        )
-    )
-    (tmp_path / "lighthouse.json").write_text("{")
-    empty = tmp_path / "empty"
-    empty.mkdir()
-    (empty / "lighthouse.json").write_text("null")
+def test_partial_report_counts_missing_scores_and_keeps_genuine_console_errors(tmp_path):
+    messages = [{"source": "network", "description": "Failed to load resource: net::ERR_TUNNEL_CONNECTION_FAILED"}]
+    report = {
+        "requestedUrl": "https://acme.example/about",
+        "categories": {
+            "best-practices": {
+                "score": 0.9,
+                "auditRefs": [{"id": "errors-in-console", "weight": 1}, {"id": "doctype", "weight": 1}],
+            },
+        },
+        "audits": {
+            "errors-in-console": {"score": 0, "title": "Check browser errors", "details": {"items": messages}},
+            "doctype": {"score": 0, "title": "Add a doctype"},
+        },
+    }
+
+    def write_route(folder, raw):
+        path = tmp_path / "out" / folder
+        path.mkdir(parents=True)
+        (path / "lighthouse.json").write_text(raw)
+
+    write_route("only-blocked-assets", json.dumps(report))
+    messages.append({"source": "javascript", "description": "Uncaught TypeError"})
+    write_route("real-error", json.dumps(report))
+    write_route("truncated", "{")
+    write_route("no-data", "null")
+    (tmp_path / "started-routes").write_bytes(b"\n" * 5)
 
     pages, unscored = audit.read_pages(tmp_path, max_routes=5, blocked_connections=1)
 
-    assert unscored == 2
-    assert audit.top_fixes(pages) == [("Add a doctype", "best-practices", 1)]
+    assert unscored == 3
+    assert audit.top_fixes(pages) == [
+        ("Add a doctype", "best-practices", 2),
+        ("Check browser errors", "best-practices", 1),
+    ]

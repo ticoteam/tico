@@ -140,6 +140,10 @@ def preflight_timeout(_signum, _frame) -> None:
     raise TimeoutError("the audit reached its 15-minute cap")
 
 
+def terminate(signum, _frame) -> None:
+    raise SystemExit(128 + signum)
+
+
 class Fence(threading.Thread):
     """Connect to a checked numeric address, so a second DNS lookup cannot change the destination."""
 
@@ -275,6 +279,7 @@ def write_config(run_dir: Path, fence: Fence, max_routes: int) -> Path:
     # Node bypasses the proxy for Chrome's own debugging connection. Never let a site redirect a Node fetch there.
     path.write_text(
         "import childProcess from 'node:child_process';\n"
+        "import { appendFileSync } from 'node:fs';\n"
         "import { syncBuiltinESMExports } from 'node:module';\n"
         f"const domain = {json.dumps(fence.domain)};\n"
         "const fetchSite = globalThis.fetch;\n"
@@ -291,7 +296,16 @@ def write_config(run_dir: Path, fence: Fence, max_routes: int) -> Path:
         "  ? spawn(file, args, { ...options, detached: false })\n"
         "  : spawn(file, { ...(options ?? args), detached: false });\n"
         "syncBuiltinESMExports();\n"
-        f"export default {json.dumps(config, indent=2)};\n"
+        f"const config = {json.dumps(config, indent=2)};\n"
+        # A Lighthouse worker can fail before creating its report. Count distinct attempts at the start.
+        "const started = new Set();\n"
+        "config.hooks = { 'task-started': (route, report, task) => {\n"
+        "  if (task === 'runLighthouseTask' && !started.has(route)) {\n"
+        "    started.add(route);\n"
+        f"    appendFileSync({json.dumps(str(run_dir / 'started-routes'))}, '\\n');\n"
+        "  }\n"
+        "} };\n"
+        "export default config;\n"
     )
     return path
 
@@ -372,9 +386,23 @@ def run_scan(site: str, run_dir: Path, fence: Fence, max_routes: int, deadline: 
     return f"Unlighthouse exited with status {code}." if code else ""
 
 
-def read_pages(out_dir: Path, max_routes: int, blocked_connections: int) -> tuple[list[dict], int]:
+def proxy_console_errors(audit: dict) -> bool:
+    items = (audit.get("details") or {}).get("items") or []
+    return bool(items) and all(
+        item.get("source") == "network"
+        and any(
+            marker in (item.get("description") or "")
+            for marker in ("ERR_TUNNEL_CONNECTION_FAILED", "403 (Refused by the audit fence)")
+        )
+        for item in items
+    )
+
+
+def read_pages(run_dir: Path, max_routes: int, blocked_connections: int) -> tuple[list[dict], int]:
     pages = []
-    reports = sorted(out_dir.rglob("lighthouse.json"))[:max_routes]
+    reports = sorted((run_dir / "out").rglob("lighthouse.json"))[:max_routes]
+    started_file = run_dir / "started-routes"
+    started = started_file.read_bytes().count(b"\n") if started_file.is_file() else 0
     for path in reports:
         try:
             lhr = json.loads(path.read_text(encoding="utf-8"))
@@ -392,10 +420,10 @@ def read_pages(out_dir: Path, max_routes: int, blocked_connections: int) -> tupl
         failing = []
         for key in CATEGORIES:
             for ref in (categories.get(key) or {}).get("auditRefs", []):
-                # Chrome treats a blocked third-party resource as a console error.
-                if ref.get("id") == "errors-in-console" and blocked_connections:
-                    continue
                 audit = audits.get(ref.get("id"), {})
+                # Chrome treats a blocked third-party resource as a console error.
+                if ref.get("id") == "errors-in-console" and blocked_connections and proxy_console_errors(audit):
+                    continue
                 group = ref.get("group")
                 actionable = group != "metrics" and (ref.get("weight") or group in {"insights", "load-opportunities"})
                 if actionable and audit.get("score") is not None and audit["score"] < GOOD:
@@ -411,7 +439,7 @@ def read_pages(out_dir: Path, max_routes: int, blocked_connections: int) -> tupl
                 "failing": failing,
             }
         )
-    return pages, len(reports) - len(pages)
+    return pages, max(started, len(reports)) - len(pages)
 
 
 def top_fixes(pages: list[dict], limit: int = 8) -> list[tuple[str, str, int]]:
@@ -522,14 +550,14 @@ def run(args: argparse.Namespace) -> int:
                 status = run_scan(site, run_dir, fence, args.max_routes, deadline)
             finally:
                 fence.stop()
-            pages, unscored = read_pages(run_dir / "out", args.max_routes, fence.blocked)
+            pages, unscored = read_pages(run_dir, args.max_routes, fence.blocked)
             if not pages:
                 tail = (run_dir / "scan.log").read_text(errors="replace").splitlines()[-10:]
                 print(json.dumps({"ok": False, "error": status or "no routes produced scores", "log_tail": tail}))
                 return 3
             out.parent.mkdir(parents=True, exist_ok=True)
             date = dt.datetime.now(tz=dt.timezone.utc).date().isoformat()
-            note = f"{status} {unscored} route reports had no usable scores." if unscored else status
+            note = f"{status} {unscored} routes had no usable scores." if unscored else status
             out.write_text(render(site, pages, note.strip(), fence, date), encoding="utf-8")
     except (Refused, OSError) as error:
         print(json.dumps({"ok": False, "error": str(error)}))
@@ -542,7 +570,7 @@ def run(args: argparse.Namespace) -> int:
                 "pages": len(pages),
                 "averages": averages(pages),
                 "status": status or ("partial" if unscored else "complete"),
-                "unscored_reports": unscored,
+                "unscored_routes": unscored,
                 "blocked_connections": fence.blocked,
                 "report": str(out),
             }
@@ -562,7 +590,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not 1 <= args.max_routes <= MAX_ROUTES:
         parser.error(f"--max-routes must be from 1 to {MAX_ROUTES}")
-    return run(args)
+    previous = signal.signal(signal.SIGTERM, terminate)
+    try:
+        return run(args)
+    finally:
+        signal.signal(signal.SIGTERM, previous)
 
 
 if __name__ == "__main__":
