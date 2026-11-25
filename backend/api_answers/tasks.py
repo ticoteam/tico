@@ -857,3 +857,24 @@ class TaskMakePage(TypedDict):
 class ShotsReconciled(TypedDict):
     reconciled: list[ReconciledShot]
     """The paid shots marked reconciled: they leave the card's wait and are never sent again"""
+
+
+class PullRequest(TypedDict):
+    id: str
+    task_id: str
+    url: str
+    title: str | None
+    state: str | None
+    """open, draft, merged, closed or shipped"""
+    repo: str | None
+    """owner/name"""
+    number: int | None
+    created_at: str
+    activity_at: str | None
+    """Its last activity on GitHub, when known"""
+
+
+@answer
+class PullRequestList(TypedDict):
+    prs: list[PullRequest]
+    next_offset: int | None

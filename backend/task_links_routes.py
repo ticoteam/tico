@@ -10,7 +10,7 @@ from . import reach
 from . import task_caps
 from . import task_merge as TM
 from .api_contract import api_v2
-from .api_answers.tasks import TaskMergeChecks, TaskMergeResult, TaskResult
+from .api_answers.tasks import PullRequestList, TaskMergeChecks, TaskMergeResult, TaskResult
 
 
 def register(app, auth, mover, mutate, person_only, settings, store, task_view):
@@ -71,6 +71,60 @@ def register(app, auth, mover, mutate, person_only, settings, store, task_view):
             }
 
         return mutate(request, body, work)
+
+    @app.get(
+        "/api/v2/prs",
+        **api_v2(
+            "Tasks",
+            "listPullRequests",
+            "Pull requests linked to tasks the caller can read, oldest activity first",
+            PullRequestList,
+            parameters={
+                "repo": "owner/name, or a name alone: that repository's pull requests",
+                "state": "open, draft, merged, closed or shipped",
+                "idle_hours": "Open and draft pull requests with no activity for this many hours",
+            },
+        ),
+    )
+    def pull_requests(
+        request: Request,
+        repo: str | None = None,
+        state: str | None = None,
+        idle_hours: int | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ):
+        """Pull request links on tasks this reader may read. A query parameter that is not one of these answers 422,
+        so a misspelled filter never counts every pull request (an automation's Only if reads this)."""
+        who = request.state.identity
+        auth.domain(who)
+        unknown = sorted(set(request.query_params.keys()) - {"repo", "state", "idle_hours", "limit", "offset"})
+        if unknown:
+            raise Problem("filter", f"Unknown filter: {', '.join(unknown)}. Filters: idle_hours, repo, state.", 422)
+        if limit < 1 or limit > 500:
+            raise Problem("limit", "limit is between 1 and 500", 422)
+        if offset < 0 or (idle_hours is not None and idle_hours < 0):
+            raise Problem("filter", "offset and idle_hours are 0 or more", 422)
+        where, args = ["l.kind='pr'"], []
+        if repo:
+            where.append("(lower(l.repo)=lower(?) OR lower(substr(l.repo, instr(l.repo, '/') + 1))=lower(?))")
+            args += [repo.strip(), repo.strip()]
+        if state:
+            where.append("coalesce(l.state,'')=?")
+            args.append(state.strip().lower())
+        if idle_hours is not None:
+            where.append("coalesce(l.state,'') IN ('open','draft') AND coalesce(l.activity_at, l.created_at)<=?")
+            args.append(H.shift(H.now(), hours=-idle_hours))
+        with store.read() as c:
+            rows = c.execute(
+                "SELECT l.id, l.task_id, l.url, l.title, l.state, l.repo, l.number, l.created_at, l.activity_at "
+                f"FROM task_links l WHERE {' AND '.join(where)} "
+                f"AND l.task_id IN (SELECT id FROM tasks WHERE ({auth.task_sql(c, who)})) "
+                "ORDER BY coalesce(l.activity_at, l.created_at), l.id LIMIT ? OFFSET ?",
+                [*args, limit + 1, offset],
+            ).fetchall()
+        prs = [dict(r) for r in rows[:limit]]
+        return {"prs": prs, "next_offset": offset + limit if len(rows) > limit else None}
 
     @app.post("/api/v2/tasks/{tid}/links")
     def task_links(request: Request, tid: str, body: M.TaskLink):

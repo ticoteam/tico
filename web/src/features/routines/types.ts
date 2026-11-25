@@ -40,8 +40,17 @@ export interface Trigger {
   at?: string;
   /** Conditions on what the trigger hands a run; a run starts only when they hold. Kept as they are by every edit. */
   filters?: unknown[];
+  /** A live check read just before a run starts (backend/automation_only_if.py): a miss skips the run. */
+  only_if?: OnlyIf;
   /** due: the rule's due date it was made for. */
   rule_due_id?: string;
+}
+
+/** `read` is a GET under /api/v2/ with its query (`tasks?stage=Release ready&status=open`); one of the two rules. */
+export interface OnlyIf {
+  read: string;
+  at_least?: number;
+  none?: boolean;
 }
 
 export interface Step {
@@ -81,7 +90,7 @@ export interface RunStep {
   status?: string;
   outputs?: { ref?: unknown; thread?: unknown; turn?: { task?: unknown } } | null;
 }
-export type Run = Omit<AutomationRun, 'steps'> & { steps: RunStep[] | null; error?: string | null };
+export type Run = Omit<AutomationRun, 'steps'> & { steps: RunStep[] | null; error?: string | null; reason?: string };
 
 // ---------------------------------------------------------------- built in: Maintenance, Heartbeat, System jobs
 

@@ -60,7 +60,7 @@ import {
   type StageRules,
 } from './queries';
 
-import type { ListenSource, OrgRule, Routine, StageRule, Trigger } from './types';
+import type { ListenSource, OnlyIf, OrgRule, Routine, StageRule, Trigger } from './types';
 import { browserZone } from './words';
 
 /* Every change and every move a person makes on Routines, Rules and Listening. A tab is `?tab=` and one routine, rule
@@ -166,11 +166,28 @@ const cached = (ctx: Ctx, rid: string): Routine | undefined =>
 /** The trigger an edit saves: a change to the same kind is merged into the one it has, so its filters, its zone (and
    anything else the editor does not draw) stay; another kind starts fresh, as the old editor did (its filters test
    another kind's fields). A new schedule runs in the person's zone. */
-const triggerOf = (i: { cron?: string; event?: string }, was?: Trigger): Trigger => {
+const kindOf = (i: { cron?: string; event?: string }, was?: Trigger): Trigger => {
   if (i.cron) return was?.type === 'schedule' ? { ...was, cron: i.cron, tz: was.tz || browserZone() } : { type: 'schedule', cron: i.cron, tz: browserZone() };
   if (i.event) return was?.type === 'event' ? { ...was, name: i.event } : { type: 'event', name: i.event };
   return was ?? { type: 'schedule', cron: '0 9 * * 1-5', tz: browserZone() };
 };
+
+/** Its Only if goes with it whatever the kind: left out, the one it had stays; null takes it off. */
+const triggerOf = (i: { cron?: string; event?: string; onlyIf?: OnlyIf | null }, was?: Trigger): Trigger => {
+  const { only_if: had, ...t } = kindOf(i, was);
+  const only = i.onlyIf === undefined ? (had ?? was?.only_if) : i.onlyIf;
+  return only ? { ...t, only_if: only } : t;
+};
+
+/** A trigger's Only if (backend/automation_flow.py check_only_if): one GET under /api/v2/ and one rule. */
+const onlyIf = z.optional(
+  z.nullable(
+    z.union([
+      z.strictObject({ read: z.string().check(z.minLength(1), z.maxLength(500)), at_least: z.int().check(z.minimum(1), z.maximum(1000)) }),
+      z.strictObject({ read: z.string().check(z.minLength(1), z.maxLength(500)), none: z.literal(true) }),
+    ]),
+  ),
+);
 
 export const createRoutineAction = defineAction({
   id: 'routines.create',
@@ -182,6 +199,7 @@ export const createRoutineAction = defineAction({
     instruction: z.string().check(z.minLength(1), z.maxLength(20_000)),
     cron: z.optional(cron),
     event: z.optional(z.string().check(z.minLength(1), z.maxLength(100))),
+    onlyIf,
   }),
   run: async ({ router }, i) => {
     const made = await said(createRoutine({ name: i.name.trim(), agent: i.agent, instruction: i.instruction.trim(), trigger: triggerOf(i) }));
@@ -203,6 +221,7 @@ export const updateRoutineAction = defineAction({
     instruction: z.optional(z.string().check(z.minLength(1), z.maxLength(20_000))),
     cron: z.optional(cron),
     event: z.optional(z.string().check(z.minLength(1), z.maxLength(100), z.regex(/^[a-z][a-z0-9_]*(\.[a-z0-9_*-]+)+$/), z.describe('an event name, like task.created'))),
+    onlyIf,
   }),
   can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false,
   run: async (ctx, i) => {

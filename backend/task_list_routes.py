@@ -145,6 +145,8 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 "first. A priority read is whole, one answer of up to `limit` (500) rows with `truncated: true` past "
                 "them, never paged (not with after, offset or changed_after: 422), and adds `sorting` and "
                 "`sorting_until`. `after` pages in the same sort",
+                "stage": "A stage's id, or its name: within `pipeline` when given, else in every pipeline (the tasks in "
+                "any stage of that name)",
                 "claimable": "The person's team work and public Support work with no assignee or an off assignee. "
                 "Use a full read because team membership and availability can change independently of tasks",
             },
@@ -190,7 +192,8 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
         entity: str | None = None,
         claimable: bool = False,
     ):
-        """Tasks this reader may read. `pipeline` and `stage` (ids) keep a pipeline's or a stage's tasks;
+        """Tasks this reader may read. `pipeline` (an id) and `stage` (an id, or a name: in `pipeline`, else in any
+        pipeline) keep a pipeline's or a stage's tasks;
         `waiting_on` (a person or a bot) keeps the open tasks with a wait on them (waiting_on.py: a person's or a
         bot's turn, or a bot that can't run); `pushed_past=true` keeps the tasks that entered their stage pushed past
         a requirement (false, the rest). `search`, `owners`, `stages`, `requesters`, `labels`, `turn`, `due` and
@@ -498,6 +501,20 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
             )
         return found
 
+    def stages_named(c, stage):
+        """A stage named without its pipeline: the rowids of the live stages of that name in any live pipeline (an
+        Only if check's `tasks?stage=Release ready`), or none when `stage` is a stage's id or names none."""
+        if c.execute("SELECT 1 FROM stages WHERE id=?", (stage,)).fetchone():
+            return []
+        return [
+            int(r[0])
+            for r in c.execute(
+                "SELECT s.rowid FROM stages s JOIN pipelines p ON p.id=s.pipeline_id WHERE lower(s.name)=lower(?) "
+                "AND s.retired_at IS NULL AND p.retired_at IS NULL",
+                (str(stage).strip(),),
+            )
+        ]
+
     def priority_list(c, who, owner, requester, stage_id, filters, limit):
         """A stage's list in the reader's priority order (backend/stage_order.py), whole in one answer: every row the
         filters select, by id, arranged by the reader's saved order (the person's own only: a delegated read, an
@@ -526,7 +543,12 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 raise Problem("pipeline", "No such pipeline", 422)
             parts.append(f"pipeline_id=(SELECT id FROM pipelines WHERE rowid={int(found[0])})")
         if stage is not None:
-            parts.append(f"stage_id=(SELECT id FROM stages WHERE rowid={int(stage_row(c, pipeline, stage)['rowid'])})")
+            named = [] if pipeline is not None else stages_named(c, stage)
+            if named:
+                parts.append(f"stage_id IN (SELECT id FROM stages WHERE rowid IN ({','.join(str(n) for n in named)}))")
+            else:
+                rowid = int(stage_row(c, pipeline, stage)["rowid"])
+                parts.append(f"stage_id=(SELECT id FROM stages WHERE rowid={rowid})")
         if pushed_past is not None:
             parts.append(
                 ("" if pushed_past else "NOT ")

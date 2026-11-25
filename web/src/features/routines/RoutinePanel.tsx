@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Fragment, useState, type ReactNode } from 'react';
 import { useActors } from '@/data';
+import { pipelinesQuery } from '@/features/tasks/routing';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
@@ -15,10 +16,31 @@ import { ReadFault, SidePanel } from '@/pagekinds';
 import { BoardItemEditor, BoardView, type ItemRef } from './BoardEditor';
 import { routineBoard, takesTemplate } from './board';
 import { Ends, Face, HeadSwitch, PanelRead, press, pressOut, RemoveItem, useConfirmRemove, useName, Verb, Word } from './parts';
-import { routineQuery, routinesQuery, runsQuery, useEndRefresh, versionsQuery } from './queries';
+import { reposQuery, routineQuery, routinesQuery, runsQuery, useEndRefresh, versionsQuery } from './queries';
 import { ApplyTemplate } from './Templates';
-import type { Routine, Trigger, Version } from './types';
-import { endedWords, EVERY, eventWords, flowLines, isOn, lineDiff, parseSchedule, runLink, runWords, scheduleCron, timeChoices, triggerWords, WEEKDAYS, type Every } from './words';
+import type { OnlyIf, Routine, Trigger, Version } from './types';
+import {
+  endedWords,
+  EVERY,
+  eventWords,
+  flowLines,
+  isOn,
+  lineDiff,
+  onlyIfDraft,
+  onlyIfOf,
+  onlyIfRead,
+  onlyIfWords,
+  parseSchedule,
+  runLink,
+  runWords,
+  scheduleCron,
+  timeChoices,
+  triggerWords,
+  WEEKDAYS,
+  type Every,
+  type OnlyIfDraft,
+  type OnlyIfSource,
+} from './words';
 
 /* One routine, as a panel (rules.js routinePanel): its facts, the instruction, the last runs and Run now. Edit turns
    the panel into the editor; `routine:new` opens the editor empty. "⋯" also holds a test run with sample input and its
@@ -86,6 +108,7 @@ function RoutineView({ id, onClose }: { id: string; onClose: () => void }) {
       <section className="rail-sec">
         <Facts label="About">
           <LabelValue label="Trigger">{triggerWords(r.trigger)}</LabelValue>
+          {r.trigger.only_if && <OnlyIfFact value={r.trigger.only_if} />}
           {together && <LabelValue label="Batch">{`Once per run, for new ${String(together.source)} since the last run`}</LabelValue>}
           <LabelValue label="Does">
             <Face id={step?.bot ?? r.owner_id} />
@@ -370,6 +393,17 @@ function Made({ id, via }: { id: string; via?: string }) {
   return <p className="made">{`Made by ${who}`}</p>;
 }
 
+/** The stage a read names, by its id, as a person reads it. */
+function useStageName() {
+  const pipelines = useQuery(pipelinesQuery).data ?? [];
+  return (id: string) => pipelines.flatMap((p) => p.stages).find((x) => x.id === id)?.name;
+}
+
+function OnlyIfFact({ value }: { value: OnlyIf }) {
+  const stageName = useStageName();
+  return <LabelValue label="Only if">{onlyIfWords(value, stageName)}</LabelValue>;
+}
+
 function Runs({ id }: { id: string }) {
   const runs = useQuery(runsQuery(id));
   const list = runs.data ?? [];
@@ -388,13 +422,15 @@ function Runs({ id }: { id: string }) {
       )}
       {list.map((run) => {
         const at = run.started_at ?? run.finished_at;
-        const what = run.error || run.summary || runWords(run.status);
+        // A run its Only if skipped: one dim word, its reason on hover, no cost.
+        const skipped = run.status === 'skipped';
+        const what = skipped ? runWords(run.status) : run.error || run.summary || runWords(run.status);
         const href = runLink(run);
         return (
-          <Row key={run.id} className="prun" title={what} href={href} target={`run:${run.id}`}>
+          <Row key={run.id} className={skipped ? 'prun is-skipped' : 'prun'} title={skipped ? run.reason || what : what} href={href} target={`run:${run.id}`}>
             <span className="run-at">{at ? fmtDate(at) : ''}</span>
             <span className="row-sub">{what}</span>
-            {run.status === 'failed' ? <Word>Failed</Word> : <span className="row-age">{run.cost ? fmtMoney(run.cost, { cents: true }) : ''}</span>}
+            {run.status === 'failed' ? <Word>Failed</Word> : <span className="row-age">{!skipped && run.cost ? fmtMoney(run.cost, { cents: true }) : ''}</span>}
           </Row>
         );
       })}
@@ -422,6 +458,7 @@ function RoutineEditor({ routine, onDone, onClose }: { routine?: Routine; onDone
   const [sched, setSched] = useState(parseSchedule(t?.type === 'schedule' && t.cron ? t.cron : '0 9 * * 1-5'));
   const [event, setEvent] = useState(t?.type === 'event' && t.name ? t.name : 'task.created');
   const [instruction, setInstruction] = useState(step?.prompt ?? '');
+  const [only, setOnly] = useState<OnlyIfDraft | null>(t?.only_if ? onlyIfDraft(t.only_if) : null);
   const [busy, setBusy] = useState(false);
   // an event the catalog does not list (one saved before) stays a choice
   const events = [...(EVENT_CHOICES.some((e) => e.value === event) ? [] : [{ value: event, label: eventWords(event) }]), ...EVENT_CHOICES];
@@ -431,12 +468,15 @@ function RoutineEditor({ routine, onDone, onClose }: { routine?: Routine; onDone
   if (agent && !options.some((o) => o.value === agent)) options.unshift({ value: agent, label: agent.slice(4) });
   // a routine whose work is other steps (a filter, an action) may have no instruction
   const others = !!routine?.steps?.some((x) => x.type !== 'bot_turn');
-  const ready = !!name.trim() && !!agent && (!!instruction.trim() || (others && !step));
+  const onlyIf = only ? onlyIfOf(only) : null;
+  const ready = !!name.trim() && !!agent && (!!instruction.trim() || (others && !step)) && (!only || !!onlyIf);
 
   const save = async () => {
     if (!ready || !agent) return;
     const when = fixed ? {} : start === 'schedule' ? { cron: scheduleCron(sched) } : { event };
-    const input = { name: name.trim(), agent, ...(instruction.trim() ? { instruction: instruction.trim() } : {}), ...when };
+    // An edit always sends it, so taking it off (null) saves; a new routine only when it has one.
+    const check = routine ? { onlyIf } : onlyIf ? { onlyIf } : {};
+    const input = { name: name.trim(), agent, ...(instruction.trim() ? { instruction: instruction.trim() } : {}), ...when, ...check };
     setBusy(true);
     const ok = await press(routine ? 'routines.update' : 'routines.create', routine ? { routine: routine.id, ...input } : input);
     setBusy(false);
@@ -481,6 +521,13 @@ function RoutineEditor({ routine, onDone, onClose }: { routine?: Routine; onDone
             {start === 'schedule' ? <ScheduleFields value={sched} onChange={setSched} /> : <Select label="When" options={events} value={event} onValueChange={setEvent} />}
           </>
         )}
+        {only ? (
+          <OnlyIfFields value={only} onChange={setOnly} />
+        ) : (
+          <span>
+            <Verb onClick={() => setOnly({ src: { kind: 'tasks', stage: '' }, none: false, n: '1' })}>+ Only if</Verb>
+          </span>
+        )}
         <Field label="Instruction" area value={instruction} onValueChange={setInstruction} placeholder="What the agent does each time" />
       </section>
     </SidePanel>
@@ -499,5 +546,50 @@ function ScheduleFields({ value, onChange }: { value: ReturnType<typeof parseSch
       {value.every !== 'hourly' && value.every !== 'custom' && <Select label="At" options={timeChoices(value.at)} value={value.at} onValueChange={(at) => set({ at })} />}
       {value.every === 'custom' && <Field label="Cron" value={value.cron} onValueChange={(cron) => onChange({ ...value, cron })} placeholder="0 9 * * 1-5" />}
     </>
+  );
+}
+
+// ---------------------------------------------------------------- Only if
+
+const SOURCES = [
+  { value: 'tasks', label: 'Tasks' },
+  { value: 'prs', label: 'PRs' },
+  { value: 'query', label: 'Query' },
+] as const;
+const RULES = [
+  { value: 'least', label: 'has at least' },
+  { value: 'none', label: 'is empty' },
+] as const;
+
+function OnlyIfFields({ value, onChange }: { value: OnlyIfDraft; onChange: (d: OnlyIfDraft | null) => void }) {
+  const pipelines = useQuery(pipelinesQuery).data ?? [];
+  const repos = useQuery(reposQuery).data?.repositories ?? [];
+  const { src } = value;
+  const set = (patch: Partial<OnlyIfDraft>) => onChange({ ...value, ...patch });
+  const pick = (kind: OnlyIfSource['kind']) => {
+    if (kind === src.kind) return;
+    // a Query starts from what the pickers had, so switching to it never loses the read
+    set({ src: kind === 'tasks' ? { kind, stage: '' } : kind === 'prs' ? { kind, repo: '' } : { kind, read: onlyIfRead(src) } });
+  };
+  const many = pipelines.length > 1;
+  const stages = pipelines.flatMap((p) => p.stages.map((x) => ({ value: x.id, label: many ? `${p.name} › ${x.name}` : x.name })));
+  if (src.kind === 'tasks' && src.stage && !stages.some((o) => o.value === src.stage)) stages.unshift({ value: src.stage, label: src.stage });
+  const names = repos.map((r) => ({ value: r.full_name, label: r.full_name }));
+  if (src.kind === 'prs' && src.repo && !names.some((o) => o.value === src.repo)) names.unshift({ value: src.repo, label: src.repo });
+  return (
+    <div className="rr-only" data-target="only-if">
+      <Select label="Only if" options={[...SOURCES]} value={src.kind} onValueChange={pick} />
+      {src.kind === 'tasks' && <Select label="Stage is" options={stages} value={src.stage || null} onValueChange={(stage) => set({ src: { kind: 'tasks', stage } })} placeholder="Pick a stage" />}
+      {src.kind === 'prs' &&
+        (names.length ? (
+          <Select label="Repo" options={names} value={src.repo || null} onValueChange={(repo) => set({ src: { ...src, repo } })} placeholder="Pick a repo" />
+        ) : (
+          <Field label="Repo" value={src.repo} onValueChange={(repo) => set({ src: { ...src, repo } })} placeholder="acme/app" />
+        ))}
+      {src.kind === 'query' && <Field label="Query" value={src.read} onValueChange={(read) => set({ src: { kind: 'query', read } })} placeholder="tasks?status=open" />}
+      <Select label="Rule" labelHidden options={[...RULES]} value={value.none ? 'none' : 'least'} onValueChange={(v) => set({ none: v === 'none' })} />
+      {!value.none && <Field label="Count" labelHidden type="number" value={value.n} onValueChange={(n) => set({ n })} />}
+      <IconButton icon="close" label="Remove Only if" size="sm" quiet onClick={() => onChange(null)} />
+    </div>
   );
 }

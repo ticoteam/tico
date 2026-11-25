@@ -1995,6 +1995,27 @@ def _run_flow(c, run):
     return {**{k: v for k, v in flow_of(row).items() if k not in VERSIONED}, **json.loads(version["flow"])}
 
 
+def _only_if(app, flow, state):
+    """The trigger's Only if check (backend/automation_only_if.py), read once, as the run is first claimed and before
+    any step: kept in the run's state as `only_if`, its count and items in the payload for the steps to read. A miss
+    or a failed read skips the run with its reason. A run started by hand, or one already past the check, is not
+    checked again."""
+    only_if = (flow.get("trigger") or {}).get("only_if")
+    if not only_if or "only_if" in state or state.get("manual") or state.get("steps"):
+        return state
+    from . import automation_only_if
+
+    checked = automation_only_if.evaluate(app, flow.get("owner") or "", only_if)
+    state = {
+        **state,
+        "only_if": {k: v for k, v in checked.items() if k != "items"},
+        "payload": {**(state.get("payload") or {}), "only_if": {"count": checked["count"], "items": checked["items"]}},
+    }
+    if not checked["ok"]:
+        state.update(status="skipped", threads=[])
+    return state
+
+
 def turn_done(c, attempt, outcome, text):
     """A bot's turn ended (after `H.turn_finish` priced it). The run that started it (its notice carries
     `automation_run`) is charged its cost, which counts toward the spend cap, and a run waiting on it takes its answer
@@ -2957,9 +2978,11 @@ class Hub:
         try:
             # What it does comes from the run's version; its owner, cap and the rest are as they are now.
             flow = {**{k: v for k, v in flow_of(row).items() if k not in VERSIONED}, **json.loads(version["flow"])}
-            services = HubServices(self, dict(row), flow, rid, tuple(json.loads(run["chain"] or "[]")), token)
-            with SRC.writing_as(SRC.automation_key(row["id"])):  # Tico lines its steps write name it
-                state = E.advance(flow, state, services)
+            state = _only_if(self.app, flow, state)
+            if state.get("status") != "skipped":
+                services = HubServices(self, dict(row), flow, rid, tuple(json.loads(run["chain"] or "[]")), token)
+                with SRC.writing_as(SRC.automation_key(row["id"])):  # Tico lines its steps write name it
+                    state = E.advance(flow, state, services)
         except Exception as exc:  # noqa: BLE001 - a bug in a run fails that run, not the drain
             state = {**state, "status": "failed", "error": (str(exc) or type(exc).__name__)[:300]}
         with self.store.transaction() as c:
@@ -2993,6 +3016,8 @@ class Hub:
                 status = state["status"] = _runnable(c, run["automation_id"])
             if status == "failed":
                 _cancel_mail(c, rid, state)
+            if status == "skipped" and (state.get("only_if") or {}).get("reason"):
+                _count(c, run["automation_id"], "dropped")  # its Only if missed: a drop, with its row and reason
             _found_done(c, run["automation_id"], state, ended=status not in ("waiting", "queued", "held"))
             waits = [
                 t["wait"]["until"] for t in state.get("threads", []) if (t.get("wait") or {}).get("kind") == "batch"
@@ -4004,6 +4029,8 @@ def run_view(run, detail=True):
     }
     if state:
         out["summary"] = _summary(state)
+        if run["status"] == "skipped" and (state.get("only_if") or {}).get("reason"):
+            out["reason"] = state["only_if"]["reason"]
         sent = (state.get("payload") or {}).get("listening")
         if isinstance(sent, dict):
             out["listening"] = {k: sent.get(k) for k in ("text", "count", "waiting", "sent_at", "counts")}

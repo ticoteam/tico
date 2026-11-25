@@ -7,11 +7,12 @@ import { queryClient } from '@/data';
 // eslint-disable-next-line no-restricted-imports -- the router's error component, as the app wires it
 import { PageFault } from '@/shell/PageFault';
 import { validateListeningSearch, validateRoutinesSearch, validateRulesSearch } from './load';
-import { deliveriesQuery, heartbeatQuery, hooksQuery, maintenanceQuery, maintenanceRunsQuery, routinesQuery, runsQuery, systemJobsQuery, templatesQuery, versionsQuery } from './queries';
+import { deliveriesQuery, heartbeatQuery, hooksQuery, maintenanceQuery, maintenanceRunsQuery, reposQuery, routinesQuery, runsQuery, systemJobsQuery, templatesQuery, versionsQuery } from './queries';
 import { RoutinesPage } from './RoutinesPage';
 import type { Hook, Maintenance, Routine, StageRule, SystemJob } from './types';
 import { fmtDate } from '@/lib';
-import { cronWords, orgParts, runLink, stageParts } from './words';
+import { pipelinesQuery } from '@/features/tasks/exports';
+import { cronWords, onlyIfRead, onlyIfSource, onlyIfWords, orgParts, runLink, stageParts } from './words';
 
 /* The Routines page: routines and one routine's panel, the built-in ones, runs, webhooks, the inbox board and
    inbox templates. Sample rows only. */
@@ -894,5 +895,93 @@ describe('Inbox templates', () => {
     expect(await within(dialog).findByText("This template doesn't fit this inbox")).toBeTruthy();
     expect(within(dialog).getByRole('button', { name: 'Apply' }).hasAttribute('disabled')).toBe(true);
     expect(sent).toHaveLength(0);
+  });
+});
+
+describe('Only if', () => {
+  const READY = 'tasks?stage=st-ready&status=open';
+  const skippedRun = (reason: string) => ({ id: 'run1', automation_id: 'r1', status: 'skipped', started_at: '2026-11-18T07:00:00Z', cost: 0, reason, steps: [], version: 1 });
+  beforeEach(() => {
+    queryClient.setQueryData(pipelinesQuery.queryKey, [{ id: 'p1', name: 'Release', stages: [{ id: 'st-ready', name: 'Release ready' }], owner: null, done: null, closed: null }] as never);
+    queryClient.setQueryData(reposQuery.queryKey, { repositories: [{ full_name: 'acme/gotidy' }] });
+  });
+  const event = (only_if?: { read: string; at_least?: number; none?: boolean }) => ({ type: 'event', name: 'task.created', ...(only_if ? { only_if } : {}) }) as Routine['trigger'];
+
+  it('says its check in plain words', () => {
+    expect(onlyIfWords({ read: 'tasks?stage=Release ready&status=open', at_least: 1 })).toBe('Release ready has a task');
+    expect(onlyIfWords({ read: 'prs?repo=gotidy&idle_hours=48', at_least: 1 })).toBe('gotidy has a PR idle 48h');
+    expect(onlyIfWords({ read: READY, none: true }, (id) => (id === 'st-ready' ? 'Release ready' : undefined))).toBe('Release ready is empty');
+    expect(onlyIfWords({ read: 'tasks?owner=ops&label=candidate', none: true })).toBe('tasks?owner=ops&label=candidate is empty');
+    expect(onlyIfWords({ read: 'tasks?label=candidate', at_least: 3 })).toBe('tasks?label=candidate has at least 3');
+  });
+
+  it('reads a simple read back into the pickers and writes it the same; any other read is a Query', () => {
+    for (const read of ['tasks?stage=Release ready&status=open', 'prs?repo=acme/gotidy&idle_hours=48', 'prs?repo=gotidy']) expect(onlyIfRead(onlyIfSource(read))).toBe(read);
+    expect(onlyIfSource('prs?repo=acme/gotidy&idle_hours=48')).toEqual({ kind: 'prs', repo: 'acme/gotidy', idle: 48 });
+    expect(onlyIfSource('tasks?stage=Release ready&label=x')).toEqual({ kind: 'query', read: 'tasks?stage=Release ready&label=x' });
+  });
+
+  it('shows the Only if fact on the panel, by the stage’s name', async () => {
+    const p = await openRoutine({ trigger: event({ read: READY, at_least: 1 }) });
+    expect(within(p).getByText('Only if')).toBeTruthy();
+    expect(within(p).getByText('Release ready has a task')).toBeTruthy();
+  });
+
+  it('a skipped run is a dim Skipped row with no cost and its reason on hover', async () => {
+    const reason = `Only if: ${READY} has 0, needs at least 1`;
+    queryClient.setQueryData(runsQuery('r1').queryKey, [skippedRun(reason)] as never);
+    const p = await openRoutine();
+    const row = within(p).getByTitle(reason);
+    expect(row.className).toContain('is-skipped');
+    expect(within(row).getByText('Skipped')).toBeTruthy();
+    expect(row.textContent).not.toContain('$');
+  });
+
+  it('an edit reads its check into the pickers and saves the rule it was changed to', async () => {
+    const sent = record((url, method) => (method === 'PATCH' && url.endsWith('/automations/r1') ? ok(routine()) : nothing()));
+    await menu(await openRoutine({ trigger: event({ read: READY, at_least: 1 }) }), 'Edit');
+    expect(screen.getByRole('combobox', { name: 'Only if' }).textContent).toContain('Tasks');
+    expect(screen.getByRole('combobox', { name: 'Stage is' }).textContent).toContain('Release ready');
+    await pick('Rule', 'is empty');
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect((sent[0]!.body as { trigger: unknown }).trigger).toEqual({ type: 'event', name: 'task.created', only_if: { read: READY, none: true } });
+  });
+
+  it('+ Only if adds a check on a repository’s PRs', async () => {
+    const sent = record((url, method) => (method === 'PATCH' && url.endsWith('/automations/r1') ? ok(routine()) : nothing()));
+    await menu(await openRoutine({ trigger: event() }), 'Edit');
+    fireEvent.click(screen.getByRole('button', { name: '+ Only if' }));
+    await pick('Only if', 'PRs');
+    await pick('Repo', 'acme/gotidy');
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Count' }), { target: { value: '2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect((sent[0]!.body as { trigger: unknown }).trigger).toEqual({ type: 'event', name: 'task.created', only_if: { read: 'prs?repo=acme/gotidy', at_least: 2 } });
+  });
+
+  it('× takes the check off', async () => {
+    const sent = record((url, method) => (method === 'PATCH' && url.endsWith('/automations/r1') ? ok(routine()) : nothing()));
+    await menu(await openRoutine({ trigger: event({ read: READY, at_least: 1 }) }), 'Edit');
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Only if' }));
+    expect(screen.getByRole('button', { name: '+ Only if' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect((sent[0]!.body as { trigger: unknown }).trigger).toEqual({ type: 'event', name: 'task.created' });
+  });
+
+  it('a skipped run in Runs is dim, says Skipped with no cost, and names its reason on hover', async () => {
+    const reason = 'Only if: prs?repo=gotidy has 0, needs at least 1';
+    const runs = {
+      next: null,
+      since: '2026-11-18T07:00:00Z',
+      runs: [{ id: 'run1', automation_id: 'r1', automation_name: 'Morning numbers', started_at: '2026-11-19T07:00:00Z', status: 'skipped', trigger: 'event', owner_id: 'bot:growth', outcome: 'Skipped', cost: 0.5, reason }],
+    };
+    record((url) => (url.includes('/automations/runs?') ? ok(runs) : nothing()));
+    show('/company/routines?tab=runs');
+    const row = await screen.findByTitle(`Morning numbers: ${reason}`);
+    expect(row.className).toContain('is-skipped');
+    expect(within(row).getByText('Skipped')).toBeTruthy();
+    expect(row.textContent).not.toContain('$');
   });
 });

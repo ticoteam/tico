@@ -74,6 +74,7 @@ from .store import H, Problem, Store
 from . import bot_settings as BS
 from . import bot_status_routes, computers_routes
 from . import brand_icons
+from . import automation_only_if
 from .bot_status_routes import INBOX_LIMIT  # noqa: F401
 from .bot_status_routes import INBOX_PAGE  # noqa: F401
 from .bot_status_routes import _first_visible  # noqa: F401
@@ -1148,10 +1149,18 @@ def _install_request_guard(
             )
             if request.url.path != "/api/v2/runners/enroll" and not agent_door:
                 began = time.perf_counter()
+                lent = request.scope.get(automation_only_if.SCOPE_KEY)
                 try:
-                    who = await asyncio.get_running_loop().run_in_executor(
-                        app.state.auth_pool, auth.authenticate, request.headers, request.url.path, request.method
-                    )
+                    if lent is not None:
+                        # An automation's Only if check, in-process as its owner (backend/automation_only_if.py): a
+                        # read, and nothing else.
+                        if request.method != "GET":
+                            raise Problem("forbidden", "An Only if check only reads", 403)
+                        who = lent
+                    else:
+                        who = await asyncio.get_running_loop().run_in_executor(
+                            app.state.auth_pool, auth.authenticate, request.headers, request.url.path, request.method
+                        )
                 except Problem as exc:
                     # GitHub's return for the App's setup (backend/github_app.py) comes in the browser, which may hold no owner
                     # session: only the missing identity passes, and the route parks the code. Any other refusal stands.
