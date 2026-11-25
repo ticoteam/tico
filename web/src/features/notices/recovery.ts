@@ -6,6 +6,7 @@
 import type { AnyRouter, RouterHistory } from '@tanstack/react-router';
 import { useSyncExternalStore } from 'react';
 import { callState, isCallActive } from '@/features/calls/routing';
+import { loadingReporter } from '@/features/support/routing';
 import { behind, thisBuild } from '@/lib/build';
 import { signedIn } from './queries';
 
@@ -58,6 +59,8 @@ export function startRecovery(router?: AnyRouter): () => void {
   let asking = false;
   let on = true;
   const fail = (e: Event) => {
+    // the error reporter's own chunk (features/support/errors.ts): failing, it only turns reporting off
+    if (e.type === 'vite:preloadError' && loadingReporter()) return;
     // The router reloads once on its own for a missing page module (lazyRouteComponent), past the checks here: its note
     // that it already did is written for it, under its own key, before the import's rejection reaches it.
     const why: unknown = (e as Event & { payload?: unknown }).payload;

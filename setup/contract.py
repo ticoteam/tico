@@ -66,6 +66,7 @@ SECRET_KEYS = frozenset(
         "TICO_VISUAL_SECRET",
         "TICO_COMPANY_FILE_B64",
         "TICO_MEET_API_SECRET",
+        "TICO_OBSERVABILITY_ID_SECRET",
         *DECISIONS_KEYS.values(),
     }
 )

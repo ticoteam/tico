@@ -17,6 +17,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClient } from '@/data';
 import type * as CallsRouting from '@/features/calls/routing';
 import { callState } from '@/features/calls/routing';
+import type * as SupportRouting from '@/features/support/routing';
+import { loadingReporter } from '@/features/support/routing';
 import { resetBuild, sawBuild } from '@/lib/build';
 import { AssetRecovery } from './AssetRecovery';
 import { Cover } from './Cover';
@@ -26,6 +28,7 @@ import { isAssetFailure, startRecovery } from './recovery';
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 vi.mock('./queries', async (actual) => ({ ...(await actual<typeof Queries>()), signedIn: vi.fn() }));
+vi.mock('@/features/support/routing', async (actual) => ({ ...(await actual<typeof SupportRouting>()), loadingReporter: vi.fn(() => false) }));
 vi.mock('@/features/calls/routing', async (actual) => ({ ...(await actual<typeof CallsRouting>()), callState: vi.fn() }));
 
 type Call = ReturnType<typeof callState>;
@@ -218,6 +221,18 @@ describe('Asset recovery @s1197', () => {
     // no shell, no actions: Reload still reloads
     fireEvent.click(within(shown).getByRole('button', { name: 'Reload' }));
     expect(go.reload).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets the error reporter's own file fail: no reload, no card, the app as it is", async () => {
+    const go = page();
+    recover();
+    render(<AssetRecovery />);
+    vi.mocked(loadingReporter).mockReturnValueOnce(true);
+    fail();
+    await act(async () => {});
+    expect(signedIn).not.toHaveBeenCalled();
+    expect(go.reload).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 
   it('shows the card, not a reload, when the tab cannot note that it reloaded', async () => {

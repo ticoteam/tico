@@ -9,6 +9,7 @@ import { Route as root } from '@/routes/__root';
 import { Route as landingRoute } from '@/routes/index';
 import { resetDesktopReports, type TicoDesktop } from '@/desktop';
 import { run } from '@/actions/run';
+import { reportError } from '@/features/support/routing';
 import type * as TasksRouting from '@/features/tasks/routing';
 import { TasksHome } from '@/features/tasks/exports';
 import { forgetPlaces, holdRow } from '@/lib';
@@ -203,7 +204,7 @@ vi.mock('@/features/threads/routing', async () => ({
   threadListQuery: { queryKey: ['threads-list'], queryFn: async () => ({ rows: [], next: null }), initialPageParam: null, getNextPageParam: () => undefined, staleTime: Infinity },
 }));
 vi.mock('@/features/support/exports', () => ({ SupportChat: () => <p>support chat</p> }));
-vi.mock('@/features/support/routing', () => ({ SUPPORT_CHAT: 'support', supportUnreadQuery: q('support-unread', 2) }));
+vi.mock('@/features/support/routing', () => ({ SUPPORT_CHAT: 'support', supportUnreadQuery: q('support-unread', 2), reportError: vi.fn() }));
 vi.mock('@/pagekinds', async (orig) => ({
   ...(await orig<object>()),
    PanelHost: () => null, usePagePanelOpen: () => false }));
@@ -1042,6 +1043,7 @@ describe('the desktop app', () => {
 describe('a page that fails', () => {
   let quiet: MockInstance[] = [];
   beforeEach(() => {
+    vi.mocked(reportError).mockClear();
     quiet = [vi.spyOn(console, 'error').mockImplementation(() => {}), vi.spyOn(console, 'warn').mockImplementation(() => {})];
   });
   afterEach(() => quiet.forEach((q) => q.mockRestore()));
@@ -1077,6 +1079,7 @@ describe('a page that fails', () => {
     });
     expect(within(main).getByText('This page did not load')).toBeTruthy();
     expect(screen.getByRole('navigation', { name: 'Main' })).toBeTruthy();
+    expect(vi.mocked(reportError)).toHaveBeenCalledWith(expect.any(TypeError), { source: 'page_fault', route: '/' });
     broken = false;
     fireEvent.click(within(main).getByRole('button', { name: 'Try again' }));
     expect(await screen.findByRole('heading', { name: 'Routines' })).toBeTruthy();
@@ -1092,6 +1095,7 @@ describe('a page that fails', () => {
     );
     expect(within(main).queryByRole('button', { name: 'Try again' })).toBeNull();
     expect(within(main).queryByText('This page did not load')).toBeNull();
+    expect(vi.mocked(reportError)).not.toHaveBeenCalled();
   });
 });
 
