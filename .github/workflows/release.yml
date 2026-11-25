@@ -242,25 +242,21 @@ jobs:
         id: sentry_maps
         if: steps.sentry.outcome == 'success' && steps.sentry.outputs.enabled == 'true'
         continue-on-error: true
-        run: docker buildx build --target web-sourcemaps --output "type=local,dest=$RUNNER_TEMP/web-sourcemaps" .
-      - id: sentry_node
+        run: |
+          docker buildx build --target web-sourcemaps --output "type=local,dest=$RUNNER_TEMP/web-sourcemaps" . \
+            || { echo "::warning::Building web source maps for Sentry failed"; exit 1; }
+      - name: Upload web source maps to Sentry
         if: steps.sentry_maps.outcome == 'success'
         continue-on-error: true
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '24.22.3'
-          package-manager-cache: false
-      - name: Upload web source maps to Sentry
-        if: steps.sentry_node.outcome == 'success'
-        continue-on-error: true
-        working-directory: ${{ runner.temp }}
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           SENTRY_ORG: tico-ws
           SENTRY_PROJECT: '4512298593681408'
         run: |
-          npx --yes @sentry/cli@3.8.2 sourcemaps upload --release "$VERSION" \
-            --url-prefix 'app:///next/assets' "$RUNNER_TEMP/web-sourcemaps" \
+          docker run --rm -e SENTRY_AUTH_TOKEN -e SENTRY_ORG -e SENTRY_PROJECT \
+            -v "$RUNNER_TEMP/web-sourcemaps:/work:ro" \
+            getsentry/sentry-cli:3.8.2@sha256:633122f5fbd774716a0ebbcd7ece9c0584aa781cc61a84e7ce57964c635d6559 \
+            sourcemaps upload --release "$VERSION" --url-prefix 'app:///next/assets' /work \
             || { echo "::warning::Web source map upload to Sentry failed"; exit 1; }
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
