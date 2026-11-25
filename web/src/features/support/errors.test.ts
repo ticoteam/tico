@@ -1,6 +1,5 @@
 import type { ErrorEvent } from '@sentry/browser';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError } from '@/api/client';
 
 const sdk = vi.hoisted(() => ({
   init: vi.fn(),
@@ -14,9 +13,10 @@ vi.mock('./queries', () => ({ observabilityConfig: vi.fn(async () => config.valu
 const DSN = 'https://abc123@o1.ingest.us.sentry.io/42';
 const ID = 'tico:' + 'a'.repeat(64);
 
+// A fresh module graph each time: errors.ts's state is per page load. Its ApiError is that graph's too.
 async function fresh() {
   vi.resetModules();
-  return import('./errors');
+  return { ...(await import('./errors')), ApiError: (await import('@/api/client')).ApiError };
 }
 
 const own = (file: string) => `${location.origin}/next/assets/${file}`;
@@ -39,7 +39,7 @@ describe('error reports', () => {
   it('sends a fault reported before it started, with its route and the refusal labels', async () => {
     config.value = { sentry_dsn: DSN, environment: 'production', release: 'v0.6.90', distinct_id: ID };
     const errors = await fresh();
-    const refused = new ApiError(502, 'http_502', 'Bad Gateway', true);
+    const refused = new errors.ApiError(502, 'http_502', 'Bad Gateway', true);
     errors.reportError(refused, { source: 'page_fault', route: '/_app/tasks/$id' });
     await errors.startErrorReports();
     expect(sdk.init).toHaveBeenCalledWith(
