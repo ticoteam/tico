@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { FilesPage } from '@/features/library/exports';
 import { filesSearch, loadFiles } from '@/features/library/routing';
+import { PAGE_SEARCH } from '@/lib';
 
 export const Route = createFileRoute('/library/files')({
   validateSearch: filesSearch,
@@ -10,5 +11,5 @@ export const Route = createFileRoute('/library/files')({
 });
 
 function Files() {
-  return <FilesPage search={Route.useSearch()} />;
+  return <FilesPage search={Route.useSearch(PAGE_SEARCH)} />;
 }

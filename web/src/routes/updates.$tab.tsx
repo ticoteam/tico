@@ -1,6 +1,7 @@
 import { createFileRoute, notFound } from '@tanstack/react-router';
 import { UpdatesPage } from '@/features/threads/exports';
 import { loadUpdates, updatesSearch, type UpdateTab } from '@/features/threads/routing';
+import { PAGE_SEARCH } from '@/lib';
 
 const TABS: readonly string[] = ['daily', 'weekly', 'archive'] satisfies UpdateTab[];
 
@@ -17,6 +18,6 @@ export const Route = createFileRoute('/updates/$tab')({
 
 function UpdatesTabRoute() {
   const { tab } = Route.useParams();
-  const { open } = Route.useSearch();
+  const { open } = Route.useSearch(PAGE_SEARCH);
   return <UpdatesPage tab={tab as UpdateTab} open={open} />;
 }

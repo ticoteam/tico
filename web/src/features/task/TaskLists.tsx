@@ -17,10 +17,12 @@ import { LatePill } from '@/kit/Pill';
 import { VirtualList, type VirtualListHandle } from '@/kit/VirtualList';
 import { useFollow } from '@/live/follow';
 import { HITS } from '@/search/helpers';
-import { boardSearch, hearPlaces, holdRow, NEEDS_YOU, noteList, type ListRow } from '@/lib';
+import { boardSearch, hearPlaces, holdRow, keptRows, NEEDS_YOU, noteList, type ListRow } from '@/lib';
 
 /* The list beside a task open over a page (plan: the task modal): the list it was opened from. A board's stage (its
-   pipeline's id), Needs you (none), an agent's or a person's open tasks (their id), or search hits (`search:<words>`).
+   pipeline's id), Needs you (none), an agent's or a person's open tasks (their id), search hits (`search:<words>`), or
+   a list a page drew as it drew it (`rows:…`: an agent's own list, its done tasks). One it cannot draw (a pipeline gone,
+   a teammate gone, a page's list not drawn since the app loaded) is Needs you.
    Each notes the rows it draws (lib noteList) for the row below once the open task is answered, and its title is a
    switcher to another list. Rows are the tasks' own links: a press on one opens it in place (router.tsx). */
 
@@ -28,9 +30,10 @@ const ListToolItems = lazy(() => loadListTools().then((m) => ({ default: m.ListT
 const ListFind = lazy(() => loadListTools().then((m) => ({ default: m.ListFind })));
 
 const SEARCH = 'search:';
+const ROWS = 'rows:';
 /** What kind of list `list` names (lib openOf keeps only one of these). */
-export const listKind = (list: string | undefined): 'needs' | 'search' | 'who' | 'pipeline' =>
-  !list ? 'needs' : list.startsWith(SEARCH) ? 'search' : list.includes(':') ? 'who' : 'pipeline';
+export const listKind = (list: string | undefined): 'needs' | 'search' | 'rows' | 'who' | 'pipeline' =>
+  !list ? 'needs' : list.startsWith(SEARCH) ? 'search' : list.startsWith(ROWS) ? 'rows' : list.includes(':') ? 'who' : 'pipeline';
 
 const numberOf = (t: { number?: number | null; id: string }) => String(t.number ?? t.id);
 const isOpen = (t: { number?: number | null; id: string }, open: string) => numberOf(t) === open || t.id === open;
@@ -54,8 +57,16 @@ export function TaskList({ list, open, current, end }: TaskListProps) {
   const kind = listKind(list);
   if (kind === 'needs') return <NeedsYouList open={open} end={end} />;
   if (kind === 'search') return <SearchList words={list!.slice(SEARCH.length)} list={list!} open={open} current={current} end={end} />;
+  if (kind === 'rows') return <DrawnList list={list!} open={open} current={current} end={end} />;
   if (kind === 'who') return <WhoList who={list!} open={open} current={current} end={end} />;
-  return <PipelineList key={list} pipeline={list!} open={open} stage={current?.stage_id ?? undefined} end={end} />;
+  return <KnownPipeline key={list} pipeline={list!} open={open} stage={current?.stage_id ?? undefined} end={end} />;
+}
+
+/** A pipeline's list, while the pipelines read have it; one they do not (gone, retired, mistyped): Needs you. */
+function KnownPipeline(props: { pipeline: string; open: string; stage?: string; end?: ReactNode }) {
+  const { data: pipes } = useQuery(pipelinesQuery);
+  if (pipes && !pipes.some((x) => x.id === props.pipeline)) return <NeedsYouList open={props.open} end={props.end} noteAs={props.pipeline} />;
+  return <PipelineList {...props} />;
 }
 
 /** The rows read, with the open task first when they lack it: the list it was opened from always has it. */
@@ -295,7 +306,8 @@ function NeedsYouList({ open, end, noteAs = NEEDS_YOU }: { open: string; end?: R
   return (
     <>
       <Head list={undefined} end={end} title={<span className="li-stage-name">Needs you</span>} />
-      <div className="nav-scroll li-body">
+      {/* its rows open with Needs you, though it stands in for another list */}
+      <div className="nav-scroll li-body" data-list="">
         {items && !items.length ? <Empty title="Nothing waits on you" /> : null}
         {!items ? null : many ? (
           <VirtualList ref={long} items={items} getKey={(it) => it.id} estimateSize={SIDE_ROW_H} measure scrollParent=".li-body" renderItem={row} />
@@ -313,7 +325,7 @@ function WhoList({ who, open, current, end }: { who: string; open: string; curre
   const actor = useActor(who);
   // one the roster does not know (gone, or never one): Needs you, never every task
   const known = useQuery({ ...directoryQuery, select: (d) => !!d.byId[who] }).data;
-  const read = useQuery(ownerListQuery(who));
+  const read = useQuery({ ...ownerListQuery(who), enabled: known !== false });
   const needs = useNeedsYou();
   const tasks = useMemo(() => withCurrent(read.data?.tasks, open, current), [read.data, open, current]);
   const rows = useMemo(() => tasks?.map((t) => ({ id: t.id, n: numberOf(t) })), [tasks]);
@@ -324,6 +336,23 @@ function WhoList({ who, open, current, end }: { who: string; open: string; curre
     <>
       <Head list={who} end={end} title={<span className="li-stage-name">{actor?.name ?? 'Tasks'}</span>} />
       <Rows read={read} tasks={tasks} open={open} needs={needs} empty="No open tasks" />
+    </>
+  );
+}
+
+/** A list a page drew (lib keepRows), its rows in its order; none drawn since the app loaded: Needs you. */
+const READ = { isError: false, refetch: () => undefined };
+function DrawnList({ list, open, current, end }: { list: string; open: string; current?: Shown; end?: ReactNode }) {
+  const kept = useSyncExternalStore(hearPlaces, () => keptRows(list));
+  const needs = useNeedsYou();
+  const tasks = useMemo(() => kept && withCurrent(kept.rows as readonly Shown[], open, current), [kept, open, current]);
+  const rows = useMemo(() => tasks?.map((t) => ({ id: t.id, n: numberOf(t) })), [tasks]);
+  useNoteRows(list, open, rows ?? undefined);
+  if (!kept) return <NeedsYouList open={open} end={end} noteAs={list} />;
+  return (
+    <>
+      <Head list={list} end={end} title={<span className="li-stage-name">{kept.title}</span>} />
+      <Rows read={READ} tasks={tasks ?? undefined} open={open} needs={needs} empty="No tasks" />
     </>
   );
 }

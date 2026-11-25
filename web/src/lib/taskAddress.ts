@@ -57,9 +57,13 @@ export function pageSearch(search: Record<string, unknown>): Record<string, unkn
   return Object.fromEntries(Object.entries(search).filter(([k]) => !isTaskKey(k)));
 }
 
-/** A list a task opens from: a pipeline's id (no colon), a teammate's id, or a search's words; anything else is none
-    (Needs you). */
-const LIST = /^(?:[^:]+|(?:human|bot):.+|search:.+)$/;
+/** `Route.useSearch(PAGE_SEARCH)`: the page's own search, the same object while only the task over it changes, so
+    the page under the task modal doesn't re-draw as the task opens, moves or closes. */
+export const PAGE_SEARCH = { select: <T,>(s: T): T => pageSearch(s as Record<string, unknown>) as T, structuralSharing: true } as const;
+
+/** A list a task opens from: a pipeline's id (no colon), a teammate's id, a search's words, or a list a page drew
+    (`rows:…`, lib keepRows); anything else is none (Needs you). */
+const LIST = /^(?:[^:]+|(?:human|bot):.+|search:.+|rows:.+)$/;
 
 /** The task open over the page, or null. */
 export function openOf(search: Record<string, unknown>): Required<Pick<TaskOpen, 'task' | 'words'>> & { list?: string } | null {

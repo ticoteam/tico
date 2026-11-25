@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { StrategyPage } from '@/features/company/exports';
 import { loadStrategy, strategySearch } from '@/features/company/routing';
+import { PAGE_SEARCH } from '@/lib';
 
 export const Route = createFileRoute('/company/strategy')({
   validateSearch: strategySearch,
@@ -9,5 +10,5 @@ export const Route = createFileRoute('/company/strategy')({
 });
 
 function Strategy() {
-  return <StrategyPage tab="strategy" search={Route.useSearch()} />;
+  return <StrategyPage tab="strategy" search={Route.useSearch(PAGE_SEARCH)} />;
 }

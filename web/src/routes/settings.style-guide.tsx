@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { lazy, Suspense } from 'react';
+import { PAGE_SEARCH } from '@/lib';
 
 /* `/settings/style-guide`: the target design drawn with the app's own parts. `?at=<area>` is the area in view (Color
    is the bare address). Loaded on its own so it adds nothing to the first load. */
@@ -12,7 +13,7 @@ export const Route = createFileRoute('/settings/style-guide')({
 });
 
 function StyleGuideRoute() {
-  const { at } = Route.useSearch();
+  const { at } = Route.useSearch(PAGE_SEARCH);
   return (
     <Suspense fallback={null}>
       <StyleGuidePage at={at} />

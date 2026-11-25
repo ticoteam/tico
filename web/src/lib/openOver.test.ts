@@ -1,5 +1,5 @@
 import { createMemoryHistory, createRootRoute, createRoute, createRouter } from '@tanstack/react-router';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { hearListClicks, openTasksOver } from './openOver';
 import { closeTask, OVER_PAGE, type Steps } from './places';
 import { changeWords, withOpen } from './taskAddress';
@@ -41,6 +41,21 @@ describe('a task opened from a page', () => {
     expect(r.state.location.search).toEqual({ view: 'list' });
   });
 
+  it('opened by a link to an anchored page, closes to that page at its anchor, never scrolled to it', async () => {
+    const r = await at('/team/qa?task=7#notes');
+    closeTask(steps(r));
+    await r.load();
+    expect(r.state.location.href).toBe('/team/qa#notes');
+    expect((r.state.location.state as unknown as Record<string, unknown>).__hashScrollIntoViewOptions).toBe(false);
+  });
+
+  it('opened from a search hit over an anchored page: the page is not scrolled back to its anchor', async () => {
+    const r = await at('/team/qa#notes');
+    await r.navigate({ to: '.', search: ((s: Record<string, unknown>) => withOpen(s, { task: '7', list: 'search:frost' })) as never } as never);
+    expect(r.state.location.href).toBe('/team/qa?task=7&list=search%3Afrost#notes');
+    expect((r.state.location.state as unknown as Record<string, unknown>).__hashScrollIntoViewOptions).toBe(false);
+  });
+
   it('takes its list from the list the press was in, and keeps it moving between tasks', async () => {
     hearListClicks(document);
     const r = await at('/tasks/eng');
@@ -75,6 +90,8 @@ describe('a task opened from a page', () => {
     expect(r.state.location.search).toEqual({ task: 7, list: 'eng', 'task.tab': 'details' });
     expect(r.state.location.hash).toBe('notes');
     expect((r.state.location.state as unknown as Record<string, unknown>)[OVER_PAGE]).toBe(true);
+    // the page under it is never scrolled to its anchor as the task opens or changes
+    expect((r.state.location.state as unknown as Record<string, unknown>).__hashScrollIntoViewOptions).toBe(false);
     expect(r.history.length).toBe(opened);
     closeTask(steps(r));
     await r.load();
@@ -111,6 +128,22 @@ describe('a task opened from a page', () => {
     await new Promise((done) => setTimeout(done));
     await r.navigate({ to: '/task/$task', params: { task: '9' } } as never);
     expect(r.state.location.search).toEqual({ task: 9 });
+    list.remove();
+  });
+
+  it('each click it hears forgets the last one’s list as it starts, never a later one’s', async () => {
+    hearListClicks(document);
+    const set = vi.spyOn(globalThis, 'setTimeout');
+    const clear = vi.spyOn(globalThis, 'clearTimeout');
+    const list = document.createElement('div');
+    list.dataset.list = 'eng';
+    document.body.append(list);
+    list.click();
+    const first = set.mock.results.at(-1)?.value;
+    list.click();
+    expect(clear).toHaveBeenCalledWith(first);
+    set.mockRestore();
+    clear.mockRestore();
     list.remove();
   });
 

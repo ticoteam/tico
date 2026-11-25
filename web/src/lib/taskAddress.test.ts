@@ -17,9 +17,9 @@ describe('the open task in an address', () => {
     expect(withOpen(one, { task: '13' })).toEqual({ task: 13 });
   });
 
-  it('a list it cannot name (neither a pipeline, a teammate nor a search) is none: Needs you', () => {
-    for (const list of ['eng', 'bot:eng', 'human:7', 'search:frost', 'search:a:b']) expect(openOf({ task: 12, list })?.list).toBe(list);
-    for (const list of ['foo:bar', 'bot:', 'search:', ':needs-you', 'team:x']) expect(openOf({ task: 12, list })).toEqual({ task: '12', words: {} });
+  it('a list it cannot name (neither a pipeline, a teammate, a search nor a list a page drew) is none: Needs you', () => {
+    for (const list of ['eng', 'bot:eng', 'human:7', 'search:frost', 'search:a:b', 'rows:qa:done']) expect(openOf({ task: 12, list })?.list).toBe(list);
+    for (const list of ['foo:bar', 'bot:', 'search:', 'rows:', ':needs-you', 'team:x']) expect(openOf({ task: 12, list })).toEqual({ task: '12', words: {} });
   });
 
   it('no task: nothing open; junk words are dropped', () => {

@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useAction } from '@/actions';
 import type { Actor } from '@/data';
 import { firstPipeline, pipelinesQuery } from '@/features/tasks/routing';
@@ -15,6 +15,7 @@ import { Pill } from '@/kit/Pill';
 import { Row, TaskRow } from '@/kit/Row';
 import { Select, type SelectOption } from '@/kit/Select';
 import { VirtualList } from '@/kit/VirtualList';
+import { keepRows } from '@/lib';
 import { whoHref } from './model';
 import type { OwnTask } from './queries';
 
@@ -25,15 +26,16 @@ export const taskHref = (t: Pick<OwnTask, 'pipeline_id' | 'number' | 'id'>) =>
 
 /** A task on its owner's page: no face, since every row here is theirs (mates.js ownRow). Only an open task is
     Late, as in the old app (ui/app/task-row.ts taskLate): a done one keeps its grey row. `waits`: Needs you names it
-    (its Dot), read once by the list, not by each row. */
-export function OwnRow({ task, waits, sub }: { task: OwnTask; waits: boolean; sub?: string }) {
+    (its Dot), read once by the list, not by each row. `list`: the list a task opened from it has beside it (lib
+    taskAddress), else its owner's open tasks. */
+export function OwnRow({ task, waits, sub, list }: { task: OwnTask; waits: boolean; sub?: string; list?: string }) {
   return (
     <TaskRow
       title={task.title ?? ''}
       href={taskHref(task)}
       target={`task:${task.number ?? task.id}`}
-      // opened from here, the task's list is its owner's open tasks
-      data-list={task.owner_id ?? undefined}
+      // opened from here, the task's list is this one, else its owner's open tasks
+      data-list={list ?? task.owner_id ?? undefined}
       mark={waits ? <FlowMark /> : undefined}
       late={task.status === 'open' && !!task.late}
       pills={sub ? <span className="row-stage">{sub}</span> : undefined}
@@ -47,19 +49,25 @@ export const LONG_LIST = 100;
 
 /** A teammate's tasks as OwnRows. Past LONG_LIST rows, only those on screen are drawn, in a scroller twelve rows high;
     `onEnd` reads the next page when its last row comes into view. `needs`: what Needs you names (useNeedsYou, read by
-    the page once). */
+    the page once). `list`: a list no read names again (an agent's own list, its done tasks), as `rows:<its name>`: a task
+    opened from it has these rows beside it, in this order (lib keepRows); left out, its owner's open tasks. */
 export function OwnRows({
   tasks,
   needs,
   label,
   onEnd,
+  list,
 }: {
   tasks: readonly OwnTask[];
   needs: ReadonlySet<string> | undefined;
   label: string;
   onEnd?: () => void;
+  list?: `rows:${string}`;
 }) {
-  if (tasks.length <= LONG_LIST) return tasks.map((t) => <OwnRow key={t.id} task={t} waits={waitsOn(t, needs)} />);
+  useEffect(() => {
+    if (list) keepRows(list, label, tasks);
+  }, [list, label, tasks]);
+  if (tasks.length <= LONG_LIST) return tasks.map((t) => <OwnRow key={t.id} task={t} waits={waitsOn(t, needs)} list={list} />);
   return (
     <VirtualList
       className="tm-long"
@@ -69,7 +77,7 @@ export function OwnRows({
       estimateSize={34}
       measure
       onReachEnd={onEnd}
-      renderItem={(t) => <OwnRow task={t} waits={waitsOn(t, needs)} />}
+      renderItem={(t) => <OwnRow task={t} waits={waitsOn(t, needs)} list={list} />}
     />
   );
 }

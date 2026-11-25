@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { MessagingPage } from '@/features/threads/exports';
 import { textListQuery } from '@/features/threads/routing';
+import { PAGE_SEARCH } from '@/lib';
 
 interface MessagingSearch {
   /** The open contact: who the texts came from. */
@@ -14,6 +15,6 @@ export const Route = createFileRoute('/threads/messaging')({
 });
 
 function MessagingRoute() {
-  const { open } = Route.useSearch();
+  const { open } = Route.useSearch(PAGE_SEARCH);
   return <MessagingPage open={open} />;
 }

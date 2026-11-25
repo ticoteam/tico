@@ -3,7 +3,7 @@ import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } fr
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClient } from '@/data';
-import { changeBoardSearch, forgetPlaces, NEEDS_YOU, nextInList } from '@/lib';
+import { changeBoardSearch, forgetPlaces, keepRows, NEEDS_YOU, nextInList } from '@/lib';
 import { TaskList, type TaskListProps } from './TaskLists';
 
 /* The list beside a task open over a page (the task modal's left column): the list it was opened from, the task in it. */
@@ -83,6 +83,33 @@ describe("a pipeline's list", () => {
   });
 });
 
+describe('a list that is gone', () => {
+  it('a pipeline the pipelines read lacks (retired, mistyped) is Needs you, its rows opening with Needs you', async () => {
+    const item = { id: 't3', number: 3, title: 'Approve the note', pipeline_id: 'eng', stage_id: 'qa', owner_id: 'bot:qa', late: false, stuck: false, since: '2026-11-18T09:00:00Z' };
+    queryClient.setQueryData(['flow'], { count: 1, items: [item] });
+    show({ list: 'retired-pipe', open: '3' });
+    await waitFor(() => expect(head().textContent).toBe('Needs you'));
+    expect(titles()).toEqual(['Approve the note']);
+    expect(screen.getByRole('link', { name: /Approve the note/ }).closest('[data-list]')?.getAttribute('data-list')).toBe('');
+  });
+});
+
+describe("a list a page drew (an agent's own list, its done tasks)", () => {
+  it('is those rows in their order, the open task among them, and an answer goes on down them', async () => {
+    keepRows('rows:qa:launch', 'Launch', [row(9, 'Pick the date', 'qa'), row(4, 'Write the note', 'qa', { status: 'done' }), row(6, 'Send it', 'qa')]);
+    show({ list: 'rows:qa:launch', open: '4' });
+    await waitFor(() => expect(titles()).toEqual(['Pick the date', 'Write the note', 'Send it']));
+    expect(head().textContent).toBe('Launch');
+    expect(calls.some((c) => c.includes('owner='))).toBe(false);
+    expect(nextInList('t4', 'rows:qa:launch')).toBe('6');
+  });
+
+  it('not drawn since the app loaded (a link, a reload): Needs you', async () => {
+    show({ list: 'rows:qa:launch', open: '4' });
+    await waitFor(() => expect(head().textContent).toBe('Needs you'));
+  });
+});
+
 describe('Needs you', () => {
   it('lists what waits on the person in its order, the task chosen; an answer goes on down it', async () => {
     const item = (n: number, title: string) => ({ id: `t${n}`, number: n, title, pipeline_id: 'eng', stage_id: 'qa', owner_id: 'bot:qa', late: false, stuck: false, since: '2026-11-18T09:00:00Z' });
@@ -107,9 +134,11 @@ describe("a teammate's list", () => {
     expect(nextInList('t12', 'bot:qa')).toBe('7');
   });
 
-  it('one the roster does not know is Needs you, never every task', async () => {
+  it('one the roster does not know is Needs you, never every task, and their list is never read', async () => {
+    queryClient.setQueryData(['flow'], { count: 0, items: [] });
     show({ list: 'bot:gone', open: '12' });
     await waitFor(() => expect(head().textContent).toBe('Needs you'));
+    expect(calls.some((c) => c.includes('owner='))).toBe(false);
   });
 });
 

@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { PipelinePage } from '@/features/tasks/exports';
 import { pipelinesQuery } from '@/features/tasks/routing';
+import { PAGE_SEARCH } from '@/lib';
 
 /** Edit pipeline, a page; `?new=1` is New pipeline, and the pipeline in the address is where Back goes. */
 export const Route = createFileRoute('/tasks/$pipeline/edit')({
@@ -12,5 +13,5 @@ export const Route = createFileRoute('/tasks/$pipeline/edit')({
 
 function Page() {
   const { pipeline } = Route.useParams();
-  return <PipelinePage pipeline={pipeline} fresh={!!Route.useSearch().new} />;
+  return <PipelinePage pipeline={pipeline} fresh={!!Route.useSearch(PAGE_SEARCH).new} />;
 }

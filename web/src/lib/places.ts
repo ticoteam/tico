@@ -1,13 +1,13 @@
 /* The places the shell keeps as the person moves: each board's search (the list beside a task draws its pipeline's
    tasks as the board did), and the list beside the open task, for the row below it once it is answered. */
 
-import { pageSearch } from './taskAddress';
+import { openOf, pageSearch } from './taskAddress';
 
 /** What closing a task needs of the router: the history (to step back to the page it opened over) and a plain move. */
 export interface Steps {
   history: { location: { state: unknown }; back: () => void };
   state: { location: { pathname: string; search: unknown } };
-  navigate: (to: { to: string; search: Record<string, unknown>; replace?: boolean; resetScroll?: boolean }) => unknown;
+  navigate: (to: { to: string; search: Record<string, unknown>; hash?: true; replace?: boolean; resetScroll?: boolean; hashScrollIntoView?: false }) => unknown;
 }
 
 /** The mark on the history step that opened a task over a page (router.tsx): Back from it is that page. */
@@ -15,6 +15,9 @@ export const OVER_PAGE = 'overPage';
 
 const BOARD = /^\/tasks\/([^/]+)\/?$/;
 const boards = new Map<string, Record<string, unknown>>();
+// what the list beside an open task was given since it opened (its search, filters, sort), over its board's own: the
+// open task's alone, gone once it closes
+const given = new Map<string, Record<string, unknown>>();
 
 // the board on screen and its own words, as last noted: a task opened, changed or closed over it changes neither
 let place: string | null = null;
@@ -26,19 +29,25 @@ export function notePlace(path: string, _searchStr: string, search: Record<strin
   // it keeps what it was given (changeBoardSearch) while tasks open and close over the board
   const own = board ? pageSearch(search) : null;
   const at = board ? `${board}?${JSON.stringify(own)}` : null;
-  if (board && at !== place) boards.set(decodeURIComponent(board), own!);
+  if (board && at !== place) {
+    boards.set(decodeURIComponent(board), own!);
+    given.delete(decodeURIComponent(board));
+  }
   place = at;
+  if (!openOf(search)) given.clear();
   heard.forEach((on) => on());
 }
 
 const NONE: Record<string, unknown> = Object.freeze({});
 
-/** The search a pipeline's board was last shown with (its view, filters and sort), or none; the same object until it
-    changes, so a reader can hear it (`hearPlaces`). */
-export const boardSearch = (pipeline: string): Record<string, unknown> => boards.get(pipeline) ?? NONE;
+/** The search the list of a pipeline beside an open task draws with: what it was given since the task opened, else its
+    board's as last shown (its view, filters and sort), or none; the same object until it changes, so a reader can hear
+    it (`hearPlaces`). */
+export const boardSearch = (pipeline: string): Record<string, unknown> => given.get(pipeline) ?? boards.get(pipeline) ?? NONE;
 
-/** The list beside an open task changes its search, filters or sort (`tasks.filter`, `tasks.sort` there): kept as the
-    board's, which that list draws, until the board is shown again with its own. A null, '' or false clears one. */
+/** The list beside an open task changes its search, filters or sort (`tasks.filter`, `tasks.sort` there): kept for it,
+    over its board's, until the task closes (the next one opened from the board starts from the board's again). A
+    null, '' or false clears one. */
 export function changeBoardSearch(pipeline: string, change: Record<string, unknown>): void {
   const next: Record<string, unknown> = { ...boardSearch(pipeline) };
   for (const [k, v] of Object.entries(change)) {
@@ -46,17 +55,18 @@ export function changeBoardSearch(pipeline: string, change: Record<string, unkno
     if (v === null || v === '' || v === false) delete next[k];
     else next[k] = v;
   }
-  boards.set(pipeline, next);
+  given.set(pipeline, next);
   heard.forEach((on) => on());
 }
 
 /** Closing the task open over a page: the page as it was. Opened over it in the app, the history steps back (Forward
-    opens it again); from a link or a reload, the same page with the task taken out of its address. */
+    opens it again); from a link or a reload, the same page with the task taken out of its address, its anchor kept and
+    never scrolled to. */
 export function closeTask(r: Steps): void {
   const state = r.history.location.state as Record<string, unknown> | null | undefined;
   if (state?.[OVER_PAGE]) return r.history.back();
   const { pathname, search } = r.state.location;
-  void r.navigate({ to: pathname, search: pageSearch((search ?? {}) as Record<string, unknown>), replace: true, resetScroll: false });
+  void r.navigate({ to: pathname, search: pageSearch((search ?? {}) as Record<string, unknown>), hash: true, replace: true, resetScroll: false, hashScrollIntoView: false });
 }
 
 /** Needs you's name among the lists a task opens from: one list across every pipeline, and the list of a task opened
@@ -151,9 +161,26 @@ export function keptOrder(from: unknown, latest: () => string[], held: string | 
   return drawn.order;
 }
 
+/* A list a page draws that no read names again (an agent's own list, its done tasks): its rows as last drawn, by the
+   name its rows give it (`rows:…`), for the list beside a task opened from it, in its order. */
+const drawnLists = new Map<string, { title: string; rows: readonly unknown[] }>();
+
+/** A page draws the list `list` (titled `title`): the list beside a task opened from it is these rows. */
+export function keepRows(list: string, title: string, rows: readonly unknown[]): void {
+  const had = drawnLists.get(list);
+  if (had?.rows === rows && had.title === title) return;
+  drawnLists.set(list, { title, rows });
+  heard.forEach((on) => on());
+}
+
+/** The rows of a list a page drew (`keepRows`), or null: none drawn since the app loaded (a link, a reload). */
+export const keptRows = (list: string): { title: string; rows: readonly unknown[] } | null => drawnLists.get(list) ?? null;
+
 /** Forgets every place (tests). */
 export function forgetPlaces(): void {
   boards.clear();
+  given.clear();
+  drawnLists.clear();
   place = null;
   listed = null;
   onRow = null;

@@ -258,7 +258,7 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
             <OwnRows tasks={rest} needs={needs} label="Open tasks" />
             {doneN > 0 && (
               <Fold label="Done" text={`${doneN} this week`}>
-                <OwnRows tasks={done.data?.tasks ?? []} needs={needs} label="Done tasks" />
+                <OwnRows tasks={done.data?.tasks ?? []} needs={needs} label="Done tasks" list={`rows:${actor.id}:done`} />
               </Fold>
             )}
           </Section>

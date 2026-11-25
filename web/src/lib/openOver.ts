@@ -11,6 +11,7 @@ import { coldOf, openOf, withOpen, type TaskWords } from './taskAddress';
    anywhere else, the list already open, else Needs you. */
 
 let clickedList: string | undefined;
+let forget: ReturnType<typeof setTimeout> | undefined;
 
 /** Hear which list each click is in, for the navigation it starts (heard first, forgotten once it is done). */
 const hearing = new WeakSet<Document>();
@@ -24,7 +25,9 @@ export function hearListClicks(doc: Document = document): void {
       clickedList = at ? (at.getAttribute('data-list') ?? '') : undefined;
       // forgotten once this click is done, even one whose handler stops it on its way: a press's own navigation reads
       // it while the click is dispatched (a microtask would run between listeners, before the row's own handler)
-      setTimeout(() => (clickedList = undefined));
+      // (one forgetting at a time: each click's replaces the last's)
+      clearTimeout(forget);
+      forget = setTimeout(() => (clickedList = undefined));
     },
     true,
   );
@@ -62,6 +65,8 @@ export function openTasksOver(r: AnyRouter): void {
       return go({
         ...opts,
         hash: opts.hash ?? true,
+        // the page stays where it was scrolled, its anchor too
+        hashScrollIntoView: false,
         replace: !!open || !!opts.replace,
         state: { ...(typeof opts.state === 'object' && opts.state), [OVER_PAGE]: open ? over() : !opts.replace },
         resetScroll: false,
@@ -77,6 +82,7 @@ export function openTasksOver(r: AnyRouter): void {
       to: here.pathname,
       search: withOpen(here.search as Record<string, unknown>, { task: cold.task, list, words: cold.words }),
       hash: here.hash || undefined,
+      hashScrollIntoView: false,
       replace: !!open || !!opts.replace,
       // the step that opened it over the page: closing steps back to it (lib closeTask); kept as tasks replace it
       state: { [OVER_PAGE]: open ? over() : !opts.replace },

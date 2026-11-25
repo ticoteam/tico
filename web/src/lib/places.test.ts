@@ -24,7 +24,7 @@ describe('closeTask', () => {
     const r = router({}, '/tasks', { view: 'all', task: 12, list: 'p1', 'task.tab': 'details', 'task.v': 2 });
     closeTask(r);
     expect(r.history.back).not.toHaveBeenCalled();
-    expect(r.navigate).toHaveBeenCalledWith({ to: '/tasks', search: { view: 'all' }, replace: true, resetScroll: false });
+    expect(r.navigate).toHaveBeenCalledWith({ to: '/tasks', search: { view: 'all' }, hash: true, replace: true, resetScroll: false, hashScrollIntoView: false });
   });
 });
 

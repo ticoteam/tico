@@ -20,7 +20,7 @@ async function at(href: string) {
 afterEach(() => forgetPlaces());
 
 describe('the list beside a task open over a board', () => {
-  it('sorts, searches and filters that list, the board under it unchanged, and keeps them as tasks open and close', async () => {
+  it('sorts, searches and filters that list, the board under it unchanged, kept while tasks open in it, gone once it closes', async () => {
     const { router, note, ctx } = await at('/tasks/eng?view=list&owner=bot:a&task=7&list=eng');
     noteList({ pipeline: 'eng', open: '7', rows: [] });
     expect(sortTasks.can!(ctx, { sort: 'newest' })).toBe(true);
@@ -29,14 +29,18 @@ describe('the list beside a task open over a board', () => {
     await filterTasks.run(ctx, { q: 'frost', late: true });
     expect(boardSearch('eng')).toEqual({ view: 'list', owner: 'bot:a', sort: 'newest', q: 'frost', late: true });
     expect(router.state.location.search).toEqual({ view: 'list', owner: 'bot:a', task: 7, list: 'eng' });
-    // another task, then closed: the list keeps what it was given, the board its own words
+    // another task: the list keeps what it was given
     await router.navigate({ to: '.', search: { view: 'list', owner: 'bot:a', task: 8, list: 'eng' } as never });
     note();
     expect(boardSearch('eng')).toMatchObject({ sort: 'newest', q: 'frost' });
+    // closed: the board its own words, and the next task opened from it starts from them
     await router.navigate({ to: '.', search: { view: 'list', owner: 'bot:a' } as never });
     note();
     expect(router.state.location.search).toEqual({ view: 'list', owner: 'bot:a' });
-    expect(boardSearch('eng')).toMatchObject({ sort: 'newest', q: 'frost' });
+    expect(boardSearch('eng')).toEqual({ view: 'list', owner: 'bot:a' });
+    await router.navigate({ to: '.', search: { view: 'list', owner: 'bot:a', task: 7, list: 'eng' } as never });
+    note();
+    expect(boardSearch('eng')).toEqual({ view: 'list', owner: 'bot:a' });
     // the board changes its own words: the list over it takes them next time
     await router.navigate({ to: '.', search: { view: 'board' } as never });
     note();
