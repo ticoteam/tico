@@ -585,6 +585,13 @@ DEVELOPER_TOOLS = frozenset(
         "tico_pin_add",
         "tico_pin_update",
         "tico_pin_remove",
+        # The Tools registry before work by hand (templates/catalog/_shared/.claude/skills/work-with-software).
+        "tico_tool_find",
+        "tico_tool_guide",
+        "tico_tool_guide_write",
+        "tico_tool_mine",
+        "tico_tool_mine_add",
+        "tico_tool_mine_remove",
     }
 )
 

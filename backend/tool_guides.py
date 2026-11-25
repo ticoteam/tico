@@ -102,7 +102,7 @@ def shipped() -> dict[str, Row]:
             "category": str(meta.get("category") or ""),
             "summary": str(meta.get("summary") or ""),
             "instructions": body.strip(),
-            "commands": [str(c) for c in meta.get("commands") or []],
+            "commands": [str(c) for c in cast(list[Any], meta.get("commands") or [])],
         }
     return out
 
