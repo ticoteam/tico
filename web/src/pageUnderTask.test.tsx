@@ -1,5 +1,5 @@
 import { QueryClient } from '@tanstack/react-query';
-import { createMemoryHistory, createRootRoute, createRouter, Outlet, RouterProvider } from '@tanstack/react-router';
+import { createMemoryHistory, createRootRoute, createRouter, Outlet, RouterProvider, type AnyRoute } from '@tanstack/react-router';
 import { act, render } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { Route as Files } from './routes/library.files';
@@ -15,7 +15,7 @@ function app(at: string) {
   Roadmap.update({ id: '/roadmap', path: '/roadmap', getParentRoute: () => root, loader: () => undefined } as never);
   Files.update({ id: '/library/files', path: '/library/files', getParentRoute: () => root, loader: () => undefined } as never);
   const router = createRouter({
-    routeTree: root.addChildren([Roadmap, Files] as never),
+    routeTree: root.addChildren([Roadmap, Files] as never) as unknown as AnyRoute,
     history: createMemoryHistory({ initialEntries: [at] }),
     context: { queryClient: new QueryClient() },
   });
