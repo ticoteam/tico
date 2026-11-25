@@ -508,6 +508,13 @@ class _ById(dict):
             raise KeyError(key)
         return row
 
+    def exact(self, key):
+        """The row for `key` as written, never through a retired id's alias: what a run that already happened ran on,
+        for its label and maker. None when neither the catalog nor the Gateway's lineup lists it."""
+        if dict.__contains__(self, key):
+            return dict.__getitem__(self, key)
+        return gateway_tiers.row_for(key) if isinstance(key, str) else None
+
     def get(self, key, default=None):
         try:
             return self[key]
@@ -789,7 +796,12 @@ def maker(model):
     """Who made `model` (`anthropic`, `openai`, ...): its catalog provider, or for a Tico AI Gateway id the maker of the
     model it runs underneath (gateway_tiers.maker_of), so Tico Medium on Claude Sonnet is Anthropic's. '' when the
     catalog does not list it."""
-    row = MODEL_BY_ID.get(str(model or "")) or {}
+    model = str(model or "")
+    row = MODEL_BY_ID.exact(model)
+    if row is None:
+        # A retired id (gateway_tiers.ALIASES): who served it, never the maker of the model that replaced it, so a
+        # `mercury-3` run stays OpenRouter's and is not credited to MiniMax.
+        return str((MODEL_BY_ID.get(model) or {}).get("provider") or "")
     return str(row.get("maker") or row.get("provider") or "")
 
 

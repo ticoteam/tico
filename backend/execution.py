@@ -1899,7 +1899,11 @@ def continuation_run(c, job_id, loads=None):
 def source_continuation(c, job_id, loads=None):
     """The actual quota- or capacity-stopped fallback, bound to its job instead of the primary session."""
     row = continuation_run(c, job_id, loads)
-    return json.loads(row["source"]).get('source_continuation') if row and row["source"] else None
+    saved = json.loads(row["source"]).get('source_continuation') if row and row["source"] else None
+    if not isinstance(saved, dict) or not saved.get("model"):
+        return saved
+    # A thread saved on a retired id (gateway_tiers.ALIASES, such as `mercury-3`) resumes on the id it is now.
+    return {**saved, "model": providers.gateway_tiers.new_id(saved["model"])}
 
 
 def thread_payload(c, conv, msg):

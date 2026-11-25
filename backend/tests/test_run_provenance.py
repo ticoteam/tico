@@ -1,7 +1,7 @@
 """Which model actually worked a task (GET /api/v2/tasks/{id} `runs[].ran_on`, Runs `ran_on`): a fallback turn names
 the model that ran it, never the bot's configured one, and a maker Tico cannot know stays unknown."""
 
-from backend.tests.helpers.api import assign, claim, get, post, ready, runner  # noqa: F401
+from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner  # noqa: F401
 
 CLAUDE = {"model": "claude-sonnet-5-5", "runtime": "claude", "harness": "claude", "billing": "subscription"}
 CODEX = {"model": "gpt-6.2-sol", "runtime": "codex", "harness": "codex", "billing": "subscription"}
@@ -98,3 +98,22 @@ def test_a_run_that_also_worked_a_private_task_is_left_out_for_whoever_cannot_re
         assert H.task_private(c, H.task(c, hidden["id"]))
     assert get(api, f"tasks/{tid}", token="cara-test")["runs"] == []
     assert [r["run"] for r in get(api, f"tasks/{tid}")["runs"]] == [aid]
+
+
+def test_a_mercury_3_run_keeps_its_name_and_is_never_credited_to_minimax(api):
+    """OpenRouter withdrew `mercury-3` and new work runs on MiniMax (gateway_tiers.ALIASES), but a run that already
+    happened on Mercury keeps what it was: labelled `mercury-3`, served by OpenRouter, so no maker (a reseller)."""
+    from backend import check_models, providers
+
+    machine = runner(api, "ana")
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    mercury = {"model": "mercury-3", "runtime": "pi", "harness": "pi", "billing": "api"}
+    tid, _ = work(api, machine, "mercury", [(mercury, 30)])
+    made = ran_on(api, tid)
+    assert made["family"] is None and [s["family"] for s in made["segments"]] == [None]
+    assert providers.maker("mercury-3") == "openrouter" and providers.maker("minimax-m3.1-flash") == "minimax"
+    with api.app.state.store.read() as c:
+        assert "minimax" not in check_models.authors_of(c, api.app.state.store.settings, tid)
+    ops = next(e for e in api.get("/api/employees", headers=headers()).json() if e["name"] == "ops")
+    assert ops["latest_runtime_model"] == "mercury-3"
