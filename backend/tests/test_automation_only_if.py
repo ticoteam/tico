@@ -216,10 +216,23 @@ def test_the_assistant_never_reads_a_check_and_outside_a_run_reads_no_private_ta
         assistant = H.assistant_actor(c)
     record, items = automation_only_if.evaluate(api.app, {"read": OPEN_TODO, "at_least": 1, "set_by": assistant})
     assert record["ok"] is False and items == [] and record["reason"].startswith("Only if check failed: the Assistant")
-    errand = task(api, "Acme private errand", owner="assistant", private=True)  # Ana's, with the Assistant
+    with api.app.state.store.transaction() as c:  # Ana's message routine's turn: private, and the Assistant's
+        errand = H.task_create(
+            c,
+            "human:ana",
+            "Acme private errand",
+            "",
+            assistant,
+            lint=False,
+            deduplicate=False,
+            private=True,
+            routine=True,
+            routine_for="human:ana",
+            trigger="other",
+        )["id"]
     with api.app.state.store.read_transaction() as c:
         visible = api.app.state.auth.task_sql(c, auth_module.bot_identity(c, assistant))
-        assert not c.execute(f"SELECT 1 FROM tasks WHERE id=? AND ({visible})", (errand["id"],)).fetchone()
+        assert not c.execute(f"SELECT 1 FROM tasks WHERE id=? AND ({visible})", (errand,)).fetchone()
 
 
 def test_items_blank_people_the_reader_may_not_see_and_a_hidden_one_reads_as_unknown(acme):
