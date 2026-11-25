@@ -196,19 +196,16 @@ def registry(c: Any, tools: Tools) -> dict[str, Entry]:
     rows = {r["slug"]: dict(r) for r in c.execute("SELECT * FROM tool_guides")}
     ship = shipped()
     out: dict[str, Entry] = {}
-    for slug in sorted(set(ship) | set(rows) | set(tools.seen) | set(tools.named)):
+    for slug in sorted(set(ship) | set(rows) | set(tools.seen)):
         row, vrows = rows.get(slug), tools.seen.get(slug, [])
         archived = bool(row and row["archived_at"])
         if archived and not vrows:
             continue
-        # A vendor the reader knows only by its Everyone tools' names: listed, so an agent can ask for Read, with
-        # the shipped guide alone.
-        named = slug in tools.named and not vrows
-        if row is not None and row["origin"] != "built" and (slug in tools.every or named) and not vrows:
+        if row is not None and row["origin"] != "built" and slug in tools.every and not vrows:
             row = None
-        if row is None and slug not in ship and not vrows and not named:
+        if row is None and slug not in ship and not vrows:
             continue
-        name = vrows[0]["vendor_name"] if vrows else TS.vendor_name(slug) if named else ""
+        name = vrows[0]["vendor_name"] if vrows else ""
         guide = _guide(slug, None, None, name) if archived else _guide(slug, row, ship.get(slug), name)
         out[slug] = (guide, vrows, row)
     return out
@@ -731,7 +728,7 @@ def unlist_tool(c: Any, who: Any, auth: Any, admins: Any, bot: str, slug: str) -
     not touched."""
     auth.domain(who)
     bot = _may_keep_list(c, who, auth, admins, bot)
-    slug, _ = _exact(c, who, admins, auth, slug)
+    slug = str(slug or "").strip().lower()
     gone = c.execute(
         "DELETE FROM bot_tool_guides WHERE bot=? AND tool_guide_id IN (SELECT id FROM tool_guides WHERE slug=?)",
         (bot, slug),
