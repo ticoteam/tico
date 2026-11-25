@@ -44,7 +44,8 @@ audio are cards too (see [Video and audio](#video-and-audio)) and count toward t
   other sites. What keeps it from the app is its address: it is only ever shown from the visual address or the
   company's files address, never the app's own, so it can't read the app's cookies or reach the app's window. A link
   without `target="_blank"` opens inside the card. A page that sends no height within 8 seconds shows as the plain
-  page card with **Open**.
+  page card with **Open**. A page [app](pages.md#apps) is sealed further: it runs without same-origin (no storage of
+  its own, and no sibling page on that address can reach it) and reads Tico only through its bridge.
 - **Expand** on a page opens it full size in a dialog (the whole screen on a phone), with **Open in new tab**.
 - **Expand** opens the visual full screen; so does a click or tap on a picture, or a tap on a page on a touch
   screen. Pictures zoom: click or tap for 2×,

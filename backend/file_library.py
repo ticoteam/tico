@@ -698,6 +698,7 @@ def purge_rows(c, actor, row):
                 if v[key]:
                     c.execute("INSERT OR IGNORE INTO page_identities(identity,file_id) VALUES(?,?)", (v[key], fid))
         c.execute("UPDATE pages SET deleted_at=?,archived=1,as_of=NULL,replaced_by_id=NULL WHERE file_id=?", (now, fid))
+        c.execute("DELETE FROM page_app_rows WHERE page_id=?", (fid,))  # an app's data goes with its page
     c.execute("DELETE FROM bot_file_versions WHERE file_id=?", (fid,))
     c.execute(
         "UPDATE bot_files SET title='Deleted file',state='deleted',archived=1,url=NULL,current_version=0,"

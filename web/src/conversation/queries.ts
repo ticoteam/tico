@@ -537,6 +537,8 @@ export interface FileFacts {
   version?: number;
   /** A page's signed address to show its current version live from (backend/files.py `info`). */
   visual_src?: string | null;
+  /** Its current version is a page app (backend/page_apps.py): framed sealed, with its bridge. */
+  visual_app?: boolean;
 }
 export const fileFactsQuery = (id: string) =>
   queryOptions({

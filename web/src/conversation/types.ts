@@ -14,6 +14,10 @@ export interface Attachment {
   size?: number;
   /** A page's signed address to show it live from (backend/visuals.py), fresh on each read; null when it can't. */
   src?: string | null;
+  file_id?: string;
+  version?: number;
+  /** A page app (backend/page_apps.py): framed sealed, with its bridge. */
+  app?: boolean;
 }
 
 /** What a message's `refs` holds that this module reads; the server sends more. */

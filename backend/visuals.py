@@ -364,12 +364,15 @@ def with_reporter(data, kit=None):
 # company's files address, both apart from the app's (check_origin), so same-origin gives it storage of its own, never
 # the app's cookies or window. The edge's version 2 template is this same rule (infra/files-edge/response.js).
 PAGE_SANDBOX = "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals"
+# An app version (backend/page_apps.py) is sealed: an opaque origin of its own, so a sibling page on the same host
+# reaches neither its frame, its bridge port nor its storage. It keeps scripts and the network.
+APP_SANDBOX = PAGE_SANDBOX.replace("allow-same-origin ", "")
 
 
-def policy(kind, ancestors):
+def policy(kind, ancestors, sealed=False):
     frames = "frame-ancestors " + (" ".join(ancestors) or "'none'")
     if kind == "page":
-        return "sandbox " + PAGE_SANDBOX + "; " + frames
+        return "sandbox " + (APP_SANDBOX if sealed else PAGE_SANDBOX) + "; " + frames
     if kind == "svg":
         return (
             "default-src 'none'; img-src data:; font-src data:; style-src 'unsafe-inline' data:; "
@@ -769,8 +772,13 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None, later=N
                 here = base if route is who or (route and files.visible(c, route, row, served)) else None
                 inline = full or a["kind"] in MEDIA
                 # A page or SVG Tico file hosting may show: an Open card until `_settle` finds its copy there.
+                sealed = a["kind"] == "page" and bool(v["app"])
                 hostable = (
-                    not inline and fid not in restricted_page_rows(c, [fid]) and hosted is not None and here is not None
+                    not inline
+                    and not sealed
+                    and fid not in restricted_page_rows(c, [fid])
+                    and hosted is not None
+                    and here is not None
                 )
                 delegated = getattr(who, "task_actor", "")
                 src = (
@@ -779,6 +787,8 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None, later=N
                     else None
                 )
                 view["src"] = src if inline else None
+                if sealed:
+                    view["app"] = True  # framed sealed; the web app runs its bridge (backend/page_apps.py)
                 if not inline:
                     view["open"] = True
                     if v["thumb_blob_id"] and here is not None:
@@ -970,6 +980,9 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
         restricted = bool(page and page["audience"] is not None)
         mime = (v["mime"] or "").split(";", 1)[0].strip().lower()
         kind = kind_of(mime, v["size"])
+        # An app version is sealed and never the shared hosted copy; only the current one gets its bridge and key.
+        app = bool(page and v["app"]) and kind == "page" and not part
+        bridge = app and number == row["current_version"]
         if part in ("poster", "preview"):
             # A video's poster, or the still preview of a page or SVG shown as a card: always a picture.
             blob_id = v["poster_blob_id"] if part == "poster" else v["thumb_blob_id"]
@@ -990,7 +1003,7 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
         from .tico_storage import visual_link
 
         # A page with live blocks never has a hosted copy (tico_storage.make_visual), so it is filled in below.
-        link = None if restricted else visual_link(blobs, blob["digest"], blob["size"], mime, ancestors, kit=kit)
+        link = None if restricted or app else visual_link(blobs, blob["digest"], blob["size"], mime, ancestors, kit=kit)
         if link:
             return Response(
                 status_code=302,
@@ -998,13 +1011,18 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
             )
         if not (full and on_host(request, visual_origin)):
             return gone
-    rule = policy(kind, ancestors)
+    rule = policy(kind, ancestors, sealed=app)
     if kind in ("page", "svg"):
         data = blobs.get(blob["digest"])
-        if kind == "page" and not part and has_live(text := data.decode("utf-8", errors="replace")):
+        # An app's live tags stay unfilled: it reads only through its bridge, cut to its writer's reach (page_apps).
+        if kind == "page" and not part and not app and has_live(text := data.decode("utf-8", errors="replace")):
             # Filled in for this reader alone, with what they may see now.
             with store.read() as c:
                 data = fill_live(text, c, who, auth, files).encode("utf-8")
+        if bridge:
+            from .page_apps import nonce, with_bridge
+
+            data = with_bridge(data, nonce(key, actor, fid, number))
         data = with_reporter(data, kit) if kind == "page" else clean(data, kind)[0]
         response = Response(
             data if request.method != "HEAD" else b"",

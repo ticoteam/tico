@@ -2031,9 +2031,11 @@ def find(
     detail: bool = False,
     owner: str | None = None,
     sort: str = "name",
+    also: str | None = None,
 ) -> dict[str, Any]:
     """A page of one type's visible entities, by name (a prefix), status, owner (human:<id> or bot:<id>), or a self link
-    key (customer_of; a person also matches by the organization they work at). Keyset paged on (name_key, id), or with
+    key (customer_of; a person also matches by the organization they work at); visible to `also` as well when given (a
+    page app reads as its viewer and its writer at once). Keyset paged on (name_key, id), or with
     sort `next` on the next step's due date (none last), then name: `after` is the `next` the last page gave. A `next`
     row carries its relationship status (status, next step, due, flags, status_version). The count stops at COUNT_CAP
     and says so. `detail` adds what the Directory page's list shows: each row's organization, owner and the sources it
@@ -2045,6 +2047,10 @@ def find(
     cl, cparams = V.clause(r)
     where = ["e.type = ?", "e.status <> 'merged'", cl]
     args = [type_key, *cparams]
+    if also is not None:
+        acl, aparams = V.clause(V.reader(c, also))
+        where.append(acl)
+        args += aparams
     if name:
         low = str(name).strip().lower()
         where.append("e.name_key >= ? AND e.name_key < ?")

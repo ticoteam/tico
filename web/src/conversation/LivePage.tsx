@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
-import { useEffect, useRef, useState, type ReactNode, type SyntheticEvent } from 'react';
-import { configQuery } from '@/data';
+import { useCallback, useEffect, useRef, useState, type ReactNode, type SyntheticEvent } from 'react';
+import { APP_SANDBOX, configQuery, useAppBridge, type AppPage } from '@/data';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Viewer } from '@/kit/Viewer';
@@ -9,7 +9,8 @@ import './livepage.css';
 /* An agent's page in a chat, running as its author wrote it (backend/visuals.py `policy`): a card that fits the page's
    height, and Expand to a large view. What keeps it from the app is its host: it is only ever framed from the
    install's visual address or the company's files address, never the app's own, so its same-origin is that host's
-   storage, not the app's cookies or window. Anything else is today's plain page card. */
+   storage, not the app's cookies or window. An app page (`app`) is sealed further: no same-origin at all, and its
+   frame runs Tico's bridge (data/pageApp.ts). Anything else is today's plain page card. */
 
 export const LIVE_SANDBOX = 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals';
 const ALLOW = 'fullscreen; clipboard-write';
@@ -80,15 +81,30 @@ export function liveSrc(src: unknown, config: Visuals | undefined): string | nul
 const stop = (e: SyntheticEvent) => e.stopPropagation();
 
 /** A page from its signed address when it is one of the install's own, else `fallback` (the plain page card). */
-export function LivePage({ src, title, id, fallback, size = 'medium' }: { src: string | null | undefined; title: string; id: string; fallback: ReactNode; size?: 'small' | 'medium' }) {
+export function LivePage({
+  src,
+  title,
+  id,
+  fallback,
+  size = 'medium',
+  app,
+}: {
+  src: string | null | undefined;
+  title: string;
+  id: string;
+  fallback: ReactNode;
+  size?: 'small' | 'medium';
+  /** The page and version when it is an app: framed sealed, with its bridge. */
+  app?: AppPage | null;
+}) {
   const config = useQuery(configQuery).data;
   const live = liveSrc(src, config);
   if (!live) return fallback;
-  // A new file version is a new frame; a renewed address for the same version is not.
-  return <LiveFrame key={id} src={live} title={title} id={id} fallback={fallback} size={size} />;
+  // A new file version is a new frame; a renewed address for the same version is not. An app's version is its own frame.
+  return <LiveFrame key={app ? `${id}@${app.version}` : id} src={live} title={title} id={id} fallback={fallback} size={size} app={app ?? null} />;
 }
 
-function LiveFrame({ src, title, id, fallback, size }: { src: string; title: string; id: string; fallback: ReactNode; size: 'small' | 'medium' }) {
+function LiveFrame({ src, title, id, fallback, size, app }: { src: string; title: string; id: string; fallback: ReactNode; size: 'small' | 'medium'; app: AppPage | null }) {
   const max = size === 'small' ? SMALL_HEIGHT : MAX_HEIGHT;
   // The first address stays while the card is drawn: a renewed token in a later read never reloads the page.
   const [first] = useState(src);
@@ -100,6 +116,24 @@ function LiveFrame({ src, title, id, fallback, size }: { src: string; title: str
   const frame = useRef<HTMLIFrameElement>(null);
   const full = useRef<HTMLIFrameElement>(null);
   const box = useRef<HTMLDivElement>(null);
+  const sandbox = app ? APP_SANDBOX : LIVE_SANDBOX;
+  const cardBridge = useAppBridge(app);
+  const fullBridge = useAppBridge(open ? app : null);
+  // The large view's frame mounts in its portal after this card's effects run: its bridge follows the element.
+  const cardRef = useCallback(
+    (el: HTMLIFrameElement | null) => {
+      frame.current = el;
+      cardBridge(el);
+    },
+    [cardBridge],
+  );
+  const fullRef = useCallback(
+    (el: HTMLIFrameElement | null) => {
+      full.current = el;
+      fullBridge(el);
+    },
+    [fullBridge],
+  );
 
   useEffect(() => {
     const hear = (e: MessageEvent) => {
@@ -150,7 +184,7 @@ function LiveFrame({ src, title, id, fallback, size }: { src: string; title: str
       ) : (
         <div ref={box} className={heard ? 'pcard lpage' : 'pcard lpage is-loading'}>
           <div className="lpage-view" style={{ height: height === null ? Math.min(LOADING_HEIGHT, max) : clampHeight(height, max) }}>
-            <iframe ref={frame} src={`${first}#tico-view=card&tico-size=${size}`} title={title} sandbox={LIVE_SANDBOX} allow={ALLOW} loading="lazy" referrerPolicy="no-referrer" />
+            <iframe ref={cardRef} src={`${first}#tico-view=card&tico-size=${size}`} title={title} sandbox={sandbox} allow={ALLOW} loading="lazy" referrerPolicy="no-referrer" />
             {cut && <span className="lpage-fade" aria-hidden="true" />}
           </div>
           <span className="pcard-foot">
@@ -173,7 +207,7 @@ function LiveFrame({ src, title, id, fallback, size }: { src: string; title: str
               </a>
             }
           >
-            <iframe ref={full} src={open} title={title} sandbox={LIVE_SANDBOX} allow={ALLOW} referrerPolicy="no-referrer" />
+            <iframe ref={fullRef} src={open} title={title} sandbox={sandbox} allow={ALLOW} referrerPolicy="no-referrer" />
           </Viewer>
         </span>
       )}

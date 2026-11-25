@@ -565,6 +565,7 @@ KEEP = (
             "message_links_seen",
             "notes",
             "pages",
+            "page_app_rows",
             "page_identities",
             "runner_load_samples",
             "perf_overloads",
