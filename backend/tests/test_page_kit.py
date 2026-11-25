@@ -9,6 +9,7 @@ from backend.tests.helpers.files import publish, turn
 from backend.tests.helpers.visuals import VISUALS
 
 KIT_PAGE = '<tico-stat label="Signups" value="1,204" trend="+12%"></tico-stat><p>plan</p>'
+PLAIN = "<p>no kit here</p><tico-stat-other>a page's own tag</tico-stat-other>"
 
 
 @pytest.fixture(autouse=True)
@@ -32,12 +33,12 @@ def test_a_page_with_a_kit_tag_runs_the_kit_it_was_published_with_and_others_are
     made = publish(api, attempt, name="signups.html", text=KIT_PAGE)
     assert made.status_code == 200, made.text
     fid = made.json()["file"]["id"]
-    plain = publish(api, attempt, name="plain.html", text="<p>no kit here</p>").json()["file"]["id"]
+    plain = publish(api, attempt, name="plain.html", text=PLAIN).json()["file"]["id"]
     with api.app.state.store.read() as c:
         kits = dict(c.execute("SELECT file_id, page_kit FROM bot_file_versions WHERE file_id IN (?,?)", (fid, plain)))
     assert kits == {fid: V.KIT, plain: V.KIT}
     assert served(api, fid, 1) == reporter(KIT_PAGE) + b"<script>" + V.KITS[1] + b"</script>"
-    assert served(api, plain, 1) == reporter("<p>no kit here</p>"), "no kit tag: the page as before"
+    assert served(api, plain, 1) == reporter(PLAIN), "no kit tag: the page as before"
     info = api.get(f"/api/v2/files/{fid}/info", headers=headers("ben-test")).json()["file"]
     assert api.get(info["visual_src"]).content.endswith(V.KITS[1] + b"</script>")
 

@@ -16,15 +16,17 @@
 <body>
 <h1 class="full">Spend by angle</h1>
 <div class="full">
-  <tico-stat label="Spend this week" value="$4,210" trend="+8%" sub="Meta and Google"></tico-stat>
-  <tico-stat label="Cost per signup" value="$31" trend="-4%"></tico-stat>
+  <tico-stat label="Spend this week" value="$4,210" trend="+8%" sub="Meta and Google">Spend this week: $4,210</tico-stat>
+  <tico-stat label="Cost per signup" value="$31" trend="-4%">Cost per signup: $31</tico-stat>
 </div>
 <tico-chart kind="bars" label="Spend by angle, this week">
   <ul><li>Price $1,640</li><li>Speed $1,210</li><li>Trust $860</li><li>Before and after $500</li></ul>
 </tico-chart>
 <section class="full">
   <h2>Last six weeks</h2>
-  <tico-chart kind="line" data="W1 $3100, W2 $3350, W3 $2980, W4 $3720, W5 $3890, W6 $4210"></tico-chart>
+  <tico-chart kind="line" label="Spend by week">
+    <ul><li>W1 $3,100</li><li>W2 $3,350</li><li>W3 $2,980</li><li>W4 $3,720</li><li>W5 $3,890</li><li>W6 $4,210</li></ul>
+  </tico-chart>
   <h2>Ads</h2>
   <tico-table>
     <table>

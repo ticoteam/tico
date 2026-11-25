@@ -84,7 +84,7 @@ before, the after and the criterion that checks it. One line per number in the c
 
 Tico draws these tags in its own look, dark and light. Use them for figures, charts, tables and lists on any page;
 plain HTML still works, and no page needs them. Tico adds the kit when the page uses a tag, so add no script for it.
-Without the kit a tag shows what is inside it.
+Without the kit a tag shows what is inside it, so put the figure inside too.
 
 | Tag | Shows |
 |---|---|
@@ -94,7 +94,7 @@ Without the kit a tag shows what is inside it.
 | `<tico-list>` | Wraps a `<ul>`: a title per row, marks (`<tico-badge>`, `<small>`, `<time>`) on the right |
 | `<tico-badge tone>` | A small mark; `tone="warn"` for late, `tone="strong"` for the one that matters |
 
-    <tico-stat label="Signups" value="1,204" trend="+12%" sub="this week"></tico-stat>
+    <tico-stat label="Signups" value="1,204" trend="+12%" sub="this week">Signups: 1,204</tico-stat>
     <tico-chart kind="bars" label="Signups by source"><ul><li>Search 640</li><li>Ads 410</li></ul></tico-chart>
 
 **Widgets.** A widget is a page pinned to your sidebar; it shows the page's card view, as a chat card does. In the card

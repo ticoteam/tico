@@ -13,7 +13,6 @@ export { activityQuery, dropRun, liveQuery, rowsOf, seedRun, timelineQuery, time
 export { tasksIn } from './links';
 export { PageCard } from './Rich';
 export { LivePage } from './LivePage';
-export { fileFactsQuery } from './queries';
 export { agentWords } from './Quote';
 export type { Variant, ChatMessage, LiveRun } from './types';
 export type { TimelineView } from '@/live';

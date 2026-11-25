@@ -164,7 +164,7 @@
       b.textContent = '';
       this.width = 0;
       var raw = this.hasAttribute('data')
-        ? this.getAttribute('data').split(',')
+        ? this.getAttribute('data').split(/,(?!\d)/)
         : Array.prototype.map.call(this.querySelectorAll('li'), function (li) {
             return li.textContent;
           });

@@ -343,7 +343,7 @@ REPORTER = Path(__file__).with_name("visual-reporter.js").read_text().strip()
 # after the reporter, so a later kit never changes a page already published. Each released kit file stays as it is.
 KIT = 1
 KITS = {n: (Path(__file__).with_name("page-kit") / f"{n}.js").read_text().strip().encode() for n in range(1, KIT + 1)}
-KIT_TAG = re.compile(rb"<tico-(?:stat|chart|table|list|badge)\b", re.I)
+KIT_TAG = re.compile(rb"<tico-(?:stat|chart|table|list|badge)[\s/>]", re.I)
 
 
 def kit_for(mime):

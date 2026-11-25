@@ -209,18 +209,20 @@ describe("An agent's own sidebar", () => {
     open([1, 2, 3, 4].map((n) => w(`page:f${n}`)), pinsReply({ ...pins, pins: [1, 2, 3, 4].map(page) }));
     const fourth = await screen.findByRole('region', { name: 'Page 4' });
     expect(within(fourth).getByRole('link').getAttribute('href')).toBe('/library/files?file=f4');
-    await waitFor(() => expect(reads.filter((u) => u.startsWith('/api/v2/files/') && !u.endsWith('/info')).map((u) => u.split('?')[0])).toEqual(['/api/v2/files/f1', '/api/v2/files/f2', '/api/v2/files/f3']));
-    expect(reads).not.toContain('/api/v2/files/f4/info');
+    await waitFor(() => expect(reads.filter((u) => u.startsWith('/api/v2/files/')).map((u) => u.split('?')[0])).toEqual(['/api/v2/files/f1', '/api/v2/files/f2', '/api/v2/files/f3']));
   });
 
-  it('runs a pinned page as a widget: its card view, live from its signed address', async () => {
+  it('runs a pinned page as a widget: its small card view, live from the signed address its pin carries', async () => {
     queryClient.setQueryData(['config'], { visual_origin: 'https://visuals.acme.example' });
-    const info = { file: { id: 'f1', name: 'videos.html', mime: 'text/html', size: 900, version: 2, visual_src: 'https://visuals.acme.example/visuals/tok' } };
-    open([w('page:f1'), w('tasks')], (u) => (u.endsWith('/api/v2/files/f1/info') ? { body: info } : undefined));
+    const live = (v: number) => ({ ...pins, pins: [{ ...pins.pins[0], page: { ...pins.pins[0].page, version: v, src: `https://visuals.acme.example/visuals/tok${v}` } }] });
+    open([w('page:f1'), w('tasks')], pinsReply(live(2)));
     const card = await screen.findByRole('region', { name: 'Videos by stage' });
     const frame = await waitFor(() => within(card).getByTitle('Videos by stage') as HTMLIFrameElement);
-    expect(frame.getAttribute('src')).toBe('https://visuals.acme.example/visuals/tok#tico-view=card&tico-size=medium');
-    expect(reads).not.toContain('/api/v2/files/f1?v=2'); // live, so its text is never read for a still
+    expect(frame.getAttribute('src')).toBe('https://visuals.acme.example/visuals/tok2#tico-view=card&tico-size=small');
+    expect(reads.filter((u) => u.startsWith('/api/v2/files/'))).toEqual([]); // live: neither its text nor its facts are read
+    // a new version: the pin's next read carries its address, and the widget runs it
+    queryClient.setQueryData(['team', 'pins', 'ana'], live(3));
+    await waitFor(() => expect(within(card).getByTitle('Videos by stage').getAttribute('src')).toBe('https://visuals.acme.example/visuals/tok3#tico-view=card&tico-size=small'));
   });
 
   it('reads the automation runs card over its last 24 hours, with which runs failed', async () => {
