@@ -393,8 +393,10 @@ else sees who to ask.
 
 A bot asking from a task (its turn works on one) puts the card in the task's thread instead, for the person who wrote to it
 there, else the first of its operator and the company owner who can read the task (none: the ask is refused), and the
-task is Paused on the card until it is saved (the person sees it in [Needs you](tasks.md#needs-you)):
-saving it wakes the task once with "<label> is saved. Continue." in place of the "Saved" message. Agent Ops asking on its own
+task is Paused on the card until it is saved (the person sees it in [Needs you](tasks.md#needs-you)). Anyone who
+manages the bot and can read the task may also open and save that card, and it is in their Needs you too, so the task
+never waits on one person; only the person asked, or a credential admin, cancels it. Saving it, by whoever, takes it out
+of every Needs you and wakes the task once with "<label> is saved. Continue." in place of the "Saved" message. Agent Ops asking on its own
 task does the same, for the person it acts for. A bot asks for its own credential; Agent Ops and the Tools page's owner (the
 Tools Owner) may ask for any bot's (`--for-bot`), the Tools owner never for itself: it holds none of the keys it connects. Asking again on the same task returns the open card; another task's open
 card for the same variable stays (saving either saves both); canceling the card ends the pause and tells the bot.
@@ -438,7 +440,8 @@ Tools Owner and people name the bot with `--for`). It never files a task for it.
   One open request per bot, resource and level.
 - A request closes itself the moment the access exists, whoever gives it and however: the card, Tools, the Tools
   Owner, the API, Everyone can read turning on, Settings > General › Repositories. The task it was asked on waits on it
-  (Paused) and is woken once, with "granted" or "declined". An hourly pass closes what no write announced, and old
+  (Paused) and is woken once, with "granted" or "declined"; deleting the tool closes it at once and wakes the task
+  with "the tool was removed". An hourly pass closes what no write announced, and old
   free-text access tasks whose title names one bot, one level and resources that exist, once that access exists.
 - `tico access stats` gives the week's numbers: requests, how many reached people, the share granted at once and the
   median time to grant. The Tools Owner's weekly review reads them.

@@ -551,6 +551,48 @@ def test_a_credential_card_holds_the_task_and_every_fix_wakes_it_once_and_a_hand
     assert "Google (ana@acme.example) is reconnected." in woke and "the Acme CRM token is saved." in woke
 
 
+def test_anyone_who_manages_the_agent_saves_a_task_key_card_and_it_leaves_every_needs_you(api):
+    # Ana is asked (the company owner: ops has no operator); Cara, a member, manages ops on the org chart.
+    machine = ops_machine(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='human:cara' WHERE bot='ops'")
+    t = task(api)
+    asked = ask_secret(api, claim(api, machine))
+    [card] = cards(api, t)
+    assert card["person"] == "human:ana"
+
+    def keys(token):
+        return [i["id"] for i in needs(api, token) if i["kind"] == "key"]
+
+    assert keys("ana-test") == keys("cara-test") == ["key:" + asked["id"]]
+    assert get(api, f"credential-requests/{asked['id']}", "cara-test")["can_save"]
+    post(api, f"credential-requests/{asked['id']}/cancel", {}, "cara-test", expected=403)  # the task hears who asked
+    with api.app.state.store.read() as c:
+        before = c.execute("SELECT COALESCE(MAX(seq),0) FROM changes").fetchone()[0]
+    post(api, f"credential-requests/{asked['id']}/save", {"value": "crm-token-0123456789"}, "cara-test")
+    assert [c["status"] for c in cards(api, t)] == ["fixed"] and len(wakes(api, t)) == 1
+    assert keys("ana-test") == keys("cara-test") == []
+    with api.app.state.store.read() as c:
+        moved = c.execute("SELECT subject_id FROM changes WHERE seq>? AND topic='needs' AND kind='key'", (before,))
+        assert {"human:ana", "human:cara"} <= {r[0] for r in moved}
+    # A card in a private chat stays with the person who asked: another manager neither sees nor saves it.
+    drain(api)
+    post(api, "chat/ops", {"text": "Connect our analytics"})
+    chat = ask_secret(api, claim(api, machine), env="ACME_ANALYTICS_KEY", label="the analytics key")
+    assert keys("ana-test") == ["key:" + chat["id"]] and keys("cara-test") == []
+    get(api, f"credential-requests/{chat['id']}", "cara-test", expected=404)
+    post(api, f"credential-requests/{chat['id']}/save", {"value": "an-0123456789"}, "cara-test", expected=404)
+    # A credential admin saves a task card only while they, or the person asked, manage the agent.
+    drain(api)
+    task(api, "Reply to Acme")
+    other = ask_secret(api, claim(api, machine))
+    api.app.state.store.settings.credential_admins = ("ana@acme.example", "cara@acme.example")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='human:ana' WHERE bot='ops'")
+        c.execute("UPDATE credential_requests SET requester='human:cara' WHERE id=?", (other["id"],))
+    post(api, f"credential-requests/{other['id']}/save", {"value": "crm-token-0123456789"}, "cara-test", expected=403)
+
+
 def test_a_private_task_cards_only_a_fixer_who_can_read_it_and_a_former_reader_loses_the_card(api, monkeypatch):
     machine = codex_bot(api)
     # a task made private retires a card nobody else can fix and stops waiting on it
