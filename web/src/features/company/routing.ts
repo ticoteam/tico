@@ -26,12 +26,13 @@ export const riskSearch = (s: Record<string, unknown>): { risk?: string; panel?:
 export const strategyTab = (t: unknown): StrategyTab => (STRATEGY_TABS as readonly unknown[]).includes(t) ? (t as StrategyTab) : 'strategy';
 
 // What each page needs for its first paint, awaited: a read that fails is the router's fault (PageFault), a refusal
-// its no-access state. Market reads its many parts itself, each with its own state.
+// its no-access state. Market reads its many parts itself, each with its own state. Company awaits nothing: its head
+// draws at once, and the Floor and each figure draw as their own reads answer (the Floor's read has taken minutes on a
+// busy server), each with its own bars and fault.
 export function loadCompany(qc: QueryClient) {
-  const floor = qc.ensureQueryData(floorQuery);
+  void qc.prefetchQuery(floorQuery);
   void qc.prefetchQuery(revenueQuery);
   void qc.prefetchQuery(spendQuery);
-  return floor;
 }
 export function loadStrategy(qc: QueryClient, tab: StrategyTab): Promise<unknown> | undefined {
   if (tab === 'goals') return qc.ensureQueryData(goalsTreeQuery);
