@@ -670,7 +670,7 @@ def _lapsed_plan(c, bot, runner, document, detail):
     from . import model_subscriptions, providers
 
     filled = providers.fill(providers.load(c), BS.read_in_snapshot(c, bot))
-    place = {key: runner[key] for key in ("label", "capabilities")}
+    place = {key: runner[key] for key in ("label", "capabilities", "readiness")}
     place["id"] = runner["runner_id"]
     if not signed_in_by_lapsed_plan(
         document,
