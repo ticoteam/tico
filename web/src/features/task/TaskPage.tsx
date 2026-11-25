@@ -26,6 +26,7 @@ import { EmailSource, Email as EmailView } from './Email';
 import { BlockedOn } from './Facts';
 import { ArchiveMenu } from './Files';
 import { FileTab, FileView, PageBones } from './FileView';
+import { TaskMedia } from './Media';
 import { MoreMenu, QuietLine, WhereLine } from './Head';
 import { askOf, CHAT, changesAskedOf, decisionOf, defaultTab, DETAILS, emailOf, failedToast, requirementOf, sendTitle, tabAddress, tabsOf, targetOf, type TaskTab } from './model';
 import { FlowMark } from '@/kit/FlowMark';
@@ -374,11 +375,11 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
       <EmailView task={t.id} send={current.email} part={search.part} at={address} lead={quiet ? <MatterBrief t={t} send={current.email} /> : <MatterDatesOf t={t} send={current.email} />} />
     ) : null;
 
-  // a file from Details opens one layer up; Esc or its Close takes it away, back to Details
+  // a file from Details or the pictures at the top opens one layer up; Esc or its Close takes it away, back to the tab
   const fileName = file ? files.data?.find((x) => x.id === file) : undefined;
   const closeFile = () =>
     void navigate({ to: '.', search: changeWords(({ file: _f, full: _p, v: _v, vs: _vs, ...rest }) => rest) as never, replace: true });
-  const layer = file && details && (
+  const layer = file && !unresolved && (
     <Viewer open onClose={closeFile} title={fileName?.title || fileName?.name || 'File'}>
       <div className="tv tv-layer">
         <FileView t={t} file={file} full={search.full} />
@@ -412,6 +413,8 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
       framed
       body={
         <div className="tv-view">
+          {/* What the task made comes first: its pictures and videos, over whichever tab is open. */}
+          {!unresolved && <TaskMedia files={files.data} />}
           {/* An email's OK filed apart from the matter it answers waits on the person here too, at the top. */}
           {!quiet && !current?.wait && <WaitingOnYou items={tabs.flatMap((x) => (x.wait && x.email ? [{ sub: x.wait, send: x.email, to: tabAddress(t, x.slug) }] : []))} />}
           {/* An email's OK on the task itself waits on the person too: off its tab, a pointer to it, never Approve. */}

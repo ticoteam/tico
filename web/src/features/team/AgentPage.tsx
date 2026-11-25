@@ -265,7 +265,7 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
           <ListSections slug={slug} needs={needs} />
         </>
       );
-    if (id === 'files') return fileN > 0 ? <FilesSection slug={slug} /> : null;
+    if (id === 'files') return fileN > 0 ? <FilesSection slug={slug} list={actor.id} /> : null;
     const pin = pinOf.get(id);
     return pinShows(pin) ? <PinnedItem pin={pin} live={livePages.has(id)} /> : null;
   };

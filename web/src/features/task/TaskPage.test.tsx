@@ -1207,6 +1207,28 @@ describe('a task’s files and pages @s56 @s76 @s780', () => {
     await waitFor(() => expect((router.state.location.search as Record<string, unknown>)['task.file']).toBeUndefined());
   });
 
+  it('puts its pictures and videos first, newest first, and opens one over the tab it is on', async () => {
+    const at = (id: string, mime: string, created_at: string, more: Record<string, unknown> = {}) => ({
+      n: 1, by: 'bot:a1', created_at, mime, url: `/api/v2/files/${id}?v=1`, answers: [], ask: null, poster_url: null, thumb_url: null, ...more,
+    });
+    const cut = { ...shot, id: 'v1', name: 'cut.mp4', title: 'Beach cut', mime: 'video/mp4', current_version: 1, versions: [at('v1', 'video/mp4', '2026-11-03T10:00:00Z', { poster_url: '/api/v2/files/v1/poster?v=1' })] };
+    const notes = { ...shot, id: 'n1', name: 'notes.txt', title: 'Shot list', mime: 'text/plain', current_version: 1, versions: [at('n1', 'text/plain', '2026-11-04T10:00:00Z')] };
+    const old = { ...shot, id: 'p0', title: 'Old frame', archived: true };
+    serve((url) => (url.endsWith('/api/v2/tasks/t1/files?all=1') ? { status: 200, body: { files: [notes, shot, old, cut] } } : files(url)));
+    const router = details();
+    const strip = await screen.findByRole('list', { name: 'Pictures and videos' });
+    // newest first, pictures and videos only: the archived picture and the text file are not in it
+    expect(within(strip).getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual(['Beach cut', 'Sign-in screen']);
+    expect(strip.querySelector('img')?.getAttribute('src')).toBe('/api/v2/files/v1/poster?v=1');
+    // first: before the tab's own body; Details' Files keeps only what is not a picture or a video
+    await waitFor(() => expect(document.querySelector('.dt-file[title="Shot list"]')).toBeTruthy());
+    const rows = [...document.querySelectorAll('.dt-file')].map((row) => row.getAttribute('title'));
+    expect(rows).toEqual(['Shot list']);
+    expect(strip.compareDocumentPosition(screen.getByText('Has it')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(within(strip).getByRole('button', { name: 'Beach cut' }));
+    await waitFor(() => expect((router.state.location.search as Record<string, unknown>)['task.file']).toBe('v1'));
+  });
+
   describe('archived files', () => {
     const live = {
       id: 'f8',

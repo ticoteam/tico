@@ -41,6 +41,10 @@ SCHEMAS.update(
                     "type": ["string", "null"],
                     "description": "set when an image has a small preview at /api/v2/files/{id}/thumb",
                 },
+                "poster_blob_id": {
+                    "type": ["string", "null"],
+                    "description": "set when a video has a frame to show at /api/v2/files/{id}/poster",
+                },
                 "open": {
                     "type": ["object", "null"],
                     "description": "{type: tico|external, url}: "

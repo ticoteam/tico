@@ -150,6 +150,29 @@ export function tabsOf(t: TaskData, files?: TaskFileView[], chosen?: TaskRequire
   ];
 }
 
+/** A task's file as it stands now: its current version. */
+const currentOf = (f: TaskFileView) => f.versions.find((v) => v.n === f.current_version) ?? f.versions.at(-1);
+
+/** A picture or a video of the task, at its current version. */
+export interface Media {
+  file: TaskFileView;
+  version: TaskFileView['versions'][number];
+  video: boolean;
+}
+
+/** The task's pictures and videos, newest first: what the top of the task shows before anything else. An archived file
+    and every other kind (a page, a PDF, a text) stay where they were. */
+export function mediaOf(files: TaskFileView[] | undefined): Media[] {
+  return (files ?? [])
+    .flatMap((file): Media[] => {
+      const version = currentOf(file);
+      const mime = version?.mime ?? file.mime;
+      if (file.archived || !version || !/^(image|video)\//.test(mime)) return [];
+      return [{ file, version, video: mime.startsWith('video/') }];
+    })
+    .sort((a, b) => b.version.created_at.localeCompare(a.version.created_at));
+}
+
 /** A document the server keeps as a page (its pages read answers for it); a Markdown file is a plain file. */
 export const isPage = (doc: TaskDocument): boolean => doc.kind !== 'markdown';
 

@@ -96,6 +96,8 @@ ACTIONS = (
     "reviewed",
 )
 LIST_MAX = 100
+# A bot's pictures and videos, not pages: what the agent page shows as previews (Made recently).
+MEDIA_SQL = "p.file_id IS NULL AND f.kind IN ('image','video')"
 MENTIONS_MAX = 60  # names one message lookup asks about
 DATES_MAX = 500  # files one date correction carries (runner-rs/src/files_publish.rs DATE_BATCH)
 
@@ -2825,11 +2827,14 @@ class Files:
                 found.add(r["id"])
         return found
 
-    def listing(self, who, bot, limit, cursor, q="", kind=""):
+    def listing(self, who, bot, limit, cursor, q="", kind="", media=False):
         """The bot's files the caller sees, newest activity first, a page at a time. `kind` is a Library kind
         (file_library.KINDS); `q` keeps the files whose name, text (Library search, file_library) or path in the bot's
-        checkout holds every word. Both narrow the same list, so the order, the cursor and the total stay its own."""
+        checkout holds every word; `media` only its images and videos (the agent page's Made recently). Each narrows
+        the same list, so the order, the cursor and the total stay its own."""
         kind_sql, kind_args = file_library.kind_filter(kind)
+        if media:
+            kind_sql = f"({kind_sql}) AND {MEDIA_SQL}"
         with self.store.read() as c:
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             self.bot_row(c, who, bot)
@@ -3180,7 +3185,7 @@ def install_files(app, store, auth, blobs, mutate):
         **api_v2(
             "Files",
             "listBotFiles",
-            "A bot's files the caller may see, newest activity first, with the visible total; limit and cursor page; q (every word, in the name, text or path) and kind (a Library kind: page, document, image, data, media, other; each file's library_kind, not its stored kind) narrow the same list",
+            "A bot's files the caller may see, newest activity first, with the visible total; limit and cursor page; q (every word, in the name, text or path), kind (a Library kind: page, document, image, data, media, other; each file's library_kind, not its stored kind) and media (only its images and videos) narrow the same list",
             "BotFileList",
         ),
     )
@@ -3191,8 +3196,11 @@ def install_files(app, store, auth, blobs, mutate):
         cursor: str = "",
         q: Annotated[str, Query(max_length=200)] = "",
         kind: str = "",
+        media: bool = False,
     ):
-        return files.listing(request.state.identity, bot, max(1, min(limit, LIST_MAX)), cursor, q=q, kind=kind)
+        return files.listing(
+            request.state.identity, bot, max(1, min(limit, LIST_MAX)), cursor, q=q, kind=kind, media=media
+        )
 
     @app.get(
         "/api/v2/bots/{bot}/files/mentions",

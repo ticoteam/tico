@@ -130,7 +130,7 @@ const pinsReply = (body: unknown) => (u: string) => (u.includes('/api/v2/places/
 /** A read of what it holds that has come (the page drew from it). */
 const settled = (key: unknown[]) => waitFor(() => expect(queryClient.getQueryState(key)?.status).toBe('success'));
 
-const SECTIONS = ['Latest update', 'Dream', 'Tasks', 'Files', 'Videos by stage', 'Waiting on Pat', 'Spend', 'Video stages'];
+const SECTIONS = ['Latest update', 'Dream', 'Tasks', 'Made recently', 'Videos by stage', 'Waiting on Pat', 'Spend', 'Video stages'];
 /** The sidebar's sections in the order they are drawn. */
 const order = () => screen.getAllByRole('region').map((r) => r.getAttribute('aria-label') ?? '').filter((n) => SECTIONS.includes(n));
 
@@ -153,15 +153,15 @@ describe("An agent's own sidebar", () => {
     ['answers its default', [w('updates'), w('tasks'), w('files')]],
   ])('draws an agent that arranged nothing as the page always has, when the server %s', async (_, widgets) => {
     open(widgets);
-    await screen.findByRole('region', { name: 'Files' });
-    expect(order()).toEqual(['Latest update', 'Tasks', 'Files']);
+    await screen.findByRole('region', { name: 'Made recently' });
+    expect(order()).toEqual(['Latest update', 'Tasks', 'Made recently']);
   });
 
   it('draws its widgets in its stored order, leaving out the hidden ones, a set height its most', async () => {
     open([w('page:f1'), w('files', { height: 120 }), w('card:c1'), w('tasks'), w('updates', { hidden: true })]);
     await screen.findByRole('region', { name: 'Waiting on Pat' });
-    expect(order()).toEqual(['Videos by stage', 'Files', 'Waiting on Pat', 'Tasks']);
-    expect((screen.getByRole('region', { name: 'Files' }).parentElement as HTMLElement).style.maxHeight).toBe('120px');
+    expect(order()).toEqual(['Videos by stage', 'Made recently', 'Waiting on Pat', 'Tasks']);
+    expect((screen.getByRole('region', { name: 'Made recently' }).parentElement as HTMLElement).style.maxHeight).toBe('120px');
     expect(screen.queryByText('Cut the intro')).toBeNull();
   });
 
@@ -169,7 +169,7 @@ describe("An agent's own sidebar", () => {
     open([w('card:c1'), w('card:c2'), w('tasks'), w('updates'), w('files')]);
     const card = await screen.findByRole('region', { name: 'Waiting on Pat' });
     expect(within(card).getByText('Approve the storyboard').closest('a')?.getAttribute('href')).toBe('/task/t9');
-    await waitFor(() => expect(order()).toEqual(['Waiting on Pat', 'Tasks', 'Latest update', 'Files']));
+    await waitFor(() => expect(order()).toEqual(['Waiting on Pat', 'Tasks', 'Latest update', 'Made recently']));
     expect(screen.queryByRole('region', { name: 'Spend' })).toBeNull();
   });
 
@@ -192,9 +192,9 @@ describe("An agent's own sidebar", () => {
     cleanup();
     queryClient.removeQueries({ queryKey: ['team', 'tabs'] });
     open([w('updates', { hidden: true }), w('tasks'), w('files')], withDream);
-    await screen.findByRole('region', { name: 'Files' });
+    await screen.findByRole('region', { name: 'Made recently' });
     await settled(['team', 'dream', 'ana']);
-    expect(order()).toEqual(['Tasks', 'Files']);
+    expect(order()).toEqual(['Tasks', 'Made recently']);
   });
 
   it('reads a pinned page by an address that changes with each version', async () => {
@@ -244,7 +244,7 @@ describe("An agent's own sidebar", () => {
     await screen.findByRole('region', { name: 'Videos by stage' });
     refused = true;
     await act(() => queryClient.invalidateQueries({ queryKey: ['team', 'tabs'] }));
-    await waitFor(() => expect(order()).toEqual(['Latest update', 'Tasks', 'Files']));
+    await waitFor(() => expect(order()).toEqual(['Latest update', 'Tasks', 'Made recently']));
     expect(screen.queryByRole('region', { name: 'Launch' })).toBeNull();
   });
 
@@ -302,6 +302,6 @@ describe("An agent's own sidebar", () => {
     expect([...card.querySelectorAll('.stage-fold')].map((s) => s.textContent)).toEqual(['Concept2', 'Draft1']);
     const href = (title: string) => within(card).getByText(title).closest('a')?.getAttribute('href');
     expect([href('Spring promo'), href('Beach clean'), href('Host intro')]).toEqual(['/tasks/videos/4', '/tasks/videos/5', '/tasks/videos/7']);
-    await waitFor(() => expect(order()).toEqual(['Video stages', 'Tasks', 'Latest update', 'Files']));
+    await waitFor(() => expect(order()).toEqual(['Video stages', 'Tasks', 'Latest update', 'Made recently']));
   });
 });

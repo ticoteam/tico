@@ -17,7 +17,7 @@ import { PageBody, Section } from '@/pagekinds';
 import { ActorItems, OwnerMenu, tagsOf } from './Head';
 import { EditKv, Inline, Kv, saved } from './Fact';
 import { Meetings, MoreFacts, PublicFacts, repeatsOwner, SizeFact, WaitFact, WaitOn } from './Facts';
-import { DETAILS, failedToast, tabAddress } from './model';
+import { DETAILS, failedToast, mediaOf, tabAddress } from './model';
 import { NewPage } from './NewPage';
 import { Face, Mark, NameOf, Go, isActor } from './parts';
 import { taskFilesQuery, type TaskData } from './queries';
@@ -167,7 +167,9 @@ export function Details({ t, adding = null, onAdding = () => undefined }: Detail
   const relations = new Map(Object.values(t.relations ?? {}).flat().map((link) => [link.id, link]));
   const related = [...relations.values()].map((x) => ({ id: x.id, title: x.title, number: x.number, owner: x.owner_id, stage: x.stage, done: x.status !== 'open' }));
   const code = (t.inputs ?? []).filter((x) => x.kind === 'pr');
-  const shown = (files.data ?? []).filter((f) => !f.archived);
+  // its pictures and videos are at the top of the task (TaskMedia); Files keeps the rest
+  const media = new Set(mediaOf(files.data).map((m) => m.file.id));
+  const shown = (files.data ?? []).filter((f) => !f.archived && !media.has(f.id));
   const web = (t.links ?? []).filter((l) => l.kind !== 'pr' && l.kind !== 'session');
   const details = tabAddress(t, DETAILS);
   const request = t.request?.text || t.body || '';

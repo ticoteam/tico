@@ -224,6 +224,41 @@ test("a task on an agent's page opens over it; Close leaves the page as it was",
   clean(page);
 });
 
+test("an agent's newest pictures and videos lead its sidebar and its task; each opens in the viewer", async ({ browser, hub }) => {
+  const made = await call<{ id: string; number: number; title: string; video: string }>(hub, `/_e2e/made?title=${encodeURIComponent('Beach clean promo')}`, 'POST');
+  const page = await open(browser, hub, '/team/engineering-manager');
+  // the sidebar's Made recently: the video and the two pictures as tiles, each captioned with its task
+  const recent = page.getByRole('region', { name: 'Made recently' }).getByRole('list', { name: 'Pictures and videos' });
+  await expect(recent.getByRole('button')).toHaveCount(3);
+  await expect(recent.locator('.thumb.is-video img')).toHaveAttribute('src', /\/poster\?v=1$/);
+  await expect(recent.getByRole('link', { name: made.title })).toHaveCount(3);
+  await page.screenshot({ path: test.info().outputPath('made-recently-1440.png') });
+  // a picture opens in the viewer over the page
+  await recent.getByRole('button', { name: /beach.close/i }).click();
+  await expect(page.locator('.pv-img')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.pv-img')).toHaveCount(0);
+
+  // its task is a click away: it opens over the page, its pictures and videos first, above the page it opens on
+  await recent.getByRole('link', { name: made.title }).first().click();
+  const over = modal(page, made.title);
+  await expect(over).toBeVisible();
+  const strip = over.locator('[data-target="task-media"]').getByRole('list', { name: 'Pictures and videos' });
+  await expect(strip.getByRole('button')).toHaveCount(3);
+  await expect(over.locator('.tv-view > *').first()).toHaveAttribute('data-target', 'task-media');
+  await page.screenshot({ path: test.info().outputPath('made-task-1440.png') });
+  // the video opens one layer up, on the tab the task was on
+  const tab = searchOf(page)['task.tab'];
+  await strip.getByRole('button', { name: /beach.cut/i }).click();
+  await expect(layers(page)).toHaveCount(2);
+  expect(searchOf(page)).toMatchObject({ 'task.file': made.video });
+  expect(searchOf(page)['task.tab']).toBe(tab);
+  await page.screenshot({ path: test.info().outputPath('made-video-1440.png') });
+  await page.keyboard.press('Escape');
+  await expect(layers(page)).toHaveCount(1);
+  clean(page);
+});
+
 test("a task's link from outside opens it over Tasks with Needs you as its list; a file opens one layer up and Esc closes it first", async ({ browser, hub }) => {
   const [draft] = hub.facts.board.tasks;
   const page = await open(browser, hub, `/task/${draft!.number}`);

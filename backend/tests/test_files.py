@@ -182,6 +182,45 @@ def test_a_files_page_reads_a_fixed_number_of_statements_and_counts_only_what_ea
         assert again["total"] == len(again["files"]), who
 
 
+def test_made_recently_is_its_pictures_and_videos_of_tasks_the_reader_may_read(api):
+    """The agent page's Made recently (`media=1`): only a bot's images and videos, newest first, through the same
+    checks as its whole list, so a private task's video stays hidden from someone who can't read the task."""
+    store = api.app.state.store
+    _, attempt = turn(api)
+    with store.transaction() as c:
+        hidden = H.task_create(c, "human:ben", "Private launch", "Secret", "bot:ops", private=True, lint=False)
+    made = {}
+    for name in ("notes", "still", "hush-cut", "cut"):
+        r = publish(api, attempt, f"{name}.md", f"# {name}")
+        assert r.status_code == 200, r.text
+        made[name] = r.json()["file"]["id"]
+        assert (
+            api.patch("/api/v2/files/" + made[name], json={"promote": True}, headers=headers("ben-test")).status_code
+            == 200
+        )
+    with store.transaction() as c:
+        for name, kind, at in (
+            ("still", "image", "2030-01-01"),
+            ("hush-cut", "video", "2030-01-02"),
+            ("cut", "video", "2030-01-03"),
+        ):
+            c.execute("UPDATE bot_files SET kind=?,last_activity_at=? WHERE id=?", (kind, at, made[name]))
+        c.execute("UPDATE bot_files SET task_id=? WHERE id=?", (hidden["id"], made["hush-cut"]))
+
+    def media(who):
+        r = api.get("/api/v2/bots/ops/files?media=1&limit=6", headers=headers(who))
+        assert r.status_code == 200, r.text
+        return r.json()
+
+    ben = media("ben-test")
+    assert [f["id"] for f in ben["files"]] == [made["cut"], made["hush-cut"], made["still"]] and ben["total"] == 3
+    assert all("poster_blob_id" in f for f in ben["files"])
+    cara = media("cara-test")
+    assert [f["id"] for f in cara["files"]] == [made["cut"], made["still"]] and cara["total"] == 2
+    # The whole list still has every file the reader sees; only Made recently leaves the rest out.
+    assert made["notes"] in {f["id"] for f in listing(api, who="cara-test")["files"]}
+
+
 def test_refusals_and_a_bot_writes_only_its_own_files(api):
     machine, attempt = turn(api, "ops")
     for name in (".env", "prod-credentials.csv", "id_rsa.txt", "tool.exe", "setup.sh"):
