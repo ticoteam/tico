@@ -1653,6 +1653,7 @@ class Files:
         existing_row=None,
         version_actor=None,
         version_time=None,
+        app: str | bool | None = False,
     ):
         """One publish of bytes already in the blob store: a new file, a new version, or a no-op touch. `fid` names a new
         file's id (for a caller that writes the file's id somewhere before the file exists). `existing_row` continues
@@ -1660,7 +1661,9 @@ class Files:
         content last changed at its source (content_time): the file's activity time when it is new or changed, so a
         repository published for the first time lists by when each file was written, not by when it was copied. An
         unchanged publish is no activity: it leaves the time alone, except that it may move a time that only says when
-        Tico copied the current version back to when that content was written."""
+        Tico copied the current version back to when that content was written. `app` is a page publish's app
+        declaration (backend/page_apps.py, None for none): a change of it is a new version, whatever the bytes; False
+        (any other publish) leaves it out of the check and off the version."""
         now = H.now()
         when = version_time or content_time(modified, now) or now
         row, created = (
@@ -1693,12 +1696,13 @@ class Files:
             or (digest != last["digest"] if as_given else source_digest != (last["source_digest"] or last["digest"]))
             or bool(version_actor and version_actor != last["actor"])
             or bool(version_time and version_time != last["created_at"])
+            or (app is not False and app != last["app"])
         )
         version = row["current_version"]
         if changed:
             version += 1
             c.execute(
-                "INSERT INTO bot_file_versions(file_id,version,blob_id,digest,source_digest,size,name,mime,commit_sha,repo_path,attempt_id,actor,created_at,media_state,page_kit) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'pending',?)",
+                "INSERT INTO bot_file_versions(file_id,version,blob_id,digest,source_digest,size,name,mime,commit_sha,repo_path,attempt_id,actor,created_at,media_state,page_kit,app) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'pending',?,?)",
                 (
                     row["id"],
                     version,
@@ -1714,6 +1718,7 @@ class Files:
                     version_actor or actor,
                     version_time or now,
                     kit_for(mime),
+                    app or None,
                 ),
             )
         action = "created" if created else "modified" if changed else "published"
@@ -2432,6 +2437,7 @@ class Files:
                 existing_row=existing_page,
                 version_actor=str(fields.get("written_by") or "") if page_publish else None,
                 version_time=str(fields.get("written_at") or "") if page_publish else None,
+                app=(str(fields["app"]) if fields.get("app") else None) if page_publish else False,
             )
             H.event(c, actor, "file.publish", row["id"], {"bot": bot, "version": row["current_version"], "size": size})
             if fields.get("from"):
@@ -3023,6 +3029,8 @@ class Files:
             settle()
         if page:
             shown["visual_src"] = seen.get("src") if seen else None
+            if seen and seen.get("app"):
+                shown["visual_app"] = True
         return {"file": shown}
 
     def versions(self, who, fid):

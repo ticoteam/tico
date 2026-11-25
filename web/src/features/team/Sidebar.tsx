@@ -1,7 +1,8 @@
-import { Fragment, type ReactNode } from 'react';
+import { Fragment, useRef, type ReactNode } from 'react';
 import { run } from '@/actions';
 import type { Card, Place } from '@/api/schema';
 import { LivePage, PageCard } from '@/conversation';
+import { useAppSlot } from '@/data';
 import { Ago } from '@/kit/Ago';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { Link } from '@/kit/Link';
@@ -86,9 +87,21 @@ function PinnedPage({ page, live }: { page: NonNullable<Pin['page']>; live: bool
   // its address changes with each version, so a new one is read, never the cached last one
   const src: `/api/${string}` = version ? `${fileHref(id)}?v=${version}` : `${fileHref(id)}?at=${encodeURIComponent(updated_at)}`;
   const still = <PageCard src={src} title={title} onOpen={() => void run('files.preview', version ? { file: id, version } : { file: id }, { via: 'click' })} />;
+  if (live && page.app && page.src && version) return <PinnedApp id={id} title={title} version={version} live={page.src} still={still} />;
   return (
     <section className="stage pk-sec side-page" aria-label={title} data-target={`page:${id}`}>
       {live ? <LivePage src={page.src} title={title} id={`${id}@${version ?? updated_at}`} size="small" fallback={still} /> : <CardRow title={title} file={id} at={updated_at} />}
+    </section>
+  );
+}
+
+/** A pinned page app: running while in view and one of the few app frames a sidebar runs at once, else its still. */
+function PinnedApp({ id, title, version, live, still }: { id: string; title: string; version: number; live: string; still: ReactNode }) {
+  const box = useRef<HTMLElement>(null);
+  const runs = useAppSlot(box, true);
+  return (
+    <section ref={box} className="stage pk-sec side-page" aria-label={title} data-target={`page:${id}`}>
+      {runs ? <LivePage src={live} title={title} id={`${id}@${version}`} size="small" app={{ page: id, version }} fallback={still} /> : still}
     </section>
   );
 }

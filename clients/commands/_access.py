@@ -305,6 +305,10 @@ AUDIENCE = {
     "tico_page_card": BOTS,  # only the page's owner bot, for a person who just wrote to it there (the route checks)
     "tico_page_archive": PEOPLE + BOTS,
     "tico_page_access": PEOPLE + BOTS,
+    "tico_page_data_list": PEOPLE + BOTS,
+    "tico_page_data_get": PEOPLE + BOTS,
+    "tico_page_data_set": PEOPLE + BOTS,
+    "tico_page_data_rm": PEOPLE + BOTS,
     # Anyone who may write a page links it (the route checks the writer and the target's read rights).
     "tico_page_link": NOT_ASSISTANT,
     "tico_page_unlink": NOT_ASSISTANT,

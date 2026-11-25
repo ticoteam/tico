@@ -79,6 +79,10 @@ SCHEMAS['Place'] = obj(
                                 'type': ['string', 'null'],
                                 'description': 'The address its current version shows live from, when the page is read',
                             },
+                            'app': obj(
+                                {'reads': items('s')},
+                                required=['reads'],
+                            ),
                         },
                         required=['file_id', 'title', 'bot', 'updated_at', 'archived'],
                     ),

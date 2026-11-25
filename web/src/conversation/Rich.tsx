@@ -178,6 +178,7 @@ function RefCard({ p }: { p: Extract<Pointer, { kind: 'file' }> }) {
         src={current ? facts.visual_src : null}
         title={title}
         id={`${p.file}@${facts.version ?? ''}`}
+        app={facts.visual_app && facts.version ? { page: p.file, version: facts.version } : null}
         fallback={<PageCard src={src} title={title} onOpen={() => preview(p.file, p.version)} />}
       />
     );
@@ -466,7 +467,15 @@ function AttachedFile({ f, own }: { f: Attachment; own: OwnFile }) {
   if (face === 'audio') return <AudioBar f={f} own={own} />;
   if (face === 'pdf') return <PdfCard f={f} own={own} />;
   if (face === 'page')
-    return <LivePage src={f.src} title={name} id={url} fallback={<PageCard src={url} title={name} onOpen={() => preview(own.id, undefined, held)} />} />;
+    return (
+      <LivePage
+        src={f.src}
+        title={name}
+        id={url}
+        app={f.app && f.version ? { page: own.id, version: f.version } : null}
+        fallback={<PageCard src={url} title={name} onOpen={() => preview(own.id, undefined, held)} />}
+      />
+    );
   if (face === 'docx' || face === 'xlsx') return <OfficeCard f={f} own={own} kind={face} />;
   const kind = fileKind(f.content_type, f.name);
   if (isCardKind(kind)) return <FileCard kind={kind} url={url} name={name} mime={f.content_type ?? ''} {...(typeof f.size === 'number' && { size: f.size })} />;

@@ -20,6 +20,7 @@ from . import cards
 from . import models as M
 from . import names
 from . import read_cache
+from . import page_apps
 from . import page_links
 from . import visuals
 from .store import H, Problem
@@ -81,7 +82,7 @@ def stale_days(updated, cadence, now=None):
     return int(days) if days > period * STALE_FACTOR else None
 
 
-VIEW_VERSION_SQL = "SELECT version,actor,created_at FROM bot_file_versions WHERE file_id=? AND version=?"
+VIEW_VERSION_SQL = "SELECT version,actor,created_at,app FROM bot_file_versions WHERE file_id=? AND version=?"
 
 
 def prime_views(c, rows):
@@ -95,7 +96,7 @@ def prime_views(c, rows):
     for part in H.chunks(sorted(current)):
         marks = ",".join("?" * len(part))
         for v in c.execute(
-            "SELECT v.file_id,v.version,v.actor,v.created_at FROM bot_file_versions v JOIN bot_files f "
+            "SELECT v.file_id,v.version,v.actor,v.created_at,v.app FROM bot_file_versions v JOIN bot_files f "
             "ON f.id=v.file_id AND f.current_version=v.version WHERE v.file_id IN (%s)" % marks,
             part,
         ):
@@ -222,6 +223,7 @@ class Pages:
             if row["task_id"] and self.files.task_info(c, who, row["task_id"], cache)
             else None,
             "src": self.src(c, who, row, row["current_version"]) if v else None,
+            **({"app": page_apps.declared(v["app"])} if v and v["app"] else {}),
             **({"restricted": page["audience"] is not None} if manager else {}),
             **({"audience": H._json(page["audience"], None)} if manager and include_audience else {}),
         }
@@ -372,8 +374,11 @@ class Pages:
             data = visual_specs.inline_styles(data)
         if len(data) > visuals.LIMITS["page"]:
             raise Problem("file_refused", "A page is at most 10 MB", 422)
-        # The original's digest stands for the version, so publishing the same page again is no new version.
-        fields = {**fields, "name": name, "etag": hashlib.sha256(data).hexdigest()}
+        # The original's digest stands for the version, so publishing the same page again is no new version. An app's
+        # declaration is part of it: the same bytes with other access are a new version, approved on their own.
+        app = page_apps.parse(fields.get("app"))
+        etag = hashlib.sha256(data + (b"\0app:" + app.encode() if app else b"")).hexdigest()
+        fields = {**fields, "name": name, "etag": etag, "app": app or ""}
 
         def extra(c, row, changed, editor, linked_task):
             now = H.now()
@@ -472,7 +477,7 @@ class Pages:
                 "cadence": cadence or "",
                 "as_of": as_of or "",
                 "replaces": replaces,
-                **{k: fields.get(k, "") for k in ("page", "as", "written_by", "written_at")},
+                **{k: fields.get(k, "") for k in ("page", "as", "written_by", "written_at", "app")},
                 **({"audience": audience} if audience_set else {}),
             },
         )
@@ -739,6 +744,7 @@ def install_pages(app, store, auth, files):
                             "scope": {"enum": ["task", "bot"]},
                             "spec": {"type": "boolean"},
                             "from": {"type": "string", "description": "The file this page was made from"},
+                            "app": {"type": "string"},
                             "audience": {"anyOf": [{"$ref": "#/components/schemas/AccessAudience"}, {"type": "null"}]},
                         },
                     }
@@ -843,4 +849,5 @@ def install_pages(app, store, auth, files):
         """Change a page's cadence, data date or replacement, or archive (`archived: true`) or restore it."""
         return pages.edit(request, fid, body)
 
+    page_apps.install_page_apps(app, store, auth, files, pages)
     return pages

@@ -60,6 +60,8 @@ CUTOVER_PREREQUISITES = {
     "20261124054917_question_marks_cleared_message": ("20261117033356_question_marks.sql",),
     # `bot_file_versions` columns in one order whichever runs first: preview_html_blob_ids adds its column before this.
     "20261125055503_page_kit": ("20261124213459_preview_html_blob_ids.sql",),
+    # The same for page_apps' `app` column: after page_kit's (which brings preview_html_blob_ids' before its own).
+    "20261125055536_page_apps": ("20261125055503_page_kit.sql",),
 }
 RETIRED_LIST = "retired.txt"
 # Older releases recorded their pre-file history as `legacy_user_version_<N>` and `legacy_cloud_<N>` rows with this

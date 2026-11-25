@@ -59,7 +59,8 @@ have a Spec, a QA report and any number of other pages.
   details link back to it ([made from](files.md#tags-metadata-and-made-from)). You must be able to read it.
 
 Anyone who may write a page publishes its versions: a person, or a bot as itself. Over MCP the same tools are
-`tico_page_publish`, `tico_page_link`, `tico_page_unlink`, `tico_page_list`, `tico_page_show` and `tico_page_archive`.
+`tico_page_publish` (with `app`), `tico_page_link`, `tico_page_unlink`, `tico_page_list`, `tico_page_show` and
+`tico_page_archive`. A page can also be an [app](#apps).
 
 ## Links and task documents
 
@@ -226,6 +227,47 @@ Pages show inline when the install has a visual address (`TICO_VISUAL_ORIGIN`) o
 ([Visuals in replies](visuals.md#self-hosting)). Without either, a page is an **Open** card with its title and status
 line, and opens in the file viewer's sandboxed preview, which shows it without its scripts.
 
+## Apps
+
+A page version can be an app: it reads Tico as the person viewing it, through Tico's bridge.
+
+    tico page publish reports/spend.html --app "reads=tasks,kpis,store"
+
+- **`--app reads=...`** names what this version may read: `tasks`, `files`, `pages`, `kpis`, `contacts` and
+  `store` (the page's own data). Each version declares its own, and a change of access is a new version, approved
+  like any other. Leave it out and the version is a plain page.
+- **Sealed.** An app is framed without same-origin, so it has an origin of its own: no `localStorage` or cookies,
+  and no other page on the same host can reach its frame. It still runs its scripts, forms and loads as written. An
+  app is never the shared hosted copy, so without a visual address it is an **Open** card.
+- **`window.tico`** is there when the page runs inside Tico. Every call is a promise:
+  `tico.me()`, `tico.query(kind, {limit, cursor, ...})` (rows and `next`), `tico.thumb(fileId)` (a small picture
+  as a `data:` address, up to 200 KB), `tico.open("task:ID" | "file:ID" | "page:ID")` (Tico goes there, the frame
+  stays; only for a declared kind the viewer and the writer may both read), and `tico.store(collection).get(id)` and `.list({after, limit})`. A refusal rejects with an error whose
+  `code` says why. Outside Tico every call rejects.
+- **What it reads** is the viewer's own rows, cut to what the version's writer may also read: a list filtered by a
+  task is empty unless both may read that task, and live tags in an app are left unfilled. A script can't show or
+  send anything its writer couldn't already see. If the writer is gone, calls are refused with `writer_gone`, and
+  `store` also needs the writer to still be one of the page's writers.
+- **Each frame's calls** carry a key Tico serves into that frame for this viewer, page and version. It ties calls to
+  them, not to one browser tab: the viewer's own session is what the call is made with.
+- **Limits:** at most 200 rows or 1 MB in one reply, and 20 calls a second for each frame. Only the current version
+  runs: a frame of an older version is refused with `version_replaced` and opens as a plain sealed page. An archived
+  page's app is stopped (`app_stopped`).
+- **Where it runs:** in chats, on task pages and in sidebars. A sidebar runs at most six apps at once; the rest show
+  their still until they scroll into view.
+
+**Page data** belongs to the page, not to a version. Its writers keep it, and the app reads it with `store`:
+
+    tico page data set p1 spend 2026-11-24 '{"meta": 120}'
+    tico page data list p1 spend
+    tico page data get p1 spend 2026-11-24
+    tico page data rm p1 spend 2026-11-24
+
+A collection is 1-40 lowercase letters, digits, `-` or `_`. A row id is 1-100 letters, digits and `. _ : @ -`. A row
+holds any JSON up to 64 KB, and a page keeps at most 10,000 rows and 20 MB. Each row records who wrote it and when.
+Deleting a page for good deletes its rows. Over MCP: `tico_page_data_list`, `tico_page_data_get`,
+`tico_page_data_set` and `tico_page_data_rm`.
+
 ## Archiving
 
 The maintainer bot, people who manage it, admins and the owner archive a page (`tico page archive ID`, or **Archive**
@@ -249,6 +291,9 @@ Stable v2 (`GET /api/v2/openapi.json`, tag **Pages**):
 | `GET /api/v2/files` and `GET /api/v2/files/search` | Both take `linked`, `role` and `writer`. Page rows and hits include writers, up to five links and a count of the remaining visible links |
 | `GET /api/v2/tasks/{id}/files?all=1` | Up to 200 readable task files and linked or pinned pages, with links on page rows and up to 50 versions per file |
 | `PATCH /api/v2/pages/{file_id}` | `cadence`, `as_of`, `replaced_by`, `archived`, `audience` (null clears it) |
+| `POST /api/v2/pages/{file_id}/app` | An app frame's call, as the viewer: `{version, nonce, op, args}` (op `me`, `query`, `thumb`, `open`, `store.get` or `store.list`). The web app sends these; the key comes with the frame |
+| `GET /api/v2/pages/{file_id}/data?collection=&after=&limit=` | The page's data rows in one collection by id, with `next` (its writers) |
+| `GET`, `PUT` or `DELETE /api/v2/pages/{file_id}/data/{collection}/{row}` | One data row: read it, write `{"data": ...}`, or remove it (its writers) |
 
 `src` is a fresh address to frame the current version, or `null` when this install cannot show pages inline. A page
 the caller may not read is a 404. `replaced_by` is `null` when the caller may not read the newer page. Lists carry no

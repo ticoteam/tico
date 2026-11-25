@@ -1,9 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { run } from '@/actions';
 import type { TaskDocument, TaskFileView } from '@/api/schema';
-import { meQuery } from '@/data';
+import { APP_SANDBOX, meQuery, useAppBridge } from '@/data';
 import { changeWords } from '@/lib';
 import { FileFrame, FilePreview, signedLine } from '@/features/library/exports';
 import { Ago } from '@/kit/Ago';
@@ -48,13 +48,23 @@ function PageOrFile({ task, id, title, page, file, pin }: { task: string; id: st
   const live = shown.data?.page;
   const p = live && pin && live.version !== pin ? { ...live, src: null, version: pin } : live;
   const text = useQuery({ ...pageVersionQuery(id, p?.version ?? 0), enabled: !!p && !p.src && !!p.version });
+  // An app runs sealed, with its bridge, only from its live address (the current version, the one served with a key).
+  const app = p?.src && p.app && p.version ? { page: id, version: p.version } : null;
+  const frame = useAppBridge(app);
+  // An app keeps its first address for its version: a renewed one would reload the frame and drop its bridge.
+  const mount = app ? `${id}@${app.version}` : '';
+  const [held, setHeld] = useState({ mount: '', src: '' });
+  if (app && p?.src && held.mount !== mount) setHeld({ mount, src: p.src });
+  // with no app drawn, nothing is held: the next one starts from the address read now (an old one may have expired)
+  if (!app && held.mount) setHeld({ mount: '', src: '' });
+  const src = app && held.mount === mount ? held.src : p?.src;
   if (!page || shown.isError) return <div className="frame fv">{file}</div>;
   if (text.isError) return <Empty icon="alert" title={`${title} did not load`} />;
   const html = text.data != null ? frameDoc(parsePage(text.data)) : null;
   return (
     <div className="frame is-inset">
       {p?.src ? (
-        <iframe src={p.src} title={title} sandbox={PAGE_SANDBOX} referrerPolicy="no-referrer" />
+        <iframe key={mount} ref={frame} src={src ?? p.src} title={title} sandbox={app ? APP_SANDBOX : PAGE_SANDBOX} referrerPolicy="no-referrer" />
       ) : html ? (
         <iframe srcDoc={html} title={title} sandbox={PAGE_SANDBOX} referrerPolicy="no-referrer" />
       ) : (
