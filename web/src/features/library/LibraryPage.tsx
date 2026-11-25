@@ -3,6 +3,8 @@ import { useRouter } from '@tanstack/react-router';
 import { useMemo, useState } from 'react';
 import { ApiError } from '@/api/client';
 import type { PageShown } from '@/api/schema';
+import { liveSrc, LIVE_SANDBOX } from '@/conversation';
+import { configQuery } from '@/data';
 import { frameDoc, markChanges, parsePage, pageVersionQuery } from '@/features/task/routing';
 import { Button } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
@@ -20,15 +22,18 @@ export function LibraryPage({ id, search }: { id: string; search: PagesSearch })
   const router = useRouter();
   const { data, error } = useSuspenseQuery(libraryPageQuery(id));
   const { page } = data;
+  const config = useQuery(configQuery);
   const version = search.v ?? page.version;
   const current = version === page.version;
+  const live = current && !page.archived ? liveSrc(page.src, config.data) : null;
+  const app = 'app' in page && Boolean(page.app);
   const history = useQuery(fileVersionsQuery(id));
   const versions = history.data ?? [];
   const before = versions.filter((v) => v.version < version);
   const against = before.some((v) => v.version === search.vs) ? search.vs : undefined;
   const text = useQuery({
     ...pageVersionQuery(id, version),
-    enabled: !!version && (!current || !page.src || !!against || page.archived),
+    enabled: !!version && (!live || !!against),
   });
   const prior = useQuery({ ...pageVersionQuery(id, against ?? 0), enabled: !!against });
   const [action, setAction] = useState<PageAction | null>(null);
@@ -42,7 +47,6 @@ export function LibraryPage({ id, search }: { id: string; search: PagesSearch })
     const count = against && prior.data !== undefined ? markChanges(parsePage(prior.data), doc) : undefined;
     return { html: frameDoc(doc, count !== undefined), noChanges: count === 0 };
   }, [against, prior.data, text.data]);
-  const showLive = current && !against && !page.archived && !!page.src;
   // Refused rereads can retain cached data in the suspense query.
   if (error instanceof ApiError && [401, 403, 404].includes(error.status)) throw error;
 
@@ -56,8 +60,8 @@ export function LibraryPage({ id, search }: { id: string; search: PagesSearch })
         onBack={() => void leave()}
         actions={
           <>
-            {!current && <Button onClick={() => replace({ v: undefined, vs: undefined })}>Latest</Button>}
-            {against && <Button onClick={() => replace({ vs: undefined })}>Close changes</Button>}
+            {!current && <Button data-phone onClick={() => replace({ v: undefined, vs: undefined })}>Latest</Button>}
+            {against && <Button data-phone onClick={() => replace({ vs: undefined })}>Close changes</Button>}
             <FileGet url={fileUrl(id, version)} link="" />
           </>
         }
@@ -76,8 +80,8 @@ export function LibraryPage({ id, search }: { id: string; search: PagesSearch })
         body={
           <div className="page-body-frame">
             {noChanges && <p className="page-no-change">No text changes</p>}
-            {showLive && page.src ? (
-              <HostedPage key={`${id}@${version}`} src={page.src} title={page.title} />
+            {live && !against ? (
+              <HostedPage key={`${id}@${version}`} src={live} title={page.title} app={app} />
             ) : text.isError || prior.isError ? (
               <Empty icon="alert" title="This version did not load">
                 <Button onClick={() => Promise.all([text.isError && text.refetch(), prior.isError && prior.refetch()])}>Try again</Button>
@@ -95,10 +99,10 @@ export function LibraryPage({ id, search }: { id: string; search: PagesSearch })
   );
 }
 
-function HostedPage({ src, title }: { src: string; title: string }) {
+function HostedPage({ src, title, app }: { src: string; title: string; app: boolean }) {
   // Renewing a signed address during a reread keeps the same page running.
   const [initialSrc] = useState(src);
-  return <iframe src={initialSrc} sandbox={sandbox} referrerPolicy="no-referrer" title={title} />;
+  return <iframe src={initialSrc} sandbox={app ? LIVE_SANDBOX.replace(' allow-same-origin', '') : LIVE_SANDBOX} referrerPolicy="no-referrer" title={title} />;
 }
 
 function PageMenu({

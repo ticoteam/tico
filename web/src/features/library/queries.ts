@@ -2075,7 +2075,9 @@ export function pageHref({ file, v, vs, ...filters }: PagesSearch) {
 
 export function refreshPages(id: string) {
   return Promise.all([
-    queryClient.invalidateQueries({ queryKey: ['pages'] }),
+    queryClient.invalidateQueries({ queryKey: ['pages', 'list'] }),
+    queryClient.invalidateQueries({ queryKey: ['pages', 'search'] }),
+    queryClient.invalidateQueries({ queryKey: ['pages', 'detail', id] }),
     queryClient.invalidateQueries({ queryKey: ['files'] }),
     queryClient.invalidateQueries({ queryKey: ['team', 'pins'] }),
     queryClient.invalidateQueries({ queryKey: ['team', 'tabs'] }),
@@ -2083,8 +2085,8 @@ export function refreshPages(id: string) {
   ]);
 }
 
-export function duplicatePage(id: string, title: string) {
-  return api.post<PagePublished>(`/api/v2/pages/${enc(id)}/duplicate`, { title }, { idempotencyKey: crypto.randomUUID() });
+export function duplicatePage(id: string, title: string, idempotencyKey: string) {
+  return api.post<PagePublished>(`/api/v2/pages/${enc(id)}/duplicate`, { title }, { idempotencyKey });
 }
 
 export function changePage(id: string, change: { archived: boolean } | { audience: AccessAudience | null }) {

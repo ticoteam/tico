@@ -59,30 +59,30 @@ function PagesList({ filters }: { filters: PageFilters }) {
         className="lib"
         search={!filters.archived && <Find label="Search pages" value={filters.q} onFind={(q) => update({ q })} />}
         actions={
-          <Menu trigger={<IconButton icon="filter" label="Filter pages" on={chips.length > 0} />}>
+          <Menu trigger={<IconButton icon="filter" label="Filter pages" on={chips.length > 0} data-phone />}>
             {writers.size > 0 && (
               <MenuSub label="Writer">
-                {[...writers].map(([writer, name]) => <MenuItem key={writer} label={name} on={writer === filters.writer} onSelect={() => update({ writer })} />)}
+                {[...writers].map(([writer, name]) => <MenuItem key={writer} label={name} on={writer === filters.writer} onSelect={() => update({ writer: writer === filters.writer ? undefined : writer })} />)}
               </MenuSub>
             )}
             <MenuSub label="Linked to">
-              {[...links].map(([target, name]) => <MenuItem key={target} label={name} on={target === filters.linked} onSelect={() => update({ linked: target })} />)}
+              {[...links].map(([target, name]) => <MenuItem key={target} label={name} on={target === filters.linked} onSelect={() => update({ linked: target === filters.linked ? undefined : target })} />)}
               <MenuItem label="Enter a link target" onSelect={() => setLinked(true)} />
             </MenuSub>
             <MenuSub label="Kind">
-              {pageKinds.map((kind) => <MenuItem key={kind} label={KIND[kind]} on={filters.kind === kind} onSelect={() => update({ kind })} />)}
+              {pageKinds.map((kind) => <MenuItem key={kind} label={KIND[kind]} on={filters.kind === kind} onSelect={() => update({ kind: filters.kind === kind ? undefined : kind })} />)}
             </MenuSub>
             <MenuItem label="Stale" on={filters.stale} onSelect={() => update({ stale: !filters.stale || undefined })} />
             {tags.length > 0 && (
               <MenuSub label="Tag">
-                {tags.map((tag) => <MenuItem key={tag.id} label={tag.label || tag.key} on={filters.tag === tag.key} onSelect={() => update({ tag: tag.key })} />)}
+                {tags.map((tag) => <MenuItem key={tag.id} label={tag.label || tag.key} on={filters.tag === tag.key} onSelect={() => update({ tag: filters.tag === tag.key ? undefined : tag.key })} />)}
               </MenuSub>
             )}
           </Menu>
         }
         more={
           <Menu trigger={<IconButton icon="more" label="More" />}>
-            <MenuItem label="Templates" on={filters.tag === 'template'} onSelect={() => update({ tag: 'template', archived: undefined })} />
+            <MenuItem label="Templates" on={filters.tag === 'template'} onSelect={() => update({ tag: filters.tag === 'template' ? undefined : 'template', archived: undefined })} />
             <MenuItem label="Show archived" on={filters.archived} onSelect={() => update({ archived: !filters.archived || undefined, q: undefined })} />
           </Menu>
         }

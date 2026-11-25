@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { useState, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import type { AccessAudience, PageShown } from '@/api/schema';
 import { configQuery } from '@/data';
 import { agentsQuery, groupsQuery, peopleQuery, sidebarPinsQuery } from '@/features/team/routing';
@@ -28,6 +28,7 @@ export function PageActionDialog({ action, data, onClose, onLeave, onDuplicate }
   const { page } = data;
   const id = page.file_id;
   const [name, setName] = useState(`Copy of ${page.title}`.slice(0, 200));
+  const copyRequest = useRef<{ title: string; key: string } | null>(null);
   const [audience, setAudience] = useState<AccessAudience | null>(page.audience ?? null);
   const [place, setPlace] = useState<string | null>(null);
   const agents = useQuery({ ...agentsQuery, enabled: action === 'pin' });
@@ -54,7 +55,10 @@ export function PageActionDialog({ action, data, onClose, onLeave, onDuplicate }
         await onLeave();
       }
       if (action === 'duplicate') {
-        const answer = await duplicatePage(id, name.trim());
+        const title = name.trim();
+        const request = copyRequest.current?.title === title ? copyRequest.current : { title, key: crypto.randomUUID() };
+        copyRequest.current = request;
+        const answer = await duplicatePage(id, title, request.key);
         await onDuplicate(answer.page.file_id);
       }
       await refreshPages(id);

@@ -412,7 +412,7 @@ class Pages:
             with page_links.visible_filters(c, self.auth, who, linked, role, writer) as (sql, args):
                 found, nxt = scan(
                     c,
-                    "SELECT f.*,p.cadence,p.as_of,p.replaced_by_id,p.audience,p.archived AS page_archived,p.live "
+                    "SELECT f.*,p.cadence,p.as_of,p.replaced_by_id,p.audience,p.archived AS page_archived "
                     "FROM pages p JOIN bot_files f ON f.id=p.file_id",
                     [*where, *sql],
                     [*params, *args],
@@ -591,13 +591,13 @@ class Pages:
 
     def duplicate(self, request, fid, title=""):
         """Copy the source's current version in its own scope, keeping that version's provenance and audience."""
-        from . import file_details, file_library
+        from . import file_details, file_library, task_privacy
         from .auth import Identity
         from .blobs import register
         from .files import stored_version, version_refusal
 
         who = request.state.identity
-        if who.role not in ("owner", "human", "bot"):
+        if who.via == "assistant" or who.role not in ("owner", "human", "bot"):
             raise Problem("forbidden", "People and agents duplicate pages", 403)
 
         def work(c):
@@ -611,6 +611,14 @@ class Pages:
                 raise Problem("not_found", "Page not found", 404)
             if not page_links.may_write(c, self.auth, who, source):
                 raise Problem("forbidden", "Only page writers duplicate this page", 403)
+            bot = H.bot(c, source["bot_id"])
+            if not bot or bot["state"] == "archived":
+                raise Problem("conflict", "This page's agent is archived", 409)
+            if who.attempt_id and any(
+                H.task_private(c, H.task(c, task)) and source["scope"] != "task:" + task
+                for task in task_privacy.attempt_tasks(c, who.attempt_id)
+            ):
+                raise Problem("privacy", "Private task files stay on their task", 403)
             H._writer(c, who.actor, task_id=source["task_id"], attempt_id=who.attempt_id)
             # A separate blob row lets the source and the copy keep their own access, while storage shares the bytes.
             blob = register(
@@ -623,7 +631,8 @@ class Pages:
             )
             # Only the original author can carry forward the access they declared for this HTML.
             apps = getattr(self.app.state, "page_apps", None)
-            app = {"app": original["app"]} if apps is not None and original["actor"] == who.actor else {}
+            declared = original["app"] if "app" in original.keys() else None
+            app = {"app": declared} if apps is not None and declared and original["actor"] == who.actor else {}
             row, created, _ = self.files.add_version(
                 c,
                 bot=source["bot_id"],
@@ -662,14 +671,19 @@ class Pages:
             H.event(
                 c, who.actor, "file.publish", row["id"], {"bot": row["bot_id"], "version": 1, "size": original["size"]}
             )
-            page = self.rows(c, [row["id"]])[row["id"]]
-            return {
-                "page": self.view(c, who, row, self.page_of(page), {}, include_audience=True),
-                "unembedded": [],
-                "created": created,
-            }
+            return {"file_id": row["id"], "created": created}
 
-        return self.files.write(request, who, {"id": fid, "title": title}, work)
+        result = self.files.write(request, who, {"id": fid, "title": title}, work)
+        with self.store.read_transaction() as c:
+            copy_id = result["file_id"]
+            row = self.rows(c, [copy_id]).get(copy_id)
+            if not row or not self.files.visible(c, who, row, {}):
+                raise Problem("not_found", "Page not found", 404)
+            return {
+                "page": self.view(c, who, row, self.page_of(row), {}, include_audience=True),
+                "unembedded": [],
+                "created": result["created"],
+            }
 
     def change_link(self, request, fid, target, role, *, remove=False):
         who = request.state.identity

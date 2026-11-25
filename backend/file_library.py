@@ -487,6 +487,10 @@ class Library:
         them, newest first."""
         if who.role not in ("owner", "human", "bot"):
             raise Problem("forbidden", "People and bots search files", 403)
+        if page_kind or stale:
+            if kind and kind != "page":
+                raise Problem("validation", "Page kind and staleness filter pages", 422)
+            kind = "page"
         kind_sql, kind_args = kind_filter(kind)
         tokens = manual.query_words(q)
         if not tokens and not tag:
@@ -894,7 +898,12 @@ def loop(store, blobs, stop, interval=60):
             for _ in range(20):  # at most 2,000 files a minute
                 if stop.is_set() or not backfill(store, blobs):
                     break
-            live_after = backfill_live(store, blobs, live_after)
+            for _ in range(5):
+                if stop.is_set():
+                    break
+                live_after = backfill_live(store, blobs, live_after)
+                if not live_after:
+                    break
             drain(store, blobs)
         except Exception:
             LOG.warning("Library files pass failed; trying again", exc_info=True)

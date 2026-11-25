@@ -747,7 +747,7 @@ def pages_card(api, args):
        "limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Pages in this page, 1-50"},
        "cursor": _s("The page after this one: a page's next_cursor"),
        "linked": _s("Pages linked to this target in any role: task:<id>, bot:<id>, human:<slug>, "
-                    "goal:<id> or page:<id>"),
+                    "goal:<id>, page:<id> or entity:<id>"),
        "role": _s("Only pages linked with this role: writer, related, or a document name such as Spec"),
        "writer": _s("Only pages this actor wrote a version of: human:<slug> or bot:<id>"),
        "stale": {"type": "boolean", "description": "Only pages not updated within 1.5x their cadence"},
@@ -1296,7 +1296,7 @@ PAGE = (
     ),
     Command(
         "page list",
-        "pages you may read, newest first; --linked, --role, --writer and --stale narrow them",
+        "pages you may read, newest first; filter by link, role, writer, kind, staleness or tag",
         example="tico page list --linked task:T1 --role Spec",
     ),
     Command("page show", "one page's status, pins, links and writers", example="tico page show p1"),

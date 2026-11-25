@@ -11,7 +11,8 @@ from datetime import datetime, timedelta, timezone
 
 from backend import blobs as B, file_library, pages as P
 from backend.store import H, encode
-from backend.tests.helpers.api import get, headers, post  # noqa: F401  (fixtures)
+from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner  # noqa: F401  (fixtures)
+from backend.tests.helpers.company import bot
 from backend.tests.helpers.groups import send
 from backend.tests.helpers.files import publish, turn
 from backend.tests.helpers.pages import HTML, page, read
@@ -472,8 +473,6 @@ def test_page_library_filters_keep_archived_and_unreadable_pages_out(api):
 
 
 def test_duplicate_retains_task_scope_and_links_to_the_source(api):
-    from backend.tests.helpers.company import bot
-
     ops = bot(api, "ops")
     task = post(api, "tasks", {"owner": "ops", "title": "Private plan", "body": "Work", "private": True}, "ben-test")[
         "id"
@@ -503,3 +502,24 @@ def test_duplicate_retains_task_scope_and_links_to_the_source(api):
         target
         not in api.get("/api/v2/files/search", params={"q": "launch calendar"}, headers=headers("cara-test")).text
     )
+    archived = api.patch(f"/api/v2/pages/{target}", json={"archived": True}, headers=headers("ben-test"))
+    assert archived.status_code == 200, archived.text
+    retry = api.post(url, json=body, headers=once).json()["page"]
+    assert retry["file_id"] == target and retry["archived"] is True
+
+
+def test_a_private_task_run_cannot_duplicate_a_bot_wide_page(api):
+    ops = bot(api, "ops")
+    machine = runner(api)
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    source = api.post(
+        "/api/v2/pages", json={"name": "team.html", "text": "<p>Team plan</p>", "scope": "bot"}, headers=headers(ops)
+    )
+    assert source.status_code == 200, source.text
+    fid = source.json()["page"]["file_id"]
+    post(api, "tasks", {"owner": "ops", "title": "Private plan", "body": "Work", "private": True}, "ben-test")
+    attempt = claim(api, machine, "ops")
+    assert read(api, fid, attempt["token"]).status_code == 200
+    denied = api.post(f"/api/v2/pages/{fid}/duplicate", json={}, headers=headers(attempt["token"]))
+    assert denied.status_code == 403 and "Private task files stay on their task" in denied.text

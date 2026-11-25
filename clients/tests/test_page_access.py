@@ -77,4 +77,4 @@ def test_duplicate_passes_the_same_title_and_idempotency_to_the_page_api():
 
     parsed = hubcli.parser().parse_args(["page", "duplicate", "file-123", "--title", "New plan"])
     assert pages_duplicate(Api(), {**vars(parsed), "operation_id": "copy-once"})["page"]["file_id"] == "file-copy"
-    assert _access.AUDIENCE["tico_page_duplicate"] == _access.KINDS
+    assert _access.AUDIENCE["tico_page_duplicate"] == _access.PEOPLE + _access.BOTS
