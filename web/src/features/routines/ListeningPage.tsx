@@ -167,7 +167,7 @@ function WatchPage({ id, tab, match }: { id: string; tab?: 'sources'; match?: st
     tabs,
   };
   if (!w) {
-    return <RecordPage {...head} state={one.isPending ? 'loading' : 'fault'} onRetry={() => void one.refetch()} />;
+    return <RecordPage {...head} state={one.isPending ? 'loading' : 'fault'} reads={one.isError ? [one] : undefined} />;
   }
   const on = isOn(w);
   const found = matches.data ?? [];
@@ -175,7 +175,7 @@ function WatchPage({ id, tab, match }: { id: string; tab?: 'sources'; match?: st
     <RecordPage
       {...head}
       state={tab === 'sources' ? 'ready' : matches.isPending ? 'loading' : matches.isError ? 'fault' : found.length ? 'ready' : 'empty'}
-      onRetry={() => void matches.refetch()}
+      reads={[matches]}
       empty={{ title: 'No matches yet' }}
       actions={
         <>

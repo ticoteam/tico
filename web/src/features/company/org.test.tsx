@@ -155,7 +155,7 @@ describe('Org @s309', () => {
     ]);
   });
 
-  it('says so when there are no teams, and offers Try again when the groups fail', async () => {
+  it('says so when there are no teams, and offers Try again when the groups are refused', async () => {
     serve(nothing);
     queryClient.setQueryData(groupsQuery.queryKey, []);
     show();
@@ -163,9 +163,10 @@ describe('Org @s309', () => {
     cleanup();
     queryClient.clear();
     queryClient.setQueryData(['me'], person);
-    serve((url) => (url.includes('/api/v2/groups') ? { status: 500, body: { detail: 'boom' } } : nothing()));
+    serve((url) => (url.includes('/api/v2/groups') ? { status: 409, body: { detail: 'boom' } } : nothing()));
     show();
-    expect(await screen.findByRole('button', { name: 'Try again' })).toBeTruthy();
+    expect(await screen.findByText(/didn't load · request refused$/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
   });
 });
 

@@ -1,6 +1,7 @@
 import { useRef, useState, type CSSProperties } from 'react';
 import { Composer, LiveRow, Message, type ChatMessage, type LiveRun } from '@/conversation';
 import { Avatar, Faces } from '@/kit/Avatar';
+import { ApiError } from '@/api/client';
 import { Button } from '@/kit/Button';
 import { Sparkline } from '@/kit/Chart';
 import { Checkbox } from '@/kit/Checkbox';
@@ -26,11 +27,14 @@ import { toast } from '@/kit/Toast';
 import { ValueButton } from '@/kit/ValueButton';
 import { fmtMoney } from '@/lib';
 import { flight, useMotionLevel, wash } from '@/motion';
-import { FiguresStrip, FilterRow, PageMore, Section } from '@/pagekinds';
+import { FiguresStrip, FilterRow, PageMore, ReadFault, Section } from '@/pagekinds';
 import { Dot } from '@/tico/dot';
 import { Area, Face, MATES, Named, Sp, Specimens, Tok, ago } from './parts';
 
 const noop = () => {};
+/** A read that failed: Tico restarting (read again by itself), and one refused (Try again). */
+const RESTARTING = [{ error: new ApiError(503, 'starting', 'Tico is restarting', true), refetch: noop }];
+const REFUSED = [{ error: new ApiError(409, 'conflict', 'Refused'), refetch: noop }];
 
 /* ============================== Color ============================== */
 
@@ -812,11 +816,10 @@ export function PagesArea() {
             <Empty title="Nothing in Review" />
           </Sp>
           <Sp name="Did not load" sheet>
-            <Empty icon="alert" title="Tasks did not load" text="Check your connection and try again.">
-              <Button variant="primary" onClick={noop}>
-                Try again
-              </Button>
-            </Empty>
+            <ReadFault what="Tasks" reads={RESTARTING} />
+          </Sp>
+          <Sp name="Refused" sheet>
+            <ReadFault what="Tasks" reads={REFUSED} variant="primary" />
           </Sp>
           <Sp name="No access">
             <Empty icon="lock" title="You don't have access to this page" text="An owner can share it with you." />

@@ -5,13 +5,13 @@ import { useAction } from '@/actions';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
-import { Empty } from '@/kit/Empty';
 import { Field, Search } from '@/kit/Field';
 import { Icon, type IconName } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem } from '@/kit/Menu';
 import { Select } from '@/kit/Select';
 import { SkeletonRows } from '@/kit/Skeleton';
+import { ReadFault } from '@/pagekinds';
 import type { AddStep } from './actions';
 import { seatHref } from './model';
 import { cloudAgentsQuery, computersQuery, groupsQuery, isOpenRequest, seatsQuery, templatesQuery } from './queries';
@@ -241,7 +241,7 @@ type Asking = { id: string; name: string };
     support connects it. A requested one opens its seat's Connecting page. */
 function CloudAgents({ team, onTeam, onRequest }: { team: string; onTeam: (team: string) => void; onRequest: (agent: Asking) => void }) {
   const navigate = useNavigate();
-  const { data: agents, isError } = useQuery(cloudAgentsQuery);
+  const { data: agents, isError, error, refetch } = useQuery(cloudAgentsQuery);
   const { data: seats } = useQuery(seatsQuery);
   const add = useAction('agents.addCloud');
   const cancel = useAction('agents.cancelCloudRequest');
@@ -260,7 +260,7 @@ function CloudAgents({ team, onTeam, onRequest }: { team: string; onTeam: (team:
     <>
       <TeamPick value={team} onValueChange={onTeam} />
       {isError ? (
-        <Empty icon="alert" title="Cloud agents did not load" />
+        <ReadFault what="Cloud agents" reads={[{ error, refetch }]} />
       ) : !agents ? (
         <SkeletonRows rows={8} label="Loading cloud agents" />
       ) : (

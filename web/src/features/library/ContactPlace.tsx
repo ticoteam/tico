@@ -1,10 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
-import { Empty } from '@/kit/Empty';
 import { Icon } from '@/kit/Icon';
 import { LabelValue } from '@/kit/LabelValue';
 import { Link } from '@/kit/Link';
 import { Pill } from '@/kit/Pill';
-import { Section } from '@/pagekinds';
+import { ReadFault, Section } from '@/pagekinds';
 import { contactRulesQuery, usQuery, type Card, type CardLink, type PlaceInfo, type Us } from './queries';
 
 /* A contact's Rules (the mock's first section; old directory-entity.ts rules card), and what a place adds: its kind,
@@ -20,7 +19,7 @@ export function ContactRules({ id }: { id: string }) {
   const rows = rules.data ?? [];
   return (
     <Section name="Rules" count={rules.data ? rows.length : undefined}>
-      {rules.isError && <Empty title="Rules did not load" icon="alert" />}
+      {rules.isError && <ReadFault what="Rules" reads={[rules]} />}
       {rules.data && !rows.length && <p className="rec-none t-small">None apply</p>}
       {rows.map((r, i) => {
         const why = [(r.path ?? []).join(' → '), r.cite ?? '', r.reason ?? ''].filter(Boolean).join(' · ');

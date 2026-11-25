@@ -86,7 +86,8 @@ describe("Tico's sheet when its read fails", () => {
     startLive();
     await show(() => <TicoSheet />, true);
     expect(await screen.findByText("Tico didn't load · server restarting")).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    // it is read again by itself: no Try again
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
     expect(warn).toHaveBeenCalledTimes(1);
     // the stream is back before the server is: the read goes out again with no click, fails again, and is the same
     // fault (not logged again)
@@ -109,6 +110,22 @@ describe("Tico's sheet when its read fails", () => {
     expect(await screen.findByRole('img', { name: 'Tico has no chat yet' })).toBeTruthy();
     expect(screen.queryByText(/didn't load/)).toBeNull();
     expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('a stopped company is not read again by itself: Try again reads it', async () => {
+    let asked = 0;
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (String(url) !== '/api/v2/assistant') return json(404, { error: { code: 'not_found', detail: 'No.' } });
+      asked++;
+      return json(503, { error: { code: 'stopped', detail: 'Stopped.' } });
+    });
+    vi.stubGlobal('EventSource', FakeEventSource);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await show(() => <TicoSheet />, true);
+    expect(await screen.findByText("Tico didn't load · company stopped")).toBeTruthy();
+    const before = asked;
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(asked).toBeGreaterThan(before));
   });
 
   it('reads the power again with the room, so a Tico that is off shows Turn on, not an empty chat', async () => {

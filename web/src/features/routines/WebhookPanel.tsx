@@ -12,7 +12,7 @@ import { Row } from '@/kit/Row';
 import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
 import { fmtDate } from '@/lib';
-import { SidePanel } from '@/pagekinds';
+import { faultHides, ReadFault, SidePanel } from '@/pagekinds';
 import { PanelRead, press, pressOut, RemoveItem, useConfirmRemove, Verb, Word } from './parts';
 import { deliveriesQuery, hooksQuery, payloadQuery } from './queries';
 import type { Delivery, Hook } from './types';
@@ -239,12 +239,17 @@ function Signing({ hook, onSecret, onClose }: { hook: Hook; onSecret: (s: string
 function Deliveries({ hook }: { hook: Hook }) {
   const id = hook.id;
   const q = useQuery(deliveriesQuery(id));
-  const list = q.data ?? [];
+  // a refusal hides calls read before too (faultHides)
+  const list = (faultHides(q) ? undefined : q.data) ?? [];
   const [open, setOpen] = useState<string | null>(null);
   return (
     <section className="rail-sec">
       <h3>Recent calls</h3>
-      {q.isError && <Word>Calls did not load</Word>}
+      {q.isError && (
+        <Word>
+          <ReadFault what="Calls" reads={[q]} inline />
+        </Word>
+      )}
       {list.map((d) => (
         <Row key={d.delivery} className="prun" title={deliveryWords(d)}>
           <span className="run-at">{fmtDate(d.received_at)}</span>
@@ -319,7 +324,7 @@ const bytesWords = (n: number) => (n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${Ma
 /** One kept call as it came: its headers (secrets hidden by the server) and its body, JSON laid out. */
 function PayloadDialog({ hook, delivery, onClose }: { hook: string; delivery: string; onClose: () => void }) {
   const q = useQuery(payloadQuery(hook, delivery));
-  const d = q.data;
+  const d = faultHides(q) ? undefined : q.data;
   let body = d?.body ?? '';
   try {
     body = JSON.stringify(JSON.parse(body), null, 2);
@@ -342,7 +347,11 @@ function PayloadDialog({ hook, delivery, onClose }: { hook: string; delivery: st
         </Button>
       }
     >
-      {q.isError && <Word>The call did not load</Word>}
+      {q.isError && (
+        <Word>
+          <ReadFault what="The call" reads={[q]} inline />
+        </Word>
+      )}
       {d &&
         (d.expired ? (
           <p className="row-sub">No longer kept</p>

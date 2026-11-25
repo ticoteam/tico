@@ -760,6 +760,23 @@ describe('Settings › Providers', () => {
     expect(sent).toEqual([{ url: exitPath, method: 'PUT', body: { runner_id: studio.id } }]);
   });
 
+  it('the exit picker says why its computers did not load, with Try again for a refusal', async () => {
+    queryClient.setQueryData(['me'], { id: 'human:p1', role: 'member' });
+    const exitPath = '/api/v2/model-subscriptions/plan-exits/p1';
+    const exit = { person_id: 'p1', runner_id: 'r1', runner_label: 'Office Mac', generation: 1, can_change: true };
+    queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [], subscriptions: [plan], plan_exits: [exit] });
+    let refuse = true;
+    serve((url) => (url === exitPath ? (refuse ? { status: 403, body: { error: { code: 'forbidden', detail: 'No.' } } } : ok({ ...exit, computers: [{ id: 'r1', label: 'Office Mac' }], next_after: null })) : undefined));
+    show(<SettingsPage section="providers" />, '/settings/providers');
+    const mine = within(await screen.findByRole('region', { name: 'Your pool' }));
+    fireEvent.click(mine.getByRole('button', { name: 'Change' }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'Change exit computer' }));
+    expect(await dialog.findByText("Computers didn't load · no access")).toBeTruthy();
+    refuse = false;
+    fireEvent.click(dialog.getByRole('button', { name: 'Try again' }));
+    expect(await dialog.findByRole('combobox', { name: 'Computer' })).toBeTruthy();
+  });
+
   it('lets members edit their own plan limit from the menu and read other plans’ limits', async () => {
     queryClient.setQueryData(['me'], { id: 'human:p1', role: 'member' });
     let mine = { ...plan, max_live_turns: 20 };

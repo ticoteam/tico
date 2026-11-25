@@ -17,7 +17,7 @@ import { Select } from '@/kit/Select';
 import { SkeletonRows } from '@/kit/Skeleton';
 import { Tabs } from '@/kit/Tabs';
 import { toast } from '@/kit/Toast';
-import { SidePanel } from '@/pagekinds';
+import { ReadFault, SidePanel } from '@/pagekinds';
 import { EventDialog } from './EventDialog';
 import { clock, dl, isInstant, isLive, joinOf, kindWords, lengthWords, minIn, minutes, parseDay, running } from './model';
 import { joinNow, LiveMark, press, refsOf, useNameOf } from './parts';
@@ -253,9 +253,7 @@ export function MeetingPanel({ id, onClose }: { id: string; onClose: () => void 
   if (m.isError)
     return (
       <SidePanel title="Meeting" target={`meeting:${id}`} onClose={onClose}>
-        <Empty title="Meeting did not load" icon="alert">
-          <Button onClick={() => m.refetch()}>Try again</Button>
-        </Empty>
+        <ReadFault what="Meeting" reads={[m]} />
       </SidePanel>
     );
   const mm = m.data as MeetingMore | undefined;

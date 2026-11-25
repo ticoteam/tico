@@ -47,6 +47,7 @@ export function ListAndItem({
   className,
   state = 'ready',
   empty,
+  reads,
   onRetry,
   noAccess,
   ...head
@@ -64,7 +65,7 @@ export function ListAndItem({
   return (
     <main className={cls} aria-label={head.title}>
       <section className="tl" aria-label={listLabel ?? head.title}>
-        <FillContext value={headFills({ state, empty, onRetry })}>
+        <FillContext value={headFills({ state, empty, reads, onRetry })}>
           <PageHead {...head} />
           {search}
           {tabs && tabs.length > 0 && <PageTabs tabs={tabs} label={`${head.title} pages`} after={tabsAfter} />}
@@ -73,6 +74,7 @@ export function ListAndItem({
           state={state}
           title={head.title}
           empty={empty}
+          reads={reads}
           onRetry={onRetry}
           skeleton={
             <div className="tl-list" aria-hidden="true">

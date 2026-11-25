@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider } from '@tanstack/react-router';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClient } from '@/data';
@@ -9,6 +9,7 @@ import {
   marketBriefingQuery,
   marketCountQuery,
   marketSetupQuery,
+  marketNoteQuery,
   marketSpendQuery,
   valueChainQuery,
   type ListeningStats,
@@ -184,7 +185,7 @@ describe('Market @s302 @s319 @s320 @s324 @s325 @s357 @s360 @s361', () => {
   it('shows the fault when Market does not load', async () => {
     serve((url) => (url.includes('/api/v2/market/') ? { status: 500, body: { detail: 'boom' } } : nothing()));
     show(<StrategyPage tab="market" />, at());
-    expect(await screen.findByText('Strategy did not load')).toBeTruthy();
+    expect(await screen.findByText("Strategy didn't load · server error")).toBeTruthy();
   });
 
   it('opens a segment: its size, estimates and organizations; the owner accepts an estimate', async () => {
@@ -265,11 +266,24 @@ describe('Market @s302 @s319 @s320 @s324 @s325 @s357 @s360 @s361', () => {
     expect(within(panel).getByText('They lead on price.')).toBeTruthy();
   });
 
+  it('a note on screen whose read is then refused hides and says why', async () => {
+    let refuse = false;
+    const note = { entity: { id: 'e1', name: 'Groomly', type: 'company', summary: 'Mobile grooming vans.' }, edges: {}, evidence: [], neighbors: [] };
+    serve((url) => (url.includes('/market/entities/e1') ? (refuse ? { status: 403, body: { error: { code: 'forbidden', detail: 'No.' } } } : { status: 200, body: note }) : nothing()));
+    market();
+    show(<StrategyPage tab="market" search={{ panel: 'player:e1' }} />, at('player:e1'));
+    expect(await screen.findByText('Mobile grooming vans.')).toBeTruthy();
+    refuse = true;
+    await act(() => queryClient.refetchQueries({ queryKey: marketNoteQuery('e1').queryKey }));
+    expect(await screen.findByText("The note didn't load · no access")).toBeTruthy();
+    expect(screen.queryByText('Mobile grooming vans.')).toBeNull();
+  });
+
   it('says so when a note does not load', async () => {
     serve(nothing);
     market();
     show(<StrategyPage tab="market" search={{ panel: 'player:e9' }} />, at('player:e9'));
-    expect(await screen.findByText('The note did not load')).toBeTruthy();
+    expect(await screen.findByText("The note didn't load · not found")).toBeTruthy();
   });
 });
 

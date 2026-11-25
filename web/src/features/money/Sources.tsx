@@ -174,7 +174,7 @@ export function SourcesPage({ failure, onDismiss, search }: { failure: string | 
     <List
       {...head}
       state={readState(q, q.data !== undefined && rows.length === 0)}
-      onRetry={() => void q.refetch()}
+      reads={[q]}
       empty={{ title: 'No source connected' }}
       actions={
         <>

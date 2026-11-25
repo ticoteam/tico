@@ -12,6 +12,7 @@ import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { Menu, MenuItem } from '@/kit/Menu';
+import { faultHides } from '@/pagekinds';
 import { toast } from '@/kit/Toast';
 import { Face, More, press } from './parts';
 import { addressGrantsQuery, lettersInQuery, lettersQuery, olderLettersQuery, postalAddressesQuery, type LetterIn, type PostalAddress } from './queries';
@@ -212,7 +213,7 @@ function useAddressReaders(scope: string, on: boolean) {
   const q = useQuery({ ...addressGrantsQuery(scope), enabled: on });
   const actors = useActors();
   if (!on) return { who: undefined, add: null };
-  if (q.isError && !q.data) return { who: <ReadFault name="Who may use it" error={q.error} onRetry={() => void q.refetch()} />, add: null };
+  if (q.isError && !q.data) return { who: <ReadFault name="Who may use it" reads={[q]} />, add: null };
   const subject = (type: string, who: string) => `${type === 'bot' ? 'bot' : 'human'}:${who}`;
   const short = (actor: string) => actor.slice(actor.indexOf(':') + 1);
   const grants = q.data ?? [];
@@ -271,10 +272,12 @@ function LettersOut({ letters }: { letters: LetterOut[] }) {
 
 function OlderLetters({ before, onDetails }: { before: string; onDetails: (l: LetterOutContents) => void }) {
   const q = useInfiniteQuery(olderLettersQuery(before));
+  // a later page that failed and may pass keeps the letters and Load more beside why; a refusal hides them (faultHides)
+  if (faultHides(q)) return <ReadFault name="Older letters" reads={[q]} />;
   return (
     <>
       {q.data?.pages.flatMap((p) => p.items).map((l) => <LetterRow key={l.id} l={l} onDetails={onDetails} />)}
-      {q.isError && <ReadFault name="Older letters" error={q.error} onRetry={() => void q.refetch()} />}
+      {q.isError && <ReadFault name="Older letters" reads={[q]} />}
       {q.hasNextPage && !q.isFetchingNextPage && <More onClick={() => q.fetchNextPage()}>Load more</More>}
     </>
   );

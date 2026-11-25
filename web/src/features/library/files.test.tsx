@@ -6,10 +6,11 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { run } from '@/actions';
 // eslint-disable-next-line no-restricted-imports -- the test lends its router to dispatch, as the shell's ActionsRoot does
 import { bind } from '@/actions/bind';
+import { ApiError } from '@/api/client';
 import { queryClient } from '@/data';
 import { FilePreview, FileViewerHost } from './FileViewer';
 import { FilesPage } from './FilesPage';
-import { fileQuery, filesQuery, fileVersionsQuery } from './queries';
+import { fileQuery, filesQuery, fileVersionsQuery, heldFileQuery } from './queries';
 import { viewing } from './viewing';
 
 /* Files: the list, one file and its versions, and a file opened from a task or a chat. What a person sees and presses,
@@ -124,6 +125,16 @@ describe('a file', () => {
     at('/tasks/7', <FilePreview file="f1" version={1} />);
     expect(await screen.findByText('first words')).toBeTruthy();
     expect(sent.map((x) => x.url)).toEqual(['/api/v2/files/f1/versions/1']);
+  });
+
+  it('an older version whose versions read failed says why', async () => {
+    serve((url) =>
+      url === '/api/v2/files/f1/versions' ? new Response(JSON.stringify({ error: { code: 'forbidden', detail: 'No.' } }), { status: 403, headers: { 'Content-Type': 'application/json' } }) : {},
+    );
+    queryClient.setQueryData(fileQuery('f1').queryKey, file() as never);
+    at('/tasks/7', <FilePreview file="f1" version={1} />);
+    expect(await screen.findByRole('heading', { name: "This file didn't load · no access" })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
   });
 
   it('uses the historical version’s file type instead of the latest one', async () => {
@@ -241,13 +252,14 @@ describe('Files', () => {
     let searches = 0;
     const sent = serve((url) => {
       if (url === '/api/v2/files/search?q=notes&limit=50&kind=document') {
-        if (++searches === 1) return new Response(null, { status: 500 });
+        if (++searches === 1) return new Response(null, { status: 409 });
         return { results: [{ id: 'f1', title: 'Sample notes' }] };
       }
       return {};
     });
     at('/library/files?kind=document&q=notes', <FilesPage search={{ kind: 'document', q: 'notes' }} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+    expect(await screen.findByRole('heading', { name: "The search didn't load · request refused" })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(await screen.findByRole('link', { name: 'Sample notes' })).toBeTruthy();
     expect(searches).toBe(2);
     expect(sent.some(({ url }) => url.startsWith('/api/v2/files?'))).toBe(false);
@@ -346,5 +358,24 @@ describe('a file from a task or a chat', () => {
     expect(router.state.location.pathname).toBe('/tasks');
     await act(async () => void (await run('files.view', { file: null }, { via: 'click' })));
     await waitFor(() => expect(screen.queryByAltText('Shelf photo')).toBeNull());
+  });
+});
+
+describe('bytes sent only as a download, that did not read', () => {
+  const read = () => queryClient.fetchQuery({ ...heldFileQuery('/api/v2/mail/m1/attachments/a1', 'application/pdf', false), retry: false });
+
+  it('of a stopped company is stopped, not a server error read again by itself', async () => {
+    vi.stubGlobal('fetch', async () => new Response('This Tico company is stopped. Start it from Tico HQ.', { status: 503 }));
+    const err = await read().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).code).toBe('stopped');
+  });
+
+  it('with no answer is no answer, read again by itself', async () => {
+    vi.stubGlobal('fetch', async () => {
+      throw new TypeError('Failed to fetch');
+    });
+    const err = await read().catch((e: unknown) => e);
+    expect([(err as ApiError).status, (err as ApiError).code]).toEqual([0, 'network']);
   });
 });

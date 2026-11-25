@@ -12,7 +12,7 @@ import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem } from '@/kit/Menu';
 import { Popover } from '@/kit/Popover';
 import { toast } from '@/kit/Toast';
-import { PageMore } from '@/pagekinds';
+import { PageMore, ReadFault } from '@/pagekinds';
 import { CallBars, Dot, dot } from '@/tico/dot';
 import { BarMore, ShareControl, Shared } from './CallMore';
 import { CallSide, Transcript } from './CallSide';
@@ -91,9 +91,7 @@ export function CallPage({ room }: CallPageProps) {
         ) : status === 403 ? (
           <Empty title="You don't have access to this call" icon="lock" />
         ) : (
-          <Empty title="Call did not load" icon="alert">
-            <Button onClick={() => call.refetch()}>Try again</Button>
-          </Empty>
+          <ReadFault what="Call" reads={[call]} />
         )}
       </main>
     );

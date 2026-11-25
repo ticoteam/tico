@@ -195,7 +195,7 @@ export function PipelinePage({ pipeline, fresh }: { pipeline: string; fresh: boo
       state={state}
       empty={{ title: 'No such pipeline' }}
       noAccess={{ text: 'Only the pipeline’s owner can change it.' }}
-      onRetry={() => void rec.refetch()}
+      reads={[rec]}
       actions={
         <>
           {held?.move && keepId && p && (

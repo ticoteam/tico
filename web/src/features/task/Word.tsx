@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { Empty } from '@/kit/Empty';
+import { ReadFault } from '@/pagekinds';
 import { wordQuery, type WordRun } from './queries';
 
 /* A Word file drawn readable in the browser (the owner, Nov 19: "so he can see them, with Download beside"): its
@@ -30,7 +30,7 @@ export function WordPages({ url, name }: { url: string; name: string }) {
 /** The sheet alone, for a desk that holds more (an email's letter, under its message). */
 export function WordSheet({ url, name }: { url: string; name: string }) {
   const q = useQuery(wordQuery(url));
-  if (q.isError) return <Empty icon="alert" title={`${name} did not load`} />;
+  if (q.isError) return <ReadFault what={name} reads={[q]} />;
   if (!q.data) return <div className="tv-bones" role="status" aria-busy="true" aria-label="Loading the page" />;
   return (
     <article className="ap-paper ap-sheet" aria-label={name}>

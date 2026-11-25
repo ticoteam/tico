@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import type { FailedRead } from '@/live';
 
 /** One tab of the page's tab row. Tabs are links: the address decides which one is on. */
 export interface PageTab {
@@ -65,7 +66,11 @@ export interface StateProps {
   state?: PageState;
   /** Empty: its one line ("Nothing in Review") and its one action. */
   empty?: { title: string; action?: ReactNode };
-  /** Fault: "<title> did not load" with Try again, which calls this. */
+  /** Fault: the reads behind it (a query's own result fits). The line says why the first that failed did ("<title>
+      didn't load · server restarting"); they are read again by themselves when that could help, and Try again shows
+      only when it could not. */
+  reads?: readonly FailedRead[];
+  /** Fault: Try again calls this (instead of reading `reads` again). Without `reads`: "<title> did not load". */
   onRetry?: () => void;
   /** No access: who can share it ("Maya Okafor can share it with you.") and the ways out. */
   noAccess?: { text?: string; actions?: ReactNode };

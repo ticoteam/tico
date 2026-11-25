@@ -188,6 +188,18 @@ describe('List’s ⋯', () => {
     expect(await screen.findByRole('button', { name: 'Connect' })).toBeTruthy();
   });
 
+  it('a source list that did not load says why in its row, with Try again for a refusal', async () => {
+    queryClient.setQueryData(granolaQuery.queryKey, granola());
+    status = (_, url) => (url === '/api/v2/meetings/sources' ? 403 : 200);
+    answer = (_, url) => (url === '/api/v2/meetings/sources' ? { error: { code: 'forbidden', detail: 'No.' } } : { importers: [], computers: [] });
+    show();
+    await pick(/^Meeting sources/);
+    expect(await screen.findByText("Other sources didn't load · no access")).toBeTruthy();
+    const asked = gets.filter((u) => u === '/api/v2/meetings/sources').length;
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(gets.filter((u) => u === '/api/v2/meetings/sources').length).toBe(asked + 1));
+  });
+
   it('an owner turns an importer on with a computer; it shows at once and goes back when refused', async () => {
     queryClient.setQueryData(granolaQuery.queryKey, granola());
     queryClient.setQueryData(sourcesQuery.queryKey, { sources: [{ id: 'import', name: 'Import', status: 'available', last_succeeded_at: null }] });

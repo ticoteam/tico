@@ -37,7 +37,7 @@ export function SeatPage({ seat: id }: { seat: string }) {
         title="Cloud agent"
         state={gone ? 'empty' : read.isError ? 'fault' : 'loading'}
         empty={{ title: 'No such request' }}
-        onRetry={() => void read.refetch()}
+        reads={[read]}
       />
     );
   }

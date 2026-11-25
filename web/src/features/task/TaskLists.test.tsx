@@ -81,15 +81,16 @@ describe("a pipeline's list", () => {
     await waitFor(() => expect(titles()).toEqual(['Rate fallback', 'Bulk edit stock']));
     expect(nextInList('t7', 'eng')).toBe('8');
   });
-  it('sorted, a failed read says so with Try again, though the open task names its stage', async () => {
+  it('sorted, a failed read says why, though the open task names its stage', async () => {
     changeBoardSearch('eng', { sort: 'oldest' });
     vi.stubGlobal('fetch', async (url: string) => {
       calls.push(String(url));
       return new Response('{}', { status: 500, headers: { 'Content-Type': 'application/json' } });
     });
     show({ list: 'eng', open: '7', current: cur(row(7, 'Bulk edit stock', 'review')) });
-    expect(await screen.findByText('These tasks did not load')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    expect(await screen.findByText("These tasks didn't load · server error")).toBeTruthy();
+    // a server error is read again by itself once the stream is back
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });
 });
 
@@ -144,7 +145,23 @@ describe("a teammate's list", () => {
     expect(nextInList('t12', 'bot:qa')).toBe('7');
   });
 
-  it('one the roster does not know is Needs you, never every task, and their list is never read', async () => {
+  it('rows on screen whose read is then refused hide and say why', async () => {
+    let refuse = false;
+    tasks = () => ({ tasks: [row(7, 'Bulk edit stock', 'qa')] });
+    vi.stubGlobal('fetch', async (url: string) => {
+      const u = new URL(String(url), 'http://x');
+      if (refuse && u.searchParams.get('owner')) return Response.json({ error: { code: 'forbidden', detail: 'No.' } }, { status: 403 });
+      return Response.json(u.pathname === '/api/v2/tasks' ? tasks(u.searchParams) : {});
+    });
+    show({ list: 'bot:qa', open: '12' });
+    await waitFor(() => expect(titles()).toEqual(['Bulk edit stock']));
+    refuse = true;
+    await act(() => queryClient.refetchQueries({ predicate: (q) => JSON.stringify(q.queryKey).includes('bot:qa') }));
+    expect(await screen.findByText("These tasks didn't load · no access")).toBeTruthy();
+    expect(titles()).toEqual([]);
+  });
+
+    it('one the roster does not know is Needs you, never every task, and their list is never read', async () => {
     queryClient.setQueryData(['flow'], { count: 0, items: [] });
     show({ list: 'bot:gone', open: '12' });
     await waitFor(() => expect(head().textContent).toBe('Needs you'));

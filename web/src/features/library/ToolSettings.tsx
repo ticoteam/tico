@@ -413,7 +413,7 @@ export function NumberRequests({ always = false }: { always?: boolean }) {
   const q = useQuery(numberRequestsQuery);
   const [now] = useState(() => Date.now());
   const live = (q.data ?? []).filter((r) => LIVE.includes(r.state));
-  if (q.isError && !q.data) return <ReadFault name="Requests" error={q.error} onRetry={() => void q.refetch()} />;
+  if (q.isError && !q.data) return <ReadFault name="Requests" reads={[q]} />;
   if (!live.length) return always && q.data ? <Empty title="No requests" /> : null;
   return live.map((r) => {
     const w = requestWord(r, now);
@@ -439,7 +439,7 @@ export const scopeOf = (a: { assignment_id?: string | null; id?: string | null; 
 /** Every address and open order, each a link to its own page (`address:<id>`). A failed read (the Gateway off) says so. */
 export function PostalAddresses() {
   const q = useQuery({ ...postalAddressesQuery, retry: false });
-  if (q.isError && !q.data) return <ReadFault name="Addresses" error={q.error} onRetry={() => void q.refetch()} />;
+  if (q.isError && !q.data) return <ReadFault name="Addresses" reads={[q]} />;
   const rows = [
     ...(q.data?.addresses ?? []).map((a) => ({
       id: String(a.assignment_id || a.id || a.address || `${a.state}-${a.kind}`),
@@ -488,7 +488,7 @@ export function useLetters() {
   const legalOptions = [{ value: '', label: 'Owner' }, ...agents.map((a) => ({ value: short(a.id), label: a.name }))];
   const facts = (
     <>
-      {settings.isError && !l && <ReadFault name="Sending letters" error={settings.error} onRetry={() => void settings.refetch()} />}
+      {settings.isError && !l && <ReadFault name="Sending letters" reads={[settings]} />}
       <Facts>
         {l && <LabelValue label="Sending letters">{lettersState(l)}</LabelValue>}
         {l && <LabelValue label="Agents send">{wordOf(MODES, l.mode)}</LabelValue>}

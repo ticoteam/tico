@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ApiError } from '@/api/client';
 import { Button } from '@/kit/Button';
-import { Empty } from '@/kit/Empty';
 import { CenteredCard } from '@/pagekinds';
 import type { StartScreenKind } from './queries';
 import './start.css';
@@ -139,16 +138,5 @@ function Down({ retry, busy }: { retry: () => void; busy: boolean }) {
       }
       foot={<Support />}
     />
-  );
-}
-
-/** One part of a page that did not load; the rest of the page, the menu and Tico still work. */
-export function PartFault({ name, onRetry }: { name: string; onRetry: () => void }) {
-  return (
-    <Empty icon="alert" title={`${name} did not load`} text="Check your connection and try again. The menu and Tico still work.">
-      <Button variant="primary" onClick={onRetry}>
-        Try again
-      </Button>
-    </Empty>
   );
 }

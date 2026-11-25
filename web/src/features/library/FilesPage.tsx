@@ -14,7 +14,7 @@ import { Menu, MenuItem, MenuSub } from '@/kit/Menu';
 import { useCards } from '@/kit/Popover';
 import { Row } from '@/kit/Row';
 import { tagsQuery } from '@/features/tasks/exports';
-import { Document, FilterRow, List, Section } from '@/pagekinds';
+import { Document, FilterRow, List, ReadFault, Section } from '@/pagekinds';
 import { SectionHead } from '@/kit/SectionHead';
 import { VirtualList } from '@/kit/VirtualList';
 import { FileGet, linkOf, posterOf, Preview } from './FileViewer';
@@ -168,7 +168,7 @@ function FilesList({ search }: { search: FilesSearch }) {
           )
         }
         state={searching || rows.length ? 'ready' : files.isPending ? 'loading' : files.isError ? 'fault' : kind || tag ? 'ready' : 'empty'}
-        onRetry={() => void files.refetch()}
+        reads={[files]}
         empty={{ title: 'No files yet', action: <Button variant="primary" onClick={() => input.current?.click()}>Add file</Button> }}
         sections={
           searching ? (
@@ -186,9 +186,7 @@ function FilesList({ search }: { search: FilesSearch }) {
               ))}
               {found.data && !found.data.results.length && <Empty title="Nothing matches" />}
               {found.isLoadingError && (
-                <Empty title="The search did not load" icon="alert">
-                  <Button onClick={() => found.refetch()}>Try again</Button>
-                </Empty>
+                <ReadFault what="The search" reads={[found]} />
               )}
             </Section>
           ) : rows.length ? (
@@ -295,7 +293,7 @@ function FilePage({ id, search }: { id: string; search: FilesSearch }) {
       path={`/library/files?file=${id}`}
       className="lib"
       state={unavailable ? (versions.isPending ? 'loading' : 'fault') : 'ready'}
-      onRetry={versions.isError ? () => void versions.refetch() : undefined}
+      reads={versions.isError ? [versions] : undefined}
       after={
         cards && (versions.data?.length ?? 0) > 1 && (
           <Menu

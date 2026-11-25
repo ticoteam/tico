@@ -640,12 +640,53 @@ describe('one open task', () => {
     expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
   });
 
-  it('offers Try again when the read fails', async () => {
+  it('says why when the read fails; a server error is read again by itself, so no Try again', async () => {
     serve(() => ({ status: 500, body: { error: { code: 'oops', detail: 'down' } } }));
     show(<TaskPage task="12" />);
     // The read is tried once more (after a second) before the fault shows.
-    expect(await screen.findByRole('heading', { name: 'Task did not load' }, { timeout: 4000 })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: "Task didn't load · server error" }, { timeout: 4000 })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+  });
+
+  it.each([
+    [400, 'bad', 'request refused'],
+    [503, 'stopped', 'company stopped'],
+  ])('a %i (%s) that will only fail again is not read again by itself: Try again is the way', async (status, code, reason) => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      serve(() => ({ status, body: { error: { code, detail: 'no', retryable: false } } }));
+      show(<TaskPage task="12" />);
+      expect(await screen.findByRole('heading', { name: `Task didn't load · ${reason}` }, { timeout: 4000 })).toBeTruthy();
+      const sentBefore = calls.filter((c) => c.startsWith('GET /api/v2/tasks/')).length;
+      await act(() => vi.advanceTimersByTimeAsync(15_000));
+      expect(calls.filter((c) => c.startsWith('GET /api/v2/tasks/'))).toHaveLength(sentBefore);
+      expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a task on screen whose read turns refused hides, says so, and is not read again every few minutes', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let refuse = false;
+      serve((url) => (refuse && url.endsWith('/api/v2/tasks/t1') ? { status: 403, body: { error: { code: 'forbidden', detail: 'no' } } } : undefined));
+      show(<TaskPage task="12" />);
+      await screen.findByRole('heading', { name: 'Fix the sign-in page' });
+      refuse = true;
+      const reads = () => calls.filter((c) => c.startsWith('GET ') && c.endsWith('/api/v2/tasks/t1')).length;
+      const before = reads();
+      // the backstop reads it once, and is refused
+      await act(() => vi.advanceTimersByTimeAsync(5 * 60_000 + 1_000));
+      await waitFor(() => expect(reads()).toBe(before + 1));
+      // the refusal takes the task's place
+      expect(await screen.findByRole('heading', { name: "You don't have access to this page" })).toBeTruthy();
+      expect(screen.queryByRole('heading', { name: 'Fix the sign-in page' })).toBeNull();
+      await act(() => vi.advanceTimersByTimeAsync(15 * 60_000));
+      expect(reads()).toBe(before + 1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -704,6 +745,15 @@ describe('a page’s versions, a new page and a picture', () => {
     serve((url) => (url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1') ? { status: 200, body: detail(t) } : (html(url) ?? base(url))));
     show(<TaskPage task="12" tab="spec" />, '/tasks/p1/12/spec?v=1');
     expect((await frame('Spec, v1')).getAttribute('srcdoc')).toContain('Sign in with your email.');
+  });
+
+  it('a version whose read was refused says why, with Try again', async () => {
+    serve((url) =>
+      url.endsWith('/api/v2/files/f1?v=1') ? { status: 403, body: { error: { code: 'forbidden', detail: 'No.' } } } : url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1') ? { status: 200, body: detail(withVersions()) } : (html(url) ?? base(url)),
+    );
+    show(<TaskPage task="12" tab="spec" />, '/tasks/p1/12/spec?v=1');
+    expect(await screen.findByRole('heading', { name: "Spec didn't load · no access" })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
   });
 
   it('a related page an ask pinned shows live only while it is that version @approvals', async () => {
@@ -1329,7 +1379,7 @@ describe('a task’s files and pages @s56 @s76 @s780', () => {
     it('says it did not load when that read fails, never showing the current one', async () => {
       serveMeta({ status: 404, body: { error: 'not_found' } });
       show(<TaskPage task="12" tab="qa-report" file="f9" />, at);
-      expect(await screen.findByText('This file did not load')).toBeTruthy();
+      expect(await screen.findByText("This file didn't load · not found")).toBeTruthy();
       expect(screen.queryByRole('button', { name: 'Sign-in screen, full size' })).toBeNull();
     });
   });

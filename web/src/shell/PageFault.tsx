@@ -5,9 +5,10 @@ import { reportError } from '@/features/support/routing';
 import { List } from '@/pagekinds';
 
 /** A page that broke while drawing or loading (the router's default error component): the page kinds' fault in the
-    page's place, so the menu and Tico stay usable. Try again draws it afresh and reads its data again. A refusal (403)
-    is the no-access state instead, without Try again: reading again would only be refused again. Each fault but a
-    refusal is reported (features/support/errors.ts), under the page's route template. */
+    page's place, so the menu and Tico stay usable, saying why. Reading again (by itself once the stream is back when
+    that could help, else Try again) draws it afresh and reads its data again. A refusal (403) is the no-access state
+    instead: reading again would only be refused again. Each fault but a refusal is reported
+    (features/support/errors.ts), under the page's route template. */
 export function PageFault({ error, reset }: ErrorComponentProps) {
   const router = useRouter();
   const path = useLocation({ select: (l) => l.pathname });
@@ -21,5 +22,5 @@ export function PageFault({ error, reset }: ErrorComponentProps) {
     reset();
     void router.invalidate();
   };
-  return <List title="This page" path={path} state="fault" onRetry={retry} sections={null} />;
+  return <List title="This page" path={path} state="fault" reads={[{ error, refetch: retry }]} sections={null} />;
 }

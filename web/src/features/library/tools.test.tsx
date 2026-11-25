@@ -750,6 +750,22 @@ describe('letters out', () => {
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Review' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/tasks'));
   });
+
+  it('an older page of letters that fails and may pass keeps the letters shown and Load more to press again, beside why', async () => {
+    const old = { id: 'O1', redacted: false, status: 'delivered', can_cancel: false, created_at: '2026-10-01T00:00:00Z', recipient: { name: 'Old Friend' }, page_count: 1, proof: null, tracking: [] };
+    const sent = serve((url) =>
+      url === '/api/v2/letters?limit=20&before=R18' ? { items: [old], next_before: 'O1' } : url === '/api/v2/letters?limit=20&before=O1' ? refused(500, 'internal') : undefined,
+    );
+    const rest = Array.from({ length: 19 }, (_, n) => ({ id: `R${n}`, redacted: true, status: 'mailed', can_cancel: false, created_at: '2026-11-01T00:00:00Z', page_count: 1 }));
+    openAddress([SENT_LETTER, ...rest]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Load more' }));
+    expect(await screen.findByText('Old Friend')).toBeTruthy();
+    fireEvent.click(await screen.findByRole('button', { name: 'Load more' }));
+    await waitFor(() => expect(reads(sent)()).toContain('/api/v2/letters?limit=20&before=O1'));
+    expect(await screen.findByRole('button', { name: 'Load more' })).toBeTruthy();
+    expect(screen.getByText('Old Friend')).toBeTruthy();
+    expect(screen.getByText("Older letters didn't load · server error")).toBeTruthy();
+  });
 });
 
 describe('Messages', () => {
@@ -775,13 +791,54 @@ describe('Messages', () => {
     await waitFor(() => expect(reads(sent)().some((u) => u.includes('before=77'))).toBe(true));
   });
 
-  it('shows the fault with Try again when the inboxes fail, not "No messages yet" @s870', async () => {
+  it('shows the fault and why when the inboxes fail, not "No messages yet" @s870', async () => {
     serve((url) => (url === '/api/v2/inbound/inboxes' ? refused(500, 'internal') : url.startsWith('/api/v2/inbound/messages?') ? { messages: [], next: null } : undefined));
     open('messages');
     const page = await screen.findByRole('region', { name: 'Messages' });
-    expect(await within(page).findByText('Messages did not load')).toBeTruthy();
-    expect(within(page).getByRole('button', { name: 'Try again' })).toBeTruthy();
+    expect(await within(page).findByText("Messages didn't load · server error")).toBeTruthy();
+    // a server error is read again by itself once the stream is back: no Try again
+    expect(within(page).queryByRole('button', { name: 'Try again' })).toBeNull();
     expect(within(page).queryByText('No messages yet')).toBeNull();
+  });
+
+  it('when the inboxes restart and the messages are refused, says the refusal and Try again reads both', async () => {
+    const sent = serve((url) =>
+      url === '/api/v2/inbound/inboxes' ? refused(500, 'internal') : url.startsWith('/api/v2/inbound/messages?') ? refused(400, 'bad_filter') : undefined,
+    );
+    open('messages');
+    const page = await screen.findByRole('region', { name: 'Messages' });
+    expect(await within(page).findByText("Messages didn't load · request refused", undefined, { timeout: 4000 })).toBeTruthy();
+    const before = { boxes: reads(sent)().filter((u) => u === '/api/v2/inbound/inboxes').length, list: reads(sent)().filter((u) => u.startsWith('/api/v2/inbound/messages?')).length };
+    fireEvent.click(within(page).getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(reads(sent)().filter((u) => u.startsWith('/api/v2/inbound/messages?')).length).toBeGreaterThan(before.list));
+    expect(reads(sent)().filter((u) => u === '/api/v2/inbound/inboxes').length).toBeGreaterThan(before.boxes);
+  });
+
+  it('an older page that fails and may pass keeps the messages shown, and Older messages reads it again', async () => {
+    const sent = serve((url) =>
+      url.startsWith('/api/v2/inbound/messages?') ? (url.includes('before=') ? refused(500, 'internal') : { messages: MESSAGES, next: 77 }) : undefined,
+    );
+    queryClient.setQueryData(inboxesQuery.queryKey, INBOXES);
+    open('messages');
+    const page = await screen.findByRole('region', { name: 'Messages' });
+    fireEvent.click(await within(page).findByRole('button', { name: 'Older messages' }));
+    await waitFor(() => expect(reads(sent)().some((u) => u.includes('before=77'))).toBe(true));
+    expect(await within(page).findByRole('button', { name: 'Older messages' })).toBeTruthy();
+    expect(within(page).getByText('Your code')).toBeTruthy();
+    expect(within(page).queryByText(/didn't load/)).toBeNull();
+  });
+
+  it('messages on screen whose refresh is refused (the inbox moved out of reach) hide and say why', async () => {
+    let refuse = false;
+    serve((url) => (url.startsWith('/api/v2/inbound/messages?') ? (refuse ? refused(404, 'not_found') : { messages: MESSAGES, next: null }) : undefined));
+    queryClient.setQueryData(inboxesQuery.queryKey, INBOXES);
+    open('messages');
+    const page = await screen.findByRole('region', { name: 'Messages' });
+    expect(await within(page).findByText('Your code')).toBeTruthy();
+    refuse = true;
+    await act(() => queryClient.refetchQueries({ queryKey: ['tools', 'messages', 'all'] }));
+    expect(await within(page).findByText("Messages didn't load · not found")).toBeTruthy();
+    expect(within(page).queryByText('Your code')).toBeNull();
   });
 
   it('a message with a code reveals it in the reader only, on its own press; never Tico’s @s932', async () => {
@@ -801,6 +858,21 @@ describe('Messages', () => {
     expect(await within(reader).findByText(CODE)).toBeTruthy();
     expect(cached()).not.toContain(CODE);
     expect(await tico('tools.revealCode', { message: 'm1' })).toMatchObject({ ok: false, error: 'not_allowed' });
+  });
+
+  it('a message whose read was refused says why, and Try again reads it', async () => {
+    let refuse = true;
+    serve((url) => (url === '/api/v2/inbound/messages/m1' ? (refuse ? refused(403, 'forbidden') : { text: 'Your sign-in code is inside.', next_offset: null }) : undefined));
+    queryClient.setQueryData(toolsQuery.queryKey, { rows: [indexRow({ id: 'tico:i1', kind: 'tico', name: 'Logins' })] } as never);
+    queryClient.setQueryData(inboxesQuery.queryKey, INBOXES);
+    queryClient.setQueryData(inboxMessagesQuery('i1').queryKey, [MESSAGES[0]] as never);
+    open('tico:i1');
+    fireEvent.click(await screen.findByRole('button', { name: /Your code/ }));
+    const reader = await screen.findByRole('dialog', { name: 'Your code' });
+    expect(await within(reader).findByText("This message didn't load · no access")).toBeTruthy();
+    refuse = false;
+    fireEvent.click(within(reader).getByRole('button', { name: 'Try again' }));
+    expect(await within(reader).findByText('Your sign-in code is inside.')).toBeTruthy();
   });
 });
 
@@ -1195,7 +1267,7 @@ describe('a section whose read fails', () => {
     const asked = reads(serve((url) => (url.startsWith(requests) ? answer : undefined)));
     tools();
     open('number');
-    expect(await screen.findByText('Requests did not load')).toBeTruthy();
+    expect(await screen.findByText("Requests didn't load · request refused")).toBeTruthy();
     expect(screen.queryByText('No requests')).toBeNull();
     const before = asked().filter((u) => u.startsWith(requests)).length;
     answer = ok({ phone_requests: [], next: null });
@@ -1229,8 +1301,8 @@ describe('a section whose read fails', () => {
     queryClient.setQueryData(lettersSettingsQuery.queryKey, { mode: 'ask_first', monthly_cap_micros: null, return_address: null, availability: 'ready' } as never);
     open('address');
     const connects = await screen.findByRole('region', { name: 'How it connects' });
-    expect(await within(connects).findByText('Addresses did not load')).toBeTruthy();
-    expect(within(connects).getByRole('button', { name: 'Try again' })).toBeTruthy();
+    expect(await within(connects).findByText("Addresses didn't load · server error")).toBeTruthy();
+    expect(within(connects).queryByRole('button', { name: 'Try again' })).toBeNull();
     expect(screen.getByRole('region', { name: 'What it can do' })).toBeTruthy();
   });
 
@@ -1240,7 +1312,7 @@ describe('a section whose read fails', () => {
     queryClient.setQueryData(lettersQuery.queryKey, []);
     open('address');
     const out = await screen.findByRole('region', { name: 'What it can do' });
-    expect(await within(out).findByText('Sending letters did not load')).toBeTruthy();
+    expect(await within(out).findByText("Sending letters didn't load · server error")).toBeTruthy();
   });
 });
 });
@@ -1276,12 +1348,12 @@ describe('the list and the open tool’s states', () => {
   it('an open tool shows grey bars while it loads, and Try again when its read fails', async () => {
     let fail = true;
     const tool1 = { tool: { id: 't1', name: 'Sample API', base_url: 'https://api.example.com', auth_scheme: 'bearer', delivery: 'proxy' }, keys: [], access: [], checks: [], recent: [], status: { tone: 'ok', text: 'Working' }, can_manage: false, mcp: null };
-    serve((url) => (url === '/api/v2/api-tools/t1' ? (fail ? refused(500, 'boom') : tool1) : undefined));
+    serve((url) => (url === '/api/v2/api-tools/t1' ? (fail ? refused(409, 'boom') : tool1) : undefined));
     tools([indexRow({ id: 'api:t1', name: 'Sample API' })]);
     open('api:t1');
     const tool = await page('Sample API');
     expect(within(tool).getByRole('status', { name: 'Loading' })).toBeTruthy();
-    expect(await within(tool).findByText('Sample API did not load')).toBeTruthy();
+    expect(await within(tool).findByText("Sample API didn't load · request refused")).toBeTruthy();
     fail = false;
     fireEvent.click(within(tool).getByRole('button', { name: 'Try again' }));
     expect(await within(tool).findByRole('region', { name: 'What it is' })).toBeTruthy();

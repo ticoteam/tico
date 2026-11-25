@@ -1,9 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
 import { Conversation } from '@/conversation';
 import { meQuery, useActor } from '@/data';
-import { Empty } from '@/kit/Empty';
 import { approvalCard, ChatQuestions, useApprovalCards } from '@/features/task/exports';
 import { chatAddress } from '@/lib';
+import { ReadFault } from '@/pagekinds';
 import { dmQuery } from './queries';
 
 /** Words an agent's empty chat offers to start with: they fill the box, never send. */
@@ -30,7 +30,7 @@ export function TeammateChat({ who }: { who: string }) {
   const agent = other && actor.kind === 'agent' ? actor.id : undefined;
   const approvals = useApprovalCards({ agent }, agent && chatAddress(agent, 'agent'));
   if (!other) return null;
-  if (dm.isError) return <Empty icon="alert" title="The chat did not load" />;
+  if (dm.isError) return <ReadFault what="The chat" reads={[dm]} />;
   if (!dm.data) return null;
   // A direct chat's @ reaches only its two members (the server refuses anyone else): the list offers just them.
   return <Conversation id={dm.data} variant="page" title={actor.name} actor={actor.id} card={approvalCard} extra={approvals} foot={agent && <ChatQuestions thread={dm.data} agent={agent} />} starters={agent ? startersFor(actor.template) : undefined} mentionOnly={[actor.id]} />;

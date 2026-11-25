@@ -5,8 +5,6 @@ import { run } from '@/actions';
 import { ApiError } from '@/api/client';
 import { agentWords, Conversation, MessageBones, SessionLine, type ChatMessage, type Session } from '@/conversation';
 import { meQuery, useActor } from '@/data';
-import { Button } from '@/kit/Button';
-import { Empty } from '@/kit/Empty';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { useCards } from '@/kit/Popover';
@@ -14,7 +12,7 @@ import { Link } from '@/kit/Link';
 import { Viewer } from '@/kit/Viewer';
 import { toast } from '@/kit/Toast';
 import { useFollow } from '@/live/follow';
-import { Document, type PageState, type PageTab } from '@/pagekinds';
+import { Document, faultHides, type PageState, type PageTab, ReadFault } from '@/pagekinds';
 import { FilePreview } from '@/features/library/exports';
 import { flowQuery, flowSnoozedAsksQuery } from '@/features/tasks/routing';
 import { whoHref } from '@/features/team/routing';
@@ -45,9 +43,6 @@ import './task.css';
 
 /** How often an open task reads itself again, as a backstop for the stream. */
 const STATUS_BACKSTOP_MS = 5 * 60_000;
-/** How soon a task that did not load (the network, a server restarting) is read again. */
-const RETRY_MS = 5_000;
-const refused = (e: unknown) => e instanceof ApiError && (e.status === 403 || e.status === 404);
 
 export interface TaskPageProps {
   /** The address's task: its number, or its id. */
@@ -62,15 +57,20 @@ export interface TaskPageProps {
     reads it afresh as it opens: what changed while it was closed (a ❓ cleared, say) reaches no copy off screen, and a
     later row merged into that copy would make it look fresh. The chat beside it shares that read. */
 function useTask(param: string, opens = false) {
-  const ref = useQuery({ ...taskRefQuery(param), refetchInterval: (q) => (q.state.status === 'error' && !refused(q.state.error) ? RETRY_MS : false) });
+  const ref = useQuery(taskRefQuery(param));
   // On this screen only, the task reads itself again every few minutes: the stream sends its status line as it changes,
-  // and this heals one it missed (a backstop, not the way it updates).
-  // a read that failed on the way (not a refusal) tries again by itself until the server answers
-  const detail = useQuery({ ...taskDetailQuery(ref.data), refetchInterval: (q) => (q.state.status === 'error' && !refused(q.state.error) ? RETRY_MS : STATUS_BACKSTOP_MS), ...(opens && { refetchOnMount: 'always' as const }) });
+  // and this heals one it missed (a backstop, not the way it updates). A read that failed with nothing to show, or was
+  // refused (a copy on screen or not), is not read again by it: its fault (ReadFault) reads it again when the stream is
+  // back if that could help, else Try again does; a refusal would only be refused again every few minutes.
+  const detail = useQuery({
+    ...taskDetailQuery(ref.data),
+    refetchInterval: (q) => (faultHides({ isError: q.state.status === 'error', error: q.state.error, data: q.state.data }) ? false : STATUS_BACKSTOP_MS),
+    ...(opens && { refetchOnMount: 'always' as const }),
+  });
   useFollow(ref.data ? { task: ref.data } : null);
   const error = ref.error ?? detail.error;
-  const retry = () => void (ref.isError ? ref.refetch() : detail.refetch());
-  return { t: detail.data, error, retry };
+  // a refusal hides the task read before too (faultHides): the page then says why
+  return { t: faultHides(detail) ? undefined : detail.data, error, reads: ref.isError ? [ref] : [detail] };
 }
 
 function stateOf(error: unknown): PageState {
@@ -88,7 +88,7 @@ export function TaskPage(props: TaskPageProps) {
 }
 
 function OneTask({ task, tab, file }: TaskPageProps) {
-  const { t, error, retry } = useTask(task, true);
+  const { t, error, reads } = useTask(task, true);
   if (!t) {
     const path = `/task/${task}`;
     return (
@@ -101,7 +101,7 @@ function OneTask({ task, tab, file }: TaskPageProps) {
         state={stateOf(error)}
         empty={{ title: 'This task is gone' }}
         noAccess={{ text: "You don't have access" }}
-        onRetry={retry}
+        reads={error ? reads : undefined}
       />
     );
   }
@@ -347,9 +347,7 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
   const body =
     unresolved ? (
       files.isError ? (
-        <Empty icon="alert" title="This file did not load">
-          <Button onClick={() => files.refetch()}>Try again</Button>
-        </Empty>
+        <ReadFault what="This file" reads={[files]} />
       ) : (
         <PageBones />
       )
@@ -501,7 +499,7 @@ export function TaskChat({ task }: TaskChatProps) {
         {session && <IconButton icon="close" label="Back to comments" size="sm" onClick={toComments} />}
       </header>
       {t.conversation_id && room.failed ? (
-        <ChatNotRead retry={room.retry} />
+        <ChatNotRead read={room.room} />
       ) : t.conversation_id && own === undefined ? (
         <MessageBones />
       ) : t.conversation_id ? (

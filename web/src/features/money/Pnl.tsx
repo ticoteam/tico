@@ -44,7 +44,7 @@ export function PnlPage({ search }: { search: FinanceSearch }) {
     <List
       {...head}
       state={readState(q)}
-      onRetry={() => void q.refetch()}
+      reads={[q]}
       after={
         <span className="range" data-target="range:pnl">
           <IconButton icon="chevron" className="flip" label="Earlier" size="sm" quiet onClick={() => step(-1)} />

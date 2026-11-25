@@ -3,9 +3,7 @@ import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type Reac
 import { refusalFor } from '@/actions';
 import { toast } from '@/kit/Toast';
 import { meQuery, useActor, type Actor } from '@/data';
-import { Button } from '@/kit/Button';
 import { DidLine } from '@/kit/DidLine';
-import { Empty } from '@/kit/Empty';
 import { Link } from '@/kit/Link';
 import { useFollow, type TimelineView } from '@/live';
 import { capCount } from '@/kit/Count';
@@ -16,6 +14,7 @@ import { SheetHead } from '@/shell';
 import { fromPage, pageAt, type FromPage } from '@/shell/pageOwner';
 import { dot, type DotState } from '@/tico/dot';
 import { usePageName } from '@/tico/pageName';
+import { ReadFault } from '@/pagekinds';
 import { MessageBones } from './Bones';
 import { Composer, readDraft, writeDraft } from './Composer';
 import { dayKey, dayLabel } from './dates';
@@ -485,13 +484,11 @@ export function Conversation({ id, variant, title, actor, session, from, starter
     </ChatPlace>
   );
 
-  // Bones while the first page loads; a read that failed says so with Try again (the box stays).
+  // Bones while the first page loads; a read that failed says why (the box stays).
   const body = timeline.isPending ? (
     <MessageBones />
   ) : timeline.isError && !timeline.data ? (
-    <Empty icon="alert" title="This chat did not load">
-      <Button onClick={() => timeline.refetch()}>Try again</Button>
-    </Empty>
+    <ReadFault what="This chat" reads={[timeline]} />
   ) : (
     list
   );

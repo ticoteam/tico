@@ -10,6 +10,7 @@ import { Button } from '@/kit/Button';
 import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { Select } from '@/kit/Select';
+import { ReadFault } from '@/pagekinds';
 import { invitees, setupQuery, type FilePerson, type KeyKind, type SetupRecord } from './queries';
 import { keepTranscript } from './transcript';
 import './start.css';
@@ -57,12 +58,7 @@ export function SetupChat() {
   if (record.isError)
     return (
       <div className="chat-body">
-        <div className="empty">
-          <p>Setup did not load.</p>
-          <div className="q-row">
-            <Button onClick={() => record.refetch()}>Try again</Button>
-          </div>
-        </div>
+        <ReadFault what="Setup" reads={[record]} />
       </div>
     );
   if (!record.data || !me) return <MessageBones label="Loading setup" />;

@@ -169,11 +169,11 @@ describe('Finance @s398 @s403 @s399', () => {
     expect(deniedReads).not.toHaveBeenCalled();
   });
 
-  it('a P&L that does not load says so and offers Try again', async () => {
+  it('a P&L that does not load says why; a server error is read again by itself, so no Try again', async () => {
     serve(() => ({ status: 500, body: { error: { code: 'internal' } } }));
     show('/company/finance?tab=pnl');
-    expect(await screen.findByRole('heading', { name: 'Finance did not load' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: "Finance didn't load · server error" })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });
 
   it('a tab outside your view says you have no access, without Try again', async () => {

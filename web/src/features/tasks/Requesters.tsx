@@ -10,6 +10,7 @@ import { IconButton } from '@/kit/IconButton';
 import { Row } from '@/kit/Row';
 import { Select } from '@/kit/Select';
 import { SkeletonRows } from '@/kit/Skeleton';
+import { ReadFault } from '@/pagekinds';
 import { Face } from './parts';
 import { requestersQuery, type Requester } from './queries';
 
@@ -43,7 +44,7 @@ function List({ task, title, onEdit, onClose }: { task: string; title: string; o
   if (list.isError)
     body = (
       <p className="rq-line">
-        Requesters did not load. <Button onClick={() => list.refetch()}>Try again</Button>
+        <ReadFault what="Requesters" reads={[list]} inline />
       </p>
     );
   else if (!list.data) body = <SkeletonRows rows={3} />;

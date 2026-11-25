@@ -211,7 +211,7 @@ describe('Budgets @s404 @s462 @s463', () => {
     let listReads = 0;
     serve((url) => {
       if (url.includes('/finance/budgets')) {
-        if (++listReads === 1) return { status: 500, body: {} };
+        if (++listReads === 1) return { status: 409, body: {} };
         return ok({ budgets: [BUDGET('b1', 'Tools')] });
       }
       if (url.includes('budget_vs_actual')) return ok({ columns: [], budgets: [] });

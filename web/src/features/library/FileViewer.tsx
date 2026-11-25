@@ -7,6 +7,7 @@ import { Markdown } from '@/kit/Markdown';
 import { PictureViewer } from '@/kit/PictureViewer';
 import { Viewer } from '@/kit/Viewer';
 import { csvRows, fileKind, safeFrame, type FileKind } from '@/lib';
+import { ReadFault } from '@/pagekinds';
 import { size } from './parts';
 import { PdfView } from './PdfView';
 import { fileQuery, fileTextQuery, fileUrl, fileVersionsQuery, heldFileQuery } from './queries';
@@ -146,7 +147,7 @@ export function Preview({ id = '', version = 0, mime, kind, title, url, name, si
   }
   if (!shows) return <Unshown name={name || title} bytes={bytes} url={url} office={view === 'office' && !held} />;
   const read = reads ? kept : words;
-  if (read.isError) return <Empty title="This file did not load" icon="alert" />;
+  if (read.isError) return <ReadFault what="This file" reads={[read]} />;
   const src = reads ? kept.data?.src : url;
   if (asText) {
     const text = held ? kept.data?.text : words.data;
@@ -261,11 +262,12 @@ export function FilePreview({ file, version }: { file: string; version?: number 
   const f = useQuery(fileQuery(file));
   const versions = useQuery(fileVersionsQuery(file));
   const shown = versions.data?.find((v) => (version === undefined ? v.current : v.version === version));
-  if (f.isError) return <Empty title="This file did not load" icon="alert" />;
+  if (f.isError) return <ReadFault what="This file" reads={[f]} />;
   if (!f.data) return null;
   const older = version !== undefined && version !== f.data.version;
+  // an older version needs the versions read: one that failed says why; one read without it, that it is gone
   if (older && !shown)
-    return versions.isPending ? null : <Empty title="This file did not load" icon="alert" />;
+    return versions.isPending ? null : versions.isError ? <ReadFault what="This file" reads={[versions]} /> : <Empty title="This file did not load" icon="alert" />;
   const n = version ?? shown?.version ?? f.data.version;
   return (
     <FileFrame

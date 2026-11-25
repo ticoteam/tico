@@ -13,6 +13,7 @@ import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
 import { SkeletonRows } from '@/kit/Skeleton';
 import { VirtualList } from '@/kit/VirtualList';
 import { fmtDate, newId } from '@/lib';
+import { ReadFault } from '@/pagekinds';
 import { SUPPORT_CHAT } from './actions';
 import { Diagnostics, type Attached } from './Diagnostics';
 import { composeQuery, refreshQuery, ticketsQuery, type Retry, type SupportList } from './queries';
@@ -150,9 +151,7 @@ export function SupportChat() {
       <>
         {head}
         {list.isError ? (
-          <Empty icon="alert" title="Tico support did not load">
-            <Button onClick={() => list.refetch()}>Try again</Button>
-          </Empty>
+          <ReadFault what="Tico support" reads={[list]} />
         ) : (
           <div className="chat-body">
             <SkeletonRows rows={4} label="Loading Tico support" />

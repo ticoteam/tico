@@ -588,8 +588,16 @@ export function MessagesView() {
     </Menu>
   );
   return (
-    // The inboxes feed the filter: when they fail, the page shows its fault rather than "No messages yet".
-    <ToolPage name="Messages" kind="mailbox" fill={filter} q={boxes.isError ? boxes : list} target="tool:messages" bare>
+    // The inboxes feed the filter: when they fail, the page shows its fault rather than "No messages yet". An older page
+    // that failed and may pass is the list's own (Older messages stays to press again); a refusal is the page's.
+    <ToolPage
+      name="Messages"
+      kind="mailbox"
+      fill={filter}
+      reads={[boxes, list]}
+      target="tool:messages"
+      bare
+    >
       <div className="msg-find">
         <Search label="Find messages" value={words} onValueChange={setWords} placeholder="Words" />
       </div>

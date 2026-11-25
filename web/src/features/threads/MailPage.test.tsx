@@ -94,6 +94,25 @@ describe('Mail @s159', () => {
     expect(screen.getByRole('heading', { name: 'Invoice question' })).toBeTruthy();
   });
 
+  it('a next page whose cursor Gmail rejects is read again from the first page, never with that cursor', async () => {
+    serve((url) =>
+      url.includes('cursor=c2')
+        ? { status: 422, body: { error: { code: 'gmail_query', detail: 'Gmail refused the query or page token; check it and try again' } } }
+        : url.includes('/mail/messages')
+          ? ok({ messages: [letter()], next_cursor: 'c2' })
+          : undefined,
+    );
+    queryClient.setQueryData(mailboxesQuery.queryKey, [{ address: 'help@example.test' }]);
+    show(<MailPage box="help@example.test" />, '/threads/mail?box=help%40example.test');
+    expect(await screen.findByText("Mail didn't load · request refused")).toBeTruthy();
+    const mail = () => all('GET', '/mail/messages').map((c) => c.url);
+    const before = mail().length;
+    expect(mail().filter((u) => u.includes('cursor=c2'))).toHaveLength(1);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Try again' })[0]!);
+    await waitFor(() => expect(mail().length).toBeGreaterThan(before));
+    expect(mail()[before]).not.toContain('cursor=');
+  });
+
   it('the box talks only to the mailbox\'s agent, about this mail, never to whoever wrote', async () => {
     serve((url, method) =>
       url.includes('/mail/messages')
@@ -172,7 +191,7 @@ describe('Mailboxes @s1203', () => {
     queryClient.setQueryData(mailboxesQuery.queryKey, [{ address: 'help@example.test' }]);
     show(<MailPage />, '/threads/mail');
     expect(await screen.findByRole('heading', { name: 'Mail is not connected' })).toBeTruthy();
-    expect(screen.queryByText('Threads did not load')).toBeNull();
+    expect(screen.queryByText(/didn't load/)).toBeNull();
   });
 });
 
@@ -370,6 +389,79 @@ describe('Messaging @s160', () => {
     expect(await screen.findByText('Also, bring the long ladder.')).toBeTruthy();
     expect(screen.getByText('Today')).toBeTruthy();
     expect(calls.some((c) => c.url.includes('from=%2B1+555+0100'))).toBe(true);
+  });
+
+  it('older texts that fail and may pass keep the texts shown, and Older texts reads them again by its press only', async () => {
+    const from = '+1 555 0100';
+    serve((url) => {
+      if (url.includes('/inbound/messages/x1')) return ok({ text: 'Is Friday fine for the visit?', message_id: 'x1' });
+      if (!url.includes('/inbound/messages?')) return undefined;
+      // the contacts list has one page; the contact's texts have an older one
+      if (!url.includes('from=')) return ok({ messages: [{ message_id: 'x1', received_at: ago(3), from, preview: 'Is Friday' }], next: null });
+      return url.includes('before=9')
+        ? { status: 500, body: { error: { code: 'internal', detail: 'No.' } } }
+        : ok({ messages: [{ message_id: 'x1', received_at: ago(3), from, preview: 'Is Friday' }], next: 9 });
+    });
+    show(<MessagingPage open={from} />, '/threads/messaging?open=%2B1+555+0100');
+    expect(await screen.findByText('Is Friday fine for the visit?')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Older texts' }));
+    await waitFor(() => expect(calls.filter((c) => c.url.includes('before=9'))).toHaveLength(1));
+    expect(await screen.findByRole('button', { name: 'Older texts' })).toBeTruthy();
+    expect(screen.getByText('Is Friday fine for the visit?')).toBeTruthy();
+    expect(screen.queryByText(/didn't load/)).toBeNull();
+    const firstPages = calls.filter((c) => c.url.includes('/inbound/messages?') && !c.url.includes('before=')).length;
+    fireEvent.click(screen.getByRole('button', { name: 'Older texts' }));
+    await waitFor(() => expect(calls.filter((c) => c.url.includes('before=9'))).toHaveLength(2));
+    // the retry is the older page alone, never every page again
+    expect(calls.filter((c) => c.url.includes('/inbound/messages?') && !c.url.includes('before='))).toHaveLength(firstPages);
+  });
+
+  it('a next page of contacts that fails is not read again by scrolling on: Load more reads it, that page alone', async () => {
+    let again: ((r: Reply) => void) | undefined;
+    serve((url) => {
+      if (!url.includes('/inbound/messages?')) return undefined;
+      const failed: Reply = { status: 500, body: { error: { code: 'internal', detail: 'No.' } } };
+      // the second read of that page is held, and fails when the test says
+      if (url.includes('before=9')) return calls.filter((c) => c.url.includes('before=9')).length > 1 ? new Promise<Reply>((r) => (again = r)) : failed;
+      return ok({ messages: [{ message_id: 'x1', received_at: ago(3), from: '+1 555 0100', preview: 'Hi' }], next: 9 });
+    });
+    show(<MessagingPage />, '/threads/messaging');
+    expect(await screen.findByTitle('+1 555 0100')).toBeTruthy();
+    const loadMore = await screen.findByRole('button', { name: 'Load more' });
+    const older = () => calls.filter((c) => c.url.includes('before=9')).length;
+    expect(older()).toBe(1);
+    expect(screen.getByTitle('+1 555 0100')).toBeTruthy();
+    expect(screen.queryByText(/didn't load/)).toBeNull();
+    fireEvent.click(loadMore);
+    await waitFor(() => expect(older()).toBe(2));
+    await waitFor(() => expect(again).toBeTypeOf('function'));
+    await act(async () => again!({ status: 500, body: { error: { code: 'internal', detail: 'No.' } } }));
+    // Load more is back (its read failed again), and nothing read the page once more meanwhile
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Load more' }).getAttribute('aria-busy')).toBeNull());
+    expect(older()).toBe(2);
+  });
+
+  it('a list read again while its next page had failed is not cut short by scrolling on (no next page meanwhile)', async () => {
+    let refresh: (() => void) | undefined;
+    let firsts = 0;
+    serve((url) => {
+      if (!url.includes('/inbound/messages?')) return undefined;
+      if (url.includes('before=9')) return { status: 500, body: { error: { code: 'internal', detail: 'No.' } } };
+      firsts += 1;
+      const page = ok({ messages: [{ message_id: 'x1', received_at: ago(3), from: '+1 555 0100', preview: 'Hi' }], next: 9 });
+      return firsts === 1 ? page : new Promise<Reply>((r) => (refresh = () => r(page)));
+    });
+    show(<MessagingPage />, '/threads/messaging');
+    expect(await screen.findByRole('button', { name: 'Load more' })).toBeTruthy();
+    const older = () => calls.filter((c) => c.url.includes('before=9')).length;
+    expect(older()).toBe(1);
+    // the stream is back: the list is read again, from its first page
+    void queryClient.refetchQueries({ queryKey: ['texts', 'list'] });
+    await waitFor(() => expect(refresh).toBeTypeOf('function'));
+    await act(async () => {});
+    expect(older()).toBe(1);
+    await act(async () => refresh!());
+    await waitFor(() => expect(older()).toBe(2));
   });
 
   it("opens no chat when the person opened another mail before the agent's box send came back @4882-S8", async () => {

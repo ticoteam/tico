@@ -2,12 +2,11 @@ import { useQuery } from '@tanstack/react-query';
 import { Conversation, MessageBones, SideHead, type FromPage, type Session } from '@/conversation';
 import { callCard } from '@/features/calls/exports';
 import { approvalCard, ChatQuestions, useApprovalCards } from '@/features/task/exports';
-import { Button } from '@/kit/Button';
-import { Empty } from '@/kit/Empty';
 import { agentOf, dmAgentOf, isDm, othersOf } from './model';
 import { useMe, useNameOf, useTitle } from './people';
 import { chatQuery } from './queries';
 import { chatActor } from '@/lib';
+import { ReadFault } from '@/pagekinds';
 
 export interface ChatSheetProps {
   /** The shell's `?chat=`: agent:<slug>, person:<id> or thread:<id>; or the page owner's, in the Agent bar. */
@@ -22,7 +21,7 @@ export interface ChatSheetProps {
 /** The second chat's body: the address resolved to a thread, drawn as the side conversation (its head and the
     conversation). The root puts it in the shell's chat sheet. */
 export function ChatSheet({ chat, from, starters, dm = false }: ChatSheetProps) {
-  const { data: t, isError, refetch } = useQuery(chatQuery(chat, dm ? 'private' : undefined));
+  const { data: t, isError, error, refetch } = useQuery(chatQuery(chat, dm ? 'private' : undefined));
   const me = useMe();
   const nameOf = useNameOf();
   const title = useTitle(t);
@@ -35,9 +34,7 @@ export function ChatSheet({ chat, from, starters, dm = false }: ChatSheetProps) 
       <>
         {/* the head stays, with the frame's fold or close control */}
         <SideHead actor={actor} name={(actor && nameOf(actor)) || 'Chat'} />
-        <Empty icon="alert" title="This chat did not load">
-          <Button onClick={() => refetch()}>Try again</Button>
-        </Empty>
+        <ReadFault what="This chat" reads={[{ error, refetch }]} />
       </>
     );
   if (!t) return <MessageBones />;

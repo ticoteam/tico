@@ -1141,7 +1141,7 @@ describe('an outbound action', () => {
     reply = (url) => (url.endsWith('/api/v2/oks/r1') ? { status: 404, body: { error: { code: 'not_found' } } } : null);
     show(<TaskChat task="12" />, '/tasks/p1/12');
     const box = await decision();
-    expect(await within(box).findByText('Part of it did not load')).toBeTruthy();
+    expect(await within(box).findByText(/^Part of it (did not|didn't) load/)).toBeTruthy();
     expect(within(box).getByRole('button', { name: 'Approve' })).toHaveProperty('disabled', true);
   });
 });
@@ -1165,15 +1165,16 @@ describe('an email waiting to send', () => {
   });
 
   it.each([
-    { problem: 'fails', response: { status: 500, body: { error: { code: 'internal', detail: 'Try again' } } } },
-    { problem: 'is incomplete', response: { body: { ...mail, body: '', preview_complete: false, shown_hash: null } } },
-  ])('offers a retry when the email preview $problem @approvals', async ({ response }) => {
+    // a refusal: a server's failure is read again by itself once the stream is back, without Try again
+    { problem: 'is refused', response: { status: 409, body: { error: { code: 'refused', detail: 'Refused' } } }, line: "Part of it didn't load · request refused" },
+    { problem: 'is incomplete', response: { body: { ...mail, body: '', preview_complete: false, shown_hash: null } }, line: 'Part of it did not load' },
+  ])('offers a retry when the email preview $problem @approvals', async ({ response, line }) => {
     shown = task({ title: titled });
     let busy = true;
     reply = (url) => (busy && url.endsWith('/api/v2/email/sends/s1') ? response : null);
     show(<TaskChat task="12" />, '/tasks/p1/12');
     const box = await decision();
-    expect(await within(box).findByText('Part of it did not load')).toBeTruthy();
+    expect(await within(box).findByText(line)).toBeTruthy();
     expect(within(box).getByText('Email to Dana Ruiz')).toBeTruthy();
     expect(within(box).queryByText('Sends now')).toBeNull();
     expect(within(box).getByRole('button', { name: 'Approve' })).toHaveProperty('disabled', true);
@@ -1181,7 +1182,7 @@ describe('an email waiting to send', () => {
     fireEvent.click(within(box).getByRole('button', { name: 'Try again' }));
     await ready(box);
     expect(within(box).getByText('Sends now')).toBeTruthy();
-    expect(within(box).queryByText('Part of it did not load')).toBeNull();
+    expect(within(box).queryByText(line)).toBeNull();
   });
 
   it('a refused decision stays with its email, never shown on another tab @approvals', async () => {
@@ -1216,7 +1217,7 @@ describe('an email waiting to send', () => {
           : null;
     show(<TaskChat task="12" />, '/tasks/p1/12');
     const box = await decision();
-    expect(await within(box).findByText('Part of it did not load')).toBeTruthy();
+    expect(await within(box).findByText(/^Part of it (did not|didn't) load/)).toBeTruthy();
     expect(within(box).getByRole('button', { name: 'Approve' })).toHaveProperty('disabled', true);
   });
 });
@@ -1276,7 +1277,7 @@ describe('what the person needs beside the email', () => {
     show(<TaskPage task="12" tab="email" />, '/tasks/p1/12/email');
     await screen.findByText('Dear Ms. Ruiz, our response is attached.');
     // the stub answers no .docx bytes: the sheet's own place says so, under the message
-    expect(await screen.findByText('letter.docx did not load')).toBeTruthy();
+    expect(await screen.findByText(/^letter\.docx didn't load · /)).toBeTruthy();
   });
 
   it('shows the email it answers in the envelope, its first line until pressed @approvals', async () => {

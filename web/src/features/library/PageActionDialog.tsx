@@ -6,10 +6,10 @@ import { agentsQuery, groupsQuery, peopleQuery, sidebarPinsQuery } from '@/featu
 import { Button } from '@/kit/Button';
 import { Checkbox } from '@/kit/Checkbox';
 import { Dialog } from '@/kit/Dialog';
-import { Empty } from '@/kit/Empty';
 import { Field } from '@/kit/Field';
 import { Segmented } from '@/kit/Segmented';
 import { Select } from '@/kit/Select';
+import { ReadFault } from '@/pagekinds';
 import { changePage, changePagePin, deleteLibraryPage, duplicatePage, refreshPages } from './queries';
 
 export type PageAction = 'access' | 'archive' | 'delete' | 'duplicate' | 'pin';
@@ -88,9 +88,7 @@ export function PageActionDialog({ action, data, onClose, onLeave, onDuplicate }
       {action === 'duplicate' && <Field label="Title" value={name} onValueChange={(value) => setName(value.slice(0, 200))} autoFocus />}
       {action === 'pin' && (
         agents.isError || config.isError || sidebar.isError ? (
-          <Empty icon="alert" title="Sidebars did not load">
-            <Button onClick={() => Promise.all([agents.isError && agents.refetch(), config.isError && config.refetch(), sidebar.isError && sidebar.refetch()])}>Try again</Button>
-          </Empty>
+          <ReadFault what="Sidebars" reads={[agents, config, sidebar]} />
         ) : (
           <Select label="Sidebar" value={place} onValueChange={setPlace} placeholder={agents.isPending || config.isPending ? 'Loading…' : choices.length ? 'Choose a sidebar' : 'No editable sidebars'} options={choices.map((agent) => ({
             value: agent.id,
@@ -123,9 +121,7 @@ function PageAudience({ audience, onChange }: { audience: AccessAudience | null;
     <>
       <Segmented label="Access" value={audience ? 'listed' : 'inherited'} options={[{ value: 'inherited', label: 'Inherit access' }, { value: 'listed', label: 'Only listed' }]} onValueChange={(value) => onChange(value === 'listed' ? emptyAudience : null)} />
       {audience && failed.length > 0 && (
-        <Empty icon="alert" title="Some access options did not load">
-          <Button onClick={() => Promise.all(failed.map((query) => query.refetch()))}>Try again</Button>
-        </Empty>
+        <ReadFault what="Access options" reads={failed} />
       )}
       {audience && choices.map(([label, key, items]) => (
         <fieldset className="page-audience" key={key}>

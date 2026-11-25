@@ -9,3 +9,4 @@ export { PageMore, type PageMoreProps } from './PageMore';
 export { SidePanel, PanelSlot, PanelHost, usePagePanelOpen, type SidePanelProps } from './SidePanel';
 export { FiguresStrip, type FiguresStripProps } from './FiguresStrip';
 export { Page, StateBody, SkRows, headFills, type PageProps, type PageKind, type StateBodyProps } from './Page';
+export { ReadFault, needsRetry, faultHides, type ReadFaultProps, type FailedRead } from './ReadFault';

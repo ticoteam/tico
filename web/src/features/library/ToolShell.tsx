@@ -3,7 +3,6 @@ import type { ReactElement, ReactNode } from 'react';
 import type { ToolIndexRow } from '@/api/schema';
 import { meQuery } from '@/data';
 import { Ago } from '@/kit/Ago';
-import { Button } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
@@ -11,7 +10,7 @@ import { Facts, LabelValue } from '@/kit/LabelValue';
 import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { ItemHead, Section, type PageState } from '@/pagekinds';
-import { SkRows, StateBody } from '@/pagekinds';
+import { faultHides, ReadFault as Fault, SkRows, StateBody, type FailedRead } from '@/pagekinds';
 import { Face, Held, KindTile } from './parts';
 import { googleQuery } from './queries';
 import type { ToolsSearch } from './search';
@@ -66,7 +65,7 @@ export const deliveryOf = (r: { kind: string; delivery?: string | null; requesta
 /** A Read the proxy holds to reads, as the run really gets it (`proxied_read`, backend/api_tools.py access_rows). */
 export const Proxied = () => <span className="row-ctx">Proxied</span>;
 
-type Read = { isError: boolean; error: unknown; data: unknown; refetch: () => unknown };
+type Read = { isError: boolean; error: unknown; data: unknown; refetch: (opts: { cancelRefetch: boolean }) => unknown };
 /** A read's page state: a 403 is no access (nothing to retry), any other failure a fault. */
 export const stateOf = (q: Pick<Read, 'isError' | 'error' | 'data'>): PageState =>
   q.isError ? ((q.error as { status?: number } | null)?.status === 403 ? 'no-access' : 'fault') : q.data !== undefined ? 'ready' : 'loading';
@@ -89,8 +88,10 @@ export interface ToolPageProps {
   onRename?: (name: string) => void;
   /** `tool:<id>`; each section's is `tool-about:<id>`, `tool-connect:<id>`, `tool-who:<id>`, `tool-can:<id>`. */
   target: string;
-  /** The tool's own read: grey bars while it loads, Try again when it fails, no access on a 403. */
+  /** The tool's own read: grey bars while it loads, why when it fails, no access on a 403. */
   q?: Read;
+  /** In place of `q`, each read the page needs: it is ready once all are, and its fault names those that failed. */
+  reads?: readonly Read[];
   /** The Tools list's row: what each section says when the kind has nothing more. */
   row?: ToolIndexRow;
   /** What it is, after Kind. */
@@ -114,7 +115,10 @@ export interface ToolPageProps {
 export function ToolPage(p: ToolPageProps) {
   const { name, kind, row, q, target } = p;
   const at = target.slice(target.indexOf(':') + 1);
-  const state = q ? stateOf(q) : 'ready';
+  const all = p.reads ?? (q ? [q] : []);
+  // a refusal is the fault even with rows read before; a failure that may pass keeps them (faultHides)
+  const failed = all.find(faultHides);
+  const state: PageState = failed ? stateOf(failed) : all.every((r) => r.data !== undefined) ? 'ready' : 'loading';
   const rowWho = row?.who.map((w) => <WhoRow key={w.id} actor={w.kind === 'group' ? null : w.id} name={w.name} />);
   const who = p.who ?? rowWho;
   return (
@@ -135,7 +139,7 @@ export function ToolPage(p: ToolPageProps) {
         }
       />
       <div className="conv-body tool-body" data-scroll>
-        <StateBody state={state} title={name} onRetry={q && (() => void q.refetch())} skeleton={<SkRows rows={8} />}>
+        <StateBody state={state} title={name} reads={all.length ? all : undefined} skeleton={<SkRows rows={8} />}>
           {!p.bare && (
             <>
               <Section name="What it is" target={`tool-about:${at}`}>
@@ -176,14 +180,10 @@ export function ToolPage(p: ToolPageProps) {
   );
 }
 
-/** A read inside a section that failed: it says so with Try again (a 403: not shared with you, nothing to retry). */
-export function ReadFault({ name, error, onRetry }: { name: string; error: unknown; onRetry: () => void }) {
-  if ((error as { status?: number } | null)?.status === 403) return <Empty title="Not shared with you" icon="lock" />;
-  return (
-    <Empty title={`${name} did not load`} icon="alert">
-      <Button onClick={onRetry}>Try again</Button>
-    </Empty>
-  );
+/** A read inside a section that failed: it says why (a 403: not shared with you, nothing to retry). */
+export function ReadFault({ name, reads }: { name: string; reads: readonly FailedRead[] }) {
+  if ((reads[0]?.error as { status?: number } | null)?.status === 403) return <Empty title="Not shared with you" icon="lock" />;
+  return <Fault what={name} reads={reads} />;
 }
 
 export const Code = ({ children }: { children: ReactNode }) => <code className="fact-code">{children}</code>;

@@ -69,7 +69,7 @@ describe('TeammateChat', () => {
     expect(asked.some((u) => u.includes('/api/v2/me'))).toBe(true);
     expect(asked.some((u) => u.includes('/threads/dm'))).toBe(false);
     expect(screen.queryByTestId('conversation')).toBeNull();
-    expect(screen.queryByText('The chat did not load')).toBeNull();
+    expect(screen.queryByText(/didn't load/)).toBeNull();
   });
 
   it('opens the direct thread with a teammate once it knows who I am @s604', async () => {

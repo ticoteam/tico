@@ -166,6 +166,8 @@ describe("Tico's tracker", () => {
       </QueryClientProvider>,
     );
     expect(await screen.findByText("Tracking didn't load · server restarting")).toBeTruthy();
+    // it is read again by itself: no Try again
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
     expect(warn).toHaveBeenCalledTimes(1);
     // the server is back: the stream says so, and the failed read goes out again with no click
     needsDown = false;

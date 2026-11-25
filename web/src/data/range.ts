@@ -3,7 +3,7 @@
 // that sends the whole file instead is cut off at once; it never holds more than it asked for. A 0-byte file has no
 // range (416) and reads as empty.
 import { queryOptions } from '@tanstack/react-query';
-import { ApiError } from '@/api/client';
+import { answered, ApiError, toError } from '@/api/client';
 import { ZIP_DIR_MAX, ZIP_TAIL, zipEnd, zipEntries, type ZipEntry } from '@/lib';
 
 export interface Bytes {
@@ -37,18 +37,24 @@ export const transient = (tries: number, e: unknown) => tries < 6 && (e instance
 /** Up to `bytes` bytes of the file at `url`. */
 export async function rangeBytes(url: string, bytes: number, { from = 0, suffix = false, signal }: RangeOptions = {}): Promise<Bytes> {
   if (!(bytes > 0) || !Number.isSafeInteger(bytes) || from < 0) throw new RangeError('bad range');
-  const res = await fetch(url, {
-    credentials: 'same-origin',
-    cache: 'no-store',
-    headers: { Range: suffix ? `bytes=-${bytes}` : `bytes=${from}-${from + bytes - 1}` },
-    ...(signal && { signal }),
-  });
+  // nothing answered, or the answer broke off, is the API's own "no answer" (answered); a refusal is the server's own
+  // Problem, or the proxy's (a stopped company), as the API reads it (toError)
+  const res = await answered(
+    fetch(url, {
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: { Range: suffix ? `bytes=-${bytes}` : `bytes=${from}-${from + bytes - 1}` },
+      ...(signal && { signal }),
+    }),
+    signal,
+  );
   const range = res.headers.get('content-range') ?? '';
   if (res.status === 416) {
     void res.body?.cancel();
     if (/^bytes \*\/0$/.test(range)) return { bytes: new Uint8Array(0), total: 0, truncated: false };
     throw refused(416, 'range not satisfiable');
   }
+  if (!res.ok) throw await toError(res);
   const m = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(range);
   const [start, end, total] = m ? [Number(m[1]), Number(m[2]), Number(m[3])] : [NaN, NaN, NaN];
   const length = end - start + 1;
@@ -61,7 +67,7 @@ export async function rangeBytes(url: string, bytes: number, { from = 0, suffix 
   let got = 0;
   const reader = res.body?.getReader();
   while (reader && got < length) {
-    const { done, value } = await reader.read();
+    const { done, value } = await answered(reader.read(), signal);
     if (done) break;
     const take = Math.min(value.length, length - got);
     out.set(value.subarray(0, take), got);

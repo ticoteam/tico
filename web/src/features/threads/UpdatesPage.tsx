@@ -74,8 +74,10 @@ function UpdatesList({ tab }: { tab: UpdateTab }) {
     if (!next.delete(day)) next.add(day);
     setFolded(next);
   };
+  // Reaching the end reads the next page: never while a read is on its way, and never after one failed (Load more
+  // reads that again), so a failed page is not asked for again each time the list draws.
   const more = () => {
-    if (list.hasNextPage && !list.isFetchingNextPage) void list.fetchNextPage();
+    if (list.hasNextPage && !isFetching && !isFetchNextPageError) void fetchNextPage();
   };
   return (
     <List
@@ -99,11 +101,13 @@ function UpdatesList({ tab }: { tab: UpdateTab }) {
       }
       state={searchingOlder ? searchState : listState}
       empty={{ title: archive ? 'Nothing archived' : 'No updates yet' }}
+      // an older page that failed is read again by Try again only: its paging is the person's, never by itself
       onRetry={searchingOlder ? () => void fetchNextPage({ cancelRefetch: false }) : undefined}
       sections={
         noMatch ? (
           <Empty icon="search" title="No matches" />
         ) : (
+        <>
         <VirtualList
           className="up-vl"
           label="Updates"
@@ -121,6 +125,12 @@ function UpdatesList({ tab }: { tab: UpdateTab }) {
             )
           }
         />
+        {isFetchNextPageError && (
+          <Button onClick={() => void fetchNextPage()} busy={list.isFetchingNextPage}>
+            Load more
+          </Button>
+        )}
+        </>
         )
       }
     />

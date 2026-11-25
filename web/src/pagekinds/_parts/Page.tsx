@@ -9,6 +9,7 @@ import type { PageBaseProps, PageTab, StateProps } from '@/pagekinds/types';
 import { PageBody } from './PageBody';
 import { PageHead } from './PageHead';
 import { PageTabs } from './PageTabs';
+import { needsRetry, ReadFault } from './ReadFault';
 
 export interface StateBodyProps extends StateProps {
   /** The page's name, for "<title> did not load". */
@@ -20,13 +21,15 @@ export interface StateBodyProps extends StateProps {
 }
 
 /** The body for each state: the slots when ready, the kind's bars while loading, one line and one action otherwise. */
-export function StateBody({ state = 'ready', title, empty, onRetry, noAccess, skeleton, children }: StateBodyProps) {
+export function StateBody({ state = 'ready', title, empty, reads, onRetry, noAccess, skeleton, children }: StateBodyProps) {
   if (state === 'loading') return <Loading>{skeleton}</Loading>;
   if (state === 'ready') return children;
   return (
     <PageBody className="is-empty">
       {state === 'empty' ? (
         <Empty title={empty?.title ?? 'Nothing here yet'}>{empty?.action}</Empty>
+      ) : state === 'fault' && reads ? (
+        <ReadFault what={title} reads={reads} onRetry={onRetry} variant="primary" />
       ) : state === 'fault' ? (
         <Empty icon="alert" title={`${title} did not load`} text="Check your connection and try again.">
           {onRetry && (
@@ -48,8 +51,8 @@ export function StateBody({ state = 'ready', title, empty, onRetry, noAccess, sk
  * Whether the head may hold the filled button. An empty page's action and a fault's Try again are the page's one
  * filled button, so while either shows, the head's own filled button draws plain.
  */
-export function headFills({ state = 'ready', empty, onRetry }: StateProps) {
-  return !((state === 'empty' && !!empty?.action) || (state === 'fault' && !!onRetry));
+export function headFills({ state = 'ready', empty, reads, onRetry }: StateProps) {
+  return !((state === 'empty' && !!empty?.action) || (state === 'fault' && (reads ? needsRetry(reads) : !!onRetry)));
 }
 
 /** A read faster than 150 ms never shows bars (architecture.md 8). No spinner, ever. */
@@ -94,7 +97,7 @@ export interface PageProps extends PageBaseProps {
 }
 
 /** The page sheet every kind but the centered card stands in: head, tab row, the state's body. */
-export function Page({ kind, className, tabs, tabsAfter, under, skeleton, over, children, state, empty, onRetry, noAccess, search, ...head }: PageProps) {
+export function Page({ kind, className, tabs, tabsAfter, under, skeleton, over, children, state, empty, reads, onRetry, noAccess, search, ...head }: PageProps) {
   // A phone's head keeps two controls: the search gets its own line under the head.
   const cards = useCards();
   const cls = `pane page pk pk-${kind}${className ? ` ${className}` : ''}`;
@@ -112,13 +115,13 @@ export function Page({ kind, className, tabs, tabsAfter, under, skeleton, over, 
   }
   return (
     <Main className={cls} aria-label={head.title}>
-      <FillContext value={headFills({ state, empty, onRetry })}>
+      <FillContext value={headFills({ state, empty, reads, onRetry })}>
         <PageHead {...head} search={cards ? undefined : search} />
         {tabs && tabs.length > 0 && <PageTabs tabs={tabs} label={`${head.title} pages`} after={tabsAfter} />}
       </FillContext>
       {cards && search && <div className="pk-find">{search}</div>}
       {(state ?? 'ready') === 'ready' && under}
-      <StateBody state={state} title={head.title} empty={empty} onRetry={onRetry} skeleton={skeleton}>
+      <StateBody state={state} title={head.title} empty={empty} reads={reads} onRetry={onRetry} skeleton={skeleton}>
         {children}
       </StateBody>
       {over}

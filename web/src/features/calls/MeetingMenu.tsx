@@ -13,7 +13,7 @@ import { MenuItem, MenuRule } from '@/kit/Menu';
 import { Select } from '@/kit/Select';
 import { Switch } from '@/kit/Switch';
 import { toast } from '@/kit/Toast';
-import { PageMore } from '@/pagekinds';
+import { faultHides, PageMore, ReadFault, type FailedRead } from '@/pagekinds';
 import { TRANSCRIPT_SOURCES, type TranscriptSource } from './model';
 import { PeoplePick } from './PeoplePick';
 import { press, useNameOf } from './parts';
@@ -184,15 +184,17 @@ function Sources({ onConnect, onLeave }: { onConnect: () => void; onLeave: () =>
   const importers = useQuery({ ...importersQuery, enabled: owner });
   if (granola.isPending && sources.isPending) return null;
   // The owner's own rows stand in for the importers' shared ones.
-  const mine = owner ? (importers.data?.importers ?? []) : [];
-  const computers = importers.data?.computers ?? [];
-  const shown = (sources.data?.sources ?? []).filter((x) => x.id !== 'import' && !mine.some((i) => i.source === x.id));
+  // a refusal hides what was read before too (faultHides)
+  const imp = faultHides(importers) ? undefined : importers.data;
+  const mine = owner ? (imp?.importers ?? []) : [];
+  const computers = imp?.computers ?? [];
+  const shown = ((faultHides(sources) ? undefined : sources.data)?.sources ?? []).filter((x) => x.id !== 'import' && !mine.some((i) => i.source === x.id));
   return (
     <ul className="call-src" data-target="dialog:meeting-sources">
-      {granola.data ? (
+      {granola.data && !faultHides(granola) ? (
         <GranolaRow g={granola.data} onConnect={onConnect} />
       ) : (
-        granola.isError && <ShortRow name="Granola" />
+        granola.isError && <ShortRow name="Granola" read={granola} />
       )}
       {shown.map((x) => (
         <li key={x.id} className="call-src-row">
@@ -210,21 +212,23 @@ function Sources({ onConnect, onLeave }: { onConnect: () => void; onLeave: () =>
           )}
         </li>
       ))}
-      {sources.isError && <ShortRow name="Other sources" />}
+      {faultHides(sources) && <ShortRow name="Other sources" read={sources} />}
       {mine.map((i) => (
         <ImporterRow key={i.source} i={i} computers={computers} />
       ))}
-      {owner && importers.isError && <ShortRow name="Importers" />}
-      {owner && importers.data && !computers.length && <li className="call-src-row call-src-st">Add a computer first</li>}
+      {owner && faultHides(importers) && <ShortRow name="Importers" read={importers} />}
+      {owner && imp && !computers.length && <li className="call-src-row call-src-st">Add a computer first</li>}
     </ul>
   );
 }
 
-function ShortRow({ name }: { name: string }) {
+/** A source's read that failed: its one line, why, and Try again when reading again by itself would not fix it. */
+function ShortRow({ name, read }: { name: string; read: FailedRead }) {
   return (
     <li className="call-src-row">
-      <b>{name}</b>
-      <span className="call-src-err">Did not load</span>
+      <span className="call-src-err">
+        <ReadFault what={name} reads={[read]} inline />
+      </span>
     </li>
   );
 }
@@ -500,9 +504,14 @@ type Team = 'review' | 'auto';
 const SHARE_WORDS: Record<Team, string> = { review: 'Review before sharing', auto: 'Share at once' };
 
 function SettingsForm({ done }: { done: () => void }) {
-  const { data: s, isError } = useQuery(meetingSettingsQuery);
+  const { data: s, isError, error, refetch } = useQuery(meetingSettingsQuery);
   const owner = useQuery(meQuery).data?.role === 'owner';
-  if (isError) return <p className="call-src-err">Settings did not load.</p>;
+  if (isError)
+    return (
+      <p className="call-src-err">
+        <ReadFault what="Settings" reads={[{ error, refetch }]} inline />
+      </p>
+    );
   if (!s) return null;
   return <SettingsFields key={String(s.auto_share) + s.review_default} s={s} owner={owner} done={done} />;
 }

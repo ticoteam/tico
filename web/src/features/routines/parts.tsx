@@ -6,7 +6,6 @@ import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
 import { DatePick } from '@/kit/DatePick';
 import { Dialog } from '@/kit/Dialog';
-import { Empty } from '@/kit/Empty';
 import { SettledSearch } from '@/kit/Field';
 import { FlowMark } from '@/kit/FlowMark';
 import { Icon, type IconName } from '@/kit/Icon';
@@ -16,6 +15,7 @@ import { SkeletonRows } from '@/kit/Skeleton';
 import { Switch } from '@/kit/Switch';
 import { toast } from '@/kit/Toast';
 import { VirtualList } from '@/kit/VirtualList';
+import { ReadFault, type FailedRead } from '@/pagekinds';
 import { endAfter, lastDay } from './words';
 
 /* The pieces Routines, Rules and Listening share, ported from pages/3-company/rules.js: a word, a quiet verb, the rule
@@ -37,7 +37,7 @@ export async function pressOut<T>(id: string, input: unknown): Promise<{ out: T 
 }
 
 /** Something went wrong, said in ink with a mark: no red. */
-export const Word = ({ children, icon = 'alert' }: { children: string; icon?: IconName }) => (
+export const Word = ({ children, icon = 'alert' }: { children: ReactNode; icon?: IconName }) => (
   <span className="word">
     <Icon name={icon} />
     {children}
@@ -73,16 +73,9 @@ export const actorKey = (id: string | null | undefined): string | undefined => (
 /** The person or agent behind an owner id. */
 const useOwner = (id: string | null | undefined) => useActor(actorKey(id));
 
-/** A panel's own read: grey bars while it loads, then what did not load and Try again. Nothing once it has data. */
-export function PanelRead({ q, what }: { q: { isPending: boolean; isError: boolean; refetch: () => unknown }; what: string }) {
-  if (q.isError)
-    return (
-      <Empty icon="alert" title={`${what} did not load`}>
-        <Button variant="quiet" onClick={() => q.refetch()}>
-          Try again
-        </Button>
-      </Empty>
-    );
+/** A panel's own read: grey bars while it loads, then what did not load and why. Nothing once it has data. */
+export function PanelRead({ q, what }: { q: FailedRead & { isPending: boolean; isError: boolean }; what: string }) {
+  if (q.isError) return <ReadFault what={what} reads={[q]} />;
   return q.isPending ? <SkeletonRows rows={4} /> : null;
 }
 

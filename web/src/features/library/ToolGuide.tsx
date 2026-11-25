@@ -260,7 +260,7 @@ function EditGuideDialog({ slug, origin, guide, onClose }: { slug: string; origi
 function Connections({ q }: { q: UseQueryResult<{ rows: VendorRow[] }> }) {
   if (q.isPending && q.fetchStatus !== 'idle') return <SkRows rows={3} />;
   if (q.isError && (q.error as { status?: number } | null)?.status !== 404)
-    return <ReadFault name="Connections" error={q.error} onRetry={() => void q.refetch()} />;
+    return <ReadFault name="Connections" reads={[q]} />;
   return q.data?.rows.map((r) => <Connection key={r.id} row={r} />) ?? null;
 }
 

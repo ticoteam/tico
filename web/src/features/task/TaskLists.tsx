@@ -7,7 +7,6 @@ import { filtersOf, flowQuery, inOrder, isFiltered, loadListTools, loadMore, nee
 import { ownerListQuery, type OwnTask } from '@/features/team/routing';
 import { Ago } from '@/kit/Ago';
 import { Avatar } from '@/kit/Avatar';
-import { Button } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
 import { FlowMark } from '@/kit/FlowMark';
 import { Icon } from '@/kit/Icon';
@@ -18,6 +17,7 @@ import { VirtualList, type VirtualListHandle } from '@/kit/VirtualList';
 import { useFollow } from '@/live/follow';
 import { HITS } from '@/search/helpers';
 import { boardSearch, hearPlaces, holdRow, keptRows, NEEDS_YOU, noteList, type ListRow } from '@/lib';
+import { faultHides, ReadFault, type FailedRead } from '@/pagekinds';
 
 /* The list beside a task open over a page (plan: the task modal): the list it was opened from. A board's stage (its
    pipeline's id), Needs you (none), an agent's or a person's open tasks (their id), search hits (`search:<words>`), or
@@ -174,7 +174,8 @@ function PipelineList({ pipeline, open, stage, end }: { pipeline: string; open: 
   const search = useSyncExternalStore(hearPlaces, () => boardSearch(pipeline));
   const filters = useMemo(() => ({ ...filtersOf(validateTasksSearch(search)), sort: sortOf(search) }), [search]);
   const list = useQuery({ ...pipelineTasksQuery(pipeline, filters), enabled: !!p });
-  const page = list.data;
+  // a refusal hides rows read before too (faultHides)
+  const page = faultHides(list) ? undefined : list.data;
   const rows = useMemo(() => inOrder(page?.tasks ?? [], filters.sort), [page, filters.sort]);
   const read = useMemo(
     () =>
@@ -194,7 +195,7 @@ function PipelineList({ pipeline, open, stage, end }: { pipeline: string; open: 
   // Priority: the stage shown is read on its own, in Tico's order for the person, whole (no More)
   const ranks = !filters.sort && !!showing;
   const byPriority = useQuery({ ...stagePriorityQuery(pipeline, showing ?? '', filters), enabled: !!p && ranks });
-  const ranked = byPriority.data;
+  const ranked = faultHides(byPriority) ? undefined : byPriority.data;
   // failed: unless the stage shown is read on its own by priority, the pipeline's read is the list
   const listFailed = list.isError && !page && (!showing || !ranks);
   const failed = listFailed || (ranks && byPriority.isError && !ranked);
@@ -257,9 +258,7 @@ function PipelineList({ pipeline, open, stage, end }: { pipeline: string; open: 
       ) : null}
       <div className="nav-scroll li-body">
         {failed ? (
-          <Empty icon="alert" title="These tasks did not load">
-            <Button onClick={() => void (listFailed ? list.refetch() : byPriority.refetch())}>Try again</Button>
-          </Empty>
+          <ReadFault what="These tasks" reads={[listFailed ? list : byPriority]} />
         ) : page && (!ranks || ranked) && !more && !shown?.items.length ? (
           <Empty title="No open tasks" />
         ) : null}
@@ -342,7 +341,7 @@ function WhoList({ who, open, current, end }: { who: string; open: string; curre
 }
 
 /** A list a page drew (lib keepRows), its rows in its order; none drawn since the app loaded: Needs you. */
-const READ = { isError: false, refetch: () => undefined };
+const READ = { isError: false, error: null, refetch: () => undefined };
 function DrawnList({ list, open, current, end }: { list: string; open: string; current?: Shown; end?: ReactNode }) {
   const kept = useSyncExternalStore(hearPlaces, () => keptRows(list));
   const needs = useNeedsYou();
@@ -373,13 +372,14 @@ function SearchList({ words, list, open, current, end }: { words: string; list: 
   );
 }
 
-function Rows({ read, tasks, open, needs, empty }: { read: { isError: boolean; refetch: () => unknown }; tasks: readonly Shown[] | undefined; open: string; needs: ReadonlySet<string> | undefined; empty: string }) {
+function Rows({ read, tasks: drawn, open, needs, empty }: { read: FailedRead & { isError: boolean }; tasks: readonly Shown[] | undefined; open: string; needs: ReadonlySet<string> | undefined; empty: string }) {
+  // a refusal hides rows read before too (faultHides)
+  const hide = faultHides({ isError: read.isError, error: read.error, data: drawn });
+  const tasks = hide ? undefined : drawn;
   return (
     <div className="nav-scroll li-body">
-      {read.isError && !tasks ? (
-        <Empty icon="alert" title="These tasks did not load">
-          <Button onClick={() => void read.refetch()}>Try again</Button>
-        </Empty>
+      {hide ? (
+        <ReadFault what="These tasks" reads={[read]} />
       ) : tasks && !tasks.length ? (
         <Empty title={empty} />
       ) : null}

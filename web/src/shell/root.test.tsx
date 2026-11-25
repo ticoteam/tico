@@ -1077,13 +1077,14 @@ describe('a page that fails', () => {
       if (broken) throw new TypeError('d.toISOString is not a function');
       return <h1>Routines</h1>;
     });
-    expect(within(main).getByText('This page did not load')).toBeTruthy();
+    // the app's own error: reading again by itself would not help, so Try again
+    expect(within(main).getByText("This page didn't load · app error")).toBeTruthy();
     expect(screen.getByRole('navigation', { name: 'Main' })).toBeTruthy();
     expect(vi.mocked(reportError)).toHaveBeenCalledWith(expect.any(TypeError), { source: 'page_fault', route: '/' });
     broken = false;
     fireEvent.click(within(main).getByRole('button', { name: 'Try again' }));
     expect(await screen.findByRole('heading', { name: 'Routines' })).toBeTruthy();
-    expect(screen.queryByText('This page did not load')).toBeNull();
+    expect(screen.queryByText("This page didn't load · app error")).toBeNull();
   });
 
   it('shows no access, without Try again, when the server refuses it', async () => {
@@ -1094,7 +1095,7 @@ describe('a page that fails', () => {
       },
     );
     expect(within(main).queryByRole('button', { name: 'Try again' })).toBeNull();
-    expect(within(main).queryByText('This page did not load')).toBeNull();
+    expect(within(main).queryByText(/didn't load/)).toBeNull();
     expect(vi.mocked(reportError)).not.toHaveBeenCalled();
   });
 });

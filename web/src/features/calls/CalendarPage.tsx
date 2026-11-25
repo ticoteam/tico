@@ -206,7 +206,7 @@ export function CalendarPage() {
         }
         // Until the range is read the grid would say "Nothing this week": the kind's bars instead.
         state={read.isError ? 'fault' : read.isPending ? 'loading' : undefined}
-        onRetry={() => void read.refetch()}
+        reads={[read]}
         grid={grid}
         agenda={
           showAgenda && view === 'week' ? (

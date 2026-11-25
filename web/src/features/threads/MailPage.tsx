@@ -16,7 +16,7 @@ import { Menu, MenuItem } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { Row } from '@/kit/Row';
 import { VirtualList } from '@/kit/VirtualList';
-import { ItemHead, ListAndItem, PageMore, type ItemHeadProps } from '@/pagekinds';
+import { faultHides, ItemHead, type ItemHeadProps, ListAndItem, PageMore, ReadFault } from '@/pagekinds';
 import { contactsOf, letterAt, letterRows, letterUnread, senderName, type Letter, type LetterRow, type Text } from './model';
 import { ChatWith, press } from './people';
 import { letterQuery, mailboxesQuery, mailFindQuery, mailInstructionsQuery, textListQuery, textQuery, textsBySenderQuery, type Mailbox } from './queries';
@@ -63,13 +63,15 @@ export function MailPage({ box, open, view, q: words }: MailPageProps) {
       ? 'empty'
       : current && list.isPending
         ? 'loading'
-        : list.isError
+        : faultHides(list)
           ? 'fault'
           : rows.length === 0 && !letterId && !agent && !pick && !narrowed
             ? 'empty'
             : 'ready';
+  // Reaching the end reads the next page: never while a read is on its way (a refresh clears the failed page's mark
+  // while it runs, and the next page would cancel it), and never after one failed: Load more reads that again.
   const more = () => {
-    if (list.hasNextPage && !list.isFetchingNextPage) void list.fetchNextPage();
+    if (list.hasNextPage && !list.isFetching && !list.isFetchNextPageError) void list.fetchNextPage();
   };
   return (
     <ListAndItem
@@ -118,6 +120,7 @@ export function MailPage({ box, open, view, q: words }: MailPageProps) {
             onReachEnd={more}
             renderItem={(r) => <MailRow r={r} box={current} keep={keep} selected={!reading && r.letter.thread_id === letterId} />}
           />
+          {list.isFetchNextPageError && <OlderAgain list={list} />}
         </>
       }
       open={!!letterId || !!reading}
@@ -130,7 +133,7 @@ export function MailPage({ box, open, view, q: words }: MailPageProps) {
             }
           : { title: 'No mail' }
       }
-      onRetry={() => void list.refetch()}
+      reads={[list]}
       {...(reading
         ? {
             itemHead: <ItemHead title="Instructions" target="page:/threads/mail?view=instructions" back={back} />,
@@ -212,13 +215,11 @@ function LetterHead({ box, id, back }: { box: Mailbox; id: string; back: ItemHea
 }
 
 function LetterBody({ box, id }: { box: string; id: string }) {
-  const { data, isPending, isError, refetch } = useQuery(letterQuery(box, id));
+  const { data, isPending, isError, error, refetch } = useQuery(letterQuery(box, id));
   if (isPending) return <MessageBones label="Loading mail" className="lt-bones" />;
   if (isError)
     return (
-      <Empty icon="alert" title="This mail did not load">
-        <Button onClick={() => refetch()}>Try again</Button>
-      </Empty>
+      <ReadFault what="This mail" reads={[{ error, refetch }]} />
     );
   return (
     <>
@@ -249,13 +250,11 @@ function MailAgentBox({ box, id, agent }: { box: string; id: string; agent: stri
 
 /** What the mailbox's agent works from; written in the agent's own files, so read only here. */
 function Instructions({ box }: { box: string }) {
-  const { data, isPending, isError, refetch } = useQuery(mailInstructionsQuery(box));
+  const { data, isPending, isError, error, refetch } = useQuery(mailInstructionsQuery(box));
   if (isPending) return <MessageBones label="Loading instructions" className="lt-bones" />;
   if (isError)
     return (
-      <Empty icon="alert" title="The instructions did not load">
-        <Button onClick={() => refetch()}>Try again</Button>
-      </Empty>
+      <ReadFault what="The instructions" reads={[{ error, refetch }]} />
     );
   if (!data.instructions.trim()) return <Empty icon="rules" title="No instructions" />;
   return (
@@ -306,8 +305,10 @@ export function MessagingPage({ open }: MessagingPageProps) {
   const find = words.toLowerCase();
   const messages = list.data?.pages.flatMap((p) => p.messages) ?? [];
   const contacts = contactsOf(find ? messages.filter((t) => (t.from ?? '').toLowerCase().includes(find)) : messages);
+  // Reaching the end reads the next page: never while a read is on its way (a refresh clears the failed page's mark
+  // while it runs, and the next page would cancel it), and never after one failed: Load more reads that again.
   const more = () => {
-    if (list.hasNextPage && !list.isFetchingNextPage) void list.fetchNextPage();
+    if (list.hasNextPage && !list.isFetching && !list.isFetchNextPageError) void list.fetchNextPage();
   };
   return (
     <ListAndItem
@@ -319,21 +320,24 @@ export function MessagingPage({ open }: MessagingPageProps) {
         contacts.length === 0 && words ? (
           <Empty icon="search" title="No matches" />
         ) : (
-          <VirtualList
-            className="tl-vl"
-            label="Messaging"
-            items={contacts}
-            getKey={(t) => t.from ?? t.message_id}
-            estimateSize={35}
-            onReachEnd={more}
-            renderItem={(t) => <ContactRow t={t} selected={t.from === open} />}
-          />
+          <>
+            <VirtualList
+              className="tl-vl"
+              label="Messaging"
+              items={contacts}
+              getKey={(t) => t.from ?? t.message_id}
+              estimateSize={35}
+              onReachEnd={more}
+              renderItem={(t) => <ContactRow t={t} selected={t.from === open} />}
+            />
+            {list.isFetchNextPageError && <OlderAgain list={list} />}
+          </>
         )
       }
       open={!!open}
-      state={list.isPending ? 'loading' : list.isError ? 'fault' : contacts.length === 0 && !open && !words ? 'empty' : 'ready'}
+      state={list.isPending ? 'loading' : faultHides(list) ? 'fault' : contacts.length === 0 && !open && !words ? 'empty' : 'ready'}
       empty={{ title: 'No texts yet' }}
-      onRetry={() => void list.refetch()}
+      reads={[list]}
       {...(open
         ? {
             itemHead: (
@@ -349,6 +353,15 @@ export function MessagingPage({ open }: MessagingPageProps) {
           }
         : {})}
     />
+  );
+}
+
+/** Under a list whose next page failed: the press that reads it again (that page alone). */
+function OlderAgain({ list }: { list: { fetchNextPage: () => Promise<unknown>; isFetchingNextPage: boolean } }) {
+  return (
+    <Button onClick={() => list.fetchNextPage()} busy={list.isFetchingNextPage}>
+      Load more
+    </Button>
   );
 }
 
@@ -370,12 +383,8 @@ function Texts({ from }: { from: string }) {
   const texts = (list.data?.pages.flatMap((p) => p.messages.filter((t) => t.from === from)) ?? []).reverse();
   const full = useQueries({ queries: texts.map((t) => textQuery(t.message_id)) });
   if (list.isPending) return <MessageBones label="Loading texts" className="lt-bones" />;
-  if (list.isError)
-    return (
-      <Empty icon="alert" title="These texts did not load">
-        <Button onClick={() => list.refetch()}>Try again</Button>
-      </Empty>
-    );
+  // an older page that failed and may pass keeps Older texts to press again; a refusal hides the texts (faultHides)
+  if (faultHides(list)) return <ReadFault what="These texts" reads={[list]} />;
   return (
     <div className="mg-list">
       {list.hasNextPage && (

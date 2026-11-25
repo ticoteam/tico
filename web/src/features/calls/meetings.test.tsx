@@ -592,9 +592,9 @@ describe('Calendar, checked against the old app', () => {
 
   it("a List the server refuses is the page's fault, with Try again", async () => {
     let fail = true;
-    answer = (url) => (url.includes('/api/v2/meetings') ? (fail ? json({ error: { code: 'boom' } }, 500) : json({ meetings: [{ id: 'mt1', title: 'Weekly sync', review_state: 'live', started: at(9) }], count: 1, pending_count: 0 })) : undefined);
+    answer = (url) => (url.includes('/api/v2/meetings') ? (fail ? json({ error: { code: 'boom' } }, 409) : json({ meetings: [{ id: 'mt1', title: 'Weekly sync', review_state: 'live', started: at(9) }], count: 1, pending_count: 0 })) : undefined);
     show('/calendar?view=list');
-    expect(await screen.findByText('Calendar did not load')).toBeTruthy();
+    expect(await screen.findByText("Calendar didn't load · request refused")).toBeTruthy();
     expect(screen.queryByText('No meetings or calls yet')).toBeNull();
     fail = false;
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));

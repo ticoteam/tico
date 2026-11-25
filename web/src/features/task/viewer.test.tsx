@@ -4,11 +4,12 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionsRoot } from '@/actions';
+import { ApiError } from '@/api/client';
 import { queryClient } from '@/data';
 import { FileFrame, posterOf } from '@/features/library/exports';
 import { openTasksOver } from '@/lib';
 import { fakePdf } from '@/test/fakePdf';
-import type { TaskData } from './queries';
+import { wordQuery, type TaskData } from './queries';
 import { tabLabel } from './model';
 import { TaskPage } from './TaskPage';
 
@@ -187,11 +188,11 @@ describe('a task’s tabs: pages and plain files', () => {
     let unavailable = true;
     reply = (url) =>
       unavailable && url.endsWith('/api/v2/tasks/t1/files?all=1')
-        ? { status: 503, body: { error: { code: 'unavailable', detail: 'Try again' } } }
+        ? { status: 409, body: { error: { code: 'refused', detail: 'Refused' } } }
         : null;
     try {
       const router = show(<TaskPage task="12" tab="letter-pdf" />, path);
-      expect(await screen.findByText('This file did not load')).toBeTruthy();
+      expect(await screen.findByText("This file didn't load · request refused")).toBeTruthy();
       expect(router.state.location.pathname).toBe(path);
       unavailable = false;
       fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
@@ -263,6 +264,43 @@ describe('a task’s tabs: pages and plain files', () => {
     expect(frame.getAttribute('sandbox')).not.toContain('allow-scripts');
     expect(calls).toContain('GET /api/v2/pages/h1');
     reply = () => null;
+  });
+});
+
+describe('a Word file that did not read', () => {
+  const read = (url: string) => queryClient.fetchQuery({ ...wordQuery(url), retry: false });
+
+  it('with no answer fails as the API does when nothing answers, so it is read again by itself', async () => {
+    vi.stubGlobal('fetch', async () => {
+      throw new TypeError('Failed to fetch');
+    });
+    const err = await read('/api/v2/files/w9').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(0);
+    expect((err as ApiError).code).toBe('network');
+  });
+
+  it('that is not Word (no word/document.xml) is the app’s error, not the connection’s', async () => {
+    const zip = await zipOf('other.xml', '<x/>');
+    vi.stubGlobal('fetch', async () => new Response(zip as Uint8Array<ArrayBuffer>, { status: 200 }));
+    const err = await read('/api/v2/files/w8').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(ApiError);
+  });
+
+  it('whose answer broke off on the way is no answer too, read again by itself', async () => {
+    const broken = new ReadableStream({ start: (c) => c.error(new TypeError('network error')) });
+    vi.stubGlobal('fetch', async () => new Response(broken, { status: 200 }));
+    const err = await read('/api/v2/files/w7').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect([(err as ApiError).status, (err as ApiError).code]).toEqual([0, 'network']);
+  });
+
+  it('of a stopped company is stopped, not read again by itself', async () => {
+    vi.stubGlobal('fetch', async () => new Response('This Tico company is stopped. Start it from Tico HQ.', { status: 503 }));
+    const err = await read('/api/v2/files/w6').catch((e: unknown) => e);
+    // a stopped company: what passing() (live/fault.ts) never reads again by itself
+    expect((err as ApiError).code).toBe('stopped');
   });
 });
 

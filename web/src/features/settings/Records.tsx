@@ -13,7 +13,7 @@ import { run } from '@/actions/run';
 import { refusal } from '@/actions';
 import { fmtDate } from '@/lib';
 import { toast } from '@/kit/Toast';
-import { FiguresStrip, Section } from '@/pagekinds';
+import { FiguresStrip, ReadFault, Section } from '@/pagekinds';
 import { StateBody } from '@/pagekinds';
 import { fixHref } from './fixes';
 import { Foot, NO_ACCESS, Verb, Word, act, isForbidden, micros } from './parts';
@@ -139,11 +139,7 @@ export function Billing() {
           {null}
         </StateBody>
       );
-    return (
-      <Empty icon="alert" title="Billing did not load">
-        <Button onClick={() => billing.refetch()}>Try again</Button>
-      </Empty>
-    );
+    return <ReadFault what="Billing" reads={[billing]} />;
   }
   if (b.state === 'no_account' && payUrl(b.booking_url))
     return (

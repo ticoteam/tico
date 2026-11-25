@@ -301,7 +301,7 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
       {...head}
       state={quiet ? (pinsFailed ? 'fault' : 'empty') : 'ready'}
       empty={{ title: 'Nothing yet' }}
-      onRetry={() => void pins.refetch()}
+      reads={[pins]}
       figures={
         <FiguresStrip
           label={`${actor.name} at a glance`}

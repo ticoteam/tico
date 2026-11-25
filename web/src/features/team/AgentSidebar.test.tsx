@@ -293,7 +293,7 @@ describe("An agent's own sidebar", () => {
   it('says its page did not load, with Try again, when its pins could not be read and it has nothing else', async () => {
     const empty = (u: string) => (u.includes('/api/v2/updates') ? { body: { updates: [] } } : u.includes('/bots/ana/files') ? { body: { files: [], total: 0 } } : undefined);
     let down = true;
-    open([w('page:f1')], (u) => (u.includes('/api/v2/places/') && down ? { status: 500, body: { error: { code: 'internal', detail: 'down' } } } : empty(u)));
+    open([w('page:f1')], (u) => (u.includes('/api/v2/places/') && down ? { status: 409, body: { error: { code: 'refused', detail: 'refused' } } } : empty(u)));
     const retry = await screen.findByRole('button', { name: 'Try again' });
     expect(screen.queryByText('Nothing yet')).toBeNull();
     down = false;
@@ -366,5 +366,26 @@ describe("An agent's Tools", () => {
     fireEvent.change(within(dialog).getByLabelText('Used for'), { target: { value: 'Refunds' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Add' }));
     await waitFor(() => expect(reads).toContain('/api/v2/bots/ana/tool-guides/stripe'));
+  });
+
+  it('Add tool: more tools that fail to load and may pass keep the ones found and More to press again, beside why', async () => {
+    open([w('tools')], (u) =>
+      u.endsWith('/bots/ana/tool-guides')
+        ? { body: { bot: '0190-ana', tool_guides: rows, next: null } }
+        : u.includes('/api/v2/tool-guides?') && u.includes('cursor=c2')
+          ? { status: 500, body: { error: { code: 'internal', detail: 'No.' } } }
+          : u.includes('/api/v2/tool-guides?')
+            ? { body: { tool_guides: found, next: 'c2' } }
+            : undefined,
+    );
+    const tools = await screen.findByRole('region', { name: 'Tools' });
+    fireEvent.click(within(tools).getByRole('button', { name: 'Add tool' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add a tool to Ana' });
+    expect(await within(dialog).findByRole('option', { name: /^Stripe/ })).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'More' }));
+    await waitFor(() => expect(reads.some((u) => u.includes('cursor=c2'))).toBe(true));
+    await waitFor(() => expect((within(dialog).getByRole('button', { name: 'More' }) as HTMLButtonElement).disabled).toBe(false));
+    expect(within(dialog).getByRole('option', { name: /^Stripe/ })).toBeTruthy();
+    expect(within(dialog).getByText("Search didn't load · server error")).toBeTruthy();
   });
 });

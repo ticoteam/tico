@@ -4,9 +4,9 @@ import { Conversation, MessageBones, type ChatMessage } from '@/conversation';
 import { useDirectory } from '@/data';
 import { callCard } from '@/features/calls/exports';
 import { groupsQuery, teamSlug } from '@/features/team/routing';
-import { Button } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
 import { Icon } from '@/kit/Icon';
+import { ReadFault } from '@/pagekinds';
 import { updateTitle, type Update } from './model';
 import { teamThreadQuery, updateListQuery } from './queries';
 
@@ -75,9 +75,7 @@ export function TeamThread({ who }: TeamThreadProps) {
 
   if (groups.isError || thread.isError)
     return (
-      <Empty icon="alert" title="This thread did not load">
-        <Button onClick={() => (groups.isError ? groups.refetch() : thread.refetch())}>Try again</Button>
-      </Empty>
+      <ReadFault what="This thread" reads={[groups, thread]} />
     );
   if (groups.data && !group) return <Empty icon="people" title="No such team" />;
   if (!thread.data) return <MessageBones />;

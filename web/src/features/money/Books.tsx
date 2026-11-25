@@ -73,7 +73,7 @@ function Page({
       {...head}
       state={readState(q, !!empty)}
       empty={empty}
-      onRetry={() => void q.refetch()}
+      reads={[q]}
       actions={
         <>
           {tools}

@@ -10,8 +10,7 @@ import { Facts, LabelValue } from '@/kit/LabelValue';
 import { Menu, MenuItem } from '@/kit/Menu';
 import { SkeletonRows } from '@/kit/Skeleton';
 import { toast } from '@/kit/Toast';
-import { Section } from '@/pagekinds';
-import { PartFault } from './Cards';
+import { ReadFault, Section } from '@/pagekinds';
 import { GithubDialog } from './GithubDialog';
 import { forgetSetup, isGithubPage, pendingSetup, reasonOf } from './handoff';
 import { githubQuery } from './queries';
@@ -35,7 +34,7 @@ export function GithubConnection() {
       {app.isPending ? (
         <SkeletonRows rows={3} />
       ) : app.isError ? (
-        <PartFault name="GitHub" onRetry={() => void app.refetch()} />
+        <ReadFault what="GitHub" reads={[app]} variant="primary" />
       ) : app.data.connected ? (
         <Connected app={app.data} />
       ) : (

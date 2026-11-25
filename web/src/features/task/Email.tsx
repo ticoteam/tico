@@ -2,9 +2,9 @@ import { useQuery } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import { stamp } from '@/conversation';
 import { FileFrame, fileSize } from '@/features/library/exports';
-import { Button } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
 import { Icon } from '@/kit/Icon';
+import { ReadFault } from '@/pagekinds';
 import { PageBones } from './FileView';
 import { Go } from './parts';
 import { SendMark } from './sending';
@@ -25,12 +25,8 @@ const isDoc = (f: EmailFile) => isWord(f.name, f.type) || /^(application\/pdf|te
 
 export function Email({ task, send, part, at, lead }: { task: string; send: string; part?: number; at: string; lead?: ReactNode }) {
   const q = useQuery(emailSendQuery(task, send));
-  if (q.isError || q.data?.preview_complete === false)
-    return (
-      <Empty icon="alert" title="The email did not load">
-        {q.isError && <Button onClick={() => q.refetch()}>Try again</Button>}
-      </Empty>
-    );
+  if (q.isError) return <ReadFault what="The email" reads={[q]} />;
+  if (q.data?.preview_complete === false) return <Empty icon="alert" title="The email did not load" />;
   if (!q.data) return <PageBones />;
   const { send: s, body, files } = q.data;
   const f = part === undefined ? undefined : files.find((x) => x.part === part);
