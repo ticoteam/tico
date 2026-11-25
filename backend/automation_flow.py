@@ -342,11 +342,8 @@ def check_only_if(only_if, where="trigger only_if"):
     host, no leading slash, no `..`), and exactly one rule."""
     _need(isinstance(only_if, dict) and set(only_if) <= ONLY_IF_KEYS, where, "is {read, at_least} or {read, none}")
     read = only_if.get("read")
-    _need(
-        isinstance(read, str) and 0 < len(read) <= MAX_READ,
-        where,
-        f"read is a path under /api/v2/ of at most {MAX_READ} characters",
-    )
+    if not isinstance(read, str) or not 0 < len(read) <= MAX_READ:
+        raise Invalid(f"{where}: read is a path under /api/v2/ of at most {MAX_READ} characters")
     path, _, query = read.partition("?")
     _need(
         bool(READ_PATH.fullmatch(path)) and ".." not in path.split("/") and not any(ch in read for ch in "#\\\t\r\n"),
