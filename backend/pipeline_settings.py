@@ -155,11 +155,23 @@ def _people_only(requirement: Row) -> Row:
     return {**requirement, "who_oks": "people_only"}
 
 
+# A finding on the PR description has no line of the diff to point at: the guideline line it breaks (CONTRIBUTING.md
+# for a missing Spec, Demo steps or Risk) is its place. Without saying so, the judge is unsure of a page whose one
+# finding is that, though it has a place, a severity and why.
 REVIEW_RUBRIC = (
+    "Two reviews of the newest commit of every linked PR, each naming that commit and its model: use different models "
+    "and say what each checked. Give each real defect its own finding with file:line, severity, and why it matters; "
+    "a finding on the PR description gives the file:line of the guideline it breaks. Skip style nits and diff "
+    "summaries. Say when there are no findings."
+)
+# The combined Review rubric before a PR-description finding could cite its guideline line (EARLIER, `_follow`).
+_REVIEW_RUBRIC_BEFORE_DESCRIPTION = (
     "Two reviews of the newest commit of every linked PR, each naming that commit and its model: use different models "
     "and say what each checked. Give each real defect its own finding with file:line, severity, and why it matters. "
     "Skip style nits and diff summaries. Say when there are no findings."
 )
+# Every text the combined Review rubric has shipped with: asked whole, with its parts (pipeline_judges.EXPLAINED).
+COMBINED_REVIEW_RUBRICS = (REVIEW_RUBRIC, _REVIEW_RUBRIC_BEFORE_DESCRIPTION)
 # The single-review line the presets shipped before the one Review stage (still recognised, EARLIER).
 # Judged from the page alone (Jev is shown the linked PRs' newest commits beside it), and true of a good review of a
 # correct change: one with nothing to fix says so. "What is wrong" alone made a clean review read as incomplete, and
@@ -521,8 +533,8 @@ _REVIEW_PURPOSE_BEFORE_BODY = (
 )
 EARLIER: dict[str, tuple[str, ...]] = {
     "product-ideas/purpose": ("Ideas wait here. Move one to Spec when it is worth a spec. Snooze one to park it.",),
-    "engineering-review-1/page/rubric": (LEGACY_REVIEW_RUBRIC, _REVIEW_RC3),
-    "product-review-1/page/rubric": (LEGACY_REVIEW_RUBRIC,),
+    "engineering-review-1/page/rubric": (LEGACY_REVIEW_RUBRIC, _REVIEW_RC3, _REVIEW_RUBRIC_BEFORE_DESCRIPTION),
+    "product-review-1/page/rubric": (LEGACY_REVIEW_RUBRIC, _REVIEW_RUBRIC_BEFORE_DESCRIPTION),
     "engineering-review-1/purpose": ("Review the newest commit and attach a Review page.", _REVIEW_PURPOSE_BEFORE_BODY),
     "product-review-1/purpose": ("Review the newest commit and attach a Review page.", _REVIEW_PURPOSE_BEFORE_BODY),
     "engineering-fixes-2/purpose": (
