@@ -47,7 +47,7 @@ public config or browser assets. Release/debug mapping needs its own tested priv
 ## Web app errors
 
 The web app (`web/`, `web/src/features/support/errors.ts`) sends errors only, to Sentry; it sends nothing to
-PostHog. With `TICO_SENTRY_DSN` and `TICO_OBSERVABILITY_ENVIRONMENT` set, it reports uncaught errors, unhandled
+PostHog. With `TICO_SENTRY_DSN`, `TICO_OBSERVABILITY_ENVIRONMENT` and `TICO_OBSERVABILITY_ID_SECRET` set, it reports uncaught errors, unhandled
 rejections and every "This page did not load" screen (`source=page_fault`, except a refused 403). Each event is
 rebuilt before sending from: the error's type, stack frames in the app's own files, the route's template
 (`/_app/tasks/$id`, never the address), the server's status and error code for a failed read, the release,

@@ -10,7 +10,8 @@ import type { ErrorEvent, StackFrame } from '@sentry/browser';
 import { ApiError } from '@/api/client';
 import { observabilityConfig } from './queries';
 
-export type ErrorSource = 'page_fault' | 'error' | 'unhandledrejection';
+// The window's own errors and rejections come through the SDK's handlers, tagged `error` by scrub.
+export type ErrorSource = 'page_fault';
 
 interface Labels {
   source: ErrorSource;
@@ -27,7 +28,7 @@ const IDENT = /^[A-Za-z_$][\w$.<>]{0,99}$/;
 const CODE = /^[a-z][a-z0-9_]{0,63}$/;
 const ROUTE = /^\/[A-Za-z0-9_$/.-]{0,200}$/;
 // Our own built files only: the app's chunks (`/next/assets/<name>-<hash>.js`), or the dev server's sources.
-const OWN_FILE = /^\/(?:next\/assets\/[A-Za-z0-9_.-]+\.js|src\/[A-Za-z0-9_./-]+\.tsx?)$/;
+const OWN_FILE = /^\/(?:next\/assets\/[A-Za-z0-9_.-]+\.js|src\/[A-Za-z0-9_$./-]+\.tsx?)$/;
 // Messages the engine writes about code (`Cannot read properties of undefined (reading 'id')`).
 const CODE_MESSAGES = new Set(['TypeError', 'ReferenceError']);
 const EARLY_MAX = 10;

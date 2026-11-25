@@ -223,7 +223,7 @@ describe('Asset recovery @s1197', () => {
     expect(go.reload).toHaveBeenCalledTimes(2);
   });
 
-  it('lets the error reporter's own file fail: no reload, no card, the app as it is', async () => {
+  it("lets the error reporter's own file fail: no reload, no card, the app as it is", async () => {
     const go = page();
     recover();
     render(<AssetRecovery />);
