@@ -61,7 +61,6 @@ export async function startErrorReports(): Promise<void> {
     // Only the window's own error and rejection handlers: no breadcrumbs, no fetch or history wrapping, no sessions.
     defaultIntegrations: false,
     integrations: [loaded.globalHandlersIntegration(), loaded.linkedErrorsIntegration()],
-    sendDefaultPii: false,
     maxBreadcrumbs: 0,
     sendClientReports: false,
     tracesSampleRate: 0,

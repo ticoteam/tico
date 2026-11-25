@@ -69,7 +69,7 @@ describe('error reports', () => {
       request: { url: `${location.origin}/tasks/12?q=secret` },
       breadcrumbs: [{ message: 'clicked secret' }],
       extra: { body: 'secret' },
-      contexts: { state: { value: 'secret' } },
+      contexts: { other: { value: 'secret' } },
       tags: { source: 'page_fault', route: '/_app/tasks/$id', other: 'secret' },
       exception: {
         values: [
