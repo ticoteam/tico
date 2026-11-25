@@ -15,9 +15,9 @@ The same text is shipped to every channel Owner. Your tag and who applies change
 
     tico task show <id>
 
-Put live exactly what the person OK'd on the Release report, nothing more. Where a granted Tool lets you, make the change
-and record what you changed and when. Where none does, file the exact change for the person your playbook
-names:
+Put live exactly what the person OK'd on the Release report, nothing more. That one approval covers the bounded test: its
+total spend, audience, allowed edits and end date. Where a granted Tool lets you, make the change and record what you
+changed and when. Where none does, file the exact change for the person your playbook names:
 
     tico task create --owner <your manager> --parent <id> --title "Apply: <the change>" --message-file <message file>
 
@@ -31,17 +31,20 @@ run it again, in this run. Say you filed it only once the command printed the ne
 
 The task waits until they say it is done, and that wakes you. Do not snooze it while it waits.
 
-Once it is live, check it is live as OK'd (the page loads, the ad runs, the email is scheduled), then snooze the task
-to the end date the Release report names. It wakes you then:
+Once it is live, check it is live as OK'd (the page loads, the ad runs, the email is scheduled). Then add the
+`idea:live` label, with the live URL in the note, and snooze the task to the end date the Release report names. It wakes
+you then. Do not snooze it before it is live. Use the version you read for the label, then read the task again for the
+snooze:
 
-    tico task snooze <id> --until <end date> -m "Live since <date>; measure on <end date>" --version N
+    tico task label <id> --add idea:live --version N
+    tico task snooze <id> --until <end date> -m "Live since <date> at <live URL>; measure on <end date>" --version N
 
 If the stop-early number or event happens before then, stop it the same way it went live, and measure now.
 
 ## Part 2: measure
 
-Read the number the Release report named for the run's period and for the same length of time before it, each from a
-dated source. Then decide:
+Read the number the Release report named for the run's period, from the day it went live to its end date, and for the
+same length of time before it, each from a dated source. Then decide:
 
 - **Worked** means the number beat the baseline and reached at least 60% of the predicted change.
 - `result:watching`: it worked and stays on, so it needs watching.
@@ -62,7 +65,7 @@ It lands in Watching, where your Watch routine checks it.
 
 ## The Results
 
-- **Before and after**: the number for each period, with its dates and its source.
+- **Before and after**: the number for each period, before and after the day it went live, with its dates and its source.
 - **The prediction** from the Release report, and how much of it was reached.
 - **The result** and its tag, in one line, with why that tag: on `result:watching` what stays on and is watched, on
   `result:worked-once` why there is nothing to watch.

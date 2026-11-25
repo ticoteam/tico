@@ -124,9 +124,9 @@ GO_LIVE_RUBRIC = (
 )
 RESULTS_RUBRIC = (
     "It worked when the baseline was beaten and at least 60% of the predicted change was reached. Gives the number "
-    "before and after, each with its dates and its source, and the result, tagged result:failed when it did not work, "
-    "or, when it worked, result:watching (what was kept needs watching) or result:worked-once (nothing to watch). On "
-    "result:watching it names the Monitoring task filed as this task's follow-up."
+    "before and after it went live, each with its dates and its source, and the result, tagged result:failed when it "
+    "did not work, or, when it worked, result:watching (what was kept needs watching) or result:worked-once (nothing "
+    "to watch). On result:watching it names the Monitoring task filed as this task's follow-up."
 )
 
 
@@ -170,8 +170,10 @@ def _experiments(pid: str, name: str, goal: str, prefix: str, factory: str) -> R
         _stage(
             f"{pid}-running",
             "Running",
-            "Put it live and snooze this task to its end date. When it wakes, measure it, tag the result and write "
-            "its Results. If it is kept and watched, file a Monitoring task as its follow-up first.",
+            "Put it live as the Release report approved it: one approval covers the total spend, audience, allowed "
+            "edits and end date. Add the idea:live label and the live URL to the task note, then snooze this task to its "
+            "end date. When it wakes, measure from the day it went live, tag the result and write its Results. If it is "
+            "kept and watched, file a Monitoring task as its follow-up first.",
             2 * DAY,
             [{"kind": "page", "line": "Results", "settings": {"document": "Results", "rubric": RESULTS_RUBRIC}}],
         ),
@@ -230,12 +232,27 @@ _RESULTS_RC6 = (
     "result:worked-once or result:watching. Worked means the baseline was beaten and at least 60% of the predicted "
     "change was reached. On result:watching it links the Monitoring task filed as this task's follow-up."
 )
+_RUNNING_SNOOZE_ONLY = (
+    "Put it live and snooze this task to its end date. When it wakes, measure it, tag the result and write its Results. "
+    "If it is kept and watched, file a Monitoring task as its follow-up first."
+)
+_RUNNING_ATTACH_RESULTS_PAGE = (
+    "Put it live and snooze this task to its end date. When it wakes, measure it, tag the result and attach a Results "
+    "page. If it is kept and watched, file a Monitoring task as its follow-up first."
+)
+_RESULTS_NO_LIVE_DATE = (
+    "It worked when the baseline was beaten and at least 60% of the predicted change was reached. Gives the number "
+    "before and after, each with its dates and its source, and the result, tagged result:failed when it did not work, "
+    "or, when it worked, result:watching (what was kept needs watching) or result:worked-once (nothing to watch). On "
+    "result:watching it names the Monitoring task filed as this task's follow-up."
+)
 EARLIER: dict[str, tuple[str, ...]] = {
     f"{pid}-{stage}": texts
     for pid in ("growth-experiments", "success-experiments")
     for stage, texts in (
         ("ideas/purpose", (_IDEAS_RC3,)),
-        ("running/purpose", (_RUNNING_RC3,)),
+        ("running/purpose", (_RUNNING_RC3, _RUNNING_ATTACH_RESULTS_PAGE, _RUNNING_SNOOZE_ONLY)),
+        ("running/page/line", ("Results page",)),
         ("building/page/rubric", (_GO_LIVE_RC6, _GO_LIVE_NOV11)),
         # Nov 16: the stage approves the Release report, a task document, not a page attached by hand.
         ("building/page/line", ("Go-live page",)),
@@ -246,7 +263,7 @@ EARLIER: dict[str, tuple[str, ...]] = {
                 "person OKs it before it goes live.",
             ),
         ),
-        ("running/page/rubric", (_RESULTS_RC6,)),
+        ("running/page/rubric", (_RESULTS_RC6, _RESULTS_NO_LIVE_DATE)),
     )
 }
 
