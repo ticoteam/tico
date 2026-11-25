@@ -170,7 +170,7 @@ export function TaskModal() {
           <div ref={setBox} className={['tmd', listUp && 'is-list-up'].filter(Boolean).join(' ')} data-pane={on} onClickCapture={raise}>
             {cards ? (
               <div className="tmd-panes" inert={under}>
-                <Segmented label="Show" options={PANES} value={on ?? 'task'} onValueChange={(p) => setPane({ task, session, pane: p })} />
+                <Segmented label="Show" options={PANES} value={on ?? 'task'} onValueChange={(p) => setPane({ ...at, pane: p })} />
               </div>
             ) : (
               <button ref={pull} type="button" className="tmd-tab" aria-label="Show the list" title="Show the list" inert={under} onClick={() => setListUp(true)}>

@@ -5,7 +5,7 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionsRoot, run } from '@/actions';
 import { keys, queryClient } from '@/data';
-import { coldOf, coldPage, forgetPlaces, NEEDS_YOU, noteList, openTasksOver } from '@/lib';
+import { coldOf, coldPage, forgetPlaces, NEEDS_YOU, noteList, openOf, openTasksOver } from '@/lib';
 import { useFollow } from '@/live/follow';
 import { answered, answering } from './answered';
 import { pageVersionQuery, taskFilesQuery, type TaskData } from './queries';
@@ -241,6 +241,18 @@ describe('one open task', () => {
     act(() => answered());
     await act(() => new Promise((done) => setTimeout(done, 20)));
     expect(router.state.location.search).toEqual({});
+    forgetPlaces();
+  });
+
+  it('an answer to another task (its card still drawn under this one): this one stays open', async () => {
+    serve(reads(task({ to_leave: [] })));
+    const router = show(<TaskPage task="12" />, '/task/12');
+    await screen.findByRole('heading', { name: 'Fix the sign-in page' });
+    noteList({ pipeline: NEEDS_YOU, open: '12', rows: [{ id: 't1', n: '12' }, { id: 't2', n: '13' }] });
+    answering('t9', null);
+    act(() => answered());
+    await act(() => new Promise((done) => setTimeout(done, 20)));
+    expect(String(openOf(router.state.location.search as Record<string, unknown>)?.task)).toBe('12');
     forgetPlaces();
   });
 
@@ -1298,6 +1310,20 @@ describe('a task’s files and pages @s56 @s76 @s780', () => {
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Archive' }));
     await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/pages/f2', method: 'PATCH', body: { archived: true } }));
     await waitFor(() => expect(router.state.location.search).toMatchObject({ task: 12, 'task.tab': 'details' }));
+  });
+
+  it('a page’s ⋯ archive answered once another task is open in its place: that one keeps its tab', async () => {
+    const reply = holdReply();
+    serve((url, method) => (method === 'PATCH' && url.endsWith('/api/v2/pages/f2') ? reply.promise : files(url)));
+    const router = show(<TaskPage task="12" />);
+    await screen.findByTitle('QA report');
+    await lastMore();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Archive' }));
+    await waitFor(() => expect(sent.at(-1)?.url).toBe('/api/v2/pages/f2'));
+    await act(() => router.navigate({ to: '/tasks/p1', search: { task: 13, 'task.tab': 'chat' } } as never));
+    reply.resolve({ status: 200, body: { page: { ...page, archived: true } } });
+    await act(() => new Promise((done) => setTimeout(done, 20)));
+    expect(router.state.location.search).toMatchObject({ task: 13, 'task.tab': 'chat' });
   });
 
   it('a page’s ⋯ deletes the page for good only after asking', async () => {

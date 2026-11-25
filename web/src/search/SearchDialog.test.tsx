@@ -65,6 +65,18 @@ describe('Search @s1209', () => {
     layer.remove();
   });
 
+  it('keeps what was typed when the layer under it closes (Back closes the task) and it moves out of it', async () => {
+    const layer = document.body.appendChild(document.createElement('div'));
+    const letGo = holdToasts(layer);
+    render(<SearchDialog />);
+    act(() => openSearch());
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Search' }), { target: { value: 'invoice' } });
+    act(() => letGo());
+    layer.remove();
+    await waitFor(() => expect(layer.contains(document.querySelector('.pal-off'))).toBe(false));
+    expect((screen.getByRole('combobox', { name: 'Search' }) as HTMLInputElement).value).toBe('invoice');
+  });
+
   it('closes on a click off the palette, even with the shell drawn over it', async () => {
     render(
       <>

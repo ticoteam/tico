@@ -172,10 +172,16 @@ vi.mock('@/features/team/exports', () => ({
   AddTeammate: ({ team }: { team: string }) => <p>add teammate onto {team}</p>,
   TeamAccess: () => null,
 }));
-// the task modal a stand-in, drawn while the address names a task (features/task tests it)
+// the task modal a stand-in, drawn while the address names a task (features/task tests it); `broken`, it fails to draw
+const taskModal = vi.hoisted(() => ({ broken: false }));
 vi.mock('@/features/task/exports', async () => {
   const { useLocation } = await import('@tanstack/react-router');
-  return { TaskModal: () => (useLocation({ select: (l) => 'task' in (l.search as object) }) ? <p>task modal</p> : null) };
+  return {
+    TaskModal: () => {
+      if (taskModal.broken) throw new Error('the task did not load');
+      return useLocation({ select: (l) => 'task' in (l.search as object) }) ? <p>task modal</p> : null;
+    },
+  };
 });
 vi.mock('@/features/team/routing', () => ({
   whoHref: () => '/',
@@ -868,6 +874,18 @@ describe('a task over the page', () => {
     await act(() => router.navigate({ to: '/calendar' }));
     expect(await screen.findByRole('heading', { name: 'Calendar page' })).toBeTruthy();
     expect(screen.queryByText('task modal')).toBeNull();
+  });
+
+  it('a task that fails to draw fails alone: the page stays under it, and Close takes the task off the address', async () => {
+    taskModal.broken = true;
+    onTestFinished(() => void (taskModal.broken = false));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const router = show('/tasks/eng?task=7&list=eng');
+    const failed = await screen.findByRole('dialog', { name: 'This task did not load' });
+    expect(screen.getByRole('heading', { name: 'Board', hidden: true })).toBeTruthy(); // under the dialog
+    fireEvent.click(within(failed).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(router.state.location.search).not.toHaveProperty('task'));
+    expect(screen.getByRole('heading', { name: 'Board' })).toBeTruthy();
   });
 });
 

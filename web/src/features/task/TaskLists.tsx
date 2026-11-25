@@ -195,7 +195,8 @@ function PipelineList({ pipeline, open, stage, end }: { pipeline: string; open: 
   const ranks = !filters.sort && !!showing;
   const byPriority = useQuery({ ...stagePriorityQuery(pipeline, showing ?? '', filters), enabled: !!p && ranks });
   const ranked = byPriority.data;
-  const listFailed = list.isError && !page && !showing;
+  // failed: unless the stage shown is read on its own by priority, the pipeline's read is the list
+  const listFailed = list.isError && !page && (!showing || !ranks);
   const failed = listFailed || (ranks && byPriority.isError && !ranked);
   useStageSort((ranks && showing) || null, ranked);
   const stages = useMemo(

@@ -258,7 +258,8 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
   useEffect(
     () =>
       onAnswered((given) => {
-        if (!stillOpen()) return;
+        // an answer to another task (its card still drawn under this one) moves nothing here
+        if (given?.task !== t.id || !stillOpen()) return;
         const waits = waitsNow(client, t.id, me);
         if (waits === 'ask') return setSeek((n) => n + 1);
         if (waits) return;
@@ -273,7 +274,7 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
   );
   const asks = tabs.find((x) => x.mark === 'ask')?.slug;
   useEffect(() => {
-    if (seek === sought.current) return;
+    if (seek === sought.current || !stillOpen()) return;
     // Opened for one ask (`?ask=`): once it is answered, the next one still waiting opens, its tab (the same one too):
     // a page or a file for its own ask, at its own pinned version; an email on its Email tab. The thread beside it
     // stays in the address; the answered ask and the version the last page was opened at go.
@@ -296,7 +297,7 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
     if (!asks) return;
     sought.current = seek;
     if (asks !== on) void navigate({ to: tabAddress(t, asks) as never });
-  }, [seek, asks, on, t, navigate, ask, named, files.data, tabs]);
+  }, [seek, asks, on, t, navigate, ask, named, files.data, tabs, stillOpen]);
   const [adding, setAdding] = useState<Adding | null>(null);
 
   const current = unresolved ? undefined : tabs.find((x) => x.slug === on);

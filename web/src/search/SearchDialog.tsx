@@ -19,6 +19,8 @@ export function SearchDialog() {
   const { open, q, n } = useSearchState();
   // over a task open over the page, in its layer: the task's dialog hides all outside it from a screen reader
   const over = useTopLayer();
+  // what is typed, kept here: the layer closing under the palette (Back closes the task) draws it again in another
+  const draftRef = useRef<{ n: number; q: string } | null>(null);
   return (
     <Dialog.Root open={open} onOpenChange={(next) => !next && closeSearch()}>
       <Dialog.Portal container={over ?? undefined}>
@@ -26,7 +28,7 @@ export function SearchDialog() {
             that lands on its backdrop, and its own unstyled one sits under the shell, which takes every click. */}
         <Dialog.Backdrop className="pal-off" />
         {/* keyed by each open, so the field starts again from what it was opened with */}
-        <Palette key={n} opened={q} />
+        <Palette key={n} n={n} opened={q} draftRef={draftRef} />
       </Dialog.Portal>
     </Dialog.Root>
   );
@@ -59,9 +61,10 @@ function useVisible(el: RefObject<HTMLElement | null>) {
   }, [el]);
 }
 
-function Palette({ opened }: { opened: string }) {
+function Palette({ n, opened, draftRef }: { n: number; opened: string; draftRef: RefObject<{ n: number; q: string } | null> }) {
   // anything typed between the tap (or Cmd+K) and this field drawing went to the catcher (state.ts)
-  const [q, setQ] = useState(() => opened + caught());
+  const [q, setQ] = useState(() => (draftRef.current?.n === n ? draftRef.current.q : opened + caught()));
+  useEffect(() => void (draftRef.current = { n, q }), [draftRef, n, q]);
   const [results, setResults] = useState<{ query: string; groups: Group[] }>({ query: opened, groups: [] });
   const [selected, setSelected] = useState<string | null>();
   const [at] = useState(dropAt);

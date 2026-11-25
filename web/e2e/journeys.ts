@@ -512,8 +512,12 @@ test('phone: a task opens full screen over its board; its list pulls up from the
   await over.locator('.tmd-more').tap();
   await expect(list).toBeVisible();
   await list.locator('a.li', { hasText: date!.title }).tap();
-  await expect(modal(page, date!.title)).toBeVisible();
-  await expect(list).toBeHidden();
+  const next = modal(page, date!.title);
+  await expect(next).toBeVisible();
+  // the list under the task now open: drawn, and down again
+  const nextList = next.locator('nav[aria-label="List"]');
+  await expect(nextList).toHaveCount(1);
+  await expect(nextList).toBeHidden();
   // one Back closes it, however many tasks were opened in it
   await page.goBack();
   await expect(layers(page)).toHaveCount(0);

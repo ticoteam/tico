@@ -1,5 +1,5 @@
 import { useInfiniteQuery, useQuery, type QueryClient } from '@tanstack/react-query';
-import { Link, Outlet, createRootRouteWithContext, useLocation, useRouter, useRouterState } from '@tanstack/react-router';
+import { CatchBoundary, Link, Outlet, createRootRouteWithContext, useLocation, useRouter, useRouterState } from '@tanstack/react-router';
 import { Suspense, lazy, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { ActionsRoot, run } from '@/actions';
 import { reportCallToDesktop, useCallWindow } from '@/desktop';
@@ -27,7 +27,9 @@ import { teammateAccessQuery, validateTeamSearch, whoHref } from '@/features/tea
 import { ChatSheet, MenuThreads, MessagePick } from '@/features/threads/exports';
 import { asksOf, catchUpQuery, threadListQuery, type Asks } from '@/features/threads/routing';
 import { Avatar } from '@/kit/Avatar';
+import { Button } from '@/kit/Button';
 import { Icon } from '@/kit/Icon';
+import { Dialog } from '@/kit/Dialog';
 import { IconButton } from '@/kit/IconButton';
 import { MenuItem } from '@/kit/Menu';
 import { OfflineBar } from '@/kit/OfflineBar';
@@ -73,7 +75,7 @@ import { usePhoneCards } from '@/shell/phone';
 import { PageIntro, TicoSheet, useTicoPower } from '@/tico';
 import { dot } from '@/tico/dot';
 import { pageName, usePageName } from '@/tico/pageName';
-import { chatAddress, notePlace, openOf, pageSearch } from '@/lib';
+import { chatAddress, closeTask, notePlace, openOf, pageSearch } from '@/lib';
 
 export interface RouterContext {
   queryClient: QueryClient;
@@ -129,6 +131,24 @@ function Later({ on, children }: { on: boolean; children: ReactNode }) {
   const [seen, setSeen] = useState(on);
   if (on && !seen) setSeen(true);
   return seen ? <Suspense fallback={null}>{children}</Suspense> : null;
+}
+
+/** A task that fails to draw (its code did not load, say) fails alone: the page under it stays, and Close takes the
+    task off the address. Another task opening tries again. */
+function TaskCatch({ children }: { children: ReactNode }) {
+  const task = useLocation({ select: (l) => openOf(l.search as Record<string, unknown>)?.task });
+  return (
+    <CatchBoundary getResetKey={() => task} errorComponent={TaskFailed}>
+      {children}
+    </CatchBoundary>
+  );
+}
+
+function TaskFailed() {
+  const router = useRouter();
+  const open = useLocation({ select: (l) => !!openOf(l.search as Record<string, unknown>) });
+  const close = () => closeTask(router);
+  return <Dialog open={open} onOpenChange={(o) => !o && close()} title="This task did not load" actions={<Button onClick={close}>Close</Button>} />;
 }
 
 const dotEl = () => dot.el();
@@ -340,7 +360,9 @@ function App() {
       <Toasts />
       {/* a task over any page (`?task=`), and over it the file `files.view` opens */}
       <Later on={taskOpen}>
-        <TaskModal />
+        <TaskCatch>
+          <TaskModal />
+        </TaskCatch>
       </Later>
       <Later on={fileOpen}>
         <FileViewerHost />

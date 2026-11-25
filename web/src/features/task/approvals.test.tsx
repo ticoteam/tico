@@ -19,6 +19,7 @@ import { decisionName, effectOf, sendTitle } from './model';
 import { flowCountQuery, flowQuery, pipelinesQuery } from '@/features/tasks/routing';
 import { taskDetailQuery, taskFilesQuery, type TaskData } from './queries';
 import { loadTask, openCold } from './routing';
+import { answered, answering } from './answered';
 import { TaskChat, TaskPage } from './TaskPage';
 
 /* The decision (plan/approvals.html): the thing asked about is the first tab, one box decides it, Approve is bound to
@@ -347,6 +348,19 @@ describe('the thing is the first tab', () => {
     expect(was(router).pathname).toBe('/tasks/p1/12/a-pdf');
     expect(was(router).searchStr).toContain('chat=agent');
     expect(was(router).searchStr).not.toContain('vs='); // the next page at its own pinned version
+  });
+
+  it('answered, then closed before the answer is read back: the next ask never opens the task again @approvals', async () => {
+    const { files } = twoPdfs();
+    reply = (url) => (url.endsWith('/files?all=1') ? { body: { files } } : null);
+    const router = show(<TaskPage task="12" tab="b-pdf" />, '/tasks/p1/12/b-pdf?ask=r3');
+    expect(await screen.findByRole('region', { name: 'b.pdf' })).toBeTruthy();
+    // the answer lands while the task as read still has r3 waiting: the next ask waits for the read
+    answering('t1', 'r3');
+    act(() => answered());
+    await act(() => router.navigate({ to: '/tasks/p1', search: {}, replace: true } as never));
+    await act(() => new Promise((done) => setTimeout(done, 20)));
+    expect(openOf(router.state.location.search as Record<string, unknown>)).toBeFalsy();
   });
 
   it('when the next ask after a file’s is an email’s, its Email tab opens, the thread kept and the answered ask gone @approvals', async () => {

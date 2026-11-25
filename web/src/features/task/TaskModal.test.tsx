@@ -166,6 +166,14 @@ describe('on a phone', () => {
     await waitFor(() => expect(modal()!.dataset.pane).toBe('task'));
   });
 
+  it('Task picked over an address naming the chat stays on the task: never bounced back to the chat', async () => {
+    show('/tasks?task=12&task.tab=chat');
+    await waitFor(() => expect(modal()!.dataset.pane).toBe('chat'));
+    fireEvent.click(within(modal()!).getByRole('button', { name: 'Task' }));
+    await act(async () => {});
+    expect(modal()!.dataset.pane).toBe('task');
+  });
+
   it('the session already open, picked again in Details after Task was picked, raises its chat', async () => {
     const router = show('/tasks?task=12&task.tab=chat&task.session=bot:a1');
     await waitFor(() => expect(modal()!.dataset.pane).toBe('chat'));
