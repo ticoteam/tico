@@ -28,6 +28,7 @@ import yaml
 from fastapi import Query, Request
 
 from . import config as _config
+from . import default_read as DR
 from . import tool_access as _TA
 from . import tool_services as _TS
 from .api_answers.tool_guides import (
@@ -159,11 +160,16 @@ class Tools(NamedTuple):
 def tools_of(c: Any, who: Any, admins: Any, auth: Any, only: str | None = None) -> Tools:
     """The company's API tools by vendor, as `who` knows them: the projection of the Tools index the registry needs,
     without its health, grants or connections (api_tools.index_rows). `only`: that vendor's alone."""
-    api_tools = _mod("api_tools")
+    api_tools, credentials = _mod("api_tools"), _mod("credentials")
     envs: dict[str, list[str]] = {}
     for tid, env in c.execute("SELECT tool_id, env FROM credentials WHERE tool_id IS NOT NULL AND env<>''"):
         envs.setdefault(tid, []).append(env)
     agent = who.role == "bot" and not getattr(who, "support", None)
+    # The tools an agent reads by default (backend/default_read.py), worked out once: an explicit grant is `visible`.
+    subject = api_tools.subject_of(c, who.actor) if agent else ""
+    defaults: set[str] = (
+        set(DR.reads(c, subject, credentials.explicitly_granted(c, subject)).values()) if agent else set()
+    )
     known = who.role in ("owner", "human", "bot") and not getattr(who, "support", None)
     out = Tools({}, {}, set())
     for tool in c.execute("SELECT * FROM tools WHERE kind='api' ORDER BY lower(name), id").fetchall():
@@ -176,10 +182,7 @@ def tools_of(c: Any, who: Any, admins: Any, auth: Any, only: str | None = None) 
         if only is not None and only not in (vendor, by_name):
             continue
         row = {"id": "api:" + tid, "tool_id": tid, "name": tool["name"], "kind": "api", "delivery": tool["delivery"]}
-        if vendor and (
-            api_tools.visible(c, who, tool, admins, auth)
-            or (agent and tool["audience"] is None and api_tools.subject_level(c, tid, who.actor))
-        ):
+        if vendor and (api_tools.visible(c, who, tool, admins, auth) or (tool["audience"] is None and tid in defaults)):
             out.seen.setdefault(vendor, []).append({**row, "vendor_name": TS.vendor_name(vendor)})
         elif known and by_name and tool["audience"] is None:
             out.named.setdefault(by_name, []).append(row)
@@ -257,13 +260,17 @@ def usage(c: Any, vrows: list[Row]) -> dict[str, dict[str, list[Any]]]:
             [*part, since],
         ):
             add(tid, _agent(bot, actor), uses, at)
+    tool_of: dict[str, str] = {}
     for part in H.chunks(keyed):
-        for tid, bot, actor, at in c.execute(
-            "SELECT k.tool_id, u.bot, u.actor, u.used_at FROM credential_uses u JOIN credentials k "
-            f"ON k.id=u.credential_id WHERE k.tool_id IN ({','.join('?' * len(part))}) AND u.used_at>=?",
+        marks = ",".join("?" * len(part))
+        tool_of.update(c.execute(f"SELECT id, tool_id FROM credentials WHERE tool_id IN ({marks})", part).fetchall())
+    for part in H.chunks(sorted(tool_of)):
+        for key, bot, actor, at in c.execute(  # credential_uses_at: by key, then time
+            "SELECT credential_id, bot, actor, used_at FROM credential_uses "
+            f"WHERE credential_id IN ({','.join('?' * len(part))}) AND used_at>=?",
             [*part, since],
         ):
-            add(tid, _agent(bot, actor), 1, at)
+            add(tool_of[key], _agent(bot, actor), 1, at)
     return out
 
 
