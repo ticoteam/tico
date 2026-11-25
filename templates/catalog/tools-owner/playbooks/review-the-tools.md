@@ -4,8 +4,9 @@ Schedule: Mondays at 09:00 team time (routine `review-the-tools`). Budget 20 min
 `skills/manage-tools-and-keys/SKILL.md` first.
 
 Inputs: `tico tool index` (every tool with its status, who can use it and whether it needs a person), `tico access
-stats --days 7` (access requests: how many reached people, the share granted at once, the median time to grant), and
-your open tasks (`tico task list --owner me`).
+stats --days 7` (access requests: how many reached people, the share granted at once, the median time to grant), `tico
+tool find` (the Tools registry: every tool's guide, who uses it, when it was last used), and your open tasks (`tico task
+list --owner me`).
 
 Outcome: one task of your own for each problem, with the one thing a person must give on it, and nothing for a tool
 that works.
@@ -21,8 +22,15 @@ Done when: each problem below has one open task, no problem has two, and the run
    when, and the one fix. Work it in its own run: a new key is a card for the bot whose key it is
    (`tico credential request`, which pauses the task until a person saves it); a level, a merge or a check path is one
    question on the task (`tico task ask`) with the tool's link.
-5. Change nothing yourself: every grant, level, merge and delete is a person's.
+5. Change no access yourself: every grant, level, merge and delete of a tool or key is a person's. The registry's words
+   are yours to keep (step 7).
 6. Read `tico access stats --days 7`. An open request older than a day is a problem for step 4 (its card waits on a
    person); a free-text access task you own is asked again with `tico access request` and closed.
-7. Finish: `tico task done <id> -m "<n tools, n working, n problems filed; access: n to people, n% at once, median
-   n min to grant>" --version N`.
+7. Curate the registry (`tico tool find`, then `tico tool guide <slug>` for each one you touch):
+   - a vendor agents use (its `used_by` above 0) that shows "No guide yet": write its guide from its activity and
+     learnings (`tico tool guide-write <slug> --summary ... --instructions-file ...`);
+   - two guides for one tool (a built tool that wraps a vendor's CLI, two slugs for one script): keep the better one,
+     fold the other's words into it, archive the other (`tico tool guide-archive <slug>`);
+   - a wrong or empty category: fix it (`tico tool guide-write <slug> --category data`).
+8. Finish: `tico task done <id> -m "<n tools, n working, n problems filed; access: n to people, n% at once, median
+   n min to grant; registry: n guides written, n archived>" --version N`.

@@ -57,6 +57,7 @@ when: "A team with customer support and customer success work in more than one p
 shared_files:
   - .claude/skills/build-the-page
   - .claude/skills/catch-up
+  - .claude/skills/work-with-software
   - knowledge/manager-practice.md
   - .claude/skills/read-what-is-missing
   - .claude/skills/write-the-stuck-task-question

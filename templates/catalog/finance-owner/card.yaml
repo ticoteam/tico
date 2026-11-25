@@ -35,6 +35,7 @@ base_skip: [knowledge/README.md, playbooks/README.md]
 shared_files:
   - .claude/skills/build-the-page
   - .claude/skills/catch-up
+  - .claude/skills/work-with-software
   - .claude/skills/build-the-pnl
   - .claude/skills/close-the-month
   - .claude/skills/collect-receivables

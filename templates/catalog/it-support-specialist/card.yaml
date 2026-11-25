@@ -57,3 +57,4 @@ recommend_when: [small_team, uses_docs]
 shared_files:
   - .claude/skills/build-the-page
   - .claude/skills/catch-up
+  - .claude/skills/work-with-software

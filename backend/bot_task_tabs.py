@@ -55,7 +55,8 @@ DEFAULT = [
     },
 ]
 # In the order the agent page draws them when nothing is saved; an old saved "routines" is dropped: they are automations.
-WIDGETS = ("updates", "tasks", "files")
+# A built-in added later goes last, so a saved layout keeps its order and gains it at the bottom (widgets_of).
+WIDGETS = ("updates", "tasks", "files", "tools")
 DEFAULT_WIDGETS = [{"id": w, "hidden": False, "height": None} for w in WIDGETS]
 # Pages and cards pinned to the sidebar (backend/cards.py): any number, beside or instead of the built-ins.
 ITEM = re.compile(r"(page|card):[A-Za-z0-9_.-]{1,100}")
@@ -668,8 +669,8 @@ def install(app, store, auth, mutate, settings, task_views=None):
         **api_v2(
             "Bots",
             "updateBotSidebarWidget",
-            "Hide, show or move one thing on a bot's sidebar (updates, tasks, files, page:<id> or card:<id>); a position "
-            "counts everything there, 0 the top",
+            "Hide, show or move one thing on a bot's sidebar (updates, tasks, files, tools, page:<id> or card:<id>); "
+            "a position counts everything there, 0 the top",
             "BotSidebar",
         ),
     )

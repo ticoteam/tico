@@ -63,6 +63,7 @@ recommend_when: [has_support_inbox, uses_tickets, sells_to_consumers, uses_email
 shared_files:
   - .claude/skills/build-the-page
   - .claude/skills/catch-up
+  - .claude/skills/work-with-software
   - .claude/skills/answer-a-customer
   - .claude/skills/recover-a-bad-experience
   - .claude/skills/answer-a-demand-or-complaint

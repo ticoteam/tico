@@ -68,6 +68,7 @@ private_tasks_default: true
 shared_files:
   - .claude/skills/build-the-page
   - .claude/skills/catch-up
+  - .claude/skills/work-with-software
   - .claude/skills/check-a-legal-deadline
   - .claude/skills/write-a-counsel-brief
   - .claude/skills/manage-insurance

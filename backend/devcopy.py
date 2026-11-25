@@ -501,6 +501,9 @@ KEEP = (
             "learning_items",
             "learning_runs",
             "learnings",
+            # The Tools registry's guides and each agent's list (backend/tool_guides.py): words and names, no key.
+            "tool_guides",
+            "bot_tool_guides",
             "lens_runs",
             "learned_entries",
             "assistant_shares",  # who a person lets view their Assistant chat: a choice, it sends nothing

@@ -417,7 +417,7 @@ SCHEMAS["BotSidebar"] = obj(
                 {
                     "id": {
                         "type": "string",
-                        "description": "A built-in (updates, tasks, files), a pinned page (page:<file id>) or a card "
+                        "description": "A built-in (updates, tasks, files, tools), a pinned page (page:<file id>) or a card "
                         "(card:<id>), whose content GET /api/v2/places/bot:<bot> gives the caller",
                     },
                     "hidden": "b",

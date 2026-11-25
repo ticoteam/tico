@@ -73,5 +73,6 @@ recommend_when: [sells_software]
 shared_files:
   - .claude/skills/build-the-page
   - .claude/skills/catch-up
+  - .claude/skills/work-with-software
   - .claude/skills/find-hidden-breaking-changes
   - .claude/skills/ship-a-release

@@ -1166,6 +1166,33 @@ def reconcile(c, reported, complete=False):
                 c.execute("UPDATE bot_tool_requests SET state='done' WHERE id=?", (request["id"],))
 
 
+def close(c, who, bot, admins, auth):
+    """Whether `who` is a credential admin, the bot itself or someone who manages it."""
+    from .credentials import administrator
+
+    return administrator(c, who, admins) or who.actor == "bot:" + bot or auth.bot_manager(c, who, bot)
+
+
+def shown(c, who, bot, near, admins, auth):
+    """The bot's grants this reader may know of: a tool they may see (`api_tools.visible`), or one for Everyone when
+    they are `near` (`close`); a key on no tool for those only. An Only listed tool stays hidden from anyone it does not
+    list. The Tools registry (backend/tool_guides.py) reads the same rows."""
+    from . import api_tools
+    from .read_cache import one
+
+    rows, keep = _granted_tools(c, bot), []
+    for row in rows:
+        tool_id = row["granted"].get("tool_id")
+        # The row _granted_tools read for its health, in this snapshot: not read again.
+        tool = one(c, "SELECT * FROM tools WHERE id=?", (tool_id,)) if tool_id else None
+        if tool is not None:
+            if api_tools.visible(c, who, tool, admins, auth) or (near and api_tools.audience_of(tool) is None):
+                keep.append(row)
+        elif near:
+            keep.append(row)
+    return keep
+
+
 def install(app, store, auth, mutate, settings_admin, requester=None):
     """`requester(c, who)` is the person Agent Ops is acting for when `who` is Agent Ops in a turn a person's chat message
     started, else `who`: a tool is a bot's owner's to add, and Agent Ops is nobody's bot but the requester's to manage."""
@@ -1174,31 +1201,6 @@ def install(app, store, auth, mutate, settings_admin, requester=None):
     def admins():
         vault = getattr(app.state, "vault", None)
         return vault.admins if vault is not None else ()
-
-    def close_to(c, who, bot):
-        """Whether `who` is a credential admin, the bot itself or someone who manages it."""
-        from .credentials import administrator
-
-        return administrator(c, who, admins()) or who.actor == "bot:" + bot or auth.bot_manager(c, who, bot)
-
-    def shown_grants(c, who, bot, close):
-        """The bot's grants this reader may know of: a tool they may see (`api_tools.visible`), or one for Everyone when
-        they are `close` (close_to); a key on no tool for those only. An Only listed tool stays hidden from anyone it
-        does not list."""
-        from . import api_tools
-        from .read_cache import one
-
-        rows, keep = _granted_tools(c, bot), []
-        for row in rows:
-            tool_id = row["granted"].get("tool_id")
-            # The row _granted_tools read for its health, in this snapshot: not read again.
-            tool = one(c, "SELECT * FROM tools WHERE id=?", (tool_id,)) if tool_id else None
-            if tool is not None:
-                if api_tools.visible(c, who, tool, admins(), auth) or (close and api_tools.audience_of(tool) is None):
-                    keep.append(row)
-            elif close:
-                keep.append(row)
-        return keep
 
     @app.get(
         "/api/v2/bots/{bot}/tools",
@@ -1222,9 +1224,9 @@ def install(app, store, auth, mutate, settings_admin, requester=None):
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
             result = listing(c, store.settings, bot)
-            close = close_to(c, who, bot)
-            result["tools"] = _merge_granted(result["tools"], shown_grants(c, who, bot, close))
-            if close:
+            near = close(c, who, bot, admins(), auth)
+            result["tools"] = _merge_granted(result["tools"], shown(c, who, bot, near, admins(), auth))
+            if near:
                 result["tools"] += _choices(c, bot, result["tools"])
 
             def redact(value):

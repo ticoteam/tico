@@ -53,6 +53,7 @@ recommend_when: [sells_software, uses_github]
 shared_files:
   - .claude/skills/build-the-page
   - .claude/skills/catch-up
+  - .claude/skills/work-with-software
   - .claude/skills/debug-and-handle-incidents
   - .claude/skills/ship-a-release
   - .claude/skills/turn-corrections-into-gates

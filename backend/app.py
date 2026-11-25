@@ -2610,6 +2610,9 @@ def _install_features(
             return who
 
     install_bot_tools(app, store, auth, mutate, settings_admin, as_requester)
+    from . import tool_guides
+
+    tool_guides.install(app, store, auth, mutate, as_requester)  # the Tools registry
     from .mail_settings import install as install_mail_settings
 
     install_mail_settings(app, store, auth, mutate)

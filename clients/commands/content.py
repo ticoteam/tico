@@ -331,15 +331,16 @@ def pin_add(api, args):
     return _as_person(api).post("pins", body, key=_key(args))
 
 
-SIDEBAR_BUILTINS = ("updates", "tasks", "files")  # an agent sidebar's own sections (backend/bot_task_tabs.py WIDGETS)
+# An agent sidebar's own sections (backend/bot_task_tabs.py WIDGETS).
+SIDEBAR_BUILTINS = ("updates", "tasks", "files", "tools")
 
 
 @tool(
     "tico_pin_update",
     "Resize or move a pin. On an agent's sidebar a position counts everything there, its built-in sections too, and "
-    "pin may also be one of them (updates, tasks, files): hidden hides or shows it.",
+    "pin may also be one of them (updates, tasks, files, tools): hidden hides or shows it.",
     {
-        "pin": _s("Pin id, from `card list --place`; or updates, tasks or files"),
+        "pin": _s("Pin id, from `card list --place`; or updates, tasks, files or tools"),
         "place": _s("A built-in's sidebar: bot:<slug>; left out, your own"),
         "size": SIZE,
         "position": {"type": "integer", "description": "0 is first"},
@@ -352,7 +353,7 @@ def pin_update(api, args):
     if args["pin"] in SIDEBAR_BUILTINS:
         return _sidebar_builtin(api, args)
     if args.get("hidden") is not None:
-        raise ValueError("hidden is for updates, tasks or files; remove a page or card with tico_pin_remove")
+        raise ValueError("hidden is for updates, tasks, files or tools; remove a page or card with tico_pin_remove")
     body = {k: args[k] for k in ("size", "position") if args.get(k) is not None}
     return _as_person(api).patch("pins/" + args["pin"], body, key=_key(args))
 

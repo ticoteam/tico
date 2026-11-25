@@ -58,3 +58,4 @@ recommend_when: [sells_software, sells_to_businesses, sells_to_consumers, uses_d
 shared_files:
   - .claude/skills/build-the-page
   - .claude/skills/catch-up
+  - .claude/skills/work-with-software
