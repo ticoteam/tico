@@ -51,6 +51,14 @@ def test_server_gets_the_support_switches_set_in_env():
     assert {"TICO_SUPPORT", "TICO_SUPPORT_ACCESS"} <= set(environment)
 
 
+def test_the_server_gets_the_error_reporting_settings_set_in_env():
+    # Without them a hosted company (setup/cell.py passes only what compose.yaml lists) can never report an error.
+    environment = yaml.safe_load((ROOT / "compose.yaml").read_text())["services"]["server"]["environment"]
+    keys = {"TICO_OBSERVABILITY_ENVIRONMENT", "TICO_OBSERVABILITY_ID_SECRET", "TICO_SENTRY_DSN", "TICO_SENTRY_SERVER_DSN"}
+    assert keys <= set(environment)
+    assert all(environment[key] is None for key in keys)
+
+
 def test_a_server_update_recreates_only_the_server_never_the_updater(monkeypatch, tmp_path):
     for key, value in {
         "TICO_UPDATER_MODE": "",

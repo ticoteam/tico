@@ -42,6 +42,12 @@ services:
       TICO_DOMAIN_ALIASES:
       TICO_PORT: ${TICO_PORT:-8765}
       TICO_PUBLIC_URL:
+      # Error reports (backend/observability.py): the server's and the web app's Sentry projects, under an environment
+      # name and the secret that makes each person's id opaque. All four empty: nothing is reported.
+      TICO_OBSERVABILITY_ENVIRONMENT:
+      TICO_OBSERVABILITY_ID_SECRET:
+      TICO_SENTRY_DSN:
+      TICO_SENTRY_SERVER_DSN:
       # Link previews in Slack (docs/slack-gateway.md): the server builds the manifest, and its unfurl_domains
       # list these hosts.
       TICO_SLACK_UNFURL_HOSTS:

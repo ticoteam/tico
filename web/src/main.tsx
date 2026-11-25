@@ -7,6 +7,7 @@ import { setLinkComponent, type LinkProps } from '@/kit/Link';
 import { appHref, router } from '@/router';
 // after the router, so the modules load in the order the router's own imports give them
 import { AssetRecovery, startRecovery } from '@/features/notices/exports';
+import { startErrorReports } from '@/features/support/routing';
 import { markDesktop } from '@/shell';
 import '@/styles/index.css';
 
@@ -29,6 +30,8 @@ markDesktop();
 
 // before anything draws: the app's own files failing (a release) are recovered here, whatever part fails
 startRecovery(router);
+// errors to the install's Sentry project, when its server names one; nothing loads when it names none
+void startErrorReports();
 
 const root = document.getElementById('root');
 if (!root) throw new Error('index.html has no #root');
