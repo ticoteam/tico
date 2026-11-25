@@ -25,7 +25,7 @@ import { BlockedOn } from './Facts';
 import { ArchiveMenu } from './Files';
 import { FileTab, FileView, PageBones } from './FileView';
 import { TaskMedia } from './Media';
-import { MoreMenu, QuietLine, WhereLine } from './Head';
+import { MoreMenu, QuickActions, QuietLine, WhereLine } from './Head';
 import { askOf, CHAT, changesAskedOf, decisionOf, defaultTab, DETAILS, emailOf, failedToast, requirementOf, sendTitle, tabAddress, tabsOf, targetOf, type TaskTab } from './model';
 import { FlowMark } from '@/kit/FlowMark';
 import { Face } from './parts';
@@ -405,6 +405,7 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
       }
       // An approval's title is read, not renamed (the mock draws it plain): Details, under ⋯, renames it.
       onRename={quiet ? undefined : (title) => void rename(title)}
+      actions={<QuickActions t={t} />}
       more={moreMenu}
       onBack={close}
       tabs={pageTabs}

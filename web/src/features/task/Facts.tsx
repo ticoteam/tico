@@ -260,7 +260,7 @@ function PeopleFact({ t }: { t: TaskData }) {
     const res = await run('task.setRole', { task: t.id, role: r, people: [...new Set([...(t.roles?.[r] ?? []), who])] }, { via: 'click' });
     setBusy(false);
     if (res.ok) close();
-    else setError(reasonOf(res.error));
+    else setError(reasonOf(res));
   };
   return (
     <div className="dt-kv" data-target={`task-people:${t.id}`}>

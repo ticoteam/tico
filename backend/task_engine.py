@@ -2180,8 +2180,8 @@ def _end_snooze(conn: "sqlite3.Connection", snoozed: Row, by: str, ts: str) -> N
 
 def on_delete(conn: "sqlite3.Connection", task_ids: Sequence[str], by: str) -> int:
     """The delete path (`task_delete.delete_tasks`), before the rows go: a deleted task keeps no place in a pipeline.
-    Its snooze, its visits with their answers, the asks added to them and the effects they owed are removed, its
-    queued wakes are canceled and its open wait span is closed. The links to and from it stay: the task that filed it
+    Its snooze, its visits with their answers, the pages pinned to them, the asks added to them and the effects they
+    owed are removed, its queued wakes are canceled and its open wait span is closed. The links to and from it stay: the task that filed it
     reads a deleted task as closed, and a restore (`restore`) starts it on a new visit. Returns how many visits went."""
     ids = [str(task_id) for task_id in task_ids if task_id]
     if not ids:
@@ -2192,6 +2192,7 @@ def on_delete(conn: "sqlite3.Connection", task_ids: Sequence[str], by: str) -> i
         task_wakes.drop(conn, task_id)
     conn.execute(f"DELETE FROM effects WHERE visit_id IN ({visits})", ids)
     conn.execute(f"DELETE FROM answers WHERE visit_id IN ({visits})", ids)
+    conn.execute(f"DELETE FROM requirement_pages WHERE visit_id IN ({visits})", ids)  # the pages pinned to them
     conn.execute(f"DELETE FROM requirements WHERE visit_id IN ({visits})", ids)
     conn.execute(f"DELETE FROM snoozes WHERE task_id IN ({marks})", ids)
     conn.execute(

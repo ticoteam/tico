@@ -34,7 +34,7 @@ export function NewPage({ task, onClose, onSaved }: { task: string; onClose: () 
     setError(null);
     const r = await run('task.newPage', { task, title, text }, { via: 'click' });
     setBusy(false);
-    if (!r.ok) return setError(reasonOf(r.error));
+    if (!r.ok) return setError(reasonOf(r));
     const file = (r.out as PagePublished | undefined)?.page.file_id;
     onClose();
     if (file) onSaved(file);

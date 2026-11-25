@@ -94,7 +94,7 @@ export function useAnswering() {
   }, []);
   const refused = (res: { error?: string; why?: string }) => {
     if (!here.current) toast(failedToast(res));
-    setError(reasonOf(res.error));
+    setError(reasonOf(res));
   };
   const moveOn = () => void (here.current && answered());
   // an answer to `wait` on `task` starts (null: all that waits there): what it said last goes, and what else Needs you

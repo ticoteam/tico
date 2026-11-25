@@ -104,6 +104,14 @@ describe('the open task', () => {
     expect(reasonOf('http_409: ')).toBe('Not saved');
   });
 
+  it('says the server’s own reason, and a server fault as one', () => {
+    const why = 'Only a person, signed in as themselves, deletes a task; close it instead';
+    expect(reasonOf({ error: 'not_allowed', why })).toBe(why);
+    expect(reasonOf({ error: 'not_allowed' })).toBe('You can’t do that on this task');
+    expect(reasonOf({ error: 'http_500: ' })).toBe('Something went wrong. Try again.');
+    expect(reasonOf({ error: 'http_502: Bad Gateway' })).toBe('Something went wrong. Try again.');
+  });
+
   it('reads a refusal: its code, its reason, and each thing missing', () => {
     const r = refusalOf('task_not_met: Not met: QA report.\n- QA report: not approved\n- Checks: 2 failing');
     expect(r).toEqual({ code: 'task_not_met', reason: 'Not met: QA report.', missing: ['QA report: not approved', 'Checks: 2 failing'] });

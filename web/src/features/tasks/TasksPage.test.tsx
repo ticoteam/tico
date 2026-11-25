@@ -309,7 +309,7 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
     show(<TasksPage pipeline="eng" search={{ view: 'list' }} />, '/tasks/eng?view=list');
     const row = await screen.findByTitle('Fix the export');
     const item = row.closest('.tk-item') as HTMLElement;
-    fireEvent.click(within(item).getByRole('button', { name: 'Move to' }));
+    fireEvent.click(within(item).getByRole('button', { name: 'Change' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Doing' }));
 
     await waitFor(() => expect(stageOf('a1')).toBe('s2'));
@@ -585,6 +585,27 @@ describe('Tasks: more of the page @s0 @s9 @s10', () => {
     expect(screen.getByRole('button', { name: 'Undo' })).toBeTruthy();
   });
 
+  it("a row's menu snoozes or closes that one task", async () => {
+    serve((url, method) => {
+      if (method === 'POST' && url === '/api/v2/tasks/move') return { status: 200, body: { batch_id: 'b', moved: ['a1'], moved_unseen: 0, skipped: [] } };
+      if (method === 'POST' && url === '/api/v2/tasks/snooze') return { status: 200, body: { batch_id: 'b', snoozed: ['a2'], skipped: [] } };
+      return { status: 200, body: {} };
+    });
+    seed(rows());
+    show(<TasksPage pipeline="eng" search={{ view: 'list' }} />, '/tasks/eng?view=list');
+    const item = (title: string) => (screen.getByTitle(title).closest('.tk-item') as HTMLElement);
+    await screen.findByTitle('Fix the export');
+    fireEvent.click(within(item('Fix the export')).getByRole('button', { name: 'Change' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Close' }));
+    await waitFor(() => expect(posts[0]).toEqual({ url: '/api/v2/tasks/move', body: { ids: ['a1'], to: 'closed' } }));
+    expect(await screen.findByText('Closed 1 task')).toBeTruthy();
+    fireEvent.click(within(item('Write the notes')).getByRole('button', { name: 'Change' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Snooze' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Tomorrow' }));
+    await waitFor(() => expect(posts[1]?.url).toBe('/api/v2/tasks/snooze'));
+    expect(posts[1]?.body).toMatchObject({ ids: ['a2'] });
+  });
+
   it('undoes only the tasks the bulk close actually moved', async () => {
     serve((url, method) => {
       if (method === 'POST' && url === '/api/v2/tasks/move')
@@ -708,7 +729,7 @@ describe('Tasks: more of the page @s0 @s9 @s10', () => {
     const inbox = await screen.findByRole('region', { name: 'Inbox' });
     await waitFor(() => expect(within(inbox).getByText('40')).toBeTruthy());
     const item = screen.getByTitle('Fix the export').closest('.tk-item') as HTMLElement;
-    fireEvent.click(within(item).getByRole('button', { name: 'Move to' }));
+    fireEvent.click(within(item).getByRole('button', { name: 'Change' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Doing' }));
     await waitFor(() => expect(within(screen.getByRole('region', { name: 'Inbox' })).getByText('39')).toBeTruthy());
     expect(within(screen.getByRole('region', { name: 'Doing' })).getByText('8')).toBeTruthy();
