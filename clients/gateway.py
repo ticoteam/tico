@@ -646,6 +646,71 @@ def video_content(url, key, job_id, headers=None, timeout=VIDEO_TIMEOUT, opener=
     )
 
 
+# HQ hands back a job when the lookup is still running. Email check is synchronous and has no job.
+DATA_SERVICES = ("seo", "competitor-ads", "reviews", "places", "email-check")
+DATA_FIELDS = ("id", "service", "op", "status", "results", "count", "truncated", "cost_usd", "subject")
+DATA_TIMEOUT = 90
+DATA_MAX_BYTES = 2 * 1024 * 1024 + 4096  # HQ caps the rows at 2 MiB, with room for the job envelope
+DATA_JOB = re.compile(r"gd_[0-9a-f]{24}")
+
+
+def _data_reply(status, answer, code, *, needs_job=True):
+    if code:
+        return (status if status >= 400 else 0), _refusal(answer), code
+    try:
+        payload = json.loads(answer)
+    except ValueError:
+        return 0, {}, "unreadable"
+    if not isinstance(payload, dict) or status not in (200, 202):
+        return 0, {}, "unreadable"
+    if needs_job and not DATA_JOB.fullmatch(str(payload.get("id", ""))):
+        return 0, {}, "unreadable"
+    if not needs_job and (status != 200 or payload.get("status") != "done"):
+        return 0, {}, "unreadable"
+    kept = {field: payload[field] for field in DATA_FIELDS if field in payload}
+    if not needs_job:
+        kept.pop("id", None)
+    if kept.get("status") == "failed":
+        kept["error"] = str(payload.get("error") or "failed")[:40]
+    kept["untrusted"] = True
+    return status, kept, ""
+
+
+def data_call(url, key, service, body, headers=None, timeout=DATA_TIMEOUT, opener=None):
+    """Start a metered lookup. Return (status, answer, error code), with a job id for async lookups."""
+    return _data_reply(
+        *_exchange(
+            "POST",
+            safe_base(url) + "/data/" + service,
+            json.dumps(body).encode(),
+            "application/json",
+            DATA_MAX_BYTES,
+            headers={"Authorization": "Bearer " + key, **(headers or {})},
+            timeout=timeout,
+            opener=opener,
+        ),
+        needs_job=service != "email-check",
+    )
+
+
+def data_job(url, key, job_id, headers=None, timeout=TIMEOUT, opener=None):
+    """Read a job with the key that made it. HQ returns 404 for another key's job and 410 once its results expire."""
+    if not DATA_JOB.fullmatch(job_id):
+        return 404, {}, NOT_FOUND
+    return _data_reply(
+        *_exchange(
+            "GET",
+            safe_base(url) + "/data/jobs/" + job_id,
+            None,
+            "application/json",
+            DATA_MAX_BYTES,
+            headers={"Authorization": "Bearer " + key, **(headers or {})},
+            timeout=timeout,
+            opener=opener,
+        )
+    )
+
+
 def _get(url, headers, timeout, opener):
     """(status, payload, code) for a GET to the Gateway, as `_post` answers a POST."""
     status, answer, code = _exchange(

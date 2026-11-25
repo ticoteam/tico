@@ -224,5 +224,501 @@
   "stdout": "{\n  \"id\": null,\n  \"status\": \"queued\",\n  \"seconds\": 5,\n  \"resolution\": \"720p\"\n}\n",
   "stderr": "",
   "exit": 0
+ },
+ {
+  "argv": [
+   "gateway",
+   "seo",
+   "keywords",
+   "crm for plumbers",
+   "plumbing software",
+   "--country",
+   "US"
+  ],
+  "tools": [
+   [
+    "tico_gateway_seo",
+    {
+     "country": "US",
+     "keywords": [
+      "crm for plumbers",
+      "plumbing software"
+     ],
+     "op": "keywords",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "gateway/data/seo",
+    {
+     "keywords": [
+      "crm for plumbers",
+      "plumbing software"
+     ],
+     "country": "US",
+     "op": "keywords"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "gateway",
+   "seo",
+   "serp",
+   "crm for plumbers",
+   "--depth",
+   "20"
+  ],
+  "tools": [
+   [
+    "tico_gateway_seo",
+    {
+     "depth": 20,
+     "keyword": "crm for plumbers",
+     "op": "serp",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "gateway/data/seo",
+    {
+     "keyword": "crm for plumbers",
+     "depth": 20,
+     "op": "serp"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "gateway",
+   "seo",
+   "rankings",
+   "acme.example",
+   "--limit",
+   "20"
+  ],
+  "tools": [
+   [
+    "tico_gateway_seo",
+    {
+     "domain": "acme.example",
+     "limit": 20,
+     "op": "rankings",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "gateway/data/seo",
+    {
+     "domain": "acme.example",
+     "limit": 20,
+     "op": "rankings"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "gateway",
+   "seo",
+   "backlinks",
+   "acme.example"
+  ],
+  "tools": [
+   [
+    "tico_gateway_seo",
+    {
+     "domain": "acme.example",
+     "op": "backlinks",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "gateway/data/seo",
+    {
+     "domain": "acme.example",
+     "op": "backlinks"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "gateway",
+   "ads",
+   "meta",
+   "--page-url",
+   "https://www.facebook.com/acme",
+   "--country",
+   "US",
+   "--limit",
+   "50"
+  ],
+  "tools": [
+   [
+    "tico_gateway_ads",
+    {
+     "country": "US",
+     "limit": 50,
+     "op": "meta",
+     "operation_id": null,
+     "page_url": "https://www.facebook.com/acme"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "gateway/data/competitor-ads",
+    {
+     "country": "US",
+     "page_url": "https://www.facebook.com/acme",
+     "limit": 50,
+     "op": "meta"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "gateway",
+   "ads",
+   "meta",
+   "--keyword",
+   "plumbing",
+   "--country",
+   "US",
+   "--ended-too"
+  ],
+  "tools": [
+   [
+    "tico_gateway_ads",
+    {
+     "active": false,
+     "country": "US",
+     "keyword": "plumbing",
+     "op": "meta",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "gateway/data/competitor-ads",
+    {
+     "country": "US",
+     "keyword": "plumbing",
+     "active": false,
+     "op": "meta"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "gateway",
+   "ads",
+   "meta",
+   "--country",
+   "US"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico gateway ads meta: error: one of the arguments --page-url --keyword is required",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "gateway",
+   "ads",
+   "advertisers",
+   "acme.example",
+   "--country",
+   "US"
+  ],
+  "tools": [
+   [
+    "tico_gateway_ads",
+    {
+     "country": "US",
+     "op": "google_advertisers",
+     "operation_id": null,
+     "query": "acme.example"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "gateway/data/competitor-ads",
+    {
+     "country": "US",
+     "query": "acme.example",
+     "op": "google_advertisers"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "gateway",
+   "ads",
+   "google",
+   "--advertiser",
+   "AR01234567890",
+   "--country",
+   "US"
+  ],
+  "tools": [
+   [
+    "tico_gateway_ads",
+    {
+     "advertiser_ids": [
+      "AR01234567890"
+     ],
+     "country": "US",
+     "op": "google",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "gateway/data/competitor-ads",
+    {
+     "country": "US",
+     "advertiser_ids": [
+      "AR01234567890"
+     ],
+     "op": "google"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "gateway",
+   "reviews",
+   "Acme Plumbing, Austin",
+   "--limit",
+   "50"
+  ],
+  "tools": [
+   [
+    "tico_gateway_reviews",
+    {
+     "business": "Acme Plumbing, Austin",
+     "limit": 50,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "gateway/data/reviews",
+    {
+     "business": "Acme Plumbing, Austin",
+     "limit": 50,
+     "op": "google"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "gateway",
+   "reviews",
+   "--place-id",
+   "ChIJ0123"
+  ],
+  "tools": [
+   [
+    "tico_gateway_reviews",
+    {
+     "operation_id": null,
+     "place_id": "ChIJ0123"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "gateway/data/reviews",
+    {
+     "place_id": "ChIJ0123",
+     "op": "google"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "gateway",
+   "places",
+   "--lat",
+   "30.27",
+   "--lon",
+   "-97.74",
+   "--radius-km",
+   "10",
+   "--category",
+   "plumber"
+  ],
+  "tools": [
+   [
+    "tico_gateway_places",
+    {
+     "category": "plumber",
+     "lat": 30.27,
+     "lon": -97.74,
+     "operation_id": null,
+     "radius_km": 10.0
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "gateway/data/places",
+    {
+     "category": "plumber",
+     "op": "search",
+     "near": {
+      "lat": 30.27,
+      "lon": -97.74,
+      "radius_km": 10.0
+     }
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "gateway",
+   "email-check",
+   "ana@acme.example"
+  ],
+  "tools": [
+   [
+    "tico_gateway_email_check",
+    {
+     "emails": [
+      "ana@acme.example"
+     ],
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "gateway/data/email-check",
+    {
+     "emails": [
+      "ana@acme.example"
+     ]
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "gateway",
+   "job",
+   "gd_0123456789abcdef01234567"
+  ],
+  "tools": [
+   [
+    "tico_gateway_job",
+    {
+     "id": "gd_0123456789abcdef01234567",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "gateway/data/jobs/gd_0123456789abcdef01234567",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "gateway",
+   "job",
+   "gv_not-a-data-job"
+  ],
+  "tools": [
+   [
+    "tico_gateway_job",
+    {
+     "id": "gv_not-a-data-job",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [],
+  "stdout": "{\n  \"error\": \"ValueError: Use the job id a Gateway lookup answered (gd_ and 24 hex digits)\"\n}\n",
+  "stderr": "",
+  "exit": 1
  }
 ]

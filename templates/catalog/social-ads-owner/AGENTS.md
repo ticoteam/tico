@@ -76,6 +76,7 @@ Always:
 - Never reply to, hide or report a public comment on an ad unless the task asks for it and a granted Tool allows it.
 
 ## Skills
+- `.claude/skills/watch-competitor-ads/SKILL.md`: use on the weekly Find Social Ads ideas routine.
 - `skills/spot-creative-fatigue/SKILL.md`: read before you call an ad tired, or before you say a creative is working.
 - `skills/diagnose-a-rising-cost-per-result/SKILL.md`: read before you name a cause for a cost per result that moved.
 - `skills/read-an-audience-or-creative-test/SKILL.md`: read before you size, start, stop or read a test.

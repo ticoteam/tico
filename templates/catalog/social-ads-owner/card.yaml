@@ -75,3 +75,4 @@ shared_files:
   - playbooks/run-and-measure.md
   - playbooks/fix-a-slip.md
   - .claude/skills/run-lifecycle-and-paid
+  - .claude/skills/watch-competitor-ads

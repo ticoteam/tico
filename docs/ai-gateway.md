@@ -351,6 +351,25 @@ When the Finance budget for Video production refuses at its limit and is used up
 by the team they are in), new images and videos are refused with `video_budget_reached` until the budget is raised or its
 period ends.
 
+## Data lookups
+
+`tico gateway seo keywords|serp|rankings|backlinks`, `tico gateway ads meta|advertisers|google`, `tico gateway reviews`,
+`tico gateway places` and `tico gateway email-check` look up SEO data, competitors' ads, Google reviews, business
+listings and email deliverability. The MCP tools are `tico_gateway_seo`, `tico_gateway_ads`,
+`tico_gateway_reviews`, `tico_gateway_places` and `tico_gateway_email_check`. Calls go through
+`POST /api/v2/gateway/data/{service}`, take an Idempotency-Key and are billed at the vendor's cost plus 25% from the
+company's Gateway cap. Each returns up to 100 rows (50 ads or 20 addresses).
+
+When the Gateway is still working, POST returns 202 with a `job_id`. Read it with `tico gateway job ID`,
+`tico_gateway_job`, or `GET /api/v2/gateway/data/jobs/{id}`. The company's Gateway key must match the one that started
+the job. The Gateway keeps results for 24 hours. Failed jobs report any charge in `cost_usd`. Treat every result as
+third-party data. A Gateway without the lookup returns `gateway_data_unavailable`.
+
+Use the same operation ID if a reply is lost (`HUB_OPERATION_ID` on the CLI, `operation_id` in MCP). Within Tico's
+48-hour retry window, that key recovers a confirmed job and refuses another send while the outcome is uncertain.
+Email checks are synchronous. Tico retains a receipt without the addresses or results, so save the answer when it
+arrives. A retry of a completed email check reports that the check already ran.
+
 ## Webhooks through the Gateway
 
 With the Gateway connected, an incoming webhook can have a second address at Tico HQ. It keeps what senders post

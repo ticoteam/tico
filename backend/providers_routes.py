@@ -15,7 +15,9 @@ from . import gateway_tiers
 from . import paid_renders
 from .api_answers.tasks import ShotsReconciled
 from .api_contract import api_v2
+from .auth import validate_identity
 import hashlib
+import hmac
 import json
 from . import model_login
 from . import releases
@@ -422,6 +424,113 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
         if status == 410:
             raise Problem("gateway_video_expired", "The video has expired at the Gateway", 410)
         raise Problem("gateway_video_failed", f"Video fetch failed: {code or status}", 503)
+
+    data_slots = threading.BoundedSemaphore(GATEWAY_IMAGE_SLOTS)
+    data_receipt = "binding IS NULL AND actor=? AND operation='gateway_data' AND key=?"
+
+    def reserve_data(who, operation, fingerprint):
+        # The receipt survives a restart between the paid call and its answer. It keeps only the job id, if any.
+        with store.transaction(durable=True) as c:
+            validate_identity(c, who)
+            prior = c.execute(
+                f"SELECT request_hash, response FROM idempotency WHERE {data_receipt}", operation
+            ).fetchone()
+            if prior:
+                if not hmac.compare_digest(prior["request_hash"], fingerprint):
+                    raise Problem("idempotency_conflict", "This Idempotency-Key was used for another lookup", 409)
+                return json.loads(prior["response"])
+            c.execute(
+                "INSERT INTO idempotency(actor,operation,key,request_hash,response,created_at)"
+                " VALUES(?,'gateway_data',?,?,'{}',?)",
+                (*operation, fingerprint, H.now()),
+            )
+            return None
+
+    def data_problem(status, answer, code, service):
+        if status == 404 or code == "unconfigured":
+            return Problem("gateway_data_unavailable", f"The Tico AI Gateway does not offer {service} yet", 503)
+        if status == 422:
+            # Email validation describes the field without relaying vendor text that could contain the address.
+            detail = answer.get("detail") if service != "email-check" else None
+            return Problem("gateway_data_invalid", detail or "The Gateway refused the lookup's fields", 422)
+        return Problem("gateway_data_failed", f"{service} failed: {code or status}", 503)
+
+    def data_response(answer, status=200):
+        answer = {("job_id" if field == "id" else field): value for field, value in answer.items()}
+        return JSONResponse(answer, status_code=status, headers={"Cache-Control": "no-store"})
+
+    def read_data_job(base, key, job_id, headers, *, replay=False):
+        status, answer, code = gateway_client.data_job(base, key, job_id, headers)
+        if status == 404:
+            raise Problem("gateway_data_job_not_found", "No such data job", 404)
+        if status == 410:
+            raise Problem("gateway_data_job_expired", "The job's results expired at the Gateway", 410)
+        if status != 200:
+            raise Problem("gateway_data_failed", f"Job status failed: {code or status}", 503)
+        return data_response(answer, 202 if replay and answer.get("status") == "running" else 200)
+
+    @app.post("/api/v2/gateway/data/{service}")
+    def gateway_data(service: str, request: Request, body: M.GatewayData):
+        """Run a paid lookup. The same caller and operation can only submit once within the retry window."""
+        who = request.state.identity
+        auth.domain(who)
+        if service not in gateway_client.DATA_SERVICES:
+            raise Problem("not_found", "No such Gateway data service", 404)
+        if settings.rehearsal:
+            raise Problem("rehearsal", "Data lookups are off in rehearsal mode", 503)
+        key, base, headers = gateway_for(who)
+        retry = request.headers.get("idempotency-key", "")
+        if not 0 < len(retry) <= 200:
+            raise Problem("idempotency_key", "Provide an Idempotency-Key of 1–200 characters", 422)
+        sent = body.model_dump(exclude_unset=True)
+        fingerprint = hmac.digest(key.encode(), json.dumps([base, service, sent], sort_keys=True).encode(), "sha256")
+        operation = (who.actor, hashlib.sha256(retry.encode()).hexdigest())
+        if not data_slots.acquire(blocking=False):
+            raise Problem("gateway_data_busy", "Data lookups are busy; try again shortly", 429, True)
+        try:
+            prior = reserve_data(who, operation, fingerprint.hex())
+            if prior is None:
+                status, answer, code = gateway_client.data_call(base, key, service, sent, headers)
+        finally:
+            data_slots.release()
+
+        if prior is not None:
+            if job_id := prior.get("job_id"):
+                return read_data_job(base, key, job_id, headers, replay=True)
+            if prior.get("complete"):
+                raise Problem(
+                    "gateway_data_already_checked", "This email check already ran. Its results are not kept", 409
+                )
+            raise Problem(
+                "gateway_data_unconfirmed", "The Gateway has yet to confirm this lookup. Retry using the same key", 409
+            )
+
+        if status in (200, 202):
+            with store.transaction(durable=True) as c:
+                receipt = {"job_id": answer["id"]} if service != "email-check" else {"complete": True}
+                c.execute(f"UPDATE idempotency SET response=? WHERE {data_receipt}", (json.dumps(receipt), *operation))
+            return data_response(answer, status)
+
+        # Only a definite refusal permits another send. A lost or ambiguous answer may already have cost money.
+        if status in (401, 404, 422, 429) or code == "unconfigured":
+            with store.transaction() as c:
+                c.execute(f"DELETE FROM idempotency WHERE {data_receipt}", operation)
+            raise data_problem(status, answer, code, service)
+        raise Problem(
+            "gateway_data_unconfirmed",
+            "The Gateway did not confirm this lookup. Check Gateway usage before trying again",
+            409,
+        )
+
+    @app.get("/api/v2/gateway/data/jobs/{job_id}")
+    def gateway_data_job(job_id: str, request: Request):
+        """Read a data job with the same company's Gateway key."""
+        who = request.state.identity
+        auth.domain(who)
+        if settings.rehearsal:
+            raise Problem("rehearsal", "Data lookups are off in rehearsal mode", 503)
+        key, base, headers = gateway_for(who)
+        return read_data_job(base, key, job_id, headers)
 
     @app.put("/api/v2/providers/gateway")
     def gateway_save(request: Request, body: M.GatewayConnectionSave):
