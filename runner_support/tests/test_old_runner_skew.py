@@ -1,7 +1,8 @@
 """Version skew: the runner built from origin/main (before native threads) against this server.
 
 The rollout updates the server first, so a computer may run an older `tico-runner` for a while. These are the threads
-turn tests and two conformance chat and task turns, run unchanged with the old binary in place of the release build.
+turn tests and the conformance task turn, run unchanged with the old binary in place of the release build, and the
+conformance chat turn as an old runner can meet it (it keeps no process per thread, so only its privacy checks hold).
 The binary path comes from OLD_RUNNER_BINARY (built from origin/main's runner-rs by the check, never from this tree);
 without it the module is skipped. Only the claude and codex harnesses run: they are the threads suite's own.
 
