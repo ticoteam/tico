@@ -2060,11 +2060,12 @@ describe('the tools registry', () => {
       used_by: [{ id: 'b1', name: 'Clerk', listed: true, note: 'Triage', uses: 4, last_used_at: null }],
       learnings: [{ id: 'l1', actor: 'bot:b1', text: 'The rate limit is low.', created_at: '2026-11-20T09:00:00Z' }],
     };
+    let saved = guide; // the server keeps what was written: a re-read after the write answers it
     const sent = serve((url, method) =>
       url === '/api/v2/tool-guides/raygun'
         ? method === 'PUT'
-          ? { ...guide, guidance: 'Ask first' }
-          : guide
+          ? (saved = { ...guide, guidance: 'Ask first' })
+          : saved
         : url === '/api/v2/tool-vendors/raygun'
           ? { vendor: 'raygun', name: 'Raygun', rows: [{ ...rg, mcp: false, access_total: 0, access: [] }] }
           : undefined,

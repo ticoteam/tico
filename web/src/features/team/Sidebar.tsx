@@ -15,15 +15,16 @@ import { readable, type SidebarWidget } from './queries';
 /* An agent's sidebar as it arranged it (backend/bot_task_tabs.py widgets): its built-ins, and the pages and cards it
    pinned (GET /api/v2/places/bot:<slug>), each in its stored order, hidden ones left out, a set height its most. */
 
-/** The built-ins in the order the page drew them before an agent could arrange them. Tools is the page's own until
-    the server keeps it among them (backend/bot_task_tabs.py WIDGETS). */
-export const DEFAULT_WIDGETS: SidebarWidget[] = ['updates', 'tasks', 'files', 'tools'].map((id) => ({ id, hidden: false, height: null }));
+/** The built-ins in the order the page drew them before an agent could arrange them: the server's default too. */
+export const DEFAULT_WIDGETS: SidebarWidget[] = ['updates', 'tasks', 'files'].map((id) => ({ id, hidden: false, height: null }));
 
-/** Its sidebar in order: the stored one (the default when there is none: a read that has not come, or failed), with
-    any built-in it lacks after it, as the server answers. */
+/** Tools: the page's own built-in until the server keeps it among them (backend/bot_task_tabs.py WIDGETS); last. */
+const TOOLS: SidebarWidget = { id: 'tools', hidden: false, height: null };
+
+/** Its sidebar in order: the stored one, or the default when there is none (a read that has not come, or failed). */
 export const sidebarOf = (widgets: SidebarWidget[] | undefined): SidebarWidget[] => {
-  const list = widgets ?? [];
-  return [...list, ...DEFAULT_WIDGETS.filter((d) => !list.some((w) => w.id === d.id))];
+  const list = widgets?.length ? widgets : DEFAULT_WIDGETS;
+  return list.some((w) => w.id === TOOLS.id) ? list : [...list, TOOLS];
 };
 
 export type Pin = Place['pins'][number];
