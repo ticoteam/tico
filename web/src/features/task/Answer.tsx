@@ -16,7 +16,7 @@ import { StoppedDecision } from './Stopped';
 import { followSend } from './sending';
 import { addressesOf, answerKey, decisionShownQuery, emailSendQuery, sendStateQuery, type AnswerKey, type BoundAction, type BoundRule, type TaskData } from './queries';
 import { Facts, LabelValue } from '@/kit/LabelValue';
-import { ReadFault } from '@/pagekinds';
+import { ReadFault } from '@/pagekinds/_parts/ReadFault';
 
 /* The decision (plan/approvals.html): one box wherever a request waits on the person. It names the thing, who asks and
    what Approve does; Request changes opens one line in it; Approve is the one filled button, bound to exactly what was

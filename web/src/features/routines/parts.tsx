@@ -15,7 +15,7 @@ import { SkeletonRows } from '@/kit/Skeleton';
 import { Switch } from '@/kit/Switch';
 import { toast } from '@/kit/Toast';
 import { VirtualList } from '@/kit/VirtualList';
-import { ReadFault, type FailedRead } from '@/pagekinds';
+import { ReadFault, type FailedRead } from '@/pagekinds/_parts/ReadFault';
 import { endAfter, lastDay } from './words';
 
 /* The pieces Routines, Rules and Listening share, ported from pages/3-company/rules.js: a word, a quiet verb, the rule

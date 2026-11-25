@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { ReadFault } from '@/pagekinds';
+import { ReadFault } from '@/pagekinds/_parts/ReadFault';
 import { wordQuery, type WordRun } from './queries';
 
 /* A Word file drawn readable in the browser (the owner, Nov 19: "so he can see them, with Download beside"): its

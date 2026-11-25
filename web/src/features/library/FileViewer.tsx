@@ -7,7 +7,7 @@ import { Markdown } from '@/kit/Markdown';
 import { PictureViewer } from '@/kit/PictureViewer';
 import { Viewer } from '@/kit/Viewer';
 import { csvRows, fileKind, safeFrame, type FileKind } from '@/lib';
-import { ReadFault } from '@/pagekinds';
+import { ReadFault } from '@/pagekinds/_parts/ReadFault';
 import { size } from './parts';
 import { PdfView } from './PdfView';
 import { fileQuery, fileTextQuery, fileUrl, fileVersionsQuery, heldFileQuery } from './queries';

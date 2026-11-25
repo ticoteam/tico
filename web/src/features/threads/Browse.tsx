@@ -9,7 +9,7 @@ import { Icon } from '@/kit/Icon';
 import { Segmented } from '@/kit/Segmented';
 import { SkeletonRows } from '@/kit/Skeleton';
 import { VirtualList } from '@/kit/VirtualList';
-import { ReadFault } from '@/pagekinds';
+import { ReadFault } from '@/pagekinds/_parts/ReadFault';
 import { press } from './people';
 import { archivedQuery, browseQuery, type BrowseRow } from './queries';
 

@@ -3,7 +3,7 @@ import { Conversation } from '@/conversation';
 import { meQuery, useActor } from '@/data';
 import { approvalCard, ChatQuestions, useApprovalCards } from '@/features/task/exports';
 import { chatAddress } from '@/lib';
-import { ReadFault } from '@/pagekinds';
+import { ReadFault } from '@/pagekinds/_parts/ReadFault';
 import { dmQuery } from './queries';
 
 /** Words an agent's empty chat offers to start with: they fill the box, never send. */

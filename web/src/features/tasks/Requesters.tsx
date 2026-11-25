@@ -10,7 +10,7 @@ import { IconButton } from '@/kit/IconButton';
 import { Row } from '@/kit/Row';
 import { Select } from '@/kit/Select';
 import { SkeletonRows } from '@/kit/Skeleton';
-import { ReadFault } from '@/pagekinds';
+import { ReadFault } from '@/pagekinds/_parts/ReadFault';
 import { Face } from './parts';
 import { requestersQuery, type Requester } from './queries';
 

@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useAction } from '@/actions';
 import { Button } from '@/kit/Button';
 import { toast } from '@/kit/Toast';
-import { ReadFault } from '@/pagekinds';
+import { ReadFault } from '@/pagekinds/_parts/ReadFault';
 import { AskCard, Docked, useAnswering } from './AskCard';
 import { holdQuery, othersHeld, REVIEW_LABEL, taskHoldsQuery, type Hold, type HoldRule } from './holds';
 import { Go } from './parts';

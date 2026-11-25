@@ -13,7 +13,7 @@ import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
 import { SkeletonRows } from '@/kit/Skeleton';
 import { VirtualList } from '@/kit/VirtualList';
 import { fmtDate, newId } from '@/lib';
-import { ReadFault } from '@/pagekinds';
+import { ReadFault } from '@/pagekinds/_parts/ReadFault';
 import { SUPPORT_CHAT } from './actions';
 import { Diagnostics, type Attached } from './Diagnostics';
 import { composeQuery, refreshQuery, ticketsQuery, type Retry, type SupportList } from './queries';

@@ -6,7 +6,7 @@ import { agentOf, dmAgentOf, isDm, othersOf } from './model';
 import { useMe, useNameOf, useTitle } from './people';
 import { chatQuery } from './queries';
 import { chatActor } from '@/lib';
-import { ReadFault } from '@/pagekinds';
+import { ReadFault } from '@/pagekinds/_parts/ReadFault';
 
 export interface ChatSheetProps {
   /** The shell's `?chat=`: agent:<slug>, person:<id> or thread:<id>; or the page owner's, in the Agent bar. */

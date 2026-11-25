@@ -7,7 +7,8 @@ export type { FailedRead };
 
 // One way every read that failed with nothing to show says so (live/fault.ts): "<what> didn't load · <why>", read
 // again by itself once the stream is back when that could help, and Try again only when it could not (a refusal, a
-// stopped company, the app's own error).
+// stopped company, the app's own error). A chat or a part the shell draws imports it by this path, not '@/pagekinds':
+// the page head there reaches the shell, and that loop leaves the action registry's modules unset in the build.
 
 /** A read paused offline fails with no error: it got no answer. */
 const NO_ANSWER = new ApiError(0, 'network', 'No answer', true);
