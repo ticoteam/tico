@@ -12,7 +12,7 @@ description: Use on the weekly Find Social Ads ideas run to save public competit
 
        tico gateway ads meta --page-url https://www.facebook.com/acme --country US --limit 50
 
-   If it returns a job ID, read it with the Gateway's job command every 5–15 seconds within the routine's budget.
+   If it returns a job ID, read it with the Gateway's `job` command every 5–15 seconds within the routine's budget.
    If the Gateway is unavailable, record that in the run's note and continue with the other idea sources.
 3. Use the Meta ad ID to deduplicate across pages and weeks. Look for the stable name `meta-<ad_id>.md` with
    `tico file search` before saving anything. Only decimal Meta IDs go in filenames. Refresh days running on the
@@ -27,10 +27,11 @@ description: Use on the weekly Find Social Ads ideas run to save public competit
 
    Save the returned file with `tico file publish "$MEDIA_PATH" --scope bot`. Record the file ID, or the reason the
    asset could not be saved. If publishing was interrupted, look for the stable media filename before publishing it
-   again. Use the public Ad Library link in the record so people can find the ad when a download fails.
+   again. Tico accepts images up to 25 MB and can stream larger videos. Use the public Ad Library link in the record
+   when an asset could not be saved. Remove the temporary media files after confirming their uploads.
 5. Publish `meta-<ad_id>.md` with `tico file publish "$RECORD_PATH" --scope bot`. Include the ad's dates, source and
    saved media file IDs. Keep the Meta ad ID and days running in the record's text. Include the tag keys
-   `competitor:<slug>`, `hook:<hook>`, `angle:<angle>` and `format:<format>` so people can find it.
+   `creative`, `competitor:<slug>`, `hook:<hook>`, `angle:<angle>` and `format:<format>` so people can find it.
    If your Files version supports metadata and tags, use the CLI's file metadata setter with `--json` and an object
    like `{"ads":{"meta":"123"},"days_running":14}` on the record and media. Attach the corresponding existing file
    tags where you have permission.

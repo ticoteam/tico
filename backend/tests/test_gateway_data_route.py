@@ -1,5 +1,6 @@
 """Exercise the paid data routes with a synthetic HQ. The receipt can retain a job ID, never lookup results."""
 
+import http.client
 import importlib.util
 import io
 import json
@@ -253,6 +254,8 @@ def test_ad_downloader_refuses_a_redirect_to_a_private_address(downloader, tmp_p
 
 def test_ad_downloader_discards_an_oversized_stream_without_a_length(downloader, tmp_path, monkeypatch):
     class Asset(io.BytesIO):
+        length = None
+
         def getheader(self, name):
             return "video/mp4" if name == "Content-Type" else None
 
@@ -262,3 +265,15 @@ def test_ad_downloader_discards_an_oversized_stream_without_a_length(downloader,
         downloader.save(Asset(b"abcd"), stem)
     assert list(tmp_path.iterdir()) == []
     assert downloader.save(Asset(b"abc"), stem).read_bytes() == b"abc"
+
+
+def test_ad_downloader_discards_a_partial_http_response(downloader, tmp_path):
+    class Socket:
+        def makefile(self, *_):
+            return io.BytesIO(b"HTTP/1.1 200 OK\r\nContent-Type: video/mp4\r\nContent-Length: 9\r\n\r\nabc")
+
+    with http.client.HTTPResponse(Socket()) as response:
+        response.begin()
+        with pytest.raises(ValueError, match="ended early"):
+            downloader.save(response, tmp_path / "meta-123")
+    assert list(tmp_path.iterdir()) == []

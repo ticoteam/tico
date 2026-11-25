@@ -457,9 +457,8 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
             # Email validation describes the field without relaying vendor text that could contain the address.
             detail = answer.get("detail") if service != "email-check" else None
             return Problem("gateway_data_invalid", detail or "The Gateway refused the lookup's fields", 422)
-        return Problem(
-            "gateway_data_failed", f"{service} failed: {code or status}", 429 if code == "rate_limited" else 422
-        )
+        limited = code == "rate_limited"
+        return Problem("gateway_data_failed", f"{service} failed: {code or status}", 429 if limited else 422, limited)
 
     def data_unconfirmed():
         return Problem(

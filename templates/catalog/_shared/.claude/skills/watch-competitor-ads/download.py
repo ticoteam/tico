@@ -66,7 +66,8 @@ def save(response, stem):
     suffix = TYPES.get((response.getheader("Content-Type") or "").split(";")[0].strip().lower())
     if not suffix:
         raise ValueError("The response is not a supported image or video")
-    if int(response.getheader("Content-Length") or 0) > MAX_BYTES:
+    expected = response.length
+    if expected is not None and expected > MAX_BYTES:
         raise ValueError("The asset exceeds 50 MB")
     path = stem.with_name(stem.name + suffix)
     with tempfile.NamedTemporaryFile(dir=path.parent) as out:
@@ -76,6 +77,8 @@ def save(response, stem):
             if size > MAX_BYTES:
                 raise ValueError("The asset exceeds 50 MB")
             out.write(chunk)
+        if expected is not None and size != expected:
+            raise ValueError("The download ended early")
         if not size:
             raise ValueError("The asset is empty")
         out.flush()
