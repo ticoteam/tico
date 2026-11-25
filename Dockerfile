@@ -56,6 +56,14 @@ RUN npm ci --ignore-scripts --no-audit --no-fund
 COPY web ./
 RUN npm run build
 
+# Export matching maps only for the release uploader. The image copies the original build.
+FROM web-build AS web-with-sourcemaps
+RUN npm run build -- --sourcemap hidden --outDir /tmp/web-sourcemaps \
+    && diff -qr -x '*.map' /src/build/web /tmp/web-sourcemaps
+
+FROM scratch AS web-sourcemaps
+COPY --from=web-with-sourcemaps /tmp/web-sourcemaps/assets/ /
+
 FROM download AS gh
 RUN fetch-tool gh /out
 
