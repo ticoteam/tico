@@ -500,6 +500,10 @@ class _ById(dict):
 
     def __missing__(self, key):
         row = gateway_tiers.row_for(key) if isinstance(key, str) else None
+        if row is None and isinstance(key, str):
+            # A retired id (gateway_tiers.ALIASES, such as `mercury-3`) finds the row of the id it is now, so a setter
+            # that saves the row's id saves the current one.
+            row = dict.get(self, gateway_tiers.new_id(key))
         if row is None:
             raise KeyError(key)
         return row
@@ -595,8 +599,10 @@ def with_compact_default(config):
 #   Google     ai.google.dev/gemini-api/docs/pricing (paid standard; $0.75/$3.75 until 2026-12-31, doubling from 2027-01-01)
 #   xAI        docs.x.ai/developers/models (prompts under 200k)
 #   pi models  OpenRouter's public model list, openrouter.ai/api/v1/models (what the pi runtime is billed)
-#              minimax-m3.1-flash (2026-11-19, ticoteam/tico-services#377): $0.15 in / $0.015 cached / $0.60 out, the
-#              list price the Gateway's meeting row marks up
+#              minimax-m3.1-flash (2026-11-19, ticoteam/tico-services#377): $0.15 in / $0.015 cached /
+#              $0.60 out, the list price the Gateway's meeting row marks up
+#              mercury-3 (2026-10-29): $0.20 in / $0.70 out, cache reads at 10% of input. Withdrawn from OpenRouter
+#              (2026-11) and no longer offered: kept so a run on it that completes after the upgrade is still priced
 PRICES_AS_OF = "2026-09-29"
 
 
@@ -659,6 +665,7 @@ PRICES = _Priced(
         "mistral-medium-3.5": (1.5, 1.5, 7.5),
         "devstral-2512": (0.40, 0.04, 2.0),
         "minimax-m3.1-flash": (0.15, 0.015, 0.60),
+        "mercury-3": (0.20, 0.02, 0.70),  # withdrawn: priced for runs already on it, never offered
     },
     gateway_tiers.price_for,
 )  # the Gateway's ids are priced in backend/gateway_tiers.py (cached input at 10% of input)
@@ -911,19 +918,15 @@ def _record(value):
     return {
         "enabled": [p for p in stored.get("enabled") or [] if p in PROVIDER_BY_ID],
         "runtime": str(stored.get("runtime") or ""),
-        "model": str(stored.get("model") or ""),
+        # A retired id saved before (`mercury-3`, an older Gateway id) reads as the id it is now (gateway_tiers.new_id).
+        "model": gateway_tiers.new_id(str(stored.get("model") or "")),
         "revision": int(stored.get("revision") or 0),
         "updated_at": str(stored.get("updated") or ""),
         "updated_by": str(stored.get("updated_by") or ""),
         "source": str(stored.get("source") or ""),
         # On unless the owner turned it off: a bot out of quota runs on another provider (default_fallbacks).
         "auto_fallback": stored.get("auto_fallback") is not False,
-        # A retired id saved before (`mercury-3`, an older Gateway id) reads as the id it is now (gateway_tiers.new_id).
-        "check_models": [
-            ":".join(gateway_tiers.new_id(part) for part in entry.split(":"))
-            for entry in stored.get("check_models") or []
-            if isinstance(entry, str)
-        ],
+        "check_models": [current_entry(entry) for entry in stored.get("check_models") or [] if isinstance(entry, str)],
         # The models choice (backend/models_preset.py); '' is the choice as it was before presets.
         "preset": models_preset.normalize(stored.get("preset")),
         # The model live-meeting replies run on (backend/live_meetings.py): None is unset (the Gateway's default
@@ -934,6 +937,12 @@ def _record(value):
             else gateway_tiers.new_id(str(stored.get("meeting_model") or ""))
         ),
     }
+
+
+def current_entry(entry):
+    """A check-model entry (`runtime`, `runtime:model` or a model id) with a retired model id written as the id it is
+    now (gateway_tiers.new_id)."""
+    return ":".join(gateway_tiers.new_id(part) for part in str(entry).split(":"))
 
 
 def env_seed(settings):
@@ -975,7 +984,7 @@ def with_gateway(record, connected):
 def meeting_choice(record, model):
     """A live-meeting model as a request names it: '' for the bot's own model, else a current model one of the enabled
     providers can run. Raises ProviderError."""
-    model = gateway_tiers.new_id(str(model or "").strip())
+    model = str(model or "").strip()
     if not model:
         return ""
     row = MODEL_BY_ID.get(model)
@@ -987,7 +996,7 @@ def meeting_choice(record, model):
         or not runtime_enabled(row["runtime"], record["enabled"], row)
     ):
         raise ProviderError("meeting_model", "Choose one of the models this company can run for meetings", 422)
-    return model
+    return row["id"]
 
 
 def load(c, settings=None):
@@ -1197,7 +1206,7 @@ def normalize_check_models(value, record, saved=()):
     items = value.split(",") if isinstance(value, str) else list(value or ())
     entries = []
     for item in items:
-        text = str(item or "").strip()
+        text = current_entry(str(item or "").strip())
         if not text or text in entries:
             continue
         if text not in saved:
@@ -1331,6 +1340,10 @@ def resolve(record, config=None, *, what="This bot"):
 
 def fill(record, config):
     """`config` with its runtime and model made concrete, or unchanged when nothing resolves."""
+    fallback = config.get("fallback")
+    if isinstance(fallback, dict) and fallback.get("model"):
+        # A fallback saved on a retired id (`mercury-3`) runs on the id it is now: the runner never gets the old one.
+        config = {**config, "fallback": {**fallback, "model": gateway_tiers.new_id(fallback["model"])}}
     try:
         runtime, model = resolve(record, config)
     except ProviderError:

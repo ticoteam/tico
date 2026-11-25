@@ -113,7 +113,7 @@ def choice_of(model, effort=None, harness=None, current=None):
     model is: the model is in the catalog and not retired, the harness runs it, and the effort is one it takes (the
     model's default when none is named). `current` is the choice a change keeps what it does not name, while the model
     stays the same. Raises Problem."""
-    row = providers.MODEL_BY_ID.get(providers.gateway_tiers.new_id(model))
+    row = providers.MODEL_BY_ID.get(model)
     if not row:
         raise Problem("model", "Choose one of the supported models", 422)
     refuse_retired(row)

@@ -587,9 +587,7 @@ def turn_config(c, settings, config, bot, rid, runner_id, job_id=None, turn_id=N
     ran_on = lambda name: (
         turn and not preview and c.execute("UPDATE live_meeting_turns SET ran_model=? WHERE id=?", (name, turn_id))
     )
-    # A meeting saved on a retired id (`mercury-3`) runs on the id it is now (gateway_tiers.new_id).
-    saved = row[0] if row[0] is not None else providers.load(c, settings)["meeting_model"]
-    model = providers.gateway_tiers.new_id(saved)
+    model = row[0] if row[0] is not None else providers.load(c, settings)["meeting_model"]
     if not model or turn and turn["retries"] >= 2:
         # A second empty reply on the meeting model: the last try runs on the bot's own model (_retry_empty).
         ran_on(None)

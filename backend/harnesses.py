@@ -126,8 +126,10 @@ def normalize_fallback(value):
     """A validated fallback dict, or None when unset/empty."""
     if not value or not isinstance(value, dict):
         return None
+    from .gateway_tiers import new_id
+
     harness = str(value.get("harness") or "").strip()
-    model = str(value.get("model") or "").strip()
+    model = new_id(str(value.get("model") or "").strip())  # a retired id (`mercury-3`) as the id it is now
     if not harness or not model:
         return None
     effort = str(value.get("reasoning_effort") or value.get("effort") or "").strip()
