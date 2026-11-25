@@ -258,6 +258,8 @@ A page version can be an app: it reads Tico as the person viewing it, through Ti
   page's app is stopped (`app_stopped`).
 - **Where it runs:** in chats, on task pages and in sidebars. A sidebar runs at most six apps at once; the rest show
   their still until they scroll into view.
+- **In a bot's [read-only view](computers.md#let-a-bot-view-the-app-read-only)** an app runs its reads as the bot;
+  every write is refused with `read_only_view`.
 
 **Page data** belongs to the page, not to a version. Its writers keep it, and the app reads it with `store`:
 

@@ -30,6 +30,7 @@ from typing import Any, cast
 from fastapi import Request
 from pydantic import Field
 
+from . import app_view
 from . import models as M
 from . import names
 from . import page_app_writes
@@ -41,7 +42,8 @@ from .api_contract import api_v2
 from .store import H, Problem
 
 READS = ("tasks", "files", "pages", "kpis", "contacts", "store")
-OPS = ("me", "query", "thumb", "open", "store.get", "store.list") + page_app_writes.OPS
+READ_OPS = ("me", "query", "thumb", "open", "store.get", "store.list")
+OPS = READ_OPS + page_app_writes.OPS
 ROWS_MAX = 200  # rows in one reply
 REPLY_MAX = 1024 * 1024  # bytes in one reply
 RATE = 20  # calls a second, per frame (its key)
@@ -335,6 +337,8 @@ class PageApps:
             raise Problem("writer_gone", "This app's writer no longer keeps this page's data", 403)
 
     def call(self, who: Any, fid: str, body: AppCall) -> dict[str, Any]:
+        if who.view and body.op not in READ_OPS:  # a bot's read-only view (backend/app_view.py) runs only the reads
+            raise Problem(app_view.CODE, app_view.REFUSED, 403)
         if body.op not in OPS:
             raise Problem("validation", "op is one of " + ", ".join(OPS), 422)
         # One snapshot: the version checked current is the one whose data the op reads.

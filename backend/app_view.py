@@ -6,7 +6,9 @@ Off for every bot until an owner or admin turns it on for that bot (`bot_app_vie
 with it on opens a view from inside a run (`POST /api/v2/app-view`): a token (`tico_av_...`) for at most VIEW_MINUTES,
 bound to that run, so it ends with the run too. The token is the bot itself and reads only what that bot already reads;
 it is never another person's view. `gate` refuses, in Auth.authenticate before any route runs, everything but a read:
-any write (POST, PUT, PATCH, DELETE), and the reads that make or show a token, key or credential. Turning the setting
+any write (POST, PUT, PATCH, DELETE), and the reads that make or show a token, key or credential. The one POST it lets
+through is a page app's call (`POST /api/v2/pages/{id}/app`), which is how a page app reads; PageApps.call then answers
+a view only that call's read ops (READ_OPS in backend/page_apps.py). Turning the setting
 off ends the bot's open views at once (`check_live` reads it on every request).
 
 Each turn on or off and each view opened is a line in the audit log (`app_view:<bot id>`), and the view itself is kept in
@@ -37,6 +39,8 @@ VIEW_MINUTES = 15
 REFUSED = "Read-only view: nothing can be changed from it."
 CODE = "read_only_view"
 READS = ("GET", "HEAD", "OPTIONS")
+# A page app reads Tico only through this POST; backend/page_apps.py refuses a view every op but a read.
+PAGE_APP_CALL = re.compile(r"/api/v2/pages/[A-Za-z0-9_-]+/app")
 
 # Reads refused even so: what makes or shows a token, key or credential (as for Tico support,
 # backend/support_access.py ALWAYS_REFUSED), a run's own lease and stream, a computer's logins, and the directory.
@@ -141,6 +145,8 @@ def check_live(c: sqlite3.Connection, who: "Identity") -> None:
 def gate(path: str, method: str | None) -> None:
     """What a view reaches: reads only. Refused (403) before any route runs. `path` is the address as sent."""
     method = (method or "").upper()
+    if method == "POST" and PAGE_APP_CALL.fullmatch(path):
+        return
     if method not in READS:
         raise Problem(CODE, REFUSED, 403)
     path = path[:-1] if path.endswith("/") and len(path) > 1 else path

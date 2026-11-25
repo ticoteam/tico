@@ -854,6 +854,7 @@ def _install_request_guard(
         if (
             caller is not None
             and caller.actor == "bot:" + AGENT_OPS
+            and not caller.view  # a read-only view's refusal is its own, not one to relay to a person
             and exc.status in (403, 409)
             and "fix" not in getattr(exc, "extra", {})
         ):
@@ -1516,6 +1517,8 @@ def _install_request_guard(
                 and agent_ops_owns_task(request.url.path, agent_ops_act.parse_body(getattr(request, "_body", b"")))
             ):
                 on_behalf = None  # Agent Ops' own task: its own words, with its own rights
+            if getattr(caller, "view", None):
+                on_behalf = None  # a bot's read-only view (backend/app_view.py) reads as that bot, never for a person
             if on_behalf and getattr(request.state, "identity", None) is not None:
                 # Agent Ops doing what the person who asked it could do in the app (backend/agent_ops_act.py).
                 early, acted = await asyncio.get_running_loop().run_in_executor(
