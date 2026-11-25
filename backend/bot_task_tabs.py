@@ -331,20 +331,36 @@ def saved_widgets(ctx, bot):
     return widgets_of(json.loads(row["widgets"]) if row and row["widgets"] else None)
 
 
+def known(ctx, widgets):
+    """The widgets this reader may know are there, as `read` gives them: a page they may not read leaves no trace."""
+    from . import cards
+
+    return [w for w in widgets if cards.readable_item(ctx, w["id"])]
+
+
+def spot(ctx, widgets, position):
+    """Where in the saved list a widget put at `position` goes. A position counts the widgets its reader may know,
+    0 the top: before the one there, or after them all, so a page they may not read keeps its place among the rest."""
+    seen = known(ctx, widgets)
+    if position is None or position >= len(seen):
+        return len(widgets)
+    return next(i for i, w in enumerate(widgets) if w["id"] == seen[position]["id"])
+
+
 def add_widget(ctx, bot, item, position=None):
     widgets = saved_widgets(ctx, bot)
     if any(w["id"] == item for w in widgets):
         raise Problem("conflict", "Already pinned here", 409)
     if len([w for w in widgets if ITEM.fullmatch(w["id"])]) >= M.SIDEBAR_ITEMS:
         raise Problem("too_many", f"A sidebar holds {M.SIDEBAR_ITEMS} pages and cards", 409)
-    entry = {"id": item, "hidden": False, "height": None}
-    widgets.insert(len(widgets) if position is None else min(position, len(widgets)), entry)
+    widgets.insert(spot(ctx, widgets, position), {"id": item, "hidden": False, "height": None})
     write_widgets(ctx, bot, widgets)
 
 
 def edit_widget(ctx, bot, wid, hidden=None, position=None):
     """Hide, show or move one widget (a built-in, or a pinned page or card) in the saved list, as it stands in this
-    write: nothing else in it, and none of the tabs, changes. A position counts every widget, 0 the top."""
+    write: nothing else in it, and none of the tabs, changes. A position counts the widgets its reader may know (spot),
+    0 the top."""
     widgets = saved_widgets(ctx, bot)
     at = next((i for i, w in enumerate(widgets) if w["id"] == wid), None)
     if at is None:
@@ -352,7 +368,7 @@ def edit_widget(ctx, bot, wid, hidden=None, position=None):
     entry = widgets.pop(at)
     if hidden is not None:
         entry["hidden"] = bool(hidden)
-    widgets.insert(at if position is None else min(position, len(widgets)), entry)
+    widgets.insert(at if position is None else spot(ctx, widgets, position), entry)
     write_widgets(ctx, bot, widgets)
 
 
@@ -630,7 +646,12 @@ def install(app, store, auth, mutate, settings, task_views=None):
                         if not any(ITEM.fullmatch(w["id"]) for w in saved_widgets(ctx, bot)):
                             c.execute("UPDATE bot_task_tabs SET widgets=NULL WHERE bot=? AND viewer=?", (bot, viewer))
                     else:
-                        write_widgets(ctx, bot, keep_unread(ctx, saved_widgets(ctx, bot), clean_widgets(body.widgets)))
+                        widgets = keep_unread(ctx, saved_widgets(ctx, bot), clean_widgets(body.widgets))
+                        # Built-ins left out come back, and pages its writer may not read stay: the whole list is what
+                        # positions count, so it never runs past the furthest position a pin may be moved to.
+                        if len(widgets) > M.SIDEBAR_WIDGETS:
+                            raise bad(f"A sidebar holds {M.SIDEBAR_WIDGETS} widgets, its built-in sections among them")
+                        write_widgets(ctx, bot, widgets)
             if not viewer:
                 H.event(
                     c, who.actor, "bot.task_tabs_changed", bot, {"tabs": None if body.tabs is None else len(body.tabs)}

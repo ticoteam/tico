@@ -499,6 +499,57 @@ def test_a_position_on_an_agents_sidebar_counts_its_built_ins(api):
     assert pins == ["card:" + later["card"]["id"], first]
 
 
+def test_a_page_its_reader_may_not_read_moves_no_position_on_an_agents_sidebar(api, monkeypatch):
+    """Positions count only what the reader may know is there: a page they may not read leaves no gap, and a pin they
+    move to where it is listed, or away and back, keeps that page where it was among the rest."""
+    from backend import files as F
+    from backend.tests.helpers.settings_assistant import mcp
+
+    _, _, attempt = setup_attempt(api, "ops")
+    bot = attempt["token"]
+    card = "card:" + post(api, "cards", {"template": "tasks_by_status"})["card"]["id"]
+    tabs = get(api, "bots/ops/task-tabs")["tabs"]
+    put(api, "bots/ops/task-tabs", {"tabs": tabs, "widgets": [{"id": w} for w in ("updates", "tasks", "files", card)]})
+
+    def listed():
+        return {p["item"]: p["position"] for p in mcp(api, "tico_card_list", {"place": "bot:ops"}, bot)[1]["pins"]}
+
+    assert listed() == {card: 3}
+    hidden, visible = page(api, "ops", "Not for the agent"), F.file_visible
+
+    def unread_by_the_agent(c, auth, who, row, cache):
+        return visible(c, auth, who, row, cache) and (who.role != "bot" or row["id"] != hidden)
+
+    monkeypatch.setattr(F, "file_visible", unread_by_the_agent)
+    saved = ["updates", "page:" + hidden, "tasks", "files", card]
+    put(api, "bots/ops/task-tabs", {"tabs": tabs, "widgets": [{"id": w} for w in saved]})
+    assert listed() == {card: 3}
+    pin = next(p["id"] for p in place(api, "bot:ops")["pins"] if p["item"] == card)
+    for position in (3, 1, 3, 0, 3):
+        assert mcp(api, "tico_pin_update", {"pin": pin, "position": position}, bot)[0] is False
+        assert listed() == {card: position}
+    assert [w for w, _ in widgets_of()(api)] == saved
+
+
+def test_the_last_pin_on_the_fullest_sidebar_a_layout_saves_moves_to_where_it_is_listed(api):
+    """Every position listed is one a pin may be moved to: the full-layout save holds no more widgets than that."""
+    from backend.models import SIDEBAR_WIDGETS
+
+    tabs = get(api, "bots/ops/task-tabs")["tabs"]
+    built_ins = ["updates", "tasks", "files"]
+    made = [post(api, "cards", {"template": "tasks_by_status"})["card"]["id"] for _ in range(SIDEBAR_WIDGETS)]
+    cards, more = ["card:" + c for c in made[3:]], ["card:" + c for c in made[:3]]
+    full = built_ins + cards
+    put(api, "bots/ops/task-tabs", {"tabs": tabs, "widgets": [{"id": w} for w in full]})
+    last = place(api, "bot:ops")["pins"][-1]
+    assert (last["item"], last["position"]) == (cards[-1], SIDEBAR_WIDGETS - 1)
+    patch(api, "pins/" + last["id"], {"position": last["position"]})
+    assert [w for w, _ in widgets_of()(api)] == full
+    # Built-ins left out of a save come back after it: a layout that would run past the furthest position is refused.
+    put(api, "bots/ops/task-tabs", {"tabs": tabs, "widgets": [{"id": w} for w in more + cards]}, expected=422)
+    assert [w for w, _ in widgets_of()(api)] == full
+
+
 def test_an_open_agent_page_hears_that_its_sidebar_changed(api):
     """A change to an agent's sidebar is a `bots` event naming it (`sidebar`: its slug), to whoever may see the agent,
     so its open page reads the sidebar again."""

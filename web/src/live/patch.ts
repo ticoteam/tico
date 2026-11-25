@@ -99,7 +99,6 @@ export function resetPatchState(): void {
   trailing.clear();
   trailingAfterRead.clear();
   refetchedAt.clear();
-  counted.clear();
   pendingRefetch = new WeakSet();
 }
 
@@ -588,19 +587,11 @@ interface BotEvent {
 const countsTasks = (place: unknown) =>
   !!(place as { pins?: { card?: { template?: string } | null }[] } | undefined)?.pins?.some((p) => p.card?.template === 'tasks_by_stage');
 
-/** What a tasks-by-stage card counts a task by, as last heard per task. */
-const counted = new Map<string, string>();
-const COUNT_KINDS = new Set(['insert', 'update', 'delete', 'bulk']);
-/** Whether a change can move a tasks-by-stage count: a task made or deleted, or its pipeline, stage, status, owner or
-    snooze moved. A run, a file, a tag or a title cannot. */
-function movesCounts(e: TaskEvent): boolean {
-  const t = e.task;
-  const before = t ? counted.get(t.id) : undefined;
-  const now = t && [t.pipeline_id, t.stage_id, t.status, t.owner_id, !!t.snoozed].join('|');
-  if (t && now) counted.set(t.id, now);
-  if (!e.bulk && !(e.kinds?.length ? e.kinds : [e.kind ?? '']).some((k) => COUNT_KINDS.has(k))) return false;
-  return !t || before !== now;
-}
+/** A task sent again only for its run or what it waits on (backend task_reads `run_moved`, `status_moved`): it moves no
+    tasks-by-stage count. Any other change may (a move, a snooze, a relation, access gained or lost...): a sidebar
+    holding one reads again, at most once a second (`refetchSoon`). */
+const RUN_KINDS = new Set(['run', 'status', 'shots']);
+const runOnly = (e: TaskEvent) => !e.gone && !e.bulk && (e.kinds?.length ? e.kinds : [e.kind ?? '']).every((k) => RUN_KINDS.has(k));
 
 function patchDirectory(batch: BotEvent[]): void {
   const held = queryClient.getQueryData<Directory>(keys.directory());
@@ -765,16 +756,15 @@ export function installPatchers(): void {
   onTopic<BotEvent>('bots', patchDirectory);
   // A task left the reader (who may read it changed, or it went): a page pinned to an agent's sidebar may have gone
   // with it, so the sidebars and their pins read again (backend/bot_task_tabs.py, cards.py place_view). A task's file
-  // or page changed (a new version, a pin on it): a pinned one shows its new version. A change that can move what a
-  // tasks-by-stage card counts (`movesCounts`): the sidebars holding one read again. A read already in flight answered
-  // from before the change: another follows it.
+  // or page changed (a new version, a pin on it): a pinned one shows its new version. Any other change but a run's
+  // (`runOnly`): the sidebars holding a tasks-by-stage card read again. A read already in flight answered from before
+  // the change: another follows it.
   onRefetch<TaskEvent>(
     'tasks',
     (e) => {
-      const moves = movesCounts(e); // first: it notes every task it hears of
       if (e.gone) return [['team', 'tabs'], ['team', 'pins']];
       if (e.kinds?.includes('files')) return [['team', 'pins']];
-      return moves ? queryClient.getQueriesData({ queryKey: ['team', 'pins'] }).filter(([, place]) => countsTasks(place)).map(([key]) => key) : [];
+      return runOnly(e) ? [] : queryClient.getQueriesData({ queryKey: ['team', 'pins'] }).filter(([, place]) => countsTasks(place)).map(([key]) => key);
     },
     true,
   );

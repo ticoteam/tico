@@ -45,15 +45,14 @@ from . import groups as G
 from . import models as M
 from . import people as P
 from . import read_cache
-from .bot_task_tabs import WIDGETS as SIDEBAR_BUILT_INS
 from .store import H, Problem, encode
 from .api_contract import api_v2
 
 SIZES = ("small", "medium", "large")
 PLACE_MAX = 60  # pins at one place: a page of cards, not an archive
-# The last place a pin may be moved to: on a full agent sidebar, below its pins and its built-in sections, which its
-# positions count too (bot_task_tabs.edit_widget).
-SPOT_MAX = PLACE_MAX + len(SIDEBAR_BUILT_INS) - 1
+# The furthest place a pin may be put: past the end of the fullest agent sidebar a layout may save, whose positions
+# count its built-in sections too (models.SIDEBAR_WIDGETS), so every position listed is one a pin may be moved to.
+SPOT_MAX = M.SIDEBAR_WIDGETS
 CARDS_MAX = 2000
 LIST_MAX = 100
 IDS_MAX = 50
@@ -1653,9 +1652,9 @@ def place_view(ctx, place, timings=None):
     if kind == "bot":
         from . import bot_task_tabs as T
 
-        # A position on an agent's sidebar counts its built-in sections too, as moving a pin there does, so a pin moved
-        # to the position it is listed at stays where it is.
-        spots = {w["id"]: at for at, w in enumerate(T.saved_widgets(ctx, ident))}
+        # A position on an agent's sidebar counts its built-in sections too, and only what its reader may know is there
+        # (bot_task_tabs.spot), as moving a pin there does: a pin moved to the position it is listed at stays put.
+        spots = {w["id"]: at for at, w in enumerate(T.known(ctx, T.saved_widgets(ctx, ident)))}
         for view in shown:
             view["position"] = spots.get(view["item"], view["position"])
     if kind == "task":

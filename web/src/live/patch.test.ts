@@ -44,24 +44,28 @@ it('reads an agent sidebar again when it changed, and the sidebars counting task
   expect([stale(['team', 'pins', 'ops']), stale(['team', 'tabs', 'ops'])]).toEqual([true, false]);
 });
 
-it('reads a sidebar counting tasks again only for a change that can move a count: not a run, a status line or a title', () => {
+it('reads a sidebar counting tasks again on any change to a task but a run: a snooze, a relation, access lost and won back', () => {
   const pins = ['team', 'pins', 'ops'];
-  const send = (seq: number, t: ReturnType<typeof task>, kind: string) => {
+  const send = (seq: number | null, event: Record<string, unknown>) => {
     vi.advanceTimersByTime(1000); // past the gap between two reads of one key
     queryClient.setQueryData(pins, { pins: [{ item: 'card:c1', card: { template: 'tasks_by_stage' } }] });
-    FakeEventSource.last.feed(taskFrame(seq, t, kind));
+    FakeEventSource.last.feed(frame(seq, 'tasks', { ...(seq !== null && { seq, actor: 'human:p1', at: AT }), ...event }));
     flushFrame();
     return !!queryClient.getQueryState(pins)?.isInvalidated;
   };
-  const t = (over: Record<string, unknown> = {}) => task('t1', { pipeline_id: 'p1', stage_id: 's1', ...over });
-  expect(send(901, t(), 'update')).toBe(true); // not heard of before
-  expect(send(902, t(), 'run')).toBe(false);
-  expect(send(903, t(), 'status')).toBe(false);
-  expect(send(904, t({ title: 'Renamed' }), 'update')).toBe(false);
-  expect(send(905, t({ stage_id: 's2' }), 'update')).toBe(true);
-  expect(send(906, t({ stage_id: 's2', snoozed: true }), 'update')).toBe(true);
-  expect(send(907, t({ stage_id: 's2', snoozed: true, owner_id: 'bot:b2' }), 'update')).toBe(true);
-  expect(send(908, task('t2', { pipeline_id: 'p1' }), 'insert')).toBe(true);
+  const t1 = (kind: string, over: Record<string, unknown> = {}) => ({ id: 't1', kind, kinds: [kind], task: task('t1', { pipeline_id: 'p1', stage_id: 's1', ...over }) });
+  expect(send(901, t1('run'))).toBe(false);
+  expect(send(902, t1('status'))).toBe(false);
+  expect(send(903, t1('shots'))).toBe(false);
+  expect(send(904, t1('snooze', { snoozed: true }))).toBe(true);
+  expect(send(905, t1('snooze', { snoozed: false }))).toBe(true);
+  expect(send(906, t1('relation', { snoozed: true }))).toBe(true);
+  expect(send(null, { task_id: 't1', gone: true })).toBe(true);
+  expect(send(907, t1('update'))).toBe(true); // shared with the reader again, as it was
+  expect(send(908, t1('update', { stage_id: 's2' }))).toBe(true);
+  expect(send(909, { kind: 'bulk', kinds: ['bulk'], bulk: true })).toBe(true);
+  expect(send(910, t1('update', { stage_id: 's1' }))).toBe(true); // back where it was before the bulk change
+  expect(send(911, { ...t1('insert'), id: 't2' })).toBe(true);
 });
 
 it("reads an agent's sidebar again after a read in flight when the sidebar changes meanwhile", async () => {
