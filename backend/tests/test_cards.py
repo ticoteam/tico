@@ -531,6 +531,28 @@ def test_a_page_its_reader_may_not_read_moves_no_position_on_an_agents_sidebar(a
     assert [w for w, _ in widgets_of()(api)] == saved
 
 
+def test_a_pin_moved_to_where_its_reader_sees_it_stays_before_a_page_they_may_not_read(api, monkeypatch):
+    """A card first, then a page its agent may not read: moved to 0, where the agent sees it, the card stays first."""
+    from backend import files as F
+    from backend.tests.helpers.settings_assistant import mcp
+
+    _, _, attempt = setup_attempt(api, "ops")
+    bot = attempt["token"]
+    card = "card:" + post(api, "cards", {"template": "tasks_by_status"})["card"]["id"]
+    hidden, visible = page(api, "ops", "Not for the agent"), F.file_visible
+
+    def unread_by_the_agent(c, auth, who, row, cache):
+        return visible(c, auth, who, row, cache) and (who.role != "bot" or row["id"] != hidden)
+
+    monkeypatch.setattr(F, "file_visible", unread_by_the_agent)
+    saved = [card, "page:" + hidden, "updates", "tasks", "files"]
+    tabs = get(api, "bots/ops/task-tabs")["tabs"]
+    put(api, "bots/ops/task-tabs", {"tabs": tabs, "widgets": [{"id": w} for w in saved]})
+    pin = next(p["id"] for p in place(api, "bot:ops")["pins"] if p["item"] == card)
+    assert mcp(api, "tico_pin_update", {"pin": pin, "position": 0}, bot)[0] is False
+    assert [w for w, _ in widgets_of()(api)] == saved
+
+
 def test_the_last_pin_on_the_fullest_sidebar_a_layout_saves_moves_to_where_it_is_listed(api):
     """Every position listed is one a pin may be moved to: the full-layout save holds no more widgets than that."""
     from backend.models import SIDEBAR_WIDGETS

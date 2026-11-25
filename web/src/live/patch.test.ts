@@ -88,6 +88,25 @@ it("reads an agent's sidebar again after a read in flight when the sidebar chang
   }
 });
 
+it('reads a sidebar again after its first read when a task changes while that read is out', async () => {
+  const pins = ['team', 'pins', 'sales'];
+  const reads: (() => void)[] = [];
+  const read = () => new Promise((done) => reads.push(() => done({ pins: [{ item: 'card:c1', card: { template: 'tasks_by_stage' } }] })));
+  const seen = new QueryObserver(queryClient, { queryKey: pins, queryFn: read, staleTime: Infinity });
+  const stop = seen.subscribe(() => {});
+  try {
+    await act(async () => {});
+    expect(reads).toHaveLength(1); // nothing known of it yet
+    vi.advanceTimersByTime(1000);
+    FakeEventSource.last.feed(taskFrame(901, task('t1', { pipeline_id: 'p1', stage_id: 's2' })));
+    flushFrame();
+    await act(() => reads.splice(0).forEach((go) => go()));
+    expect(reads).toHaveLength(1); // its reply may predate the move: it reads once more
+  } finally {
+    stop();
+  }
+});
+
 it('refreshes only the agent whose run state changed', () => {
   const payer = (bot: string) => [...keys.team.paidBy(), bot, true];
   queryClient.setQueryData(payer('ops'), { last_turn: null });

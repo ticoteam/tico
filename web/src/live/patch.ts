@@ -764,7 +764,10 @@ export function installPatchers(): void {
     (e) => {
       if (e.gone) return [['team', 'tabs'], ['team', 'pins']];
       if (e.kinds?.includes('files')) return [['team', 'pins']];
-      return runOnly(e) ? [] : queryClient.getQueriesData({ queryKey: ['team', 'pins'] }).filter(([, place]) => countsTasks(place)).map(([key]) => key);
+      if (runOnly(e)) return [];
+      // a sidebar on its first read may hold one too: it reads again after that read
+      const pins = queryClient.getQueryCache().findAll({ queryKey: ['team', 'pins'] });
+      return pins.filter((q) => countsTasks(q.state.data) || (q.state.data === undefined && q.state.fetchStatus !== 'idle')).map((q) => q.queryKey);
     },
     true,
   );

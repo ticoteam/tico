@@ -365,10 +365,13 @@ def edit_widget(ctx, bot, wid, hidden=None, position=None):
     at = next((i for i, w in enumerate(widgets) if w["id"] == wid), None)
     if at is None:
         raise Problem("not_found", "Not on this sidebar", 404)
+    seen = [w["id"] for w in known(ctx, widgets)]
     entry = widgets.pop(at)
     if hidden is not None:
         entry["hidden"] = bool(hidden)
-    widgets.insert(at if position is None else spot(ctx, widgets, position), entry)
+    # Moved to where its reader already sees it: it stays put, a page they may not read beside it too.
+    stays = position is None or wid in seen and seen.index(wid) == position
+    widgets.insert(at if stays else spot(ctx, widgets, position), entry)
     write_widgets(ctx, bot, widgets)
 
 
