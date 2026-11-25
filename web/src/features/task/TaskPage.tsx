@@ -12,7 +12,7 @@ import { Link } from '@/kit/Link';
 import { Viewer } from '@/kit/Viewer';
 import { toast } from '@/kit/Toast';
 import { useFollow } from '@/live/follow';
-import { Document, type PageState, type PageTab, ReadFault } from '@/pagekinds';
+import { Document, faultHides, type PageState, type PageTab, ReadFault } from '@/pagekinds';
 import { FilePreview } from '@/features/library/exports';
 import { flowQuery, flowSnoozedAsksQuery } from '@/features/tasks/routing';
 import { whoHref } from '@/features/team/routing';
@@ -59,11 +59,12 @@ export interface TaskPageProps {
 function useTask(param: string, opens = false) {
   const ref = useQuery(taskRefQuery(param));
   // On this screen only, the task reads itself again every few minutes: the stream sends its status line as it changes,
-  // and this heals one it missed (a backstop, not the way it updates). A read that failed with nothing to show is left
-  // to its fault (ReadFault): read again when the stream is back if that could help, else by Try again.
+  // and this heals one it missed (a backstop, not the way it updates). A read that failed with nothing to show, or was
+  // refused (a copy on screen or not), is not read again by it: its fault (ReadFault) reads it again when the stream is
+  // back if that could help, else Try again does; a refusal would only be refused again every few minutes.
   const detail = useQuery({
     ...taskDetailQuery(ref.data),
-    refetchInterval: (q) => (q.state.status === 'error' && q.state.data === undefined ? false : STATUS_BACKSTOP_MS),
+    refetchInterval: (q) => (faultHides({ isError: q.state.status === 'error', error: q.state.error, data: q.state.data }) ? false : STATUS_BACKSTOP_MS),
     ...(opens && { refetchOnMount: 'always' as const }),
   });
   useFollow(ref.data ? { task: ref.data } : null);

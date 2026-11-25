@@ -18,7 +18,7 @@ import { clock, took } from './dates';
 import { Markdown } from '@/kit/Markdown';
 import { PictureViewer, type Picture } from '@/kit/PictureViewer';
 import { Viewer } from '@/kit/Viewer';
-import { ReadFault } from '@/pagekinds';
+import { faultHides, ReadFault } from '@/pagekinds';
 import { agentWords, Quote } from './Quote';
 import { isPicture, linkRender, ownFile, richText, Shelf } from './Rich';
 import { fromSlack, proposalQuery, slackPlaceOf, slackThreadQuery, type SlackPlace } from './queries';
@@ -162,7 +162,8 @@ const slackTime = (ts: string) => {
 /** The Slack thread a message came from, every message in full, as the server keeps it. */
 function SlackThread({ place, m, onClose }: { place: SlackPlace; m: ChatMessage; onClose: () => void }) {
   const q = useQuery(slackThreadQuery(place));
-  const lines = q.data ?? [];
+  // a refusal hides the lines already read too (faultHides)
+  const lines = (faultHides(q) ? undefined : q.data) ?? [];
   const link = slackHref(m) ?? lines[0]?.url ?? null;
   return (
     <Dialog
@@ -185,7 +186,7 @@ function SlackThread({ place, m, onClose }: { place: SlackPlace; m: ChatMessage;
     >
       {q.isPending ? (
         <SkeletonRows rows={3} />
-      ) : q.isError && !lines.length ? (
+      ) : faultHides(q) ? (
         <ReadFault what="The Slack thread" reads={[q]} />
       ) : lines.length === 0 ? (
         <Empty title="No messages" />

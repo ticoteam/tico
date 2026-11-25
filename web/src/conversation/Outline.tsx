@@ -4,7 +4,7 @@ import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
 import { SkeletonRows } from '@/kit/Skeleton';
 import { VirtualList } from '@/kit/VirtualList';
-import { ReadFault } from '@/pagekinds';
+import { faultHides, ReadFault } from '@/pagekinds';
 import { outlineQuery } from './queries';
 
 /* A jump asked from the Outline reaches the open Conversation with that id, wherever it is drawn. */
@@ -34,12 +34,12 @@ export interface OutlineProps {
 /** A long chat's prompts as a list; a row takes the chat to that message, loading older pages to reach it. */
 export function Outline({ id, open, onOpenChange }: OutlineProps) {
   const q = useQuery({ ...outlineQuery(id), enabled: open });
-  const prompts = q.data ?? [];
+  const prompts = (faultHides(q) ? undefined : q.data) ?? [];
   return (
     <Dialog open={open} onOpenChange={onOpenChange} title="Outline">
       {q.isPending ? (
         <SkeletonRows rows={4} />
-      ) : q.isError && !prompts.length ? (
+      ) : faultHides(q) ? (
         <ReadFault what="The outline" reads={[q]} />
       ) : prompts.length === 0 ? (
         <Empty title="No prompts yet" />

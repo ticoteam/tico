@@ -751,10 +751,10 @@ describe('letters out', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/tasks'));
   });
 
-  it('an older page of letters that fails keeps the letters shown and Load more to press again', async () => {
+  it('an older page of letters that fails and may pass keeps the letters shown and Load more to press again', async () => {
     const old = { id: 'O1', redacted: false, status: 'delivered', can_cancel: false, created_at: '2026-10-01T00:00:00Z', recipient: { name: 'Old Friend' }, page_count: 1, proof: null, tracking: [] };
     const sent = serve((url) =>
-      url === '/api/v2/letters?limit=20&before=R18' ? { items: [old], next_before: 'O1' } : url === '/api/v2/letters?limit=20&before=O1' ? refused(400, 'bad_cursor') : undefined,
+      url === '/api/v2/letters?limit=20&before=R18' ? { items: [old], next_before: 'O1' } : url === '/api/v2/letters?limit=20&before=O1' ? refused(500, 'internal') : undefined,
     );
     const rest = Array.from({ length: 19 }, (_, n) => ({ id: `R${n}`, redacted: true, status: 'mailed', can_cancel: false, created_at: '2026-11-01T00:00:00Z', page_count: 1 }));
     openAddress([SENT_LETTER, ...rest]);
@@ -814,9 +814,9 @@ describe('Messages', () => {
     expect(reads(sent)().filter((u) => u === '/api/v2/inbound/inboxes').length).toBeGreaterThan(before.boxes);
   });
 
-  it('an older page that fails keeps the messages shown, and Older messages reads it again', async () => {
+  it('an older page that fails and may pass keeps the messages shown, and Older messages reads it again', async () => {
     const sent = serve((url) =>
-      url.startsWith('/api/v2/inbound/messages?') ? (url.includes('before=') ? refused(400, 'bad_cursor') : { messages: MESSAGES, next: 77 }) : undefined,
+      url.startsWith('/api/v2/inbound/messages?') ? (url.includes('before=') ? refused(500, 'internal') : { messages: MESSAGES, next: 77 }) : undefined,
     );
     queryClient.setQueryData(inboxesQuery.queryKey, INBOXES);
     open('messages');
@@ -826,6 +826,19 @@ describe('Messages', () => {
     expect(await within(page).findByRole('button', { name: 'Older messages' })).toBeTruthy();
     expect(within(page).getByText('Your code')).toBeTruthy();
     expect(within(page).queryByText(/didn't load/)).toBeNull();
+  });
+
+  it('messages on screen whose refresh is refused (the inbox moved out of reach) hide and say why', async () => {
+    let refuse = false;
+    serve((url) => (url.startsWith('/api/v2/inbound/messages?') ? (refuse ? refused(404, 'not_found') : { messages: MESSAGES, next: null }) : undefined));
+    queryClient.setQueryData(inboxesQuery.queryKey, INBOXES);
+    open('messages');
+    const page = await screen.findByRole('region', { name: 'Messages' });
+    expect(await within(page).findByText('Your code')).toBeTruthy();
+    refuse = true;
+    await act(() => queryClient.refetchQueries({ queryKey: ['tools', 'messages', 'all'] }));
+    expect(await within(page).findByText("Messages didn't load · not found")).toBeTruthy();
+    expect(within(page).queryByText('Your code')).toBeNull();
   });
 
   it('a message with a code reveals it in the reader only, on its own press; never Tico’s @s932', async () => {
@@ -845,6 +858,21 @@ describe('Messages', () => {
     expect(await within(reader).findByText(CODE)).toBeTruthy();
     expect(cached()).not.toContain(CODE);
     expect(await tico('tools.revealCode', { message: 'm1' })).toMatchObject({ ok: false, error: 'not_allowed' });
+  });
+
+  it('a message whose read was refused says why, and Try again reads it', async () => {
+    let refuse = true;
+    serve((url) => (url === '/api/v2/inbound/messages/m1' ? (refuse ? refused(403, 'forbidden') : { text: 'Your sign-in code is inside.', next_offset: null }) : undefined));
+    queryClient.setQueryData(toolsQuery.queryKey, { rows: [indexRow({ id: 'tico:i1', kind: 'tico', name: 'Logins' })] } as never);
+    queryClient.setQueryData(inboxesQuery.queryKey, INBOXES);
+    queryClient.setQueryData(inboxMessagesQuery('i1').queryKey, [MESSAGES[0]] as never);
+    open('tico:i1');
+    fireEvent.click(await screen.findByRole('button', { name: /Your code/ }));
+    const reader = await screen.findByRole('dialog', { name: 'Your code' });
+    expect(await within(reader).findByText("This message didn't load · no access")).toBeTruthy();
+    refuse = false;
+    fireEvent.click(within(reader).getByRole('button', { name: 'Try again' }));
+    expect(await within(reader).findByText('Your sign-in code is inside.')).toBeTruthy();
   });
 });
 

@@ -1,5 +1,5 @@
 import { keepPreviousData, queryOptions, type QueryKey } from '@tanstack/react-query';
-import { ApiError, api } from '@/api/client';
+import { answered, ApiError, api, toError } from '@/api/client';
 import type { OkPreview, PagePublished, PageShown, PipelineSettingsResult, PublishPageBody, TaskDetail, TaskDetailChild, TaskFileList, TaskLinkView, TaskRequirement, TaskResult } from '@/api/schema';
 import { asksGone, keys, meQuery, queryClient, quietRoot, write } from '@/data';
 import { newId } from '@/lib/ids';
@@ -816,14 +816,11 @@ export const wordQuery = (url: string) =>
   queryOptions({
     queryKey: ['files', 'word', url] as const,
     queryFn: async ({ signal }): Promise<WordPara[]> => {
-      // nothing answered is the API's own "no answer" (read again once the stream is back); a file that is not Word is
-      // the app's to fix, not the connection's
-      const res = await fetch(url, { credentials: 'same-origin', signal }).catch((err: unknown) => {
-        if (signal.aborted) throw err;
-        throw new ApiError(0, 'network', 'The server did not answer', true);
-      });
-      if (!res.ok) throw new ApiError(res.status, `http_${res.status}`, res.statusText, res.status >= 500);
-      const xml = await unzip(await res.arrayBuffer(), 'word/document.xml');
+      // nothing answered, or the answer broke off, is the API's own "no answer" (read again once the stream is back); a
+      // refusal is read as the API reads it (a stopped company); a file that is not Word is the app's to fix
+      const res = await answered(fetch(url, { credentials: 'same-origin', signal }), signal);
+      if (!res.ok) throw await toError(res);
+      const xml = await unzip(await answered(res.arrayBuffer(), signal), 'word/document.xml');
       if (xml == null) throw new Error('Not a Word file: it has no word/document.xml');
       return wordParagraphs(xml);
     },

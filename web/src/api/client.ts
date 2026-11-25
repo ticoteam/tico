@@ -112,7 +112,20 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-async function toError(res: Response): Promise<ApiError> {
+/** A read made outside `api` (a file's own bytes) that got no answer: nothing answered, or the answer broke off on the
+    way (fetch, or reading its body, threw). Failed as `api`'s own reads fail (status 0, read again by itself); a
+    caller's abort stays an abort. */
+export async function answered<T>(read: Promise<T>, signal?: AbortSignal | null): Promise<T> {
+  try {
+    return await read;
+  } catch (err) {
+    if (signal?.aborted || (err instanceof DOMException && err.name === 'AbortError')) throw err;
+    throw new ApiError(0, 'network', 'The server did not answer', true);
+  }
+}
+
+/** A failed answer as an ApiError: its Problem, or the proxies' own plain answers (a restart, a stopped company). */
+export async function toError(res: Response): Promise<ApiError> {
   const text = await res.text().catch(() => '');
   let problem: Problem['error'] | undefined;
   try {

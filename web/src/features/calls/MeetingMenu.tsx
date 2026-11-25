@@ -13,7 +13,7 @@ import { MenuItem, MenuRule } from '@/kit/Menu';
 import { Select } from '@/kit/Select';
 import { Switch } from '@/kit/Switch';
 import { toast } from '@/kit/Toast';
-import { PageMore, ReadFault, type FailedRead } from '@/pagekinds';
+import { faultHides, PageMore, ReadFault, type FailedRead } from '@/pagekinds';
 import { TRANSCRIPT_SOURCES, type TranscriptSource } from './model';
 import { PeoplePick } from './PeoplePick';
 import { press, useNameOf } from './parts';
@@ -184,12 +184,14 @@ function Sources({ onConnect, onLeave }: { onConnect: () => void; onLeave: () =>
   const importers = useQuery({ ...importersQuery, enabled: owner });
   if (granola.isPending && sources.isPending) return null;
   // The owner's own rows stand in for the importers' shared ones.
-  const mine = owner ? (importers.data?.importers ?? []) : [];
-  const computers = importers.data?.computers ?? [];
-  const shown = (sources.data?.sources ?? []).filter((x) => x.id !== 'import' && !mine.some((i) => i.source === x.id));
+  // a refusal hides what was read before too (faultHides)
+  const imp = faultHides(importers) ? undefined : importers.data;
+  const mine = owner ? (imp?.importers ?? []) : [];
+  const computers = imp?.computers ?? [];
+  const shown = ((faultHides(sources) ? undefined : sources.data)?.sources ?? []).filter((x) => x.id !== 'import' && !mine.some((i) => i.source === x.id));
   return (
     <ul className="call-src" data-target="dialog:meeting-sources">
-      {granola.data ? (
+      {granola.data && !faultHides(granola) ? (
         <GranolaRow g={granola.data} onConnect={onConnect} />
       ) : (
         granola.isError && <ShortRow name="Granola" read={granola} />
@@ -210,12 +212,12 @@ function Sources({ onConnect, onLeave }: { onConnect: () => void; onLeave: () =>
           )}
         </li>
       ))}
-      {sources.isError && !sources.data && <ShortRow name="Other sources" read={sources} />}
+      {faultHides(sources) && <ShortRow name="Other sources" read={sources} />}
       {mine.map((i) => (
         <ImporterRow key={i.source} i={i} computers={computers} />
       ))}
-      {owner && importers.isError && !importers.data && <ShortRow name="Importers" read={importers} />}
-      {owner && importers.data && !computers.length && <li className="call-src-row call-src-st">Add a computer first</li>}
+      {owner && faultHides(importers) && <ShortRow name="Importers" read={importers} />}
+      {owner && imp && !computers.length && <li className="call-src-row call-src-st">Add a computer first</li>}
     </ul>
   );
 }

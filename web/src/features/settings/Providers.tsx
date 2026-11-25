@@ -14,7 +14,7 @@ import { Pill } from '@/kit/Pill';
 import { SectionHead } from '@/kit/SectionHead';
 import { Select } from '@/kit/Select';
 import { fmtDate } from '@/lib';
-import { Section } from '@/pagekinds';
+import { faultHides, ReadFault, Section } from '@/pagekinds';
 import { editSubscriptionName, maxLiveTurns } from './actions';
 import { ConnectPlan } from './ConnectPlan';
 import { GatewayLines } from './Gateway';
@@ -314,7 +314,10 @@ function ProviderRow({
 }
 
 function ExitPicker({ exit, close }: { exit: PlanExit; close: () => void }) {
-  const { data, isError, isPending, hasNextPage, isFetchingNextPage, fetchNextPage } = useInfiniteQuery(planExitQuery(exit.person_id));
+  const read = useInfiniteQuery(planExitQuery(exit.person_id));
+  const { isPending, hasNextPage, isFetchingNextPage, fetchNextPage } = read;
+  // a refusal hides the computers read before too (faultHides)
+  const data = faultHides(read) ? undefined : read.data;
   const [computer, choose] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const options = data?.pages.flatMap((page) => page.computers.map(({ id, label }) => ({ value: id, label }))) ?? [];
@@ -339,11 +342,11 @@ function ExitPicker({ exit, close }: { exit: PlanExit; close: () => void }) {
         </>
       }
     >
-      {isError && !data ? <p role="alert">Couldn't load computers</p> : (
+      {faultHides(read) ? <ReadFault what="Computers" reads={[read]} inline /> : (
         <Select label="Computer" value={computer ?? exit.runner_id} options={options} onValueChange={choose}
           placeholder={isPending ? 'Loading…' : options.length ? 'Choose a computer' : 'No computers'} disabled={busy || options.length === 0} />
       )}
-      {hasNextPage && <Button variant="quiet" busy={isFetchingNextPage} onClick={() => void fetchNextPage()}>More computers</Button>}
+      {hasNextPage && data && <Button variant="quiet" busy={isFetchingNextPage} onClick={() => void fetchNextPage()}>More computers</Button>}
     </Dialog>
   );
 }

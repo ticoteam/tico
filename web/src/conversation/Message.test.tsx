@@ -216,6 +216,25 @@ describe('A message that came from a Slack thread @s190', () => {
     expect(within(dialog).getByRole('button', { name: 'Try again' })).toBeTruthy();
   });
 
+  it('a Slack thread on screen whose refresh is refused hides its lines and says why', async () => {
+    let refuse = false;
+    serve((url) =>
+      url.includes('/slack-thread')
+        ? refuse
+          ? { status: 403, body: { error: { code: 'forbidden', detail: 'No.' } } }
+          : { status: 200, body: { messages: [{ event_id: 'e1', ts: '1789800000.000100', author: 'Sam Rivera', text: 'Ship it', deleted: false, url: 'https://example.slack.com/archives/C1/p1' }] } }
+        : undefined,
+    );
+    show([fromSlack()], { role: 'owner' });
+    fireEvent.click(await screen.findByRole('button', { name: 'Slack #launch' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Slack thread' });
+    await waitFor(() => expect(dialog.textContent).toContain('Sam Rivera'));
+    refuse = true;
+    await act(() => queryClient.refetchQueries({ queryKey: ['slackThread'] }));
+    expect(await within(dialog).findByRole('heading', { name: "The Slack thread didn't load · no access" })).toBeTruthy();
+    expect(dialog.textContent).not.toContain('Sam Rivera');
+  });
+
   it('anyone else gets the link to the message in Slack', async () => {
     serve();
     show([fromSlack()]);

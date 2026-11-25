@@ -10,7 +10,7 @@ import { Facts, LabelValue } from '@/kit/LabelValue';
 import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { ItemHead, Section, type PageState } from '@/pagekinds';
-import { ReadFault as Fault, SkRows, StateBody, type FailedRead } from '@/pagekinds';
+import { faultHides, ReadFault as Fault, SkRows, StateBody, type FailedRead } from '@/pagekinds';
 import { Face, Held, KindTile } from './parts';
 import { googleQuery } from './queries';
 import type { ToolsSearch } from './search';
@@ -116,7 +116,8 @@ export function ToolPage(p: ToolPageProps) {
   const { name, kind, row, q, target } = p;
   const at = target.slice(target.indexOf(':') + 1);
   const all = p.reads ?? (q ? [q] : []);
-  const failed = all.find((r) => r.isError);
+  // a refusal is the fault even with rows read before; a failure that may pass keeps them (faultHides)
+  const failed = all.find(faultHides);
   const state: PageState = failed ? stateOf(failed) : all.every((r) => r.data !== undefined) ? 'ready' : 'loading';
   const rowWho = row?.who.map((w) => <WhoRow key={w.id} actor={w.kind === 'group' ? null : w.id} name={w.name} />);
   const who = p.who ?? rowWho;

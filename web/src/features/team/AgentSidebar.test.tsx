@@ -368,12 +368,12 @@ describe("An agent's Tools", () => {
     await waitFor(() => expect(reads).toContain('/api/v2/bots/ana/tool-guides/stripe'));
   });
 
-  it('Add tool: more tools that fail to load keep the ones found and More to press again', async () => {
+  it('Add tool: more tools that fail to load and may pass keep the ones found and More to press again', async () => {
     open([w('tools')], (u) =>
       u.endsWith('/bots/ana/tool-guides')
         ? { body: { bot: '0190-ana', tool_guides: rows, next: null } }
         : u.includes('/api/v2/tool-guides?') && u.includes('cursor=c2')
-          ? { status: 400, body: { error: { code: 'bad_cursor', detail: 'No.' } } }
+          ? { status: 500, body: { error: { code: 'internal', detail: 'No.' } } }
           : u.includes('/api/v2/tool-guides?')
             ? { body: { tool_guides: found, next: 'c2' } }
             : undefined,

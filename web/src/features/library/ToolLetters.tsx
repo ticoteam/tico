@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { refusal, run } from '@/actions';
 import type { LetterOut, LetterOutContents, ToolIndexRow } from '@/api/schema';
 import { useActors } from '@/data';
+import { faultHides } from '@/live/fault';
 import { useFollow } from '@/live/follow';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
@@ -271,11 +272,11 @@ function LettersOut({ letters }: { letters: LetterOut[] }) {
 
 function OlderLetters({ before, onDetails }: { before: string; onDetails: (l: LetterOutContents) => void }) {
   const q = useInfiniteQuery(olderLettersQuery(before));
+  // a later page that failed and may pass keeps Load more to press again; a refusal hides the letters (faultHides)
+  if (faultHides(q)) return <ReadFault name="Older letters" reads={[q]} />;
   return (
     <>
       {q.data?.pages.flatMap((p) => p.items).map((l) => <LetterRow key={l.id} l={l} onDetails={onDetails} />)}
-      {/* only a first page that failed says so: an older one that failed keeps Load more to press again */}
-      {q.isLoadingError && <ReadFault name="Older letters" reads={[q]} />}
       {q.hasNextPage && !q.isFetchingNextPage && <More onClick={() => q.fetchNextPage()}>Load more</More>}
     </>
   );

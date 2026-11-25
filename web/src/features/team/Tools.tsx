@@ -7,7 +7,7 @@ import { Field, SettledSearch } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Link } from '@/kit/Link';
-import { ReadFault, Section } from '@/pagekinds';
+import { faultHides, ReadFault, Section } from '@/pagekinds';
 import { agentToolsQuery, findToolsQuery, readable, toolRows, type AgentTool } from './queries';
 
 /* Its Tools (backend tool guides): the software it lists, may use or used in the last 30 days. Each row is the tool's
@@ -91,7 +91,8 @@ export function AddToolDialog({ slug, name, onClose }: { slug: string; name: str
   const [picked, setPicked] = useState<string | null>(null);
   const [note, setNote] = useState('');
   const found = useInfiniteQuery({ ...findToolsQuery(words.trim()), placeholderData: keepPreviousData });
-  const rows = (found.data?.pages.flatMap((p) => p.tool_guides ?? []) ?? []).filter((t) => !has.has(t.slug));
+  // a refusal hides the tools found before too (faultHides)
+  const rows = ((faultHides(found) ? undefined : found.data)?.pages.flatMap((p) => p.tool_guides ?? []) ?? []).filter((t) => !has.has(t.slug));
   // Only a tool the search still shows counts as chosen: one the words filtered out is never added unseen.
   // Rows from the last search while the new one loads do not count either.
   const chosen = picked && !found.isPlaceholderData && rows.some((t) => t.slug === picked) ? picked : null;
@@ -131,14 +132,14 @@ export function AddToolDialog({ slug, name, onClose }: { slug: string; name: str
           </button>
         ))}
         {found.isSuccess && !rows.length && !found.hasNextPage && <p className="now-step">Nothing matches</p>}
-        {/* only a first page that failed says so: an older one that failed keeps More to press again */}
-        {found.isLoadingError && (
+        {/* a later page that failed and may pass keeps More to press again */}
+        {faultHides(found) && (
           <p className="now-step">
             <ReadFault what="Search" reads={[found]} inline />
           </p>
         )}
       </div>
-      {found.hasNextPage && (
+      {found.hasNextPage && !faultHides(found) && (
         <button className="verb" type="button" disabled={found.isFetchingNextPage} onClick={() => void found.fetchNextPage()}>
           More
         </button>

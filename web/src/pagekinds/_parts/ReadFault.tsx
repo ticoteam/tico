@@ -4,6 +4,7 @@ import { Empty } from '@/kit/Empty';
 import { passing, useReadFault, type FailedRead } from '@/live';
 
 export type { FailedRead };
+export { faultHides } from '@/live';
 
 // One way every read that failed with nothing to show says so (live/fault.ts): "<what> didn't load · <why>", read
 // again by itself once the stream is back when that could help, and Try again only when it could not (a refusal, a

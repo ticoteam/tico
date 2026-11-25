@@ -665,6 +665,26 @@ describe('one open task', () => {
       vi.useRealTimers();
     }
   });
+
+  it('a task on screen whose read turns refused is not read again every few minutes', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let refuse = false;
+      serve((url) => (refuse && url.endsWith('/api/v2/tasks/t1') ? { status: 403, body: { error: { code: 'forbidden', detail: 'no' } } } : undefined));
+      show(<TaskPage task="12" />);
+      await screen.findByRole('heading', { name: 'Fix the sign-in page' });
+      refuse = true;
+      const reads = () => calls.filter((c) => c.startsWith('GET ') && c.endsWith('/api/v2/tasks/t1')).length;
+      const before = reads();
+      // the backstop reads it once, and is refused
+      await act(() => vi.advanceTimersByTimeAsync(5 * 60_000 + 1_000));
+      await waitFor(() => expect(reads()).toBe(before + 1));
+      await act(() => vi.advanceTimersByTimeAsync(15 * 60_000));
+      expect(reads()).toBe(before + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('a page’s versions, a new page and a picture', () => {

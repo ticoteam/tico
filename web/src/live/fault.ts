@@ -28,6 +28,14 @@ export function faultReason(err: unknown): string {
     refusal (4xx) or the app's own error would only fail again; Try again stays for those. */
 export const passing = (err: unknown) => err instanceof ApiError && (err.status === 0 || err.status >= 500) && err.code !== 'stopped';
 
+/**
+ * Whether a read's fault takes the place of its rows. A refusal (any failure `passing` rules out: 401, 403, 404, a
+ * stopped company) hides rows already on screen too, even from a background read or a later page: the server no
+ * longer lets them be seen. A failure that may pass keeps rows already shown (a later page's stays on its paging
+ * control); with none yet, it is the fault.
+ */
+export const faultHides = (q: { isError: boolean; error: unknown; data?: unknown }) => q.isError && (q.data === undefined || !passing(q.error));
+
 /** A read that failed: its error, and how to read it again (a query's own result fits). */
 export interface FailedRead {
   error: unknown;

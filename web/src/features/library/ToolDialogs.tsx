@@ -14,6 +14,7 @@ import { Segmented } from '@/kit/Segmented';
 import { Select } from '@/kit/Select';
 import { Switch } from '@/kit/Switch';
 import { toast } from '@/kit/Toast';
+import { ReadFault } from '@/pagekinds';
 import { SCHEMES, type Scheme } from './AddTool';
 import { More, press, Foot, trimmed, useGo } from './parts';
 import { eventTypesQuery, readMessage, type Inbox, type PasteItem } from './queries';
@@ -313,16 +314,18 @@ export function MessageDialog({ message, title, hasCode = false, onClose }: { me
   };
   const [pages, setPages] = useState<string[]>([]);
   const [next, setNext] = useState<number | null>(0);
-  const [failed, setFailed] = useState(false);
+  // the read that failed: its fault says why, and reads that part again
+  const [failed, setFailed] = useState<{ error: unknown } | null>(null);
   const [busy, setBusy] = useState(false);
   const more = async (offset: number) => {
     setBusy(true);
+    setFailed(null);
     try {
       const r = await readMessage(message, offset);
       setPages((p) => [...p, r.text]);
       setNext(r.next_offset ?? null);
-    } catch {
-      setFailed(true);
+    } catch (error) {
+      setFailed({ error });
     }
     setBusy(false);
   };
@@ -353,7 +356,7 @@ export function MessageDialog({ message, title, hasCode = false, onClose }: { me
       {code !== null && (code ? <Secret label="Code" value={code} onHide={() => setCode(null)} /> : <Empty title="No code found" />)}
       <div className="fv-view">
         {failed ? (
-          <Empty title="This message did not load" icon="alert" />
+          <ReadFault what="This message" reads={[{ error: failed.error, refetch: () => (busy ? undefined : more(next ?? 0)) }]} />
         ) : (
           <div className="fv-main">
             <pre className="fv-text">{pages.join('')}</pre>

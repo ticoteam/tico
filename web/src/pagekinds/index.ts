@@ -23,6 +23,7 @@ export {
   StateBody,
   SkRows,
   ReadFault,
+  faultHides,
   type ReadFaultProps,
   type FailedRead,
   type FilterRowProps,

@@ -8,6 +8,7 @@ import { ApiError } from '@/api/client';
 import { queryClient } from '@/data';
 import { FileFrame, posterOf } from '@/features/library/exports';
 import { openTasksOver } from '@/lib';
+import { passing } from '@/live/fault';
 import { fakePdf } from '@/test/fakePdf';
 import { wordQuery, type TaskData } from './queries';
 import { tabLabel } from './model';
@@ -286,6 +287,22 @@ describe('a Word file that did not read', () => {
     const err = await read('/api/v2/files/w8').catch((e: unknown) => e);
     expect(err).toBeInstanceOf(Error);
     expect(err).not.toBeInstanceOf(ApiError);
+  });
+
+  it('whose answer broke off on the way is no answer too, read again by itself', async () => {
+    const broken = new ReadableStream({ start: (c) => c.error(new TypeError('network error')) });
+    vi.stubGlobal('fetch', async () => new Response(broken, { status: 200 }));
+    const err = await read('/api/v2/files/w7').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(passing(err)).toBe(true);
+    expect((err as ApiError).status).toBe(0);
+  });
+
+  it('of a stopped company is stopped, not read again by itself', async () => {
+    vi.stubGlobal('fetch', async () => new Response('This Tico company is stopped. Start it from Tico HQ.', { status: 503 }));
+    const err = await read('/api/v2/files/w6').catch((e: unknown) => e);
+    expect((err as ApiError).code).toBe('stopped');
+    expect(passing(err)).toBe(false);
   });
 });
 

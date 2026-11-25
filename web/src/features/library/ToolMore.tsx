@@ -589,12 +589,12 @@ export function MessagesView() {
   );
   return (
     // The inboxes feed the filter: when they fail, the page shows its fault rather than "No messages yet". An older page
-    // that failed is the list's own (Older messages stays to press again); only the first page's failure is the page's.
+    // that failed and may pass is the list's own (Older messages stays to press again); a refusal is the page's.
     <ToolPage
       name="Messages"
       kind="mailbox"
       fill={filter}
-      reads={[boxes, { isError: list.isLoadingError, error: list.isLoadingError ? list.error : null, data: list.data, refetch: list.refetch }]}
+      reads={[boxes, list]}
       target="tool:messages"
       bare
     >

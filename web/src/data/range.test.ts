@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '@/api/client';
+import { passing } from '@/live/fault';
 import { rangeBytes, rangeText, transient } from './range';
 
 /** A server holding `file` that answers ranges as backend/file_delivery.py does, or `bad` for one that does not. */
@@ -82,5 +84,40 @@ describe('which failed reads are tried again', () => {
     expect(transient(0, new ApiError(416, 'range_416', 'range not satisfiable', false))).toBe(false);
     expect(transient(0, new RangeError('bad range'))).toBe(false);
     expect(transient(6, new TypeError('Failed to fetch'))).toBe(false);
+  });
+});
+
+describe('a range read that failed, as the API reads a failure', () => {
+  const failure = (p: Promise<unknown>) => p.then(() => null, (e: unknown) => e);
+
+  it('with no answer, or an answer that broke off, is no answer: read again by itself', async () => {
+    vi.stubGlobal('fetch', async () => {
+      throw new TypeError('Failed to fetch');
+    });
+    const none = await failure(rangeBytes('/f', 5));
+    expect([none instanceof ApiError && none.status, passing(none)]).toEqual([0, true]);
+    const broken = new ReadableStream({ start: (c) => c.error(new TypeError('network error')) });
+    vi.stubGlobal('fetch', async () => new Response(broken, { status: 206, headers: { 'Content-Range': 'bytes 0-4/11' } }));
+    const cut = await failure(rangeBytes('/f', 5));
+    expect([cut instanceof ApiError && cut.status, passing(cut)]).toEqual([0, true]);
+  });
+
+  it('of a stopped company is stopped, and a refusal is the server’s own: neither is read again by itself', async () => {
+    vi.stubGlobal('fetch', async () => new Response('This Tico company is stopped. Start it from Tico HQ.', { status: 503 }));
+    const stopped = await failure(rangeBytes('/f', 5));
+    expect([stopped instanceof ApiError && stopped.code, passing(stopped)]).toEqual(['stopped', false]);
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ error: { code: 'not_found', detail: 'No such file' } }), { status: 404 }));
+    const gone = await failure(rangeBytes('/f', 5));
+    expect([gone instanceof ApiError && gone.code, passing(gone)]).toEqual(['not_found', false]);
+  });
+
+  it('stays an abort when its caller stopped it', async () => {
+    const stop = new AbortController();
+    vi.stubGlobal('fetch', async () => {
+      stop.abort();
+      throw new DOMException('Aborted', 'AbortError');
+    });
+    const err = await failure(rangeBytes('/f', 5, { signal: stop.signal }));
+    expect(err).toBeInstanceOf(DOMException);
   });
 });
