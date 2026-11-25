@@ -73,6 +73,14 @@ describe('an agent’s page live in a chat', () => {
     expect(height(container)).toBe(`${MAX_HEIGHT}px`);
   });
 
+  it('frames the card unscrollable (what holds it takes the wheel), the large view scrollable', async () => {
+    const { container } = show(`${VISUAL}/visuals/tok`);
+    expect(container.querySelector('iframe')!.getAttribute('scrolling')).toBe('no');
+    fireEvent.click(screen.getByRole('button', { name: 'Expand' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Report' });
+    expect(dialog.querySelector('iframe')!.hasAttribute('scrolling')).toBe(false);
+  });
+
   it('falls back to the plain card when no height comes (an edge that does not serve the page yet)', () => {
     vi.useFakeTimers();
     const { container } = show(`${VISUAL}/visuals/tok`);
