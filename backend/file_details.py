@@ -140,7 +140,8 @@ def set_parent(c, auth, who, row, pid):
     if (row["parent_id"] if "parent_id" in row.keys() else None) == (pid or None):
         return
     c.execute("UPDATE bot_files SET parent_id=? WHERE id=?", (pid or None, row["id"]))
-    H.event(c, who.actor, "file.parent", row["id"], {"parent": pid or None})
+    # The event names no parent: the company audit trail may be read by people who cannot read the parent.
+    H.event(c, who.actor, "file.parent", row["id"], {"set": bool(pid)})
 
 
 def change_tags(c, auth, files, who, fid, body):
@@ -184,7 +185,10 @@ def change_metadata(c, auth, files, who, fid, body):
             data[key] = value
     for key in body.remove:
         data.pop(key, None)
-    packed = pack(data)
+    try:
+        packed = pack(data)
+    except ValueError:
+        raise Problem("validation", "Metadata values are JSON: no NaN or Infinity", 422) from None
     if len(packed.encode()) > META_BYTES:
         raise Problem("validation", f"A file's metadata is at most {META_BYTES // 1024} KB", 422)
     before = metadata_of(c, row["id"])
@@ -209,7 +213,7 @@ def change_metadata(c, auth, files, who, fid, body):
 
 def pack(value):
     """Canonical JSON: true and 1 differ here, as Python's == does not tell them apart."""
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True, allow_nan=False)
 
 
 def purge(c, fid):

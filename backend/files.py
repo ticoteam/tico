@@ -3112,6 +3112,7 @@ def install_files(app, store, auth, blobs, mutate):
                             "title": {"type": "string"},
                             "task": {"type": "string"},
                             "scope": {"enum": ["task", "bot"]},
+                            "from": {"type": "string", "description": "The file this one was made from"},
                         },
                     }
                 },

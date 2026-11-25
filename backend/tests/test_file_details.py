@@ -80,6 +80,8 @@ def test_metadata_is_one_bounded_object_writers_change_and_versions_keep(api):
     assert api.get(url, headers=headers("cara-test")).json()["metadata"] == {"ads": {"meta": "238"}, "angle": "price"}
     too_big = api.patch(url, json={"set": {"blob": "x" * 17000}}, headers=headers(ops))
     assert too_big.status_code == 422, too_big.text
+    nan = {**headers(ops), "content-type": "application/json"}
+    assert api.patch(url, content='{"set":{"score":NaN}}', headers=nan).status_code == 422  # never stored
     page(api, ops, "creative.html", public, page=fid, text="<p>v2</p>")  # a new version keeps it
     assert info(api, fid, ops)["metadata"] == {"ads": {"meta": "238"}, "angle": "price"}
     r = api.patch(url, json={"set": {"angle": None}, "remove": ["missing"]}, headers=headers(ops))
