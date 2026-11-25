@@ -2032,8 +2032,8 @@ def _bind_only_if(flow, before, actor):
     from . import automation_only_if as O
 
     was = ((before or {}).get("trigger") or {}).get("only_if")
-    same = isinstance(was, dict) and was.get("set_by") and O.rule(was) == O.rule(only_if)
-    bound = {**O.rule(only_if), "set_by": was["set_by"] if same else actor}
+    kept = was.get("set_by") if isinstance(was, dict) and O.rule(was) == O.rule(only_if) else None
+    bound = {**O.rule(only_if), "set_by": kept or actor}
     return {**flow, "trigger": {**flow["trigger"], "only_if": bound}}
 
 
