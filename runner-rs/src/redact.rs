@@ -362,6 +362,21 @@ impl Redactor {
         *inner = build_values(all);
     }
 
+    /// One redactor holding every value and code of `all`: each matched against the same text, longest first, so a
+    /// value that begins another's never leaves that one's rest unmasked (as scrubbing with each in turn could).
+    pub fn merged(all: &[&Redactor]) -> Redactor {
+        let mut values = BTreeSet::new();
+        let mut codes = vec![];
+        for r in all {
+            values.extend(r.inner.read().unwrap().values.iter().cloned());
+            codes.extend(r.codes.read().unwrap().iter().cloned());
+        }
+        Redactor {
+            inner: RwLock::new(build_values(values)),
+            codes: RwLock::new(codes),
+        }
+    }
+
     /// `text` with its secrets masked: borrowed, with nothing copied, when it holds none.
     pub fn scrub_text<'a>(&self, text: &'a str) -> Cow<'a, str> {
         let inner = self.inner.read().unwrap();

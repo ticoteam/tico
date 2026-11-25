@@ -2288,8 +2288,12 @@ impl Runner {
             )));
         }
         #[cfg(test)]
-        if let Some(env) = tests::HOST_CODEX.with(|env| env.borrow().clone()) {
-            return Ok(Host::Codex(CodexHost::on_home(env, tx, None)));
+        if let Some(mut own) = tests::HOST_CODEX.with(|env| env.borrow().clone()) {
+            // The plan home the turn signs in from, as a real host gets it.
+            if let Some(home) = env.get("CODEX_HOME") {
+                own.insert("CODEX_HOME".into(), home.clone());
+            }
+            return Ok(Host::Codex(CodexHost::on_home(own, tx, None)));
         }
         Ok(match runtime {
             "claude" => Host::Claude(ClaudeHost::new(
@@ -2976,6 +2980,26 @@ impl Runner {
                 }
                 (host, _) => host,
             };
+            // A thread's Codex app-server is kept between its turns (crate::keeper) when nothing in it is this turn's
+            // alone: not a fresh stateless chat, a relationship turn or a one-off thread, a fallback's turn (a task
+            // model's side session, or a turn going on in the harness it fell back to), a voice call, a Model exit or
+            // Gateway relay, or a leased user. The hub claims and completes each turn as before; only the process goes on.
+            let made = match made {
+                Host::Codex(h)
+                    if !fresh_chat
+                        && !relationship
+                        && !one_off
+                        && !side_run
+                        && source_resume.is_none()
+                        && !voice_call
+                        && vault.model_exit.is_none()
+                        && vault.relay.is_none()
+                        && vault.turn_user.is_none() =>
+                {
+                    Host::Codex(h.with_keeper(self.keeper.clone())?)
+                }
+                host => host,
+            };
             let h = host.insert(made);
             if voice_call && matches!(h, Host::Codex(_)) {
                 let call_id = text_of(&refs["live_meeting"]["voice_call"]);
@@ -2989,8 +3013,12 @@ impl Runner {
             if let Some(c) = &capture {
                 h.set_capture(c);
             }
-            h.start().await?;
-            mark("harness_started", &aid);
+            // A Codex host the keeper may hold starts once its settings say whether the thread's kept one will do.
+            let deferred = matches!(&*h, Host::Codex(c) if c.keeps());
+            if !deferred {
+                h.start().await?;
+                mark("harness_started", &aid);
+            }
             // The bot's company skills, in a folder of this turn's own that Claude is given with --add-dir and Codex as
             // its extra skill root. A failure runs the turn without them.
             let company_skills = if matches!(h, Host::Claude(_) | Host::Codex(_)) {
@@ -3020,6 +3048,27 @@ impl Runner {
                 verbosity: hosts::verbosity(&config),
                 plan_home: crate::model_subscriptions::plan_home(&vault.subscriptions, &runtime),
             };
+            if deferred {
+                let login = crate::model_subscriptions::for_runtime(&vault.subscriptions, &runtime)
+                    .map(|d| (d.id.as_str(), d.revision));
+                let kept = match &*h {
+                    Host::Codex(c) => c.take_kept(previous.as_deref(), &settings, login).await,
+                    _ => None,
+                };
+                match kept {
+                    Some(kept) => {
+                        // The turn goes on in the kept app-server: the plan login it refreshes in its own home is this
+                        // turn's to send back (model_subscriptions::go_on_in). One that dies from now on is a crash, as
+                        // a process started for the turn would be.
+                        if let Some(home) = kept.own_home() {
+                            crate::model_subscriptions::go_on_in(&mut vault.subscriptions, &runtime, &home);
+                        }
+                        *h = Host::Codex(kept);
+                    }
+                    None => h.start().await?,
+                }
+                mark("harness_started", &aid);
+            }
             let mut resumed = false;
             let moved_session = previous.is_none() && session_fence.is_some_and(|f| f > 0)
                 && !cleared && !binding_changed && !fresh_chat && !release_run && continuing.is_empty();
@@ -3153,6 +3202,10 @@ impl Runner {
                     self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
                 }
             }
+            // Only now, started, does a kept app-server's token file hold this turn's token.
+            if let Host::Codex(c) = &*h {
+                c.lend_started(&settings)?;
+            }
             if !continuing.is_empty() && (!resumed || (th != continuing && previous.as_deref() != Some(continuing.as_str()))) {
                 // Started, so the server holds it for review rather than queueing it again; no prompt was sent.
                 return Err(Fail::runtime(CONTINUE_LOST));
@@ -3276,6 +3329,8 @@ impl Runner {
                 tail = format!("{tail}\n\n{line}");
             }
             let prompt = crate::prompt::before_header(&attempt, &built.text, &tail);
+            #[cfg(test)]
+            tests::kill_kept_at(h).await;
             // A resumed session that turns out to be missing restarts as a new one under its id (hosts::Host::full_prompt),
             // given what a new session that replaces it is given: the repo rules, the checkpoint, the room since its
             // last turn with its own replies, and the new-session note. A new Antigravity conversation also gets the
@@ -3513,7 +3568,8 @@ impl Runner {
             && !voice_reply
             && !native_control
             && continuing.is_empty()
-            && tools_settled(&drove, &flags, ran.is_err() && turn.is_some());
+            // A `turn/start` the app-server may have read, answered or not, may have begun the turn there.
+            && tools_settled(&drove, &flags, ran.is_err() && (turn.is_some() || matches!(&host, Some(Host::Codex(c)) if c.turn_sent())));
         let mut pending = if unavailable && drove.outcome != "completed" && fallback_allowed {
             crate::fallback::configured_for(
                 &fallback_config,
@@ -4054,12 +4110,15 @@ impl Runner {
                 }
             }
             // A host that keeps its process between turns gives it back below, after a turn that completed (Antigravity's
-            // after one a person's Stop or a drain cancelled too, which leaves its process running; never after a
-            // timeout, a lost lease or an error); a fresh stateless chat turn, a relationship turn and a one-off thread
-            // (saved nowhere, so never looked up) keep none (crate::continuity::stateless).
-            // A person's own Assistant chat keeps its agy with a hold on the room's copy, which goes when the keeper lets
-            // the agy go (crate::sessions::PersonalCopy::hold); pi keeps its sessions in the copy, so it keeps none.
-            let copy = if matches!(h, Host::Antigravity(_)) && personal {
+            // and Codex's after one a person's Stop or a drain cancelled too, which leaves its process running; never
+            // after a timeout, a lost lease or an error); a fresh stateless chat turn, a relationship turn and a one-off
+            // thread (saved nowhere, so never looked up) keep none (crate::continuity::stateless).
+            // A person's own Assistant chat keeps its agy or Codex app-server with a hold on the room's copy, which goes
+            // when the keeper lets it go (crate::sessions::PersonalCopy::hold); pi keeps its sessions in the copy, so it
+            // keeps none.
+            let holds =
+                matches!(h, Host::Antigravity(_)) || matches!(h, Host::Codex(c) if c.keeps());
+            let copy = if holds && personal {
                 place.as_ref().and_then(|p| p.hold_copy())
             } else {
                 None
@@ -4070,21 +4129,35 @@ impl Runner {
                     Host::Antigravity(_) => {
                         !relationship && !one_off && (!personal || copy.is_some())
                     }
+                    Host::Codex(c) => {
+                        c.keeps() && !relationship && !one_off && (!personal || copy.is_some())
+                    }
                     _ => false,
                 };
             // Never once the lease was lost: a final answer can still come in while the turn is salvaged (drive.rs).
             let ended = !flags.lost.load(Ordering::SeqCst)
                 && (drove.outcome == "completed"
                     || (drove.outcome == "interrupted"
-                        && matches!(h, Host::Antigravity(_))
+                        && matches!(h, Host::Antigravity(_) | Host::Codex(_))
                         && ran.is_ok()
                         && !hop_failed));
-            if !keeps || !ended {
+            let mut hold = copy.map(|c| Box::new(c) as crate::keeper::Held);
+            // Codex gives its app-server to the keeper only once its turn there has ended (CodexHost::release).
+            let kept = keeps
+                && ended
+                && match h {
+                    Host::Codex(codex) => {
+                        codex
+                            .release(thread.as_deref(), hold.take(), &flags.lost)
+                            .await
+                    }
+                    _ => true,
+                };
+            if !kept {
                 self.stop_host(h, &aid).await;
             }
             if let Host::Antigravity(agy) = h {
-                let held = copy.map(|c| Box::new(c) as crate::keeper::Held);
-                agy.release(keeps && ended, held).await;
+                agy.release(kept, hold).await;
             }
             if let Host::Pi(pi) = h {
                 // A primary pi on a leased user is kept with that user and its relay; a fallback's never is.
@@ -4096,7 +4169,7 @@ impl Runner {
                 } else {
                     Default::default()
                 };
-                let back = pi.release(keeps && ended, &owner, held).await;
+                let back = pi.release(kept, &owner, held).await;
                 vault.turn_user = vault.turn_user.take().or(back.user);
                 vault.relay = vault.relay.take().or(back.relay);
             }
@@ -4828,6 +4901,20 @@ mod tests {
         pub(super) static HOST_CLAUDE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
         pub(super) static RUN_SESSION: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
         pub(super) static HOST_CODEX: RefCell<Option<Env>> = const { RefCell::new(None) };
+        /// A turn that went on in a kept Codex app-server kills it once the hub has started the turn.
+        pub(super) static KILL_KEPT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    /// Kill the kept app-server `h` went on in, and wait until it has gone, when KILL_KEPT says so.
+    pub(super) async fn kill_kept_at(h: &Host) {
+        if !KILL_KEPT.with(|at| at.get()) {
+            return;
+        }
+        if let Host::Codex(c) = h {
+            if c.warm() {
+                c.die().await;
+            }
+        }
     }
 
     struct RunControls;
@@ -4848,6 +4935,7 @@ mod tests {
             HOST_CLAUDE.with(|claude| claude.set(false));
             RUN_SESSION.with(|on| on.set(None));
             HOST_CODEX.with(|env| env.borrow_mut().take());
+            KILL_KEPT.with(|at| at.set(false));
             MEMORY_RISES_AFTER_ALLOCATION.with(|on| on.set(false));
             MEMORY_OVERRIDE.with(|reading| reading.set(None));
             hosts::TEST_STARTS.with(|starts| starts.set(0));
@@ -8934,10 +9022,16 @@ for line in sys.stdin:
     }
 
     /// A Codex app server stand-in, controlled by `mode.json` in its directory (`resume`: ok | missing | refuse |
-    /// refuse_once; `compact`: ok | fail; `turn`: ok | die), logging each call to `calls.jsonl`.
+    /// refuse_once; `compact`: ok | fail; `turn`: ok | die | exit (once it has said the turn completed); `refresh`:
+    /// what a turn writes to its home's auth.json, as Codex does when it refreshes a ChatGPT login), logging each call
+    /// to `calls.jsonl` with its pid, and with each turn the token its token file holds then (crate::warm).
     const FAKE_CODEX: &str = r#"#!/usr/bin/env python3
-import json, os, sys
+import json, os, re, sys
 D = os.path.dirname(os.path.abspath(__file__))
+TOKEN = None
+def token():
+    try: return open(TOKEN).read() if TOKEN else None
+    except OSError: return None
 def say(m): print(json.dumps(m), flush=True)
 def mode():
     try: return json.load(open(os.path.join(D, "mode.json")))
@@ -8952,8 +9046,11 @@ for line in sys.stdin:
     method, params, m = msg.get("method"), msg.get("params", {}), mode()
     if method is None or "id" not in msg:
         continue
+    if method in ("thread/start", "thread/resume"):
+        found = re.search(r'tico-file:([^"]+)', json.dumps(params))
+        TOKEN = found.group(1) if found else TOKEN
     with open(os.path.join(D, "calls.jsonl"), "a") as f:
-        f.write(json.dumps({"method": method, "params": params}) + "\n")
+        f.write(json.dumps({"method": method, "params": params, "pid": os.getpid(), "token": token()}) + "\n")
     i = msg["id"]
     if method == "thread/start":
         say({"id": i, "result": {"thread": {"id": "th-%d" % count("threads")}}})
@@ -8970,6 +9067,9 @@ for line in sys.stdin:
     elif method == "turn/start":
         if m.get("turn") == "die":
             os._exit(1)
+        if m.get("refresh"):
+            with open(os.path.join(os.environ["CODEX_HOME"], "auth.json"), "w") as f:
+                f.write(m["refresh"])
         t, tid = "t%d" % count("turns"), params["threadId"]
         say({"id": i, "result": {"turn": {"id": t}}})
         say({"method": "turn/started", "params": {"threadId": tid, "turn": {"id": t}}})
@@ -8981,6 +9081,8 @@ for line in sys.stdin:
             continue
         say({"method": "item/completed", "params": {"threadId": tid, "turnId": t, "item": {"type": "agentMessage", "id": "i" + t, "text": "Done.", "phase": "final_answer"}}})
         say({"method": "turn/completed", "params": {"threadId": tid, "turn": {"id": t, "status": "completed"}}})
+        if m.get("turn") == "exit":
+            os._exit(0)
     elif method == "thread/compact/start":
         tid = params["threadId"]
         say({"id": i, "result": {}})
@@ -8997,6 +9099,8 @@ for line in sys.stdin:
     struct CodexRig {
         runner: Arc<Runner>,
         dir: PathBuf,
+        /// The keeper may hold the app-server between turns; otherwise every turn starts its own.
+        warm: bool,
         seen: Arc<Mutex<Vec<(String, String, Value)>>>,
         server: tokio::task::JoinHandle<()>,
         _controls: RunControls,
@@ -9025,6 +9129,7 @@ for line in sys.stdin:
             CodexRig {
                 runner,
                 dir,
+                warm: false,
                 seen,
                 server,
                 _controls: controls,
@@ -9045,10 +9150,10 @@ for line in sys.stdin:
         ) -> Value {
             std::fs::write(self.dir.join("mode.json"), mode.to_string()).unwrap();
             let mut config = json!({"runtime": "codex", "harness": "codex", "model": "gpt-5.5"});
-            config
-                .as_object_mut()
-                .unwrap()
-                .extend(extra.as_object().cloned().unwrap_or_default());
+            let mut extra = extra.as_object().cloned().unwrap_or_default();
+            // The attempt's own fields (a run token whose grants sign the turn in), not the bot's config.
+            let own = extra.remove("attempt");
+            config.as_object_mut().unwrap().extend(extra.clone());
             let mut attempt = json!({"id": format!("a-codex-{n}"), "job_id": format!("j{n}"), "bot": "ops", "token": "synthetic-turn", "lease_seconds": 120,
                                  "conversation": {"id": "c-watch", "kind": "task"},
                                  "task": {"id": "t-watch", "title": "Watch the Acme release", "requester": "human:ana@acme.example",
@@ -9057,6 +9162,9 @@ for line in sys.stdin:
                                  "history": [], "config": config});
             if let Some(thread) = continuing {
                 attempt["continue_thread"] = json!(thread);
+            }
+            if let Some(Value::Object(own)) = own {
+                attempt.as_object_mut().unwrap().extend(own);
             }
             if let Some(epoch) = extra.get("test_session_epoch") {
                 attempt["session_epoch"] = epoch.clone();
@@ -9068,6 +9176,9 @@ for line in sys.stdin:
             .await
             .expect("the turn did not end")
             .unwrap();
+            if !self.warm {
+                self.runner.keeper.prune(true).await;
+            }
             let seen = self.seen.lock().unwrap().clone();
             let found: Vec<&Value> = seen
                 .iter()
@@ -9141,6 +9252,199 @@ for line in sys.stdin:
             self.server.abort();
             std::fs::remove_dir_all(&self.dir).ok();
         }
+    }
+
+    impl CodexRig {
+        /// A rig whose app-servers the keeper may hold between turns.
+        async fn warm() -> CodexRig {
+            let mut rig = CodexRig::new().await;
+            rig.warm = true;
+            rig
+        }
+
+        /// Each `turn/start` the fake got.
+        fn turns(&self) -> Vec<Value> {
+            self.calls()
+                .into_iter()
+                .filter(|c| c["method"] == "turn/start")
+                .collect()
+        }
+
+        /// The token file the app-server reads HUB_TOKEN from (crate::warm), from its thread's parameters.
+        fn token_file(&self) -> PathBuf {
+            let params = self
+                .calls()
+                .iter()
+                .map(|c| c["params"].to_string())
+                .find(|p| p.contains("tico-file:"))
+                .expect("a token file");
+            let at = params.find("tico-file:").unwrap() + "tico-file:".len();
+            PathBuf::from(params[at..].split('"').next().unwrap())
+        }
+    }
+
+    /// The thread's next message is the next turn in the app-server its last one left running: no new process and no
+    /// thread/resume, each turn lent its own token, which is blank between them. Two idle minutes end it, and the turn
+    /// after resumes the thread in a new one.
+    #[tokio::test]
+    async fn a_codex_threads_next_message_goes_on_in_its_kept_app_server_until_it_idles_out() {
+        let rig = CodexRig::warm().await;
+        for n in 0..2 {
+            let done = rig.turn(n, json!({}), json!({})).await;
+            assert_eq!(done["outcome"], "completed", "{done}");
+            assert_eq!(
+                std::fs::read_to_string(rig.token_file()).unwrap(),
+                "",
+                "no token while kept"
+            );
+        }
+        assert_eq!(rig.methods(), ["thread/start", "turn/start", "turn/start"]);
+        let turns = rig.turns();
+        assert_eq!(turns[0]["pid"], turns[1]["pid"]);
+        assert!(
+            turns.iter().all(|t| t["token"] == "synthetic-turn"),
+            "{turns:?}"
+        );
+        assert!(rig.prompt(1).contains("Question 1"));
+        assert_eq!(rig.runner.keeper.count(), 1);
+
+        rig.runner
+            .keeper
+            .prune_at(
+                std::time::Instant::now() + crate::keeper::IDLE + Duration::from_secs(1),
+                false,
+            )
+            .await;
+        assert_eq!(rig.runner.keeper.count(), 0);
+        let done = rig.turn(2, json!({}), json!({})).await;
+        assert_eq!(done["outcome"], "completed", "{done}");
+        assert_eq!(
+            rig.methods(),
+            [
+                "thread/start",
+                "turn/start",
+                "turn/start",
+                "thread/resume",
+                "turn/start"
+            ]
+        );
+        assert_ne!(rig.turns()[2]["pid"], turns[0]["pid"]);
+        rig.runner.keeper.prune(true).await;
+    }
+
+    /// A turn that would start the app-server otherwise (another model) starts its own, resuming the thread.
+    #[tokio::test]
+    async fn a_codex_turn_with_another_model_starts_its_own_app_server() {
+        let rig = CodexRig::warm().await;
+        rig.turn(0, json!({}), json!({})).await;
+        let done = rig.turn(1, json!({}), json!({"model": "gpt-5.4"})).await;
+        assert_eq!(done["outcome"], "completed", "{done}");
+        assert_eq!(
+            rig.methods(),
+            ["thread/start", "turn/start", "thread/resume", "turn/start"]
+        );
+        let turns = rig.turns();
+        assert_ne!(turns[0]["pid"], turns[1]["pid"]);
+        rig.runner.keeper.prune(true).await;
+    }
+
+    /// A kept app-server found dead when the thread's next turn would take it: the turn goes cold from the start,
+    /// resuming the thread in a new app-server signed in with its own token, its message sent once.
+    #[tokio::test]
+    async fn a_codex_turn_whose_kept_app_server_died_between_turns_resumes_cold_and_sends_its_message_once(
+    ) {
+        let rig = CodexRig::warm().await;
+        rig.turn(0, json!({}), json!({})).await;
+        let pid = rig.turns()[0]["pid"].as_i64().unwrap() as libc::pid_t;
+        // SAFETY: a signal to the fake app-server this test started.
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+        let gone = std::time::Instant::now() + Duration::from_secs(10);
+        // SAFETY: signal 0 only asks whether the (reaped) process is still there.
+        while unsafe { libc::kill(pid, 0) } == 0 && std::time::Instant::now() < gone {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        // Its reaper notes the exit (CodexHost::exited) just after the reap.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let done = rig.turn(1, json!({}), json!({})).await;
+        assert_eq!(done["outcome"], "completed", "{done}");
+        assert_eq!(
+            rig.methods(),
+            ["thread/start", "turn/start", "thread/resume", "turn/start"]
+        );
+        let turns = rig.turns();
+        assert_ne!(turns[1]["pid"], turns[0]["pid"]);
+        assert_eq!(turns[1]["token"], "synthetic-turn");
+        assert_eq!(
+            turns
+                .iter()
+                .filter(|t| text_of(&t["params"]["input"][0]["text"]).contains("Question 1"))
+                .count(),
+            1
+        );
+        rig.runner.keeper.prune(true).await;
+    }
+
+    /// An app-server that says its turn completed and exits at once: the turn is completed, its reply read before
+    /// the exit counts (CodexHost::alive waits for the output to drain).
+    #[tokio::test]
+    async fn an_app_server_that_exits_right_after_its_turn_completed_finishes_the_turn() {
+        let rig = CodexRig::new().await;
+        let done = rig.turn(0, json!({"turn": "exit"}), json!({})).await;
+        assert_eq!(done["outcome"], "completed", "{done}");
+    }
+
+    /// A kept app-server that dies once the hub has started the turn that went on in it is that turn's crash, as a
+    /// process started for the turn would be: nothing starts again or resumes the thread, and its message goes nowhere
+    /// a second time.
+    #[tokio::test]
+    async fn a_kept_app_server_that_dies_after_the_turn_started_is_that_turns_crash_and_nothing_is_sent_again(
+    ) {
+        let rig = CodexRig::warm().await;
+        rig.turn(0, json!({}), json!({})).await;
+        KILL_KEPT.with(|at| at.set(true));
+        let done = rig.turn(1, json!({}), json!({})).await;
+        KILL_KEPT.with(|at| at.set(false));
+        assert_ne!(done["outcome"], "completed", "{done}");
+        assert_eq!(rig.methods(), ["thread/start", "turn/start"]);
+        rig.runner.keeper.prune(true).await;
+    }
+
+    /// A ChatGPT login Codex refreshed during a turn that went on in the thread's kept app-server, in the home that
+    /// app-server signs in from, goes back to the hub at that turn's revision.
+    #[tokio::test]
+    async fn a_login_refreshed_in_a_kept_app_server_goes_back_to_the_hub() {
+        let rig = CodexRig::warm().await;
+        let token = format!("run-codex-plan-{}", uuid::Uuid::new_v4().simple());
+        grants().lock().unwrap().insert(
+            token.clone(),
+            json!({"subscriptions": [{
+                "id": "codexplan", "runtime": "codex", "kind": "codex_login", "file": "auth.json", "source": "attempt",
+                "value": r#"{"tokens":{"access_token":"synthetic-handed-access-0123456789"}}"#,
+                "revision": 4, "billing": "subscription"
+            }]}),
+        );
+        let plan = json!({"attempt": {"token": token, "credential_vault": true}});
+        let done = rig.turn(0, json!({}), plan.clone()).await;
+        assert_eq!(done["outcome"], "completed", "{done}");
+        let refreshed = r#"{"tokens":{"access_token":"synthetic-refreshed-access-0123456789"}}"#;
+        let done = rig.turn(1, json!({"refresh": refreshed}), plan).await;
+        assert_eq!(done["outcome"], "completed", "{done}");
+        let turns = rig.turns();
+        assert_eq!(turns[0]["pid"], turns[1]["pid"], "warm");
+        let sent: Vec<Value> = rig
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, p, _)| p.ends_with("runner-model-subscription-refresh"))
+            .map(|(_, _, b)| b.clone())
+            .collect();
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert_eq!(sent[0]["attempt"], "a-codex-1");
+        assert_eq!(sent[0]["subscription"], "codexplan");
+        assert_eq!(sent[0]["revision"], 4);
+        assert_eq!(sent[0]["value"], refreshed);
+        rig.runner.keeper.prune(true).await;
     }
 
     #[tokio::test]

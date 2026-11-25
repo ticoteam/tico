@@ -1165,6 +1165,7 @@ impl Host {
         match self {
             Host::Pi(h) => h.warm(),
             Host::Antigravity(h) => h.warm(),
+            Host::Codex(h) => h.warm(),
             _ => false,
         }
     }
@@ -1175,6 +1176,7 @@ impl Host {
         match self {
             Host::Antigravity(h) => h.scopes(),
             Host::Pi(h) => h.scopes(),
+            Host::Codex(h) => h.scopes(),
             _ => vec![],
         }
     }

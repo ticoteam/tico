@@ -142,6 +142,25 @@ takes its user. A kept pi's relay is stopped and its user cleaned and returned w
 crash, a failed turn, the runner stopping); a pi started again for a changed start keeps both. A new GitHub token
 (the runner and the server hand out a new one about every 15 minutes) still restarts it.
 
+A Codex thread's `codex app-server` is kept between its turns in the runner's session keeper (`keeper.rs`), one process
+per thread: after a turn that completed, or one a Stop or drain interrupted once Codex has ended it, the next message
+is the next `turn/start` on the live thread, with no new process and no `thread/resume`. The hub still claims, starts
+and completes every message; only the process is reused. The app-server reads `HUB_TOKEN` from a token file of its own
+(`tico-file:`), blanked while it is kept and given the next turn's token once the hub has started that turn. It goes
+after 2 minutes unused (up to 4 hours while a tool call or subagent a turn started still runs), when it exits, when the
+runner stops, or when the next turn would start it differently: another model, environment, folder, MCP servers, config,
+plan or sign-in (a new login revision too). Each turn's company skills are given to it as that turn resumes. A kept
+process that has exited when the next turn would take it is dropped, and that turn starts cold: a process of its own
+resumes the thread. One that dies after the turn took it is that turn's crash, as a turn's own process dying would be;
+nothing is sent again. A ChatGPT plan's home made for the turn the process started in stays while the process does and
+goes with it; a login Codex refreshes there during a later turn goes back to the hub at that turn's revision. A tool
+call or subagent stays background work until it ends itself, and a subagent's calls are the turn's that spawned it. Its
+stderr is the process's: a line may land in a later turn's diagnostics, scrubbed of every secret lent to the process
+while it lives. Never kept: a fresh
+stateless chat, a relationship or one-off thread, a voice call, a Model exit or Gateway relay, a leased turn user, a
+fallback's turn, a process on a plan's home its turns share (a legacy `codex_login` file), or one whose MCP server
+header names `HUB_TOKEN` (the token would sit in its config).
+
 pi is the one that best fits a headless run in a git repository with the least new code. If it stops being
 maintained, replacing the catch-all is a manifest and a host adapter, described below.
 
@@ -534,7 +553,7 @@ another bot's home; all turns use the original login in its own home.
 | `voice_session` | The harness can answer live call questions in one resident session | `false` |
 | `voice_session_runner` | Additional heartbeat capability required to place a resident call session on the runner | `voice_sessions_v1` suffices |
 | `steer` | A message sent while a turn runs is written into that turn (Claude Code, Codex and pi; Claude Code also needs a CLI that echoes its input) | The message waits for the next turn; DM says so and offers Stop and redirect |
-| `persistent_session` | One process per conversation is kept between turns: pi's own pool (15 minutes), Antigravity in the runner's session keeper (`keeper.rs`, T3 Code's: 2 minutes unused, checked every 15 seconds, up to 4 hours while background work runs; Claude and Codex next) | One process per turn |
+| `persistent_session` | One process per conversation is kept between turns: pi's own pool (15 minutes), Antigravity and Codex in the runner's session keeper (`keeper.rs`, T3 Code's: 2 minutes unused, checked every 15 seconds, up to 4 hours while background work runs; Claude next) | One process per turn |
 | `goal_runs_across_turns` | A native goal keeps the thread going after a turn completes, and a clear is reconciled | A goal ends with its turn |
 | `serial_cold_start` | An expired stored token is refreshed by the first turn; the others wait for it | Turns start together |
 | `isolated_user` | The CLI keeps no owner-only sign-in state in the bot's home, so on a Docker runner with a turn-user pool each turn runs as its own leased OS user that cannot enter another bot's checkout. Only pi sets it: Claude Code, Codex, Gemini CLI, Cursor, Grok, Muse Code and Antigravity keep 0600 sign-in files shared across turns | The turn runs as `bot`; readiness reports it as not isolated |

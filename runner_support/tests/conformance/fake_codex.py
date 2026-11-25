@@ -222,6 +222,7 @@ def main():
                     "method": method,
                     "thread": thread,
                     "turn": turn,
+                    "pid": os.getpid(),
                     "prompt": text,
                     "cwd": cwds.get(thread),
                     "env": {k: os.environ.get(k) for k in GRANTED},

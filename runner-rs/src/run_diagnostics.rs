@@ -94,6 +94,8 @@ pub struct Stderr(
     Arc<std::sync::atomic::AtomicBool>,
     Arc<tokio::sync::Notify>,
     Arc<tokio::sync::Notify>,
+    /// The redactors of the attempts the process has run for (`lend`).
+    Arc<Mutex<Vec<Arc<Redactor>>>>,
 );
 
 impl Stderr {
@@ -135,7 +137,7 @@ impl Stderr {
                         if n == 0 {
                             if !pending.is_empty() || oversized {
                                 kept.push(if oversized { "[oversized stderr line omitted]".into() } else {
-                                    safe(&String::from_utf8_lossy(&scrub.scrub_bytes(&pending)), &scrub)
+                                    kept.scrubbed(&pending, &scrub)
                                 });
                                 dirty = true;
                             }
@@ -147,7 +149,7 @@ impl Stderr {
                         for b in &buf[..n] {
                             if *b == b'\n' {
                                 let line = if oversized { "[oversized stderr line omitted]".into() } else {
-                                    safe(&String::from_utf8_lossy(&scrub.scrub_bytes(&pending)), &scrub)
+                                    kept.scrubbed(&pending, &scrub)
                                 };
                                 kept.push(line);
                                 pending.clear();
@@ -167,6 +169,29 @@ impl Stderr {
             }
         });
         tail
+    }
+
+    /// `line` with the process's own secrets (`scrub`, its environment's) and every lent attempt's taken out, all
+    /// matched at once (Redactor::merged): one secret that begins another never leaves the other's rest behind.
+    fn scrubbed(&self, line: &[u8], scrub: &Redactor) -> String {
+        let lent = self.4.lock().unwrap().clone();
+        let mut all = vec![scrub];
+        all.extend(lent.iter().map(|r| r.as_ref()));
+        let every = Redactor::merged(&all);
+        safe(&String::from_utf8_lossy(&every.scrub_bytes(line)), &every)
+    }
+
+    /// The process runs for an attempt whose secrets `redactor` holds, those added later too: what it says from now on
+    /// is scrubbed of them as long as it lives. A process kept between turns gathers every turn's, so its stderr is
+    /// safe in whichever turn's tail it lands.
+    pub fn lend(&self, redactor: Option<Arc<Redactor>>) {
+        let Some(redactor) = redactor else {
+            return;
+        };
+        let mut lent = self.4.lock().unwrap();
+        if !lent.iter().any(|r| Arc::ptr_eq(r, &redactor)) {
+            lent.push(redactor);
+        }
     }
 
     fn push(&self, line: String) {
@@ -276,34 +301,47 @@ mod tests {
     /// decoded, so the emitted diagnostic holds the mark and none of the value (Review on c4b9a23).
     #[tokio::test]
     async fn a_non_ascii_secret_in_utf16_on_stderr_is_masked_in_the_emitted_event() {
-        let secret = "granted-wïde-sécret";
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut env = crate::env::Env::new();
-        env.insert("TICO_TEST_TOKEN".into(), secret.into());
-        let escaped: String = secret
-            .encode_utf16()
-            .flat_map(|u| u.to_le_bytes())
-            .map(|b| format!("\\{b:03o}"))
-            .collect();
-        let mut child = tokio::process::Command::new("sh")
-            .args(["-c", &format!("printf 'failure {escaped}\\n' >&2")])
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .unwrap();
-        let tail = Stderr::capture(&mut child, tx, &env);
-        child.wait().await.unwrap();
-        let ev = tokio::time::timeout(Duration::from_secs(5), rx.recv())
-            .await
-            .unwrap()
-            .unwrap();
-        let shown = ev["stderr_tail"].as_str().unwrap();
-        let ascii: String = "granted-w".chars().flat_map(|c| [c, '\0']).collect();
-        assert!(shown.starts_with("failure "), "{shown:?}");
-        assert!(shown.contains(crate::redact::MASK), "{shown:?}");
-        assert!(
-            !shown.contains(&ascii) && !tail.tail().contains(&ascii),
-            "{shown:?}"
-        );
+        // The process's own (its environment's) and one only an attempt lent it (Stderr::lend).
+        for lent in [false, true] {
+            use tokio::io::AsyncWriteExt;
+            let secret = "granted-wïde-sécret";
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let mut env = crate::env::Env::new();
+            if !lent {
+                env.insert("TICO_TEST_TOKEN".into(), secret.into());
+            }
+            let escaped: String = secret
+                .encode_utf16()
+                .flat_map(|u| u.to_le_bytes())
+                .map(|b| format!("\\{b:03o}"))
+                .collect();
+            let mut child = tokio::process::Command::new("sh")
+                .args(["-c", &format!("read l; printf 'failure {escaped}\\n' >&2")])
+                .stdin(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            let tail = Stderr::capture(&mut child, tx, &env);
+            if lent {
+                tail.lend(Some(Arc::new(Redactor::new(&[secret.to_string()]))));
+            }
+            let mut stdin = child.stdin.take().unwrap();
+            stdin.write_all(b"go\n").await.unwrap();
+            drop(stdin);
+            child.wait().await.unwrap();
+            let ev = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            let shown = ev["stderr_tail"].as_str().unwrap();
+            let ascii: String = "granted-w".chars().flat_map(|c| [c, '\0']).collect();
+            assert!(shown.starts_with("failure "), "{lent} {shown:?}");
+            assert!(shown.contains(crate::redact::MASK), "{lent} {shown:?}");
+            assert!(
+                !shown.contains(&ascii) && !tail.tail().contains(&ascii),
+                "{lent} {shown:?}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -326,5 +364,47 @@ mod tests {
         assert!(ev["stderr_tail"].as_str().unwrap().contains("failure"));
         assert!(!tail.tail().contains("abcdefghijklmnop"));
         assert_eq!(code, -15);
+    }
+
+    /// A process kept between turns says one turn's secrets while running for the next: every attempt's redactor lent
+    /// to it, a secret added to one after it was lent too, scrubs its stderr for as long as it lives.
+    #[tokio::test]
+    async fn a_kept_processs_stderr_is_scrubbed_of_every_attempts_secrets_it_was_lent() {
+        use tokio::io::AsyncWriteExt;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut child = tokio::process::Command::new("sh")
+            .args(["-c", "while read l; do echo \"said $l\" >&2; done"])
+            .stdin(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let tail = Stderr::capture(&mut child, tx, &crate::env::Env::new());
+        let first = Arc::new(Redactor::new(&["synthetic-first-turn".to_string()]));
+        let second = Arc::new(Redactor::new(&["synthetic-second-turn".to_string()]));
+        // One that the first's secret begins: its rest is masked too, whichever was lent first.
+        let longer = Arc::new(Redactor::new(&[
+            "synthetic-first-turn-and-its-tail".to_string()
+        ]));
+        tail.lend(Some(first.clone()));
+        tail.lend(Some(second));
+        tail.lend(Some(longer));
+        first.add(&["synthetic-added-later".to_string()]);
+        let mut stdin = child.stdin.take().unwrap();
+        stdin
+            .write_all(b"synthetic-first-turn\nsynthetic-second-turn\nsynthetic-added-later\nsynthetic-first-turn-and-its-tail\n")
+            .await
+            .unwrap();
+        drop(stdin);
+        child.wait().await.unwrap();
+        tail.drained().await;
+        let mut shown = tail.tail();
+        while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await {
+            shown.push_str(ev["stderr_tail"].as_str().unwrap_or_default());
+        }
+        assert_eq!(tail.tail().lines().count(), 4, "{shown:?}");
+        assert!(
+            !shown.contains("synthetic-") && !shown.contains("its-tail"),
+            "{shown:?}"
+        );
     }
 }
