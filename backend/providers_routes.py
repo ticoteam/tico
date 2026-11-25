@@ -501,19 +501,17 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
             raise Problem("gateway_data_busy", "Data lookups are busy; try again shortly", 429, True)
         try:
             prior = reserve_data(who, operation, fingerprint.hex())
-            if prior is None:
-                status, answer, code = gateway_client.data_call(base, key, service, sent, headers)
+            if prior is not None:
+                if job_id := prior.get("job_id"):
+                    return read_data_job(base, key, job_id, headers, replay=True)
+                if prior.get("complete"):
+                    raise Problem(
+                        "gateway_data_already_checked", "This email check already ran. Its results are not kept", 409
+                    )
+                raise data_unconfirmed()
+            status, answer, code = gateway_client.data_call(base, key, service, sent, headers)
         finally:
             data_slots.release()
-
-        if prior is not None:
-            if job_id := prior.get("job_id"):
-                return read_data_job(base, key, job_id, headers, replay=True)
-            if prior.get("complete"):
-                raise Problem(
-                    "gateway_data_already_checked", "This email check already ran. Its results are not kept", 409
-                )
-            raise data_unconfirmed()
 
         if status in (200, 202):
             with store.transaction(durable=True) as c:
