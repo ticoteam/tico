@@ -240,6 +240,17 @@ describe("An agent's own sidebar", () => {
     expect(await screen.findByText('Nothing yet')).toBeTruthy();
   });
 
+  it('says its page did not load, with Try again, when its pins could not be read and it has nothing else', async () => {
+    const empty = (u: string) => (u.includes('/api/v2/updates') ? { body: { updates: [] } } : u.includes('/bots/ana/files') ? { body: { files: [], total: 0 } } : undefined);
+    let down = true;
+    open([w('page:f1')], (u) => (u.includes('/api/v2/places/') && down ? { status: 500, body: { error: { code: 'internal', detail: 'down' } } } : empty(u)));
+    const retry = await screen.findByRole('button', { name: 'Try again' });
+    expect(screen.queryByText('Nothing yet')).toBeNull();
+    down = false;
+    fireEvent.click(retry);
+    expect(await screen.findByRole('region', { name: 'Videos by stage' })).toBeTruthy();
+  });
+
   it('draws no empty box for a sized widget with nothing in it', async () => {
     // an update, so the page has something to show; no files
     open([w('files', { height: 120 }), w('tasks'), w('updates')], (u) => (u.includes('/bots/ana/files') ? { body: { files: [], total: 0 } } : undefined));

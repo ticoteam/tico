@@ -41,14 +41,14 @@ export async function loadWho(qc: QueryClient, who: string, tab: Tab | undefined
     if (tab === 'computer' || tab === 'screen') return qc.ensureQueryData(computersQuery);
     if (tab === 'instructions') return qc.ensureQueryData(instructionsQuery(found.actor.slug ?? found.actor.id.slice(4)));
     if (tab === 'settings' || tab === 'model') return qc.ensureQueryData(agentsQuery);
-    // Its sidebar with its tasks, then its pins when a read of it shows any: the page draws them in their places from
-    // the start (a failed read: the default, and no pins).
+    // Its sidebar, then its pins when a read of it shows any, started with its tasks but never waited for: a slow one
+    // never holds the page (a failed read: the default, and no pins).
     const slug = found.actor.slug ?? found.actor.id.slice(4);
     const key = taskTabsQuery(slug).queryKey;
-    const sidebar = qc.prefetchQuery(taskTabsQuery(slug)).then(() =>
+    void qc.prefetchQuery(taskTabsQuery(slug)).then(() =>
       qc.getQueryState(key)?.status === 'success' && showsPins(qc.getQueryData(key)?.widgets) ? qc.prefetchQuery(sidebarPinsQuery(slug)) : undefined,
     );
-    return Promise.all([qc.ensureQueryData(openTasksQuery(found.actor.id)), sidebar]);
+    return qc.ensureQueryData(openTasksQuery(found.actor.id));
   }
   if (found?.kind === 'person' && tab === 'settings') return qc.ensureQueryData(peopleQuery);
   if (found?.kind === 'person' && tab === 'slack') return qc.ensureQueryData(slackQuery(bareId(found.actor.id)));

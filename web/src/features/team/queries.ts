@@ -629,8 +629,10 @@ const REFUSED = new Set([401, 403, 404]);
 
 /** A read's data as this reader may see it now: none once a read of it is refused (the last answer is kept by the cache
     after a failed read), else the last read's. */
-export const readable = <T>(read: { data?: T; error: unknown }): T | undefined =>
-  read.error instanceof ApiError && REFUSED.has(read.error.status) ? undefined : read.data;
+export const readable = <T>(read: { data?: T; error: unknown }): T | undefined => (refused(read.error) ? undefined : read.data);
+
+/** Whether a read failed because the reader may not have it (not because it could not be made). */
+export const refused = (error: unknown) => error instanceof ApiError && REFUSED.has(error.status);
 
 /** A pinned page or card, not a built-in. */
 export const isPinned = (id: string) => id.startsWith('page:') || id.startsWith('card:');

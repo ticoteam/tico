@@ -47,6 +47,7 @@ import {
   rulesQuery,
   runsQuery,
   readable,
+  refused,
   showsPins,
   sidebarPinsQuery,
   taskTabsQuery,
@@ -278,11 +279,14 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
     !(on('files') && fileN) &&
     !shownPins.length &&
     !(pinned && pins.isPending);
+  // Its pins could not be read (not refused) and it has nothing else: a fault to try again, never "Nothing yet".
+  const pinsFailed = pinned && pins.isError && !pins.data && !refused(pins.error);
   return (
     <RecordPage
       {...head}
-      state={quiet ? 'empty' : 'ready'}
+      state={quiet ? (pinsFailed ? 'fault' : 'empty') : 'ready'}
       empty={{ title: 'Nothing yet' }}
+      onRetry={() => void pins.refetch()}
       figures={
         <FiguresStrip
           label={`${actor.name} at a glance`}
