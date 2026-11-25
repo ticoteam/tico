@@ -4,10 +4,15 @@ import { isAction, type AnyAction } from './types';
 
 /** Every action in the app, by id: the base set, each shared part's `src/<part>/actions.ts` (conversation, …) and each
     feature's `features/<area>/actions.ts`. */
-export function buildRegistry(sources: Record<string, Record<string, unknown>>): ReadonlyMap<string, AnyAction> {
+export function buildRegistry(sources: Record<string, Record<string, unknown> | undefined>): ReadonlyMap<string, AnyAction> {
   const all = new Map<string, AnyAction>();
   const from = new Map<string, string>();
   for (const [file, mod] of Object.entries(sources)) {
+    // A file not loaded yet costs its own actions, never every page (v0.6.282).
+    if (mod == null) {
+      console.error(`actions: ${file} had not loaded when the registry was built; its actions are missing`);
+      continue;
+    }
     for (const value of Object.values(mod)) {
       if (!isAction(value)) continue;
       const was = from.get(value.id);
@@ -23,11 +28,16 @@ export function buildRegistry(sources: Record<string, Record<string, unknown>>):
 
 /* Every actions file imports `@/actions`, which holds this registry, and the registry imports every actions file: a
    loop. Whichever file loads first is still running when the registry loads, so its exports are not set yet. The
-   registry therefore reads its files on first use, never while modules load (cycle.test.ts tries every load order). */
-const found = import.meta.glob<Record<string, unknown>>(['/src/*/actions.ts', '/src/features/*/actions.ts'], { eager: true });
-
+   registry therefore reads its files on first use, never while modules load (cycle.test.ts tries every load order).
+   The glob stays inside `all`: Vite turns it into an object of the files' namespaces, and in the build some come from
+   other chunks still loading when this one runs. Made at load, that object kept one unset and every page failed
+   (v0.6.282); made at first use, each is set. */
 let built: ReadonlyMap<string, AnyAction> | null = null;
-const all = () => (built ??= buildRegistry({ '/src/actions/base.ts': base, ...found }));
+const all = () =>
+  (built ??= buildRegistry({
+    '/src/actions/base.ts': base,
+    ...import.meta.glob<Record<string, unknown>>(['/src/*/actions.ts', '/src/features/*/actions.ts'], { eager: true }),
+  }));
 
 export const registry: ReadonlyMap<string, AnyAction> = {
   get: (id) => all().get(id),
