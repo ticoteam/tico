@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { ApiError } from '@/api/client';
 import { Button } from '@/kit/Button';
-import { AskCard } from './AskCard';
+import { AskCard, useAnswering } from './AskCard';
 import { holdQuery } from './holds';
 import { answerInChat, answerQuestion } from './queries';
 import { questionLine } from './waits';
@@ -53,13 +53,17 @@ export function QuestionCard({ id, task = '', thread, line, detail, choices = []
     setNow(next);
   };
   const busy = state.at === 'sending';
+  // answered on a task, the open task's page goes on as an Approve does: to what still waits there, else the next task
+  const answer = useAnswering();
   const send = async (reply: string) => {
     if (busy) return;
     setError('');
     setState({ at: 'sending' });
+    if (!thread) answer.start(task, id);
     try {
       const held = await (thread ? answerInChat(thread, id, reply) : answerQuestion(task, id, reply));
       setState(held ? { at: 'held', hold: held.id, why: held.reason } : { at: 'sent' });
+      if (!held && !thread) answer.moveOn();
     } catch (e) {
       setState({ at: 'open' });
       setError(e instanceof ApiError ? e.message : 'Not sent. Try again.');

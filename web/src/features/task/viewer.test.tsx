@@ -6,6 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { ActionsRoot } from '@/actions';
 import { queryClient } from '@/data';
 import { FileFrame } from '@/features/library/exports';
+import { openTasksOver } from '@/lib';
 import { fakePdf } from '@/test/fakePdf';
 import type { TaskData } from './queries';
 import { tabLabel } from './model';
@@ -331,10 +332,11 @@ describe('an email the task asks about', () => {
   });
 
   it('opens on the email that waits, with its words and files', async () => {
-    const router = show(<TaskPage task="12" />, '/tasks/p1/12');
+    const router = show(<TaskPage task="12" />, '/tasks/p1?task=12&list=p1');
+    openTasksOver(router);
     expect(await screen.findByRole('heading', { name: 'Your quote' })).toBeTruthy();
     expect(screen.getByText('Hello Pat, the quote is attached.')).toBeTruthy();
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/email'));
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ task: 12, 'task.tab': 'email' }));
   });
 
   it('opens on the email that waits, as it will go: subject, From, To, its files as cards @approvals', async () => {

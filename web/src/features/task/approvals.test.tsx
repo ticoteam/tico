@@ -10,7 +10,7 @@ import { sendMessage } from '@/conversation';
 import { keys, queryClient } from '@/data';
 import { matterWhen } from '@/features/company/exports';
 import { Toasts } from '@/kit/Toast';
-import { coldOf, coldPage, forgetPlaces, hearListClicks, noteList, notePlace, openOf, openTasksOver, pageSearch, type ListRow } from '@/lib';
+import { coldOf, coldPage, forgetPlaces, hearListClicks, NEEDS_YOU, noteList, notePlace, openOf, openTasksOver, pageSearch, type ListRow } from '@/lib';
 import { useFollow } from '@/live/follow';
 // eslint-disable-next-line no-restricted-imports -- the test hands the page a stream event, as the shell's startLive does
 import { dispatch, installPatchers } from '@/live/patch';
@@ -924,6 +924,34 @@ describe('the decision', () => {
     await waitFor(() => expect(was(router).pathname).toBe('/needs-you'));
   });
 
+  it('the last ❓ answered in the chat goes on as Approve does, to the next task in the list @approvals', async () => {
+    shown = task({ to_leave: [], waits: [question] } as Partial<TaskData>);
+    // Needs you: the ❓ on task 12, then an OK on task 13; taken, the ❓ no longer waits as the task is read again
+    const row = (id: string, number: number, rid: string) => ({ kind: 'ask', id: `v1:${rid}`, task_id: id, requirement_id: rid, line: 'Which?', since: '2026-11-18T09:00:00Z', task: { id, number, title: `Task ${number}`, pipeline_id: 'p1' } });
+    reply = (url, method) =>
+      method === 'POST' && url.endsWith('/comments')
+        ? ((shown = task({ to_leave: [] })), { body: { comment: { id: 'c1' } } })
+        : method === 'GET' && url.includes('/needs-you?limit=')
+          ? { body: { items: [row('t1', 12, 'qmark:m1'), row('t9', 13, 'r9')], next: null } }
+          : null;
+    const router = show(
+      <>
+        <OnTask />
+        <TaskChat task="12" />
+      </>,
+      '/needs-you?view=all',
+    );
+    await act(() => router.navigate({ href: '/tasks/p1/12' }));
+    const card = await screen.findByRole('region', { name: 'Question' });
+    await waitFor(() => expect((queryClient.getQueryData(['flow']) as { task_ids?: string[] } | undefined)?.task_ids).toEqual(['t1', 't9']));
+    // as the list beside the task draws it
+    noteList({ pipeline: NEEDS_YOU, open: '12', rows: [{ id: 't1', n: '12' }, { id: 't9', n: '13' }] });
+    fireEvent.change(within(card).getByRole('textbox', { name: 'Reply' }), { target: { value: 'UPS' } });
+    fireEvent.click(within(card).getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/tasks/t1/comments', body: { text: 'UPS', ask: 'qmark:m1' } }));
+    await waitFor(() => expect(openOf(router.state.location.search as Record<string, unknown>)?.task).toBe('13'));
+  });
+
   it('Back closes the task: to the list it was opened from, else its board @approvals', async () => {
     const router = show(<OnTask />, '/needs-you?view=all');
     await act(() => router.navigate({ href: '/tasks/p1/12' }));
@@ -1324,12 +1352,12 @@ describe('on a phone, the decision holds the bottom', () => {
       '/tasks/p1/12/chat',
     );
     const chat = await screen.findByRole('region', { name: 'Chat with Legal Owner' });
-    // the task's own ask: an email's OK is approved only on its Email tab
-    expect(within(within(chat).getByRole('region', { name: 'The decision' })).getByText('Check the brief?')).toBeTruthy();
     // the page opens on what waits (the email), never the chat again
     expect(await screen.findByText('Dear Ms. Ruiz, our response is attached.')).toBeTruthy();
     await waitFor(() => expect(was(router).pathname).toBe('/tasks/p1/12/email'));
     expect(screen.getAllByRole('region', { name: 'Chat with Legal Owner' })).toHaveLength(1);
+    // the decision over the chat's box answers the tab the page opened: the email's send
+    await ready(await within(chat).findByRole('region', { name: 'The decision' }));
   });
 
   it('of the Chat tab: a ❓ to the person is pinned over its message box too @approvals', async () => {

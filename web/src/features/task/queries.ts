@@ -371,6 +371,8 @@ export async function answerQuestion(task: string, question: string, text: strin
   }
   void reread(task);
   if (r.comment?.id) {
+    // the ❓ no longer waits on the task as read now either: what the page does next reads it before the new read lands
+    queryClient.setQueryData<TaskData>(keys.tasks.detail(task), (t) => t && { ...t, waits: t.waits?.filter((w) => w.requirement_id !== question) });
     leaveNeedsYou(task, question);
     settleNeedsYou({ task, wait: question });
     return null;

@@ -431,7 +431,7 @@ describe('one open task', () => {
       if (url.endsWith('/api/v2/threads/room')) return { status: 200, body: { id: 'room', task_id: 't1' } };
       return base(url);
     });
-    await loadTask(queryClient, '12', 'details', true, 'bot:r2');
+    await loadTask(queryClient, '12', 'details', 'bot:r2');
     await waitFor(() => expect(calls.filter((c) => c.startsWith('GET /api/v2/threads/room/timeline'))).toHaveLength(1));
     const read = calls.find((c) => c.startsWith('GET /api/v2/threads/room/timeline'))!;
     expect(read).toContain('session=bot%3Ar2');
@@ -459,7 +459,11 @@ describe('one open task', () => {
     // never two conversations: the page names a tab of its own, the session kept for the chat beside it
     await waitFor(() => expect(router.state.location.search).toMatchObject({ task: 12, 'task.tab': 'qa-report', 'task.session': 'bot:r2' }));
     expect(screen.getAllByRole('textbox', { name: 'Message Rowan Reviewer' })).toHaveLength(1);
-    expect(within(await screen.findByRole('region', { name: 'The decision' })).getByRole('button', { name: 'Approve' })).toBeTruthy();
+    // the decision over the chat's box, once (the page's dock is a phone's)
+    await screen.findAllByRole('region', { name: 'The decision' });
+    const boxes = screen.getAllByRole('region', { name: 'The decision' }).filter((b) => !b.closest('.dock'));
+    expect(boxes).toHaveLength(1);
+    expect(within(boxes[0]).getByRole('button', { name: 'Approve' })).toBeTruthy();
     expect(calls.some((c) => c.includes('/threads/room/timeline') && c.includes('session=bot%3Ar2'))).toBe(true);
     fireEvent.click(screen.getByRole('button', { name: 'Back to comments' }));
     await waitFor(() => expect(router.state.location.search).toEqual({ task: 12, list: 'p1', 'task.tab': 'qa-report' }));
