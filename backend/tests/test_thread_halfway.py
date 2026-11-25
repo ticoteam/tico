@@ -255,10 +255,11 @@ def test_a_task_comment_that_mentions_an_agent_is_named_on_its_status_row_until_
 
 
 def test_a_comment_a_run_posted_can_be_edited_and_deleted_by_its_bot(api):
-    """A run's post carries `by_run` (hubdb._write_message): it is still a plain comment its author may change."""
+    """A run's post carries `by_run` (hubdb._write_message): it is still a plain comment its author may change. Here a
+    run a chat message started comments on a task it was asked about."""
     machine = machine_for(api)
     task = post(api, "tasks", {"title": "Fix the page", "body": "It looks bad.", "owner": "human:ana"})
-    post(api, f"tasks/{task['id']}/comments", {"text": "@ops can you see why this page looks bad?"})
+    say(api, new_thread(api)["id"], "@ops can you note on the task why this page looks bad?")
     attempt = claim(api, machine)
     said = post(api, f"tasks/{task['id']}/comments", {"text": "Old stylesheet."}, token=attempt["token"])["comment"]
     assert H._json(row_of(api, said["id"])["refs"], {})["by_run"] == attempt["id"]
@@ -572,6 +573,12 @@ def test_a_message_to_one_bot_that_names_another_is_only_the_first_bots_input(ap
     with api.app.state.store.transaction() as c:
         c.execute(
             "INSERT OR REPLACE INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", (attempt["id"], both["id"])
+        )
+        # as execution folds a queued message into a running turn: its job is that turn's input
+        c.execute(
+            "UPDATE jobs SET state='input', attempt_id=?1 WHERE message_id=(SELECT carrier_id FROM message_deliveries "
+            "WHERE message_id=?2 AND recipient='bot:ops')",
+            (attempt["id"], both["id"]),
         )
     rows = {r["actor"]: r for r in bot_status(api, thread["id"])}
     assert rows["bot:ops"]["run_id"] == attempt["id"]
