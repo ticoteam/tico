@@ -367,4 +367,25 @@ describe("An agent's Tools", () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Add' }));
     await waitFor(() => expect(reads).toContain('/api/v2/bots/ana/tool-guides/stripe'));
   });
+
+  it('Add tool: more tools that fail to load keep the ones found and More to press again', async () => {
+    open([w('tools')], (u) =>
+      u.endsWith('/bots/ana/tool-guides')
+        ? { body: { bot: '0190-ana', tool_guides: rows, next: null } }
+        : u.includes('/api/v2/tool-guides?') && u.includes('cursor=c2')
+          ? { status: 400, body: { error: { code: 'bad_cursor', detail: 'No.' } } }
+          : u.includes('/api/v2/tool-guides?')
+            ? { body: { tool_guides: found, next: 'c2' } }
+            : undefined,
+    );
+    const tools = await screen.findByRole('region', { name: 'Tools' });
+    fireEvent.click(within(tools).getByRole('button', { name: 'Add tool' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add a tool to Ana' });
+    expect(await within(dialog).findByRole('option', { name: /^Stripe/ })).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'More' }));
+    await waitFor(() => expect(reads.some((u) => u.includes('cursor=c2'))).toBe(true));
+    await waitFor(() => expect((within(dialog).getByRole('button', { name: 'More' }) as HTMLButtonElement).disabled).toBe(false));
+    expect(within(dialog).getByRole('option', { name: /^Stripe/ })).toBeTruthy();
+    expect(within(dialog).queryByText(/didn't load/)).toBeNull();
+  });
 });

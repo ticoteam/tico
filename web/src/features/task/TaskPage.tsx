@@ -43,9 +43,6 @@ import './task.css';
 
 /** How often an open task reads itself again, as a backstop for the stream. */
 const STATUS_BACKSTOP_MS = 5 * 60_000;
-/** How soon a task that did not load (the network, a server restarting) is read again. */
-const RETRY_MS = 5_000;
-const refused = (e: unknown) => e instanceof ApiError && (e.status === 403 || e.status === 404);
 
 export interface TaskPageProps {
   /** The address's task: its number, or its id. */
@@ -60,15 +57,18 @@ export interface TaskPageProps {
     reads it afresh as it opens: what changed while it was closed (a ❓ cleared, say) reaches no copy off screen, and a
     later row merged into that copy would make it look fresh. The chat beside it shares that read. */
 function useTask(param: string, opens = false) {
-  const ref = useQuery({ ...taskRefQuery(param), refetchInterval: (q) => (q.state.status === 'error' && !refused(q.state.error) ? RETRY_MS : false) });
+  const ref = useQuery(taskRefQuery(param));
   // On this screen only, the task reads itself again every few minutes: the stream sends its status line as it changes,
-  // and this heals one it missed (a backstop, not the way it updates).
-  // a read that failed on the way (not a refusal) tries again by itself until the server answers
-  const detail = useQuery({ ...taskDetailQuery(ref.data), refetchInterval: (q) => (q.state.status === 'error' && !refused(q.state.error) ? RETRY_MS : STATUS_BACKSTOP_MS), ...(opens && { refetchOnMount: 'always' as const }) });
+  // and this heals one it missed (a backstop, not the way it updates). A read that failed with nothing to show is left
+  // to its fault (ReadFault): read again when the stream is back if that could help, else by Try again.
+  const detail = useQuery({
+    ...taskDetailQuery(ref.data),
+    refetchInterval: (q) => (q.state.status === 'error' && q.state.data === undefined ? false : STATUS_BACKSTOP_MS),
+    ...(opens && { refetchOnMount: 'always' as const }),
+  });
   useFollow(ref.data ? { task: ref.data } : null);
   const error = ref.error ?? detail.error;
-  const retry = () => void (ref.isError ? ref.refetch() : detail.refetch());
-  return { t: detail.data, error, retry };
+  return { t: detail.data, error, reads: ref.isError ? [ref] : [detail] };
 }
 
 function stateOf(error: unknown): PageState {
@@ -86,7 +86,7 @@ export function TaskPage(props: TaskPageProps) {
 }
 
 function OneTask({ task, tab, file }: TaskPageProps) {
-  const { t, error, retry } = useTask(task, true);
+  const { t, error, reads } = useTask(task, true);
   if (!t) {
     const path = `/task/${task}`;
     return (
@@ -99,7 +99,7 @@ function OneTask({ task, tab, file }: TaskPageProps) {
         state={stateOf(error)}
         empty={{ title: 'This task is gone' }}
         noAccess={{ text: "You don't have access" }}
-        reads={error ? [{ error, refetch: retry }] : undefined}
+        reads={error ? reads : undefined}
       />
     );
   }

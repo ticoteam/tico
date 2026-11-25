@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ApiError } from '@/api/client';
 import { Button } from '@/kit/Button';
-import { CenteredCard, ReadFault, type FailedRead } from '@/pagekinds';
+import { CenteredCard } from '@/pagekinds';
 import type { StartScreenKind } from './queries';
 import './start.css';
 
@@ -139,9 +139,4 @@ function Down({ retry, busy }: { retry: () => void; busy: boolean }) {
       foot={<Support />}
     />
   );
-}
-
-/** One part of a page that did not load, and why; the rest of the page, the menu and Tico still work. */
-export function PartFault({ name, reads }: { name: string; reads: readonly FailedRead[] }) {
-  return <ReadFault what={name} reads={reads} variant="primary" />;
 }

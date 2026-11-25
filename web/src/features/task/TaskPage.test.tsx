@@ -647,6 +647,24 @@ describe('one open task', () => {
     expect(await screen.findByRole('heading', { name: "Task didn't load · server error" }, { timeout: 4000 })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });
+
+  it.each([
+    [400, 'bad', 'request refused'],
+    [503, 'stopped', 'company stopped'],
+  ])('a %i (%s) that will only fail again is not read again by itself: Try again is the way', async (status, code, reason) => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      serve(() => ({ status, body: { error: { code, detail: 'no', retryable: false } } }));
+      show(<TaskPage task="12" />);
+      expect(await screen.findByRole('heading', { name: `Task didn't load · ${reason}` }, { timeout: 4000 })).toBeTruthy();
+      const sentBefore = calls.filter((c) => c.startsWith('GET /api/v2/tasks/')).length;
+      await act(() => vi.advanceTimersByTimeAsync(15_000));
+      expect(calls.filter((c) => c.startsWith('GET /api/v2/tasks/'))).toHaveLength(sentBefore);
+      expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('a page’s versions, a new page and a picture', () => {
@@ -704,6 +722,15 @@ describe('a page’s versions, a new page and a picture', () => {
     serve((url) => (url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1') ? { status: 200, body: detail(t) } : (html(url) ?? base(url))));
     show(<TaskPage task="12" tab="spec" />, '/tasks/p1/12/spec?v=1');
     expect((await frame('Spec, v1')).getAttribute('srcdoc')).toContain('Sign in with your email.');
+  });
+
+  it('a version whose read was refused says why, with Try again', async () => {
+    serve((url) =>
+      url.endsWith('/api/v2/files/f1?v=1') ? { status: 403, body: { error: { code: 'forbidden', detail: 'No.' } } } : url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1') ? { status: 200, body: detail(withVersions()) } : (html(url) ?? base(url)),
+    );
+    show(<TaskPage task="12" tab="spec" />, '/tasks/p1/12/spec?v=1');
+    expect(await screen.findByRole('heading', { name: "Spec didn't load · no access" })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
   });
 
   it('a related page an ask pinned shows live only while it is that version @approvals', async () => {

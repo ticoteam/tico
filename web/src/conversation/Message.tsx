@@ -18,6 +18,7 @@ import { clock, took } from './dates';
 import { Markdown } from '@/kit/Markdown';
 import { PictureViewer, type Picture } from '@/kit/PictureViewer';
 import { Viewer } from '@/kit/Viewer';
+import { ReadFault } from '@/pagekinds';
 import { agentWords, Quote } from './Quote';
 import { isPicture, linkRender, ownFile, richText, Shelf } from './Rich';
 import { fromSlack, proposalQuery, slackPlaceOf, slackThreadQuery, type SlackPlace } from './queries';
@@ -184,8 +185,10 @@ function SlackThread({ place, m, onClose }: { place: SlackPlace; m: ChatMessage;
     >
       {q.isPending ? (
         <SkeletonRows rows={3} />
-      ) : q.isError || lines.length === 0 ? (
-        <Empty title={q.isError ? "Couldn't load the Slack thread" : 'No messages'} />
+      ) : q.isError && !lines.length ? (
+        <ReadFault what="The Slack thread" reads={[q]} />
+      ) : lines.length === 0 ? (
+        <Empty title="No messages" />
       ) : (
         <div className="st-list">
           {lines.map((l) => (

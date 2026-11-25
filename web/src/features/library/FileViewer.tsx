@@ -265,8 +265,9 @@ export function FilePreview({ file, version }: { file: string; version?: number 
   if (f.isError) return <ReadFault what="This file" reads={[f]} />;
   if (!f.data) return null;
   const older = version !== undefined && version !== f.data.version;
+  // an older version needs the versions read: one that failed says why; one read without it, that it is gone
   if (older && !shown)
-    return versions.isPending ? null : <Empty title="This file did not load" icon="alert" />;
+    return versions.isPending ? null : versions.isError ? <ReadFault what="This file" reads={[versions]} /> : <Empty title="This file did not load" icon="alert" />;
   const n = version ?? shown?.version ?? f.data.version;
   return (
     <FileFrame

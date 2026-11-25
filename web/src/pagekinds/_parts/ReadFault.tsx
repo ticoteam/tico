@@ -18,13 +18,14 @@ export function failedOf(reads: readonly FailedRead[]): FailedRead[] {
   return failed.length ? failed : reads.map((r) => ({ error: NO_ANSWER, refetch: r.refetch }));
 }
 
-/** Whether the fault needs Try again: no read in it is read again by itself. */
-export const needsRetry = (reads: readonly FailedRead[]) => !failedOf(reads).some((r) => passing(r.error));
+/** Whether the fault needs Try again: a read in it is not read again by itself. */
+export const needsRetry = (reads: readonly FailedRead[]) => failedOf(reads).some((r) => !passing(r.error));
 
 export interface ReadFaultProps {
   /** "Tasks": the line is "Tasks didn't load · server restarting". */
   what: string;
-  /** The reads behind it (a query's own result fits); the first that failed says why. */
+  /** The reads behind it (a query's own result fits); the first that failed says why, one that reading again would not
+      fix before any. */
   reads: readonly FailedRead[];
   /** Try again's own way, when reading again takes more than the reads (the router's reset). */
   onRetry?: () => void;
@@ -39,7 +40,7 @@ export function ReadFault({ what, reads, onRetry, inline, variant }: ReadFaultPr
   const failed = failedOf(reads);
   const line = useReadFault(what, failed, false) ?? `${what} didn't load`;
   const retry = onRetry ?? (() => Promise.all(failed.map((r) => r.refetch({ cancelRefetch: true }))));
-  const again = !failed.some((r) => passing(r.error)) && (
+  const again = needsRetry(failed) && (
     <Button variant={inline ? 'quiet' : variant} onClick={retry}>
       Try again
     </Button>

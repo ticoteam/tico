@@ -90,6 +90,8 @@ export interface ToolPageProps {
   target: string;
   /** The tool's own read: grey bars while it loads, why when it fails, no access on a 403. */
   q?: Read;
+  /** In place of `q`, each read the page needs: it is ready once all are, and its fault names those that failed. */
+  reads?: readonly Read[];
   /** The Tools list's row: what each section says when the kind has nothing more. */
   row?: ToolIndexRow;
   /** What it is, after Kind. */
@@ -113,7 +115,9 @@ export interface ToolPageProps {
 export function ToolPage(p: ToolPageProps) {
   const { name, kind, row, q, target } = p;
   const at = target.slice(target.indexOf(':') + 1);
-  const state = q ? stateOf(q) : 'ready';
+  const all = p.reads ?? (q ? [q] : []);
+  const failed = all.find((r) => r.isError);
+  const state: PageState = failed ? stateOf(failed) : all.every((r) => r.data !== undefined) ? 'ready' : 'loading';
   const rowWho = row?.who.map((w) => <WhoRow key={w.id} actor={w.kind === 'group' ? null : w.id} name={w.name} />);
   const who = p.who ?? rowWho;
   return (
@@ -134,7 +138,7 @@ export function ToolPage(p: ToolPageProps) {
         }
       />
       <div className="conv-body tool-body" data-scroll>
-        <StateBody state={state} title={name} reads={q && [q]} skeleton={<SkRows rows={8} />}>
+        <StateBody state={state} title={name} reads={all.length ? all : undefined} skeleton={<SkRows rows={8} />}>
           {!p.bare && (
             <>
               <Section name="What it is" target={`tool-about:${at}`}>

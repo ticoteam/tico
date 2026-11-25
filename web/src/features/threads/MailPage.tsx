@@ -63,7 +63,7 @@ export function MailPage({ box, open, view, q: words }: MailPageProps) {
       ? 'empty'
       : current && list.isPending
         ? 'loading'
-        : list.isError
+        : list.isLoadingError
           ? 'fault'
           : rows.length === 0 && !letterId && !agent && !pick && !narrowed
             ? 'empty'
@@ -327,7 +327,7 @@ export function MessagingPage({ open }: MessagingPageProps) {
         )
       }
       open={!!open}
-      state={list.isPending ? 'loading' : list.isError ? 'fault' : contacts.length === 0 && !open && !words ? 'empty' : 'ready'}
+      state={list.isPending ? 'loading' : list.isLoadingError ? 'fault' : contacts.length === 0 && !open && !words ? 'empty' : 'ready'}
       empty={{ title: 'No texts yet' }}
       reads={[list]}
       {...(open
@@ -366,10 +366,8 @@ function Texts({ from }: { from: string }) {
   const texts = (list.data?.pages.flatMap((p) => p.messages.filter((t) => t.from === from)) ?? []).reverse();
   const full = useQueries({ queries: texts.map((t) => textQuery(t.message_id)) });
   if (list.isPending) return <MessageBones label="Loading texts" className="lt-bones" />;
-  if (list.isError)
-    return (
-      <ReadFault what="These texts" reads={[list]} />
-    );
+  // only a first page that failed is the fault: an older page that failed keeps Older texts to press again
+  if (list.isLoadingError) return <ReadFault what="These texts" reads={[list]} />;
   return (
     <div className="mg-list">
       {list.hasNextPage && (

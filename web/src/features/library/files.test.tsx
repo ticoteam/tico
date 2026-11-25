@@ -126,6 +126,16 @@ describe('a file', () => {
     expect(sent.map((x) => x.url)).toEqual(['/api/v2/files/f1/versions/1']);
   });
 
+  it('an older version whose versions read failed says why', async () => {
+    serve((url) =>
+      url === '/api/v2/files/f1/versions' ? new Response(JSON.stringify({ error: { code: 'forbidden', detail: 'No.' } }), { status: 403, headers: { 'Content-Type': 'application/json' } }) : {},
+    );
+    queryClient.setQueryData(fileQuery('f1').queryKey, file() as never);
+    at('/tasks/7', <FilePreview file="f1" version={1} />);
+    expect(await screen.findByRole('heading', { name: "This file didn't load · no access" })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+  });
+
   it('uses the historical version’s file type instead of the latest one', async () => {
     serve(() => 'first words');
     queryClient.setQueryData(fileQuery('f1').queryKey, file({ mime: 'image/png', library_kind: 'image', name: 'notes.png' }) as never);

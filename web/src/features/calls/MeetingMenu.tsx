@@ -13,7 +13,7 @@ import { MenuItem, MenuRule } from '@/kit/Menu';
 import { Select } from '@/kit/Select';
 import { Switch } from '@/kit/Switch';
 import { toast } from '@/kit/Toast';
-import { PageMore, ReadFault } from '@/pagekinds';
+import { PageMore, ReadFault, type FailedRead } from '@/pagekinds';
 import { TRANSCRIPT_SOURCES, type TranscriptSource } from './model';
 import { PeoplePick } from './PeoplePick';
 import { press, useNameOf } from './parts';
@@ -192,7 +192,7 @@ function Sources({ onConnect, onLeave }: { onConnect: () => void; onLeave: () =>
       {granola.data ? (
         <GranolaRow g={granola.data} onConnect={onConnect} />
       ) : (
-        granola.isError && <ShortRow name="Granola" />
+        granola.isError && <ShortRow name="Granola" read={granola} />
       )}
       {shown.map((x) => (
         <li key={x.id} className="call-src-row">
@@ -210,21 +210,23 @@ function Sources({ onConnect, onLeave }: { onConnect: () => void; onLeave: () =>
           )}
         </li>
       ))}
-      {sources.isError && <ShortRow name="Other sources" />}
+      {sources.isError && !sources.data && <ShortRow name="Other sources" read={sources} />}
       {mine.map((i) => (
         <ImporterRow key={i.source} i={i} computers={computers} />
       ))}
-      {owner && importers.isError && <ShortRow name="Importers" />}
+      {owner && importers.isError && !importers.data && <ShortRow name="Importers" read={importers} />}
       {owner && importers.data && !computers.length && <li className="call-src-row call-src-st">Add a computer first</li>}
     </ul>
   );
 }
 
-function ShortRow({ name }: { name: string }) {
+/** A source's read that failed: its one line, why, and Try again when reading again by itself would not fix it. */
+function ShortRow({ name, read }: { name: string; read: FailedRead }) {
   return (
     <li className="call-src-row">
-      <b>{name}</b>
-      <span className="call-src-err">Did not load</span>
+      <span className="call-src-err">
+        <ReadFault what={name} reads={[read]} inline />
+      </span>
     </li>
   );
 }

@@ -4,11 +4,12 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionsRoot } from '@/actions';
+import { ApiError } from '@/api/client';
 import { queryClient } from '@/data';
 import { FileFrame, posterOf } from '@/features/library/exports';
 import { openTasksOver } from '@/lib';
 import { fakePdf } from '@/test/fakePdf';
-import type { TaskData } from './queries';
+import { wordQuery, type TaskData } from './queries';
 import { tabLabel } from './model';
 import { TaskPage } from './TaskPage';
 
@@ -263,6 +264,28 @@ describe('a task’s tabs: pages and plain files', () => {
     expect(frame.getAttribute('sandbox')).not.toContain('allow-scripts');
     expect(calls).toContain('GET /api/v2/pages/h1');
     reply = () => null;
+  });
+});
+
+describe('a Word file that did not read', () => {
+  const read = (url: string) => queryClient.fetchQuery({ ...wordQuery(url), retry: false });
+
+  it('with no answer fails as the API does when nothing answers, so it is read again by itself', async () => {
+    vi.stubGlobal('fetch', async () => {
+      throw new TypeError('Failed to fetch');
+    });
+    const err = await read('/api/v2/files/w9').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(0);
+    expect((err as ApiError).code).toBe('network');
+  });
+
+  it('that is not Word (no word/document.xml) is the app’s error, not the connection’s', async () => {
+    const zip = await zipOf('other.xml', '<x/>');
+    vi.stubGlobal('fetch', async () => new Response(zip, { status: 200 }));
+    const err = await read('/api/v2/files/w8').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(ApiError);
   });
 });
 

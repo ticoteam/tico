@@ -34,9 +34,13 @@ export interface FailedRead {
   refetch: (opts: { cancelRefetch: boolean }) => unknown;
 }
 
+/** The failed read that says why: the first that reading again would not fix (what Try again is there for), else the
+    first. */
+const firstFault = (failed: readonly FailedRead[]) => failed.find((r) => !passing(r.error)) ?? failed[0];
+
 /**
- * The line for reads of `what` that failed (`failed`: those whose fault is on screen; the first one's error says
- * why), or null while none has. Each failed read that may pass is read again each time the stream is live again, and
+ * The line for reads of `what` that failed (`failed`: those whose fault is on screen; firstFault's error says why),
+ * or null while none has. Each failed read that may pass is read again each time the stream is live again, and
  * every BACKSTOP_MS meanwhile, joining a read already on its way rather than sending another. A fault is logged once,
  * through the attempts that fail again, until a read succeeds (`ok`).
  */
@@ -60,7 +64,7 @@ export function useReadFault(what: string, failed: readonly FailedRead[], ok: bo
       clearInterval(timer);
     };
   }, [auto]);
-  const first = failed[0];
+  const first = firstFault(failed);
   const reason = first ? faultReason(first.error) : null;
   // the fault logged last: a read trying again (pending, its error cleared) is not a new one
   const logged = useRef<string | null>(null);
@@ -68,7 +72,7 @@ export function useReadFault(what: string, failed: readonly FailedRead[], ok: bo
     if (ok) logged.current = null;
     else if (reason && reason !== logged.current) {
       logged.current = reason;
-      console.warn(`${what} didn't load: ${reason}`, reads.current[0]?.error);
+      console.warn(`${what} didn't load: ${reason}`, firstFault(reads.current)?.error);
     }
   }, [what, reason, ok]);
   return reason && `${what} didn't load · ${reason}`;

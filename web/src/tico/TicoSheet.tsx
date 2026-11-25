@@ -7,7 +7,7 @@ import { useSetupOwed, useSetupTranscript, wentLive } from '@/features/start/rou
 import { Button } from '@/kit/Button';
 import { Fault } from '@/kit/Fault';
 import { IconButton } from '@/kit/IconButton';
-import { useReadFault } from '@/live';
+import { passing, useReadFault } from '@/live';
 // the open/close state alone, not the dialog: Tico's sheet only opens it
 import { openSearch } from '@/search/state';
 import { Sheet, SheetHead, TICO_MARK, fromPage, pageAt } from '@/shell';
@@ -50,7 +50,10 @@ export function TicoSheet() {
     void room.refetch();
     if (powerRead.isError) void powerRead.refetch();
   };
-  const fault = useReadFault('Tico', faulted ? (powerRead.isError ? [room, powerRead] : [room]) : [], room.isSuccess);
+  const failed = faulted ? (powerRead.isError ? [room, powerRead] : [room]) : [];
+  const fault = useReadFault('Tico', failed, room.isSuccess);
+  // Try again only when reading again by itself would not fix it (a refusal, a stopped company)
+  const stuck = failed.some((r) => !passing(r.error));
   // On a phone, going live from a setup file puts Tico's card down so Tasks shows (the shell brings it up for setup).
   const tuck = phone?.tuck;
   const wasOwed = useRef(owed);
@@ -96,9 +99,11 @@ export function TicoSheet() {
               <Fault label={fault} size={16} />
             </span>
             <p>{fault}</p>
-            <div className="q-row">
-              <Button onClick={retry}>Try again</Button>
-            </div>
+            {stuck && (
+              <div className="q-row">
+                <Button onClick={retry}>Try again</Button>
+              </div>
+            )}
           </div>
         </div>
       ) : room.data === null ? (

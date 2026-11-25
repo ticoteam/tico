@@ -372,6 +372,29 @@ describe('Messaging @s160', () => {
     expect(calls.some((c) => c.url.includes('from=%2B1+555+0100'))).toBe(true);
   });
 
+  it('older texts that fail keep the texts shown, and Older texts reads them again by its press only', async () => {
+    const from = '+1 555 0100';
+    serve((url) => {
+      if (url.includes('/inbound/messages/x1')) return ok({ text: 'Is Friday fine for the visit?', message_id: 'x1' });
+      if (!url.includes('/inbound/messages?')) return undefined;
+      return url.includes('before=9')
+        ? { status: 400, body: { error: { code: 'bad_cursor', detail: 'No.' } } }
+        : ok({ messages: [{ message_id: 'x1', received_at: ago(3), from, preview: 'Is Friday' }], next: 9 });
+    });
+    show(<MessagingPage open={from} />, '/threads/messaging?open=%2B1+555+0100');
+    expect(await screen.findByText('Is Friday fine for the visit?')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Older texts' }));
+    await waitFor(() => expect(calls.filter((c) => c.url.includes('before=9'))).toHaveLength(1));
+    expect(await screen.findByRole('button', { name: 'Older texts' })).toBeTruthy();
+    expect(screen.getByText('Is Friday fine for the visit?')).toBeTruthy();
+    expect(screen.queryByText(/didn't load/)).toBeNull();
+    const firstPages = calls.filter((c) => c.url.includes('/inbound/messages?') && !c.url.includes('before=')).length;
+    fireEvent.click(screen.getByRole('button', { name: 'Older texts' }));
+    await waitFor(() => expect(calls.filter((c) => c.url.includes('before=9'))).toHaveLength(2));
+    // the retry is the older page alone, never every page again
+    expect(calls.filter((c) => c.url.includes('/inbound/messages?') && !c.url.includes('before='))).toHaveLength(firstPages);
+  });
+
   it("opens no chat when the person opened another mail before the agent's box send came back @4882-S8", async () => {
     let answer!: (r: Reply) => void;
     serve((url, method) =>

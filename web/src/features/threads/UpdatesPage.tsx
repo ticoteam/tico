@@ -99,7 +99,8 @@ function UpdatesList({ tab }: { tab: UpdateTab }) {
       }
       state={searchingOlder ? searchState : listState}
       empty={{ title: archive ? 'Nothing archived' : 'No updates yet' }}
-      reads={searchingOlder ? [{ error: list.error, refetch: () => fetchNextPage({ cancelRefetch: false }) }] : undefined}
+      // an older page that failed is read again by Try again only: its paging is the person's, never by itself
+      onRetry={searchingOlder ? () => void fetchNextPage({ cancelRefetch: false }) : undefined}
       sections={
         noMatch ? (
           <Empty icon="search" title="No matches" />

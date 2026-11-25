@@ -7,6 +7,7 @@ import { IconButton } from '@/kit/IconButton';
 import { Markdown, parseDiff } from '@/kit/Markdown';
 import { Viewer } from '@/kit/Viewer';
 import { csvRows, delimiterOf, firstLines, isFolder, parseEml, parseIcs, parseVcf, stripAnsi, type FileKind } from '@/lib';
+import { ReadFault } from '@/pagekinds';
 import './cards.css';
 
 /* A chat's file that shows what it holds: the first rows of a sheet, the first lines of a text, a diff, an invite, a
@@ -236,8 +237,6 @@ function Full(p: FileCardProps & { onClose: () => void }) {
   );
 }
 
-const Failed = () => <Empty title="This file did not load" icon="alert" />;
-
 /** One line where a bound cut the view short: what is shown, and the whole file. */
 function Cut({ shown, url, name }: { shown: string; url: string; name: string }) {
   return (
@@ -268,7 +267,7 @@ function TextFull(p: FileCardProps & { wrap: boolean }) {
   const full = useQuery({ ...rangeTextQuery(p.url, FULL), enabled: card.isSuccess && !whole && !empty });
   const read = whole ? card : full;
   if (empty) return <Empty title={p.name} icon="file" text="0 B" />;
-  if (read.isError || card.isError) return <Failed />;
+  if (read.isError || card.isError) return <ReadFault what="This file" reads={[card, read]} />;
   if (!read.data) return null;
   const { text, truncated, total } = read.data;
   let body: ReactNode;
@@ -301,7 +300,7 @@ function TextFull(p: FileCardProps & { wrap: boolean }) {
 
 function ZipFull(p: FileCardProps) {
   const z = useQuery({ ...zipListQuery(p.url), enabled: p.size !== 0 });
-  if (z.isError) return <Failed />;
+  if (z.isError) return <ReadFault what="This file" reads={[z]} />;
   if (z.isPending && p.size !== 0) return null;
   if (!z.data) return <Empty title={p.name} icon="archive" text={p.size ? bytesWord(p.size) : undefined} />;
   const { count: n, entries, total } = z.data;

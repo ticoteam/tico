@@ -104,4 +104,22 @@ describe('a part of a page whose read failed', () => {
     rerender(<ReadFault what="Sidebars" reads={[ok]} />);
     expect(screen.getByRole('heading', { name: "Sidebars didn't load · no connection" })).toBeTruthy();
   });
+
+  it('a restart beside a refusal: the refusal is the reason, and Try again reads both', () => {
+    const restart = vi.fn();
+    const refused = vi.fn();
+    render(
+      <ReadFault
+        what="Mail"
+        reads={[
+          { error: starting(), refetch: restart },
+          { error: new ApiError(403, 'forbidden', 'No.'), refetch: refused },
+        ]}
+      />,
+    );
+    expect(screen.getByRole('heading', { name: "Mail didn't load · no access" })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(restart).toHaveBeenCalledWith({ cancelRefetch: true });
+    expect(refused).toHaveBeenCalledWith({ cancelRefetch: true });
+  });
 });

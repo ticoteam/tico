@@ -9,7 +9,7 @@ import { FlowMark } from '@/kit/FlowMark';
 import { Icon } from '@/kit/Icon';
 import { TaskRow } from '@/kit/Row';
 import { Section } from '@/kit/SectionHead';
-import { useReadFault } from '@/live';
+import { passing, useReadFault } from '@/live';
 import { useFollow } from '@/live/follow';
 import { backQuery, markTrackerSeen, trackedQuery, trackerSeenQuery, type TrackedTask } from './queries';
 import { backSince, nextAgeOut, trackerGroups } from './tracked';
@@ -95,9 +95,11 @@ export function Tracker() {
           <span className="tracker-why" title={fault}>
             {fault}
           </span>
-          <Button variant="quiet" onClick={() => failed.forEach((r) => void r.refetch())}>
-            Try again
-          </Button>
+          {failed.some((r) => !passing(r.error)) && (
+            <Button variant="quiet" onClick={() => failed.forEach((r) => void r.refetch())}>
+              Try again
+            </Button>
+          )}
         </div>
       </div>
     );

@@ -207,6 +207,15 @@ describe('A message that came from a Slack thread @s190', () => {
     expect(screen.getByRole('link', { name: 'Open in Slack' }).getAttribute('href')).toBe('https://example.slack.com/archives/C1/p1');
   });
 
+  it('a Slack thread that did not load says why', async () => {
+    serve((url) => (url.includes('/slack-thread') ? { status: 403, body: { error: { code: 'forbidden', detail: 'No.' } } } : undefined));
+    show([fromSlack()], { role: 'owner' });
+    fireEvent.click(await screen.findByRole('button', { name: 'Slack #launch' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Slack thread' });
+    expect(await within(dialog).findByRole('heading', { name: "The Slack thread didn't load · no access" })).toBeTruthy();
+    expect(within(dialog).getByRole('button', { name: 'Try again' })).toBeTruthy();
+  });
+
   it('anyone else gets the link to the message in Slack', async () => {
     serve();
     show([fromSlack()]);

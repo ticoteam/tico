@@ -87,6 +87,15 @@ describe('Connect GitHub @s1158', () => {
     for (const a of document.querySelectorAll('a')) expect(a.getAttribute('href') ?? '').not.toMatch(/c0de|forged/);
   });
 
+  it('a read that was refused says why, and Try again reads it again', async () => {
+    answers['GET /api/v2/github/app'] = [refusal(400, 'bad', 'No.'), NOT_CONNECTED];
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    show(<GithubConnection />, '/library/tools?tool=github');
+    expect(await screen.findByRole('heading', { name: "GitHub didn't load · request refused" })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText('Not connected')).toBeTruthy();
+  });
+
   it('hands off to GitHub with the setup, and the setup never enters the cache', async () => {
     answers['GET /api/v2/github/app/manifest'] = { body: SETUP };
     show(<GithubConnection />, '/library/tools?tool=github');

@@ -2,10 +2,10 @@ import { useQuery } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
 import { run } from '@/actions';
 import type { TaskDocument } from '@/api/schema';
-import { Empty } from '@/kit/Empty';
 import { Icon } from '@/kit/Icon';
 import { Menu, MenuItem } from '@/kit/Menu';
 import { fmtDate } from '@/lib';
+import { ReadFault, type FailedRead } from '@/pagekinds';
 import { frameDoc, markChanges, parsePage } from './changes';
 import { DocFrame, PageBones, PAGE_SANDBOX } from './FileView';
 import { PageMenu } from './Files';
@@ -31,7 +31,8 @@ export interface Versions {
   html: string | null;
   /** The version an ask pinned, the default while the address names none: a version picked is then always named. */
   pin: number | undefined;
-  failed: boolean;
+  /** The version reads that failed, with nothing to show. */
+  failed: FailedRead[];
 }
 
 /** `pinned`, the version an ask is about, opens unless the address names another; it is read by its number even when
@@ -66,7 +67,7 @@ export function useVersions(doc: TaskDocument | undefined, v?: number, vs?: numb
     on: marked,
     count,
     html,
-    failed: newer.isError || (marked && older.isError),
+    failed: [...(newer.isError ? [newer] : []), ...(marked && older.isError ? [older] : [])],
     pin: pinned,
   };
 }
@@ -132,7 +133,7 @@ export function PageView({ task, vs, at }: { task: string; vs: Versions; at: num
   }, [vs.on, at]);
   const name = vs.doc.title || vs.doc.name;
   if (vs.newest && !vs.on) return <DocFrame task={task} doc={vs.doc} pin={vs.pin === undefined ? undefined : vs.shown} />;
-  if (vs.failed) return <Empty icon="alert" title={`${name} did not load`} />;
+  if (vs.failed.length) return <ReadFault what={name} reads={vs.failed} />;
   return (
     <div className="frame is-inset">
       {vs.html ? (

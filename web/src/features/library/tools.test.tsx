@@ -750,6 +750,22 @@ describe('letters out', () => {
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Review' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/tasks'));
   });
+
+  it('an older page of letters that fails keeps the letters shown and Load more to press again', async () => {
+    const old = { id: 'O1', redacted: false, status: 'delivered', can_cancel: false, created_at: '2026-10-01T00:00:00Z', recipient: { name: 'Old Friend' }, page_count: 1, proof: null, tracking: [] };
+    const sent = serve((url) =>
+      url === '/api/v2/letters?limit=20&before=R18' ? { items: [old], next_before: 'O1' } : url === '/api/v2/letters?limit=20&before=O1' ? refused(400, 'bad_cursor') : undefined,
+    );
+    const rest = Array.from({ length: 19 }, (_, n) => ({ id: `R${n}`, redacted: true, status: 'mailed', can_cancel: false, created_at: '2026-11-01T00:00:00Z', page_count: 1 }));
+    openAddress([SENT_LETTER, ...rest]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Load more' }));
+    expect(await screen.findByText('Old Friend')).toBeTruthy();
+    fireEvent.click(await screen.findByRole('button', { name: 'Load more' }));
+    await waitFor(() => expect(reads(sent)()).toContain('/api/v2/letters?limit=20&before=O1'));
+    expect(await screen.findByRole('button', { name: 'Load more' })).toBeTruthy();
+    expect(screen.getByText('Old Friend')).toBeTruthy();
+    expect(screen.queryByText(/didn't load/)).toBeNull();
+  });
 });
 
 describe('Messages', () => {
@@ -783,6 +799,33 @@ describe('Messages', () => {
     // a server error is read again by itself once the stream is back: no Try again
     expect(within(page).queryByRole('button', { name: 'Try again' })).toBeNull();
     expect(within(page).queryByText('No messages yet')).toBeNull();
+  });
+
+  it('when the inboxes restart and the messages are refused, says the refusal and Try again reads both', async () => {
+    const sent = serve((url) =>
+      url === '/api/v2/inbound/inboxes' ? refused(500, 'internal') : url.startsWith('/api/v2/inbound/messages?') ? refused(400, 'bad_filter') : undefined,
+    );
+    open('messages');
+    const page = await screen.findByRole('region', { name: 'Messages' });
+    expect(await within(page).findByText("Messages didn't load · request refused", undefined, { timeout: 4000 })).toBeTruthy();
+    const before = { boxes: reads(sent)().filter((u) => u === '/api/v2/inbound/inboxes').length, list: reads(sent)().filter((u) => u.startsWith('/api/v2/inbound/messages?')).length };
+    fireEvent.click(within(page).getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(reads(sent)().filter((u) => u.startsWith('/api/v2/inbound/messages?')).length).toBeGreaterThan(before.list));
+    expect(reads(sent)().filter((u) => u === '/api/v2/inbound/inboxes').length).toBeGreaterThan(before.boxes);
+  });
+
+  it('an older page that fails keeps the messages shown, and Older messages reads it again', async () => {
+    const sent = serve((url) =>
+      url.startsWith('/api/v2/inbound/messages?') ? (url.includes('before=') ? refused(400, 'bad_cursor') : { messages: MESSAGES, next: 77 }) : undefined,
+    );
+    queryClient.setQueryData(inboxesQuery.queryKey, INBOXES);
+    open('messages');
+    const page = await screen.findByRole('region', { name: 'Messages' });
+    fireEvent.click(await within(page).findByRole('button', { name: 'Older messages' }));
+    await waitFor(() => expect(reads(sent)().some((u) => u.includes('before=77'))).toBe(true));
+    expect(await within(page).findByRole('button', { name: 'Older messages' })).toBeTruthy();
+    expect(within(page).getByText('Your code')).toBeTruthy();
+    expect(within(page).queryByText(/didn't load/)).toBeNull();
   });
 
   it('a message with a code reveals it in the reader only, on its own press; never Tico’s @s932', async () => {

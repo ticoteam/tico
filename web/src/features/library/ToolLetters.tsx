@@ -274,7 +274,8 @@ function OlderLetters({ before, onDetails }: { before: string; onDetails: (l: Le
   return (
     <>
       {q.data?.pages.flatMap((p) => p.items).map((l) => <LetterRow key={l.id} l={l} onDetails={onDetails} />)}
-      {q.isError && <ReadFault name="Older letters" reads={[q]} />}
+      {/* only a first page that failed says so: an older one that failed keeps Load more to press again */}
+      {q.isLoadingError && <ReadFault name="Older letters" reads={[q]} />}
       {q.hasNextPage && !q.isFetchingNextPage && <More onClick={() => q.fetchNextPage()}>Load more</More>}
     </>
   );

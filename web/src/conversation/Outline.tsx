@@ -4,6 +4,7 @@ import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
 import { SkeletonRows } from '@/kit/Skeleton';
 import { VirtualList } from '@/kit/VirtualList';
+import { ReadFault } from '@/pagekinds';
 import { outlineQuery } from './queries';
 
 /* A jump asked from the Outline reaches the open Conversation with that id, wherever it is drawn. */
@@ -38,8 +39,10 @@ export function Outline({ id, open, onOpenChange }: OutlineProps) {
     <Dialog open={open} onOpenChange={onOpenChange} title="Outline">
       {q.isPending ? (
         <SkeletonRows rows={4} />
+      ) : q.isError && !prompts.length ? (
+        <ReadFault what="The outline" reads={[q]} />
       ) : prompts.length === 0 ? (
-        <Empty title={q.isError ? "Couldn't load the outline" : 'No prompts yet'} />
+        <Empty title="No prompts yet" />
       ) : (
         <VirtualList
           className="co-list"

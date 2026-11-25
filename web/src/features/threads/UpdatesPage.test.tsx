@@ -146,6 +146,27 @@ describe('Updates: search, weeks and an opened update @s972 @s985 @s992', () => 
     }
   });
 
+  it('an older page that fails while searching keeps its Try again, even for a server error: paging is never by itself', async () => {
+    const height = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(35);
+    serve((url) => {
+      if (!url.startsWith('/api/v2/updates?')) return;
+      if (new URL(url, location.origin).searchParams.get('before') === 'first') return { status: 500, body: { error: { code: 'internal', detail: 'Down' } } };
+      return feed([update('recent', 'daily', '2026-01-07', 'Recent note')], { next_before: 'first' });
+    });
+    try {
+      show({}, '/updates');
+      expect(await screen.findByRole('feed', { name: 'Updates' })).toBeTruthy();
+      fireEvent.change(screen.getByRole('textbox', { name: 'Find an update' }), { target: { value: 'winter' } });
+      const again = await screen.findByRole('button', { name: 'Try again' });
+      const older = () => calls.filter((c) => c.url.includes('before=first')).length;
+      const asked = older();
+      fireEvent.click(again);
+      await waitFor(() => expect(older()).toBe(asked + 1));
+    } finally {
+      height.mockRestore();
+    }
+  });
+
   it('Weekly asks for weekly ones, opens them in Weekly, finds them by their words, and reads a section a week', async () => {
     serve((url) => (url.includes('/api/v2/updates') ? feed([update('u1', 'weekly', '2026-01-07', 'Cash is up'), update('u2', 'weekly', '2026-01-05', 'Ads cost less')]) : undefined));
     show({ tab: 'weekly' }, '/updates/weekly');
