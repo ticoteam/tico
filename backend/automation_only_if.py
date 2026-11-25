@@ -2,212 +2,226 @@
 """Only if (CONTRACT §2): a trigger's live check, read just before its run starts.
 
 An event says something just happened; it cannot say whether something is still true. A trigger's `only_if`
-(`{read, at_least: N}` or `{read, none: true}`, checked on save by automation_flow.check_only_if) is one GET of Tico's
-own API, `/api/v2/<read>`, made as the automation's owner when a run of it is first claimed: through this application
-in-process (as backend/mcp.py and backend/assistant.py `Internal` call it), its middleware and routes, so every access
-check the HTTP API applies is applied. Never an outbound request, never a write: the middleware refuses any other
-method for a lent identity (`SCOPE_KEY`).
+(`{read, at_least: N}` or `{read, none: true}`) counts one list and the run starts only when the rule holds.
 
-The count is the length of the answer's one top-level list (`tasks`, `prs`). While the rule needs more than the pages
-read hold (at_least past them; `none` needs one row), the next page is read at the answer's `next_offset`, up to
-MAX_PAGES pages; so `count` is what the pages read hold, which may stop short of every row there is. A miss, or a read
-that fails (an error answer, no single list, more than READ_BYTES, a stream, or no answer in TIMEOUT_S) skips the run:
-no step runs, nothing is spent, and its run row says why. A run that goes on reads `only_if.count` and `only_if.items`
-(at most MAX_ITEMS items, each cut as a find's items are, within ITEMS_BYTES).
+`read` is written as an API read (`tasks?stage=Release ready&status=open`, `prs?repo=gotidy&idle_hours=48`), but it is
+never sent through the HTTP stack: it names one of SOURCES and that source's filters, and each source is a direct query
+of the database with the reader's own visibility, the same `Auth.task_sql` fragment `GET /api/v2/tasks` and
+`GET /api/v2/prs` apply. Nothing a source runs writes, refreshes a token or calls out. An unknown source or filter is
+refused when the automation is saved (`check`).
 
-It runs outside every transaction (the drain's claim, `Hub.go`), never inside the trigger's write: the read takes its
-own read connections, and a write held open across it would stall every other write for as long as it took.
+It reads with the access of whoever last set it (`set_by`, which backend/automations.py `_save` writes: a save that
+changes the read or its rule binds it to the editor, any other save keeps it), never with the owner's: a person who may
+edit a routine but not see a private task cannot learn whether it matched. The run's record keeps the count and the
+rule, never the items; the items reach only the run's steps, as `only_if.items`.
+
+The count is one COUNT-style query (a PR count stops at MAX_AT_LEAST, all any rule needs); the items are the first
+MAX_ITEMS rows. A miss, or
+a check that cannot be read (its reader left, a stage or person it names is gone), skips the run with its reason.
 """
 
-import asyncio
-import json
 import logging
-import time
-from collections.abc import Awaitable, Callable, MutableMapping
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any, cast
 from urllib.parse import parse_qsl
 
-import httpx
-
-from . import automation_engine as _E
-from . import automation_flow as _F
 from .store import H as _H
 from .store import Problem
 
 Json = dict[str, Any]
-Message = MutableMapping[str, Any]
 H: Any = _H
 log = logging.getLogger(__name__)
 
-SCOPE_KEY = "tico.only_if_identity"  # the ASGI scope key a check's identity rides in: no client can set it
-TIMEOUT_S = 5.0  # the whole check, every page included
-READ_BYTES = 1_048_576  # one answer's body
-MAX_PAGES = 10
-MAX_ITEMS: int = _F.MAX_FIND
-ITEM_TEXT: int = _E.ITEM_TEXT
-ITEMS_BYTES = 32_000
-# Checks waiting on a slow read hold a thread each; past these, later checks wait and time out (fail closed).
-_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="only-if")
+KEYS = frozenset({"read", "at_least", "none", "set_by"})
+MAX_READ = 500
+MAX_AT_LEAST = 1000
+MAX_ITEMS = 20
+ITEM_TEXT = 500  # what an item keeps of its title, as a find's items are cut
+MAX_IDLE_HOURS = 8760
+# Each source's filters. A filter not here is refused on save, so a misspelled one never widens the count.
+SOURCES: dict[str, frozenset[str]] = {
+    "tasks": frozenset({"stage", "status", "owner", "requester", "label", "lane", "q"}),
+    "prs": frozenset({"repo", "state", "idle_hours"}),
+}
+TASK_STATUSES = ("open", "done", "closed")
+PR_STATES = ("open", "draft", "merged", "closed", "shipped")
+TASK_FIELDS = ("id", "number", "title", "status", "stage_id", "owner_id", "assignee_id", "lane", "updated_at")
 
 
-class Failed(Exception):
-    """The check could not be read; its words are the run's reason."""
+class Refused(ValueError):
+    """An only_if that cannot be saved; its words say why."""
 
 
-def needs(only_if: Json) -> int:
-    """How many rows the rule must see before it can decide."""
-    return 1 if only_if.get("none") else int(only_if["at_least"])
+class Unread(Exception):
+    """A saved check that cannot be read now; its words are the run's reason."""
+
+
+def parse(read: str) -> tuple[str, dict[str, str]]:
+    """`read` as (source, filters), refused (Refused) when it is not one of SOURCES with its own filters."""
+    path, _, query = read.partition("?")
+    if path not in SOURCES:
+        raise Refused(f"read is one of {', '.join(sorted(SOURCES))}, with its filters, such as tasks?status=open")
+    pairs = parse_qsl(query, keep_blank_values=True)
+    params = dict(pairs)
+    allowed = SOURCES[path]
+    unknown = sorted({k for k, _ in pairs} - allowed)
+    if unknown:
+        raise Refused(f"{path} has no filter {', '.join(unknown)}; its filters are {', '.join(sorted(allowed))}")
+    if len(params) != len(pairs):
+        raise Refused("read names each filter once")
+    for key, value in params.items():
+        if not value.strip() or len(value) > 200:
+            raise Refused(f"{key} is a value of at most 200 characters")
+    status = params.get("status")
+    if status and status != "all" and any(s not in TASK_STATUSES for s in status.split(",")):
+        raise Refused("status is open, done, closed or all")
+    if params.get("lane") and params["lane"] not in H.TASK_LANES:
+        raise Refused("lane is company or product")
+    if params.get("state") and params["state"].lower() not in PR_STATES:
+        raise Refused(f"state is {', '.join(PR_STATES)}")
+    idle = params.get("idle_hours")
+    if idle is not None and not (idle.isdigit() and int(idle) <= MAX_IDLE_HOURS):
+        raise Refused(f"idle_hours is a whole number of hours, up to {MAX_IDLE_HOURS}")
+    return path, params
+
+
+def check(only_if: Any) -> None:
+    """`{read, at_least: N}` or `{read, none: true}` (and the `set_by` a save writes), else Refused."""
+    if not isinstance(only_if, dict):
+        raise Refused("is {read, at_least} or {read, none}")
+    given = cast(Json, only_if)
+    if not set(given) <= KEYS:
+        raise Refused("is {read, at_least} or {read, none}")
+    read = given.get("read")
+    if not isinstance(read, str) or not 0 < len(read) <= MAX_READ:
+        raise Refused(f"read is at most {MAX_READ} characters, such as tasks?status=open")
+    parse(read)
+    least, none = given.get("at_least"), given.get("none")
+    if (least is None) == (none is None):
+        raise Refused("has exactly one of at_least or none")
+    if least is not None and not (type(least) is int and 1 <= least <= MAX_AT_LEAST):
+        raise Refused(f"at_least is a whole number from 1 to {MAX_AT_LEAST}")
+    if least is None and none is not True:
+        raise Refused("none is true")
+    set_by = given.get("set_by")
+    if set_by is not None and not isinstance(set_by, str):
+        raise Refused("set_by is who set it")
+
+
+def rule(only_if: Json | None) -> Json:
+    """The check as its author wrote it: `set_by` is the server's."""
+    return {k: v for k, v in (only_if or {}).items() if k != "set_by"}
 
 
 def holds(only_if: Json, count: int) -> bool:
     return count == 0 if only_if.get("none") else count >= int(only_if["at_least"])
 
 
-def owner_identity(c: Any, auth: Any, owner: str) -> Any:
-    """Whom the check reads as: the owner, a group's lead for a group (as its actions act). A person who left or a bot
-    that is not active reads as nobody, and the check fails."""
+def reader(c: Any, auth: Any, actor: str) -> Any:
+    """The identity a check reads as: the person or agent who set it. One who left, or an agent no longer on the team,
+    reads as nobody, and the check fails."""
     from . import auth as _auth
-    from . import automation_actions as _A
 
-    A: Any = _A
     auth_module: Any = _auth
-    actor = A.acts_as(c, {"flow": {"owner": owner}})
     if H.is_bot(actor):
         found = H.resolve_bot(c, actor)
         if not found:
-            raise Problem("identity", "Its agent is not on the team", 403)
+            raise Unread("the agent that set it is not on the team")
         return auth_module.bot_identity(c, H.bot_actor(found["id"]))
     if H.is_human(actor):
         return auth.identity_for_actor(c, actor)
-    raise Problem("identity", "It has no owner to read as", 403)
+    raise Unread("nobody set it to read as")
 
 
-def _lent(app: Any, who: Any) -> Any:
-    """The app with `who` in every request's scope, and an answer cut off past READ_BYTES or when it is a stream."""
-
-    async def call(
-        scope: Message, receive: Callable[[], Awaitable[Message]], send: Callable[[Message], Awaitable[None]]
-    ) -> None:
-        size = 0
-
-        async def counted(message: Message) -> None:
-            nonlocal size
-            if message["type"] == "http.response.start":
-                headers = cast("list[tuple[bytes, bytes]]", list(message.get("headers") or []))
-                kind = b"".join(value for name, value in headers if name.lower() == b"content-type")
-                if b"text/event-stream" in kind:
-                    raise Failed("the read is a stream")
-            elif message["type"] == "http.response.body":
-                size += len(message.get("body") or b"")
-                if size > READ_BYTES:
-                    raise Failed(f"the read answered more than {READ_BYTES // 1024} KB")
-            await send(message)
-
-        await app({**scope, SCOPE_KEY: who}, receive, counted)
-
-    return call
+def _person(c: Any, params: dict[str, str], key: str) -> str | None:
+    if key not in params:
+        return None
+    found = H.resolve_actor(c, params[key])
+    if not found:
+        raise Unread(f"{key} {params[key]} is not on the roster")
+    return str(found)
 
 
-def the_list(body: Any) -> list[Any]:
-    """The answer's one top-level list."""
-    values: list[Any] = list(cast(Json, body).values()) if isinstance(body, dict) else []
-    lists = [cast("list[Any]", v) for v in values if isinstance(v, list)]
-    if len(lists) != 1:
-        raise Failed("the read does not answer one list")
-    return lists[0]
+def _tasks(c: Any, visible: str, params: dict[str, str]) -> tuple[int, list[Json]]:
+    """Tasks as `GET /api/v2/tasks` selects them for this reader (snoozed ones left out, as there)."""
+    from . import task_list_routes
+
+    stages: Any = task_list_routes
+    match: list[tuple[str, tuple[Any, ...]]] = []
+    if "stage" in params:
+        ids = cast("list[str]", stages.stage_ids(c, params["stage"]))
+        if not ids:
+            raise Unread(f"there is no stage {params['stage']}")
+        match.append((f"tasks.stage_id IN ({','.join('?' * len(ids))})", tuple(ids)))
+    status = params.get("status")
+    selection: Json = {
+        "owner": _person(c, params, "owner"),
+        "requester": _person(c, params, "requester"),
+        "status": status.split(",") if status and status != "all" else None,
+        "lane": params.get("lane"),
+        "label": params.get("label"),
+        "q": params.get("q"),
+        "snoozed": None if status == "all" else "hide",
+        "visible": visible,
+        "match": match,
+    }
+    # One grouped COUNT over the whole selection, loading no row: the count H.tasks gives a board's stages.
+    count = sum(int(n) for n in cast("dict[Any, Any]", H.tasks(c, per_stage=True, **selection)).values())
+    rows = cast("list[Any]", H.tasks(c, limit=MAX_ITEMS, **selection)) if count else []
+    return count, [{k: dict(row).get(k) for k in TASK_FIELDS} for row in rows]
 
 
-async def _pages(app: Any, who: Any, base: str, only_if: Json) -> list[Any]:
-    path, _, query = str(only_if["read"]).partition("?")
-    params = dict(parse_qsl(query, keep_blank_values=True))
-    want = needs(only_if)
-    rows: list[Any] = []
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=_lent(app, who)), base_url=base) as client:
-        for _ in range(MAX_PAGES):
-            answer = await client.get("/api/v2/" + path, params=params, headers={"Accept": "application/json"})
-            if answer.status_code != 200:
-                try:
-                    said: Any = answer.json()
-                    error: Any = said.get("error")
-                    detail: Any = (
-                        cast(Json, error).get("detail") if isinstance(error, dict) else said.get("detail") or error
-                    )
-                except (ValueError, AttributeError):
-                    detail = None
-                raise Failed(f"the read answered {answer.status_code}" + (f": {detail}" if detail else ""))
-            try:
-                body: Any = answer.json()
-            except ValueError:
-                raise Failed("the read is not JSON") from None
-            rows += the_list(body)
-            more: Any = body.get("next_offset")
-            if len(rows) >= want or isinstance(more, bool) or not isinstance(more, int):
-                break
-            params["offset"] = str(more)
-    return rows
+def _prs(c: Any, visible: str, params: dict[str, str]) -> tuple[int, list[Json]]:
+    """Pull requests as `GET /api/v2/prs` selects them for this reader."""
+    from . import task_links_routes
+
+    links: Any = task_links_routes
+    idle = params.get("idle_hours")
+    rows = cast(
+        "list[Json]",
+        links.pr_rows(
+            c,
+            visible,
+            repo=params.get("repo"),
+            state=params.get("state"),
+            idle_hours=int(idle) if idle is not None else None,
+            limit=MAX_AT_LEAST,
+        ),
+    )
+    return len(rows), rows[:MAX_ITEMS]
 
 
-def _read(app: Any, who: Any, base: str, only_if: Json, deadline: float) -> list[Any]:
-    """The read, within what is left of the check's TIMEOUT_S: time spent waiting for a thread counts too."""
-    left = deadline - time.monotonic()
-    if left <= 0:
-        raise TimeoutError
-    return asyncio.run(asyncio.wait_for(_pages(app, who, base, only_if), left))
-
-
-def _items(rows: list[Any]) -> list[Any]:
-    """What the run reads as `only_if.items`: the first rows, each cut as a find's items are, within ITEMS_BYTES."""
-    kept: list[Any] = []
-    used = 2
-    for row in rows[:MAX_ITEMS]:
-        item: Any = (
-            {k: (v[:ITEM_TEXT] if isinstance(v, str) else v) for k, v in cast(Json, row).items()}
-            if isinstance(row, dict)
-            else row
-        )
-        size = len(json.dumps(item, default=str)) + 1
-        if used + size > ITEMS_BYTES:
-            break
-        kept.append(item)
-        used += size
-    return kept
-
-
-def evaluate(app: Any, owner: str, only_if: Json) -> Json:
-    """The check, as the run records it: {read, count, items, ok} and, when the run is skipped, `reason`."""
+def evaluate(app: Any, only_if: Json) -> tuple[Json, list[Json]]:
+    """The check: its record ({read, count, ok} and, when the run is skipped, `reason`) and the items the steps read."""
     read = str(only_if["read"])
-    out: Json = {"read": read, "count": 0, "items": [], "ok": False}
+    out: Json = {"read": read, "count": 0, "ok": False}
+    items: list[Json] = []
     try:
         if app is None:
-            raise Failed("the server is stopping")
-        store: Any = app.state.store
-        with store.read() as c:
-            who = owner_identity(c, app.state.auth, owner)
-        base = str(store.settings.public_url or "http://127.0.0.1")
-        deadline = time.monotonic() + TIMEOUT_S
-        pending = _POOL.submit(_read, app, who, base, only_if, deadline)
-        try:
-            rows = pending.result(TIMEOUT_S)
-        except TimeoutError:
-            pending.cancel()  # one still queued never starts; one running ends at its deadline
-            raise
-    except TimeoutError:  # concurrent.futures' timeout is this one
-        out["reason"] = f"Only if check failed: {read} did not answer in {TIMEOUT_S:g} s"
-        return out
+            raise Unread("the server is stopping")
+        source, params = parse(read)
+        auth: Any = app.state.auth
+        with app.state.store.read() as c:
+            who = reader(c, auth, str(only_if.get("set_by") or ""))
+            visible = str(auth.task_sql(c, who))
+            count, items = (_tasks if source == "tasks" else _prs)(c, visible, params)
+    except (Unread, Refused) as e:
+        out["reason"] = f"Only if check failed: {e}"[:300]
+        return out, []
     except Problem as e:
-        out["reason"] = f"Only if check failed: {getattr(e, 'detail', e)}"
-        return out
-    except Exception as e:  # noqa: BLE001 - any failure to read fails the check closed, with its reason
-        if not isinstance(e, Failed):
-            log.warning("only_if read %s failed", read, exc_info=True)
+        out["reason"] = f"Only if check failed: {getattr(e, 'detail', e)}"[:300]
+        return out, []
+    except Exception as e:  # noqa: BLE001 - a check that cannot be read fails closed, with its reason
+        log.warning("only_if read %s failed", read, exc_info=True)
         out["reason"] = f"Only if check failed: {str(e) or type(e).__name__}"[:300]
-        return out
-    out.update(count=len(rows), items=_items(rows), ok=holds(only_if, len(rows)))
+        return out, []
+    for item in items:
+        if isinstance(item.get("title"), str):
+            item["title"] = str(item["title"])[:ITEM_TEXT]
+    out.update(count=count, ok=holds(only_if, count))
     if not out["ok"]:
         out["reason"] = (
             f"Only if: {read} is not empty"
             if only_if.get("none")
-            else f"Only if: {read} has {len(rows)}, needs at least {only_if['at_least']}"
+            else f"Only if: {read} has {count}, needs at least {only_if['at_least']}"
         )[:300]
-    return out
+    return out, items

@@ -46,11 +46,13 @@ export interface Trigger {
   rule_due_id?: string;
 }
 
-/** `read` is a GET under /api/v2/ with its query (`tasks?stage=Release ready&status=open`); one of the two rules. */
+/** `read` is `tasks` or `prs` with that source's filters (`tasks?stage=Release ready&status=open`); one of the two rules. */
 export interface OnlyIf {
   read: string;
   at_least?: number;
   none?: boolean;
+  /** Whose access it counts with: whoever last set it (the server writes it). */
+  set_by?: string;
 }
 
 export interface Step {

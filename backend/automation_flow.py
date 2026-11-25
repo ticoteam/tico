@@ -57,7 +57,7 @@ MAX_PROMPT = 32000  # an llm or bot_turn prompt (an Inbox Manager's instructions
 MAX_FIND = 100
 MAX_IDLE_HOURS = 8760  # the stale-PR find's bound: a year
 # A listening trigger (backend/listening.py): where posts come from, which are kept, and how many are sent on.
-LISTENING_KEYS = {"type", "sources", "rules", "limits", "at", "tz", "filters", "only_if"}
+LISTENING_KEYS = {"type", "sources", "rules", "limits", "at", "tz", "filters"}
 SOURCE_KINDS = ("search", "page", "push", "github")
 GITHUB_FOLLOWS = ("prs", "releases")
 MAX_SOURCES = 50
@@ -75,27 +75,6 @@ FIELD = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,199}")
 MAX_PATTERN = 200  # a `matches` pattern's length
 MATCH_CHARS = 2000  # what `matches` reads of a field: a filter runs inside a trigger's write
 MAX_UNBOUNDED = 3  # `*`, `+` and `{n,}` in one pattern: more backtrack polynomially, as a*a*a*a*b does
-# A trigger's `only_if` (backend/automation_only_if.py): one read of Tico's own API, relative to /api/v2/, whose count
-# decides whether the run starts. Its path is plain segments; its query is anything a URL query may hold but `#`.
-ONLY_IF_KEYS = {"read", "at_least", "none"}
-MAX_READ = 500
-MAX_AT_LEAST = 1000
-# No %: an escaped name never slips past the refused list.
-READ_PATH = re.compile(r"[a-z0-9][a-z0-9_.~-]*(/[A-Za-z0-9_.~:@+-]+)*")
-# GETs that are not reads: sign-in and its returns, pairing and setup doors, and the live streams, which never end.
-ONLY_IF_REFUSED = (
-    "events",
-    "runners",
-    "local-signin",
-    "logout",
-    "oauth",
-    "tool-oauth",
-    "github/app",
-    "agents/pairings",
-    "agents/setup-script",
-    "skills/helper.mjs",
-    "company-connection",
-)
 
 
 class Invalid(ValueError):
@@ -310,6 +289,13 @@ def _check_trigger(trigger):
     _need(isinstance(trigger, dict), "trigger", "is a map with a type")
     kind = trigger.get("type")
     _need(kind in TRIGGERS, "trigger", f"type is one of {', '.join(TRIGGERS)}")
+    # A listening trigger chooses what it sends with its own rules, and has scored and reserved its posts before a run
+    # is claimed: a skip there would undo half of that.
+    _need(
+        kind != "listening" or trigger.get("only_if") is None,
+        "trigger only_if",
+        "is not on a listening trigger: its rules choose what it sends",
+    )
     for key in TRIGGERS[kind]:
         _text(trigger.get(key), "trigger", key, cap=300)
     if kind == "schedule":
@@ -338,37 +324,14 @@ def _check_trigger(trigger):
 
 
 def check_only_if(only_if, where="trigger only_if"):
-    """`{read, at_least: N}` or `{read, none: true}`: `read` a GET path under /api/v2/ with its query, relative (no
-    host, no leading slash, no `..`), and exactly one rule."""
-    _need(isinstance(only_if, dict) and set(only_if) <= ONLY_IF_KEYS, where, "is {read, at_least} or {read, none}")
-    read = only_if.get("read")
-    if not isinstance(read, str) or not 0 < len(read) <= MAX_READ:
-        raise Invalid(f"{where}: read is a path under /api/v2/ of at most {MAX_READ} characters")
-    path, _, query = read.partition("?")
-    _need(
-        # No . or .. segment: the client drops them as it builds the URL, so agents/./setup-script would reach a
-        # refused path.
-        bool(READ_PATH.fullmatch(path))
-        and not {".", ".."} & set(path.split("/"))
-        and not any(ch in read for ch in "#\\\t\r\n"),
-        where,
-        "read is a relative path under /api/v2/ such as tasks?status=open (no host, no leading slash, no . or ..)",
-    )
-    _need(
-        not any(path == p or path.startswith(p + "/") for p in ONLY_IF_REFUSED),
-        where,
-        f"read cannot be {path.split('/')[0]}: sign-in, setup and streams are not reads",
-    )
-    least, none = only_if.get("at_least"), only_if.get("none")
-    _need((least is None) != (none is None), where, "has exactly one of at_least or none")
-    if least is not None:
-        _need(
-            type(least) is int and 1 <= least <= MAX_AT_LEAST,
-            where,
-            f"at_least is a whole number from 1 to {MAX_AT_LEAST}",
-        )
-    else:
-        _need(none is True, where, "none is true")
+    """`{read, at_least: N}` or `{read, none: true}`: `read` one of the sources backend/automation_only_if.py counts,
+    with that source's filters only."""
+    from . import automation_only_if
+
+    try:
+        automation_only_if.check(only_if)
+    except automation_only_if.Refused as e:
+        raise Invalid(f"{where}: {e}") from None
 
 
 def _check_listening(trigger):
@@ -1076,9 +1039,10 @@ def shape_text():
     lines += [f"- `{kind}` {TRIGGER_WORDS[kind]}: {TRIGGER_FIELDS[kind]}" for kind in TRIGGERS]
     lines += [
         "",
-        "Any trigger may carry `only_if` (`{\"read\", \"at_least\": N}` or `{\"read\", \"none\": true}`): when it fires, "
-        "Tico GETs `read` (a path under /api/v2/ with its query) as the owner and counts its list; a miss, or a read "
-        "that fails, skips the run with the reason. The run reads `only_if.count` and `only_if.items`. Example: "
+        "Any trigger but listening may carry `only_if` (`{\"read\", \"at_least\": N}` or `{\"read\", \"none\": true}`): "
+        "when it fires, Tico counts `read` (`tasks` with stage, status, owner, requester, label, lane or q; `prs` with "
+        "repo, state or idle_hours) as whoever last set the check; a miss skips the run with the reason. The run reads "
+        "`only_if.count` and `only_if.items`. Example: "
         "`\"only_if\": {\"read\": \"tasks?stage=Release ready&status=open\", \"at_least\": 1}`.",
     ]
     lines += ["", "Steps (each has `id`, `type` and `enabled`; ids are unique):"]

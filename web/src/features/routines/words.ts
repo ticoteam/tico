@@ -447,6 +447,8 @@ export function flowLines(flow: FlowLike | null | undefined): string[] {
   const out: string[] = [];
   const t = flow?.trigger;
   if (t) out.push(`Trigger: ${triggerWords(t)}`, ...(t.filters ?? []).map((c) => `  filter ${condLine(c)}`));
+  // The exact read and rule, so a proposal that only changes the check shows it.
+  if (t?.only_if) out.push(`  only if ${t.only_if.read} ${t.only_if.none ? 'is empty' : `has at least ${t.only_if.at_least ?? 1}`}`);
   const walk = (steps: FlowLike['steps'], pad: string) => {
     for (const s of steps ?? []) {
       const off = s.enabled === false ? ' (off)' : '';

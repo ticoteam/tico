@@ -118,14 +118,16 @@ one is passed as quoted data after the prompt, never as instructions.
 
 ## Only if
 
-Any trigger can carry `only_if`: one read of Tico's own API, made as the automation's owner just before a run starts.
-`{"read": "tasks?stage=Release ready&status=open", "at_least": 1}` runs only while that stage holds a task;
+Any trigger but a listening one can carry `only_if`: a count, made just before a run starts, that decides whether it
+runs. `{"read": "tasks?stage=Release ready&status=open", "at_least": 1}` runs only while that stage holds a task;
 `{"read": "prs?repo=acme/app&idle_hours=48", "at_least": 1}` only while a pull request has sat 48 hours;
-`{"read": "tasks?label=candidate", "none": true}` only while the list is empty. `read` is a GET path under `/api/v2/`
-with its query; the count is the length of the answer's one list (`tasks`, `prs`), reading further pages only as far as
-the rule needs. A miss, or a read that fails or takes over 5 seconds, skips the run: nothing runs or is spent, and the
-run shows as Skipped with the reason. A run that goes on reads `{{only_if.count}}` and `{{only_if.items}}`. Run now and
-a test run are not checked. In the app, **Edit** → **+ Only if** under When.
+`{"read": "tasks?label=candidate", "none": true}` only while there is none. `read` is `tasks` (filters `stage`, by id or
+name, `status`, `owner`, `requester`, `label`, `lane`, `q`) or `prs` (`repo`, `state`, `idle_hours`); any other is refused
+on save. It counts with the access of whoever last set the check: changing the read or its rule makes it yours. A miss,
+or a check that cannot be read (a stage or person it names is gone, or whoever set it left), skips the run: nothing runs
+or is spent, and the run shows as Skipped with the reason. A run that goes on reads `{{only_if.count}}` and
+`{{only_if.items}}` (the first 20); its history keeps the count, never the items. Run now and a test run are not
+checked. In the app, **Edit** → **+ Only if** under When.
 
 ## On hold
 

@@ -117,6 +117,33 @@ def claimable_match(c, auth, who):
     )
 
 
+def stages_named(c, stage):
+    """A stage named without its pipeline: the rowids of the live stages of that name in any live pipeline (an
+    Only if check's `tasks?stage=Release ready`), or none when `stage` is a stage's id or names none."""
+    if c.execute("SELECT 1 FROM stages WHERE id=?", (stage,)).fetchone():
+        return []
+    return [
+        int(r[0])
+        for r in c.execute(
+            "SELECT s.rowid FROM stages s JOIN pipelines p ON p.id=s.pipeline_id WHERE lower(s.name)=lower(?) "
+            "AND s.retired_at IS NULL AND p.retired_at IS NULL",
+            (str(stage).strip(),),
+        )
+    ]
+
+
+def stage_ids(c, stage):
+    """The ids of the stages `stage` names: its id, or its name in any live pipeline; none when it names none."""
+    if c.execute("SELECT 1 FROM stages WHERE id=?", (stage,)).fetchone():
+        return [stage]
+    named = stages_named(c, stage)
+    return (
+        [r[0] for r in c.execute(f"SELECT id FROM stages WHERE rowid IN ({','.join('?' * len(named))})", named)]
+        if named
+        else []
+    )
+
+
 def register(app, auth, mutate, rule_check, rule_target, store, task_filters, task_idents, visible_tasks):
     @app.get(
         "/api/v2/tasks",
@@ -509,20 +536,6 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 422,
             )
         return found
-
-    def stages_named(c, stage):
-        """A stage named without its pipeline: the rowids of the live stages of that name in any live pipeline (an
-        Only if check's `tasks?stage=Release ready`), or none when `stage` is a stage's id or names none."""
-        if c.execute("SELECT 1 FROM stages WHERE id=?", (stage,)).fetchone():
-            return []
-        return [
-            int(r[0])
-            for r in c.execute(
-                "SELECT s.rowid FROM stages s JOIN pipelines p ON p.id=s.pipeline_id WHERE lower(s.name)=lower(?) "
-                "AND s.retired_at IS NULL AND p.retired_at IS NULL",
-                (str(stage).strip(),),
-            )
-        ]
 
     def priority_list(c, who, owner, requester, stage_id, filters, limit):
         """A stage's list in the reader's priority order (backend/stage_order.py), whole in one answer: every row the

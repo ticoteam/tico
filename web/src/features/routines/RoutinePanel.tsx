@@ -458,7 +458,8 @@ function RoutineEditor({ routine, onDone, onClose }: { routine?: Routine; onDone
   const [sched, setSched] = useState(parseSchedule(t?.type === 'schedule' && t.cron ? t.cron : '0 9 * * 1-5'));
   const [event, setEvent] = useState(t?.type === 'event' && t.name ? t.name : 'task.created');
   const [instruction, setInstruction] = useState(step?.prompt ?? '');
-  const [only, setOnly] = useState<OnlyIfDraft | null>(t?.only_if ? onlyIfDraft(t.only_if) : null);
+  const [was] = useState<OnlyIfDraft | null>(t?.only_if ? onlyIfDraft(t.only_if) : null);
+  const [only, setOnly] = useState<OnlyIfDraft | null>(was);
   const [busy, setBusy] = useState(false);
   // an event the catalog does not list (one saved before) stays a choice
   const events = [...(EVENT_CHOICES.some((e) => e.value === event) ? [] : [{ value: event, label: eventWords(event) }]), ...EVENT_CHOICES];
@@ -469,13 +470,15 @@ function RoutineEditor({ routine, onDone, onClose }: { routine?: Routine; onDone
   // a routine whose work is other steps (a filter, an action) may have no instruction
   const others = !!routine?.steps?.some((x) => x.type !== 'bot_turn');
   const onlyIf = only ? onlyIfOf(only) : null;
-  const ready = !!name.trim() && !!agent && (!!instruction.trim() || (others && !step)) && (!only || !!onlyIf);
+  // Untouched, the saved check is never rewritten (or rebound to whoever saves): only a change to it is sent.
+  const changed = JSON.stringify(only) !== JSON.stringify(was);
+  const ready = !!name.trim() && !!agent && (!!instruction.trim() || (others && !step)) && (!only || !changed || !!onlyIf);
 
   const save = async () => {
     if (!ready || !agent) return;
     const when = fixed ? {} : start === 'schedule' ? { cron: scheduleCron(sched) } : { event };
-    // An edit always sends it, so taking it off (null) saves; a new routine only when it has one.
-    const check = routine ? { onlyIf } : onlyIf ? { onlyIf } : {};
+    // An edit sends it only when it changed (null takes it off); a new routine only when it has one.
+    const check = routine ? (changed ? { onlyIf } : {}) : onlyIf ? { onlyIf } : {};
     const input = { name: name.trim(), agent, ...(instruction.trim() ? { instruction: instruction.trim() } : {}), ...when, ...check };
     setBusy(true);
     const ok = await press(routine ? 'routines.update' : 'routines.create', routine ? { routine: routine.id, ...input } : input);

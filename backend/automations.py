@@ -248,11 +248,16 @@ def _save(c, actor, aid, flow, before, *, current=None, summary=None, new_versio
     (trigger, steps, batch) is a new version; a rename, pause or cap is not. `current` makes that pending version the
     current one instead; `new_version` writes one even when nothing it does changed (restoring an old version)."""
     _check_due_link(c, aid, flow, before)
+    flow.update(_bind_only_if(flow, before, actor))
     now, prior = H.now(), c.execute("SELECT version FROM automations WHERE id=?", (aid,)).fetchone()
     n = prior["version"] if prior else None
     if current is not None:
         n = current
-        c.execute("UPDATE automation_versions SET status='active' WHERE automation_id=? AND n=?", (aid, n))
+        # The version as it is made current: an Only if it changed reads as whoever makes it current.
+        c.execute(
+            "UPDATE automation_versions SET status='active', flow=? WHERE automation_id=? AND n=?",
+            (json.dumps(_versioned(flow), sort_keys=True), aid, n),
+        )
     elif new_version or prior is None or _versioned(flow) != _versioned(before or {}):
         n = _next_n(c, aid)
         c.execute(
@@ -379,6 +384,7 @@ def regroup(c, old, new):
 def _propose(c, actor, aid, flow, before, summary):
     """A bot's change it may not make itself: kept as a pending version that a person with edit rights restores."""
     _check_due_link(c, aid, flow, before)
+    flow = _bind_only_if(flow, before, actor)
     n = _next_n(c, aid)
     c.execute(
         "INSERT INTO automation_versions(automation_id,n,actor,created_at,flow,status,summary) "
@@ -1997,23 +2003,38 @@ def _run_flow(c, run):
 
 def _only_if(app, flow, state):
     """The trigger's Only if check (backend/automation_only_if.py), read once, as the run is first claimed and before
-    any step: kept in the run's state as `only_if`, its count and items in the payload for the steps to read. A miss
-    or a failed read skips the run with its reason. A run started by hand, or one already past the check, is not
-    checked again."""
+    any step: its record (count and rule, never the items) kept in the run's state as `only_if`, its count and items in
+    the payload for the steps to read. A miss, or a check that cannot be read, skips the run with its reason. A run
+    started by hand, or one already past the check, is not checked again."""
     only_if = (flow.get("trigger") or {}).get("only_if")
     if not only_if or "only_if" in state or state.get("manual") or state.get("steps"):
         return state
     from . import automation_only_if
 
-    checked = automation_only_if.evaluate(app, flow.get("owner") or "", only_if)
+    checked, items = automation_only_if.evaluate(app, only_if)
     state = {
         **state,
-        "only_if": {k: v for k, v in checked.items() if k != "items"},
-        "payload": {**(state.get("payload") or {}), "only_if": {"count": checked["count"], "items": checked["items"]}},
+        "only_if": checked,
+        "payload": {**(state.get("payload") or {}), "only_if": {"count": checked["count"], "items": items}},
     }
     if not checked["ok"]:
         state.update(status="skipped", threads=[])
     return state
+
+
+def _bind_only_if(flow, before, actor):
+    """An Only if reads with the access of whoever last set it (backend/automation_only_if.py): a save or proposal
+    that changes its read or rule binds it to `actor`; any other keeps the reader it had. A `set_by` a client sent is
+    never kept."""
+    only_if = (flow.get("trigger") or {}).get("only_if")
+    if not isinstance(only_if, dict):
+        return flow
+    from . import automation_only_if as O
+
+    was = ((before or {}).get("trigger") or {}).get("only_if")
+    same = isinstance(was, dict) and was.get("set_by") and O.rule(was) == O.rule(only_if)
+    bound = {**O.rule(only_if), "set_by": was["set_by"] if same else actor}
+    return {**flow, "trigger": {**flow["trigger"], "only_if": bound}}
 
 
 def turn_done(c, attempt, outcome, text):
@@ -2978,7 +2999,19 @@ class Hub:
         try:
             # What it does comes from the run's version; its owner, cap and the rest are as they are now.
             flow = {**{k: v for k, v in flow_of(row).items() if k not in VERSIONED}, **json.loads(version["flow"])}
+            checking = "only_if" not in state
             state = _only_if(self.app, flow, state)
+            if checking and state.get("only_if") and state.get("status") != "skipped":
+                # A passing check is saved under this claim before the first step: a run its claim lapsed on and
+                # that is picked up again goes on from it, and is never skipped after a step had an effect.
+                with self.store.transaction() as c:
+                    kept = c.execute(
+                        "UPDATE automation_runs SET saved_state=? WHERE id=? AND claim_token=?",
+                        (json.dumps(state, default=str), rid, token),
+                    ).rowcount
+                if not kept:
+                    log.warning("automation run %s: its claim lapsed during its Only if check", rid)
+                    return False
             if state.get("status") != "skipped":
                 services = HubServices(self, dict(row), flow, rid, tuple(json.loads(run["chain"] or "[]")), token)
                 with SRC.writing_as(SRC.automation_key(row["id"])):  # Tico lines its steps write name it

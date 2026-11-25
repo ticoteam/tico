@@ -12,7 +12,7 @@ import { RoutinesPage } from './RoutinesPage';
 import type { Hook, Maintenance, Routine, StageRule, SystemJob } from './types';
 import { fmtDate } from '@/lib';
 import { pipelinesQuery } from '@/features/tasks/exports';
-import { cronWords, onlyIfRead, onlyIfSource, onlyIfWords, orgParts, runLink, stageParts } from './words';
+import { cronWords, flowLines, onlyIfRead, onlyIfSource, onlyIfWords, orgParts, runLink, stageParts } from './words';
 
 /* The Routines page: routines and one routine's panel, the built-in ones, runs, webhooks, the inbox board and
    inbox templates. Sample rows only. */
@@ -905,7 +905,7 @@ describe('Only if', () => {
     queryClient.setQueryData(pipelinesQuery.queryKey, [{ id: 'p1', name: 'Release', stages: [{ id: 'st-ready', name: 'Release ready' }], owner: null, done: null, closed: null }] as never);
     queryClient.setQueryData(reposQuery.queryKey, { repositories: [{ full_name: 'acme/gotidy' }] });
   });
-  const event = (only_if?: { read: string; at_least?: number; none?: boolean }) => ({ type: 'event', name: 'task.created', ...(only_if ? { only_if } : {}) }) as Routine['trigger'];
+  const event = (only_if?: { read: string; at_least?: number; none?: boolean; set_by?: string }) => ({ type: 'event', name: 'task.created', ...(only_if ? { only_if } : {}) }) as Routine['trigger'];
 
   it('says its check in plain words', () => {
     expect(onlyIfWords({ read: 'tasks?stage=Release ready&status=open', at_least: 1 })).toBe('Release ready has a task');
@@ -960,6 +960,21 @@ describe('Only if', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(sent).toHaveLength(1));
     expect((sent[0]!.body as { trigger: unknown }).trigger).toEqual({ type: 'event', name: 'task.created', only_if: { read: 'prs?repo=acme/gotidy', at_least: 2 } });
+  });
+
+  it('an edit that leaves the check alone sends it back exactly as it was saved', async () => {
+    const saved = { read: 'tasks?status=open&label= ', at_least: 1, set_by: 'human:cara' };
+    const sent = record((url, method) => (method === 'PATCH' && url.endsWith('/automations/r1') ? ok(routine()) : nothing()));
+    await menu(await openRoutine({ trigger: event(saved) }), 'Edit');
+    fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), { target: { value: 'Renamed' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect((sent[0]!.body as { trigger: { only_if: unknown } }).trigger.only_if).toEqual(saved);
+  });
+
+  it('a version shows its exact check, so a proposal that only changes it is not "No changes"', () => {
+    expect(flowLines({ trigger: event({ read: READY, at_least: 2 }) })).toContain(`  only if ${READY} has at least 2`);
+    expect(flowLines({ trigger: event({ read: READY, none: true }) })).toContain(`  only if ${READY} is empty`);
   });
 
   it('× takes the check off', async () => {

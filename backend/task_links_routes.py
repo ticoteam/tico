@@ -13,6 +13,28 @@ from .api_contract import api_v2
 from .api_answers.tasks import PullRequestList, TaskMergeChecks, TaskMergeResult, TaskResult
 
 
+def pr_rows(c, visible_sql, repo=None, state=None, idle_hours=None, limit=100, offset=0):
+    """Pull request links on the tasks `visible_sql` (Auth.task_sql) admits, oldest activity first: `GET /api/v2/prs`
+    and an automation's Only if (backend/automation_only_if.py) read the same rows. `repo` is owner/name or a name."""
+    where, args = ["l.kind='pr'"], []
+    if repo:
+        where.append("(lower(l.repo)=lower(?) OR lower(substr(l.repo, instr(l.repo, '/') + 1))=lower(?))")
+        args += [repo.strip(), repo.strip()]
+    if state:
+        where.append("coalesce(l.state,'')=?")
+        args.append(state.strip().lower())
+    if idle_hours is not None:
+        where.append("coalesce(l.state,'') IN ('open','draft') AND coalesce(l.activity_at, l.created_at)<=?")
+        args.append(H.shift(H.now(), hours=-idle_hours))
+    rows = c.execute(
+        "SELECT l.id, l.task_id, l.url, l.title, l.state, l.repo, l.number, l.created_at, l.activity_at "
+        f"FROM task_links l WHERE {' AND '.join(where)} AND l.task_id IN (SELECT id FROM tasks WHERE ({visible_sql})) "
+        "ORDER BY coalesce(l.activity_at, l.created_at), l.id LIMIT ? OFFSET ?",
+        [*args, limit, offset],
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def register(app, auth, mover, mutate, person_only, settings, store, task_view):
     @app.get(
         "/api/v2/deleted-tasks",
@@ -95,7 +117,7 @@ def register(app, auth, mover, mutate, person_only, settings, store, task_view):
         offset: int = 0,
     ):
         """Pull request links on tasks this reader may read. A query parameter that is not one of these answers 422,
-        so a misspelled filter never counts every pull request (an automation's Only if reads this)."""
+        so a misspelled filter never lists every pull request."""
         who = request.state.identity
         auth.domain(who)
         unknown = sorted(set(request.query_params.keys()) - {"repo", "state", "idle_hours", "limit", "offset"})
@@ -105,26 +127,9 @@ def register(app, auth, mover, mutate, person_only, settings, store, task_view):
             raise Problem("limit", "limit is between 1 and 500", 422)
         if offset < 0 or (idle_hours is not None and idle_hours < 0):
             raise Problem("filter", "offset and idle_hours are 0 or more", 422)
-        where, args = ["l.kind='pr'"], []
-        if repo:
-            where.append("(lower(l.repo)=lower(?) OR lower(substr(l.repo, instr(l.repo, '/') + 1))=lower(?))")
-            args += [repo.strip(), repo.strip()]
-        if state:
-            where.append("coalesce(l.state,'')=?")
-            args.append(state.strip().lower())
-        if idle_hours is not None:
-            where.append("coalesce(l.state,'') IN ('open','draft') AND coalesce(l.activity_at, l.created_at)<=?")
-            args.append(H.shift(H.now(), hours=-idle_hours))
         with store.read() as c:
-            rows = c.execute(
-                "SELECT l.id, l.task_id, l.url, l.title, l.state, l.repo, l.number, l.created_at, l.activity_at "
-                f"FROM task_links l WHERE {' AND '.join(where)} "
-                f"AND l.task_id IN (SELECT id FROM tasks WHERE ({auth.task_sql(c, who)})) "
-                "ORDER BY coalesce(l.activity_at, l.created_at), l.id LIMIT ? OFFSET ?",
-                [*args, limit + 1, offset],
-            ).fetchall()
-        prs = [dict(r) for r in rows[:limit]]
-        return {"prs": prs, "next_offset": offset + limit if len(rows) > limit else None}
+            rows = pr_rows(c, auth.task_sql(c, who), repo, state, idle_hours, limit + 1, offset)
+        return {"prs": rows[:limit], "next_offset": offset + limit if len(rows) > limit else None}
 
     @app.post("/api/v2/tasks/{tid}/links")
     def task_links(request: Request, tid: str, body: M.TaskLink):
