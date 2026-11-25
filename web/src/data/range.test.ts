@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '@/api/client';
-import { passing } from '@/live/fault';
 import { rangeBytes, rangeText, transient } from './range';
 
 /** A server holding `file` that answers ranges as backend/file_delivery.py does, or `bad` for one that does not. */
@@ -95,20 +94,21 @@ describe('a range read that failed, as the API reads a failure', () => {
       throw new TypeError('Failed to fetch');
     });
     const none = await failure(rangeBytes('/f', 5));
-    expect([none instanceof ApiError && none.status, passing(none)]).toEqual([0, true]);
+    expect([none instanceof ApiError && none.status, none instanceof ApiError && none.code]).toEqual([0, 'network']);
     const broken = new ReadableStream({ start: (c) => c.error(new TypeError('network error')) });
     vi.stubGlobal('fetch', async () => new Response(broken, { status: 206, headers: { 'Content-Range': 'bytes 0-4/11' } }));
     const cut = await failure(rangeBytes('/f', 5));
-    expect([cut instanceof ApiError && cut.status, passing(cut)]).toEqual([0, true]);
+    expect([cut instanceof ApiError && cut.status, cut instanceof ApiError && cut.code]).toEqual([0, 'network']);
   });
 
   it('of a stopped company is stopped, and a refusal is the server’s own: neither is read again by itself', async () => {
     vi.stubGlobal('fetch', async () => new Response('This Tico company is stopped. Start it from Tico HQ.', { status: 503 }));
     const stopped = await failure(rangeBytes('/f', 5));
-    expect([stopped instanceof ApiError && stopped.code, passing(stopped)]).toEqual(['stopped', false]);
+    // a stopped company: what passing() (live/fault.ts) never reads again by itself
+    expect([stopped instanceof ApiError && stopped.code, stopped instanceof ApiError && stopped.retryable]).toEqual(['stopped', false]);
     vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ error: { code: 'not_found', detail: 'No such file' } }), { status: 404 }));
     const gone = await failure(rangeBytes('/f', 5));
-    expect([gone instanceof ApiError && gone.code, passing(gone)]).toEqual(['not_found', false]);
+    expect([gone instanceof ApiError && gone.status, gone instanceof ApiError && gone.code]).toEqual([404, 'not_found']);
   });
 
   it('stays an abort when its caller stopped it', async () => {
