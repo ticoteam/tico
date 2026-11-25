@@ -1253,7 +1253,7 @@ describe('a task’s files and pages @s56 @s76 @s780', () => {
       versions: [{ n: 1, by: 'bot:a1', created_at: '2026-11-04T10:00:00Z', mime: 'text/plain', url: '/api/v2/files/n1?v=1', answers: [], ask: null }],
     };
     serve((url) => (url.endsWith('/api/v2/tasks/t1/files?all=1') ? { status: 200, body: { files: [shot, notes] } } : files(url)));
-    const router = show(<TaskPage task="12" tab="qa-report" file="f9" />, '/tasks/p1/12/qa-report?file=f9&v=1');
+    const router = show(<TaskPage task="12" tab="qa-report" file="f9" />, '/tasks/p1?task=12&list=p1&task.tab=qa-report&task.file=f9&task.v=1');
     const words = () => router.state.location.search as Record<string, unknown>;
     // named for the tab under it, never Details
     const back = await screen.findByRole('button', { name: 'Back to QA report' });

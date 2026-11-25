@@ -34,7 +34,7 @@ describe('old task addresses', () => {
     ['/task/12', { tab: 'details' }, { task: '12', words: { tab: 'details' } }, { to: '/tasks', search: { task: 12, 'task.tab': 'details' } }],
     ['/flow/12', {}, { task: '12', words: {} }, { to: '/tasks', search: { task: 12 } }],
     ['/tasks/p1/12', { ask: 'a1' }, { task: '12', pipeline: 'p1', words: { ask: 'a1' } }, { to: '/tasks/p1', search: { task: 12, list: 'p1', 'task.ask': 'a1' } }],
-    ['/tasks/p1/12/details', { file: 'a.pdf', v: 2 }, { task: '12', pipeline: 'p1', words: { tab: 'details', file: 'a.pdf', v: 2 } }, { to: '/tasks/p1', search: { task: 12, list: 'p1', 'task.tab': 'details', 'task.file': 'a.pdf', 'task.v': 2 } }],
+    ['/tasks/p1/12/details', { file: 'a.pdf', v: 2 }, { task: '12', pipeline: 'p1', words: { file: 'a.pdf', fv: 2, tab: 'details' } }, { to: '/tasks/p1', search: { task: 12, list: 'p1', 'task.file': 'a.pdf', 'task.fv': 2, 'task.tab': 'details' } }],
     ['/tasks/all/12/chat', { session: 'bot:eng' }, { task: '12', pipeline: 'all', words: { tab: 'chat', session: 'bot:eng' } }, { to: '/tasks', search: { task: 12, 'task.tab': 'chat', 'task.session': 'bot:eng' } }],
     ['/next/tasks/p1/12/', {}, { task: '12', pipeline: 'p1', words: {} }, { to: '/tasks/p1', search: { task: 12, list: 'p1' } }],
   ])('%s %o opens over its page', (path, search, cold, page) => {

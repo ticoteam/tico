@@ -261,6 +261,8 @@ test("an agent's newest pictures and videos lead its sidebar and its task; each 
   await expect(layers(page)).toHaveCount(2);
   expect(searchOf(page)).toMatchObject({ 'task.file': made.video });
   expect(searchOf(page)['task.tab']).toBe(tab);
+  // the layer's way in finished (its title no longer crossing the task's)
+  await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running' || a.effect?.getComputedTiming().endTime === Infinity));
   await page.screenshot({ path: test.info().outputPath('made-video-1440.png') });
   await page.keyboard.press('Escape');
   await expect(layers(page)).toHaveCount(1);

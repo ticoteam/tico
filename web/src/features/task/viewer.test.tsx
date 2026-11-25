@@ -217,7 +217,7 @@ describe('a task’s tabs: pages and plain files', () => {
           ? { body: docx, type: mime }
           : null;
     try {
-      show(<TaskPage task="12" tab="details" file="word1" />, '/tasks/p1?task=12&list=p1&task.tab=details&task.file=word1&task.v=1');
+      show(<TaskPage task="12" tab="details" file="word1" />, '/tasks/p1?task=12&list=p1&task.tab=details&task.file=word1&task.fv=1');
       const sheet = await screen.findByRole('article', { name: 'draft.docx, v1' });
       expect(within(sheet).getByText('Original draft')).toBeTruthy();
       expect(calls).not.toContain('GET /api/v2/files/word1?v=2');

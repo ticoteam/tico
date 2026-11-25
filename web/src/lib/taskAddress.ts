@@ -99,7 +99,10 @@ export function coldOf(path: string, search: Record<string, unknown> = {}): { ta
     }
   };
   const task = dec((m[1] ?? m[2] ?? m[4])!);
-  const words = wordsOf(search, (w) => w);
+  const read = wordsOf(search, (w) => w);
+  // an old address had one `v`/`vs`: with a file open they were the file's (the viewer showed that version), now its own
+  const { v, vs, ...rest } = read;
+  const words: TaskWords = read.file && read.fv === undefined && read.fvs === undefined ? { ...rest, ...(v && { fv: v }), ...(vs && { fvs: vs }) } : read;
   // the path names the tab; an old `/task/<n>?tab=` named it in the search
   if (m[5]) words.tab = dec(m[5]);
   return { task, ...(m[3] && { pipeline: dec(m[3]) }), words };
