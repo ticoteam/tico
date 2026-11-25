@@ -214,6 +214,7 @@
      The font shorthand resets font-feature-settings, so set --feat-text after it on text-face steps.
      Three weights only: --w-text 400, --w-strong 550, --w-title 650. */
   --t-micro:11px;                 /* the smallest text: a key cap, a tag on a picture. Never a sentence */
+  --t-field:max(16px,1em);        /* a field typed in on touch: 16px or its own size, so iOS does not zoom on focus */
   --lh-display:1.1;               /* figures and hall names, one line */
   --lh-title:1.16;                /* a title that may wrap */
   --lh-ask:1.18;                  /* the question */

@@ -148,7 +148,7 @@ test('Needs you: open the first case over Tasks and approve it; the next case op
   const box = async (sel: string) => (await over.locator(sel).first().boundingBox())!;
   expect((await box('.ap-subj')).height).toBeGreaterThan(0);
   expect((await box('.ap-mail')).height).toBeGreaterThan(0);
-  const [scroll, column] = [await box('.ap-scroll'), await box('section[aria-label="Task"]')];
+  const [scroll, column] = [await box('.ap-scroll'), await box('.tmd-task')];
   expect(scroll.height).toBeGreaterThan(300);
   expect(Math.abs(scroll.y + scroll.height - (column.y + column.height))).toBeLessThan(2);
   await page.screenshot({ path: test.info().outputPath('modal-1440.png') });
@@ -193,12 +193,12 @@ test('Needs you: Undo on the sent case, with the next one open over Tasks, takes
   await expect(over.locator('.ap-subj')).toHaveText(first!.subject);
   await over.locator('section[aria-label="The decision"]').getByRole('button', { name: 'Approve', exact: true }).click();
   await expect(over.locator('.ap-subj')).toHaveText(second!.subject);
-  const okAt = async () => (await sql(hub, `SELECT ok_at FROM ok_grants WHERE requirement_id='${first!.approval}'`))[0]?.ok_at ?? null;
-  await expect.poll(okAt).not.toBeNull();
+  const grant = async () => (await sql<{ ok_at: string | null; revoked_at: string | null }>(hub, `SELECT ok_at, revoked_at FROM ok_grants WHERE requirement_id='${first!.approval}'`))[0];
+  await expect.poll(async () => (await grant())?.ok_at ?? null).not.toBeNull();
   // the send's toast is in the task's layer, its Undo in reach while the next case is open
-  const undo = over.getByRole('button', { name: 'Undo' });
-  await undo.click();
-  await expect.poll(okAt).toBeNull();
+  await over.getByRole('button', { name: 'Undo' }).click();
+  // the OK taken back is revoked for good (answers.undo)
+  await expect.poll(async () => (await grant())?.revoked_at ?? null).not.toBeNull();
   await expect(over.locator('.ap-subj')).toHaveText(second!.subject);
   clean(page);
 });
@@ -428,10 +428,10 @@ test('phone: a task opens full screen over its board; its list pulls up from the
   expect(searchOf(page)).toMatchObject({ view: 'list', task: String(draft!.number), list: 'launch' });
   // the task, or its chat: two tabs
   const panes = over.locator('.tmd-panes');
-  await expect(over.locator('section[aria-label="Task"]')).toBeVisible();
+  await expect(over.locator('.tmd-task')).toBeVisible();
   await panes.getByRole('button', { name: 'Chat', exact: true }).tap();
   await expect(over.locator('aside[aria-label="Chat"]')).toBeVisible();
-  await expect(over.locator('section[aria-label="Task"]')).toBeHidden();
+  await expect(over.locator('.tmd-task')).toBeHidden();
   // its fields at 16px or more: iOS zooms the page into a smaller one when it is typed in
   const sizes = await over.locator('input:not([type=file]), textarea, [contenteditable="true"]').evaluateAll((els) => els.map((e) => parseFloat(getComputedStyle(e).fontSize)));
   expect(sizes.length).toBeGreaterThan(0);

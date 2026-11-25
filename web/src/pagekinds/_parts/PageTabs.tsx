@@ -53,7 +53,7 @@ function mark(row: HTMLElement) {
  */
 export function PageTabs({ tabs, label, after }: PageTabsProps) {
   // the page's own address: a task opened over it draws nothing here
-  const at = useLocation({ select: (l) => ({ pathname: l.pathname, search: pageSearch(l.search as Record<string, unknown>) }), structuralSharing: true });
+  const at = useLocation({ select: (l) => ({ pathname: l.pathname, search: pageSearch(l.search as Record<string, unknown>) as Record<string, string | number | boolean> }), structuralSharing: true });
   const search = at.search as Record<string, unknown>;
   const rowKeys = [...new Set(tabs.flatMap((t) => Object.keys(t.search ?? {})))];
   // a page opened from a thread keeps it beside every tab (lib besideThread)

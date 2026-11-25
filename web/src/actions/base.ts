@@ -57,7 +57,7 @@ export const closeChat = defineAction({
 const sheet = z.enum(['tico', 'menu', 'list', 'widgets', 'side'] as const);
 
 const behind =
-  <T>(input: T) =>
+  <const T>(input: T) =>
   (ctx: Ctx): T | null =>
     openOf(ctx.router.state.location.search as Record<string, unknown>) ? null : input;
 

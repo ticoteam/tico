@@ -463,7 +463,7 @@ describe('one open task', () => {
     await screen.findAllByRole('region', { name: 'The decision' });
     const boxes = screen.getAllByRole('region', { name: 'The decision' }).filter((b) => !b.closest('.dock'));
     expect(boxes).toHaveLength(1);
-    expect(within(boxes[0]).getByRole('button', { name: 'Approve' })).toBeTruthy();
+    expect(within(boxes[0]!).getByRole('button', { name: 'Approve' })).toBeTruthy();
     expect(calls.some((c) => c.includes('/threads/room/timeline') && c.includes('session=bot%3Ar2'))).toBe(true);
     fireEvent.click(screen.getByRole('button', { name: 'Back to comments' }));
     await waitFor(() => expect(router.state.location.search).toEqual({ task: 12, list: 'p1', 'task.tab': 'qa-report' }));
