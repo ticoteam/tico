@@ -8,7 +8,7 @@ import type { BotWait, LiveRun } from './types';
 
 /** What the chat draws for one agent answering: its reply being written (or that it got the message, `doing: 'wait'`),
     a line that something stops it, or a line that its run ended with no reply. */
-export type Replying =
+export type Answering =
   | { k: 'live'; key: string; r: LiveRun; text: string }
   | { k: 'stuck'; key: string; bot: string; name: string; detail: string }
   | { k: 'quiet'; key: string; bot: string; why: 'none' | 'failed' };
@@ -31,8 +31,8 @@ function waitRun(w: BotWait): LiveRun {
  * waits on whose run is not here yet (it got the message, or is at work from before the chat opened), or that something
  * stops; then, for an agent with neither, the line that its last run ended with no reply. One row per agent.
  */
-export function replyingRows(live: readonly LiveRun[], waits: readonly BotWait[], shown: ShownIn = () => true): Replying[] {
-  const out: Replying[] = [];
+export function replyingRows(live: readonly LiveRun[], waits: readonly BotWait[], shown: ShownIn = () => true): Answering[] {
+  const out: Answering[] = [];
   const busy = new Set<string>();
   for (const r of live) {
     if (r.quiet || !shown(r.bot, r.message)) continue;
@@ -57,7 +57,7 @@ export function replyingRows(live: readonly LiveRun[], waits: readonly BotWait[]
 }
 
 /** A thread's agents answering, as `replyingRows` draws them, for every chat that shows the thread. */
-export function useReplying(id: string, shown?: ShownIn): Replying[] {
+export function useReplying(id: string, shown?: ShownIn): Answering[] {
   const { data: live = [] } = useQuery(liveQuery(id));
   const { data: waits = [] } = useQuery(waitsQuery(id));
   return replyingRows(live, waits, shown);

@@ -234,7 +234,7 @@ def test_a_task_comment_that_mentions_an_agent_is_named_on_its_status_row_until_
     """The task's chat draws "got it", then the work, under the comment that woke the agent: the row names it, in the
     comments' own first page too, and goes once the agent replies."""
     machine = machine_for(api)
-    task = post(api, "tasks", {"title": "Fix the page", "body": "It looks bad."})
+    task = post(api, "tasks", {"title": "Fix the page", "body": "It looks bad.", "owner": "human:ana"})
     said = post(api, f"tasks/{task['id']}/comments", {"text": "@ops can you see why this page looks bad?"})
     comment = said["comment"]
     thread = comment["conversation_id"]

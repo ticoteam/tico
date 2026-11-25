@@ -24,7 +24,7 @@ import { ChatPlace } from './Rich';
 import { quoteFrom, quoteOf, Replying } from './Quote';
 import { SessionLine, type Session } from './Session';
 import { installConversationLive, isDmChanged, markRead, rowsOf, sendMessage, timelineQuery, type TaskSend } from './queries';
-import { useReplying, type Replying, type ShownIn } from './replying';
+import { useReplying, type Answering, type ShownIn } from './replying';
 import { ReplyBox } from './ReplyBox';
 import type { ChatMessage, Variant } from './types';
 
@@ -93,7 +93,7 @@ type Item =
   | { k: 'day'; key: string; label: string; isNew: boolean }
   | { k: 'did'; key: string; text: string; fault: boolean }
   | { k: 'msg'; key: string; m: ChatMessage; cont: boolean; under?: string }
-  | Replying
+  | Answering
   | { k: 'reply'; key: string; m: ChatMessage };
 
 /** A message that is someone's (a person's or an agent's), not a Tico line: what Reply answers in a task's comments. */
@@ -131,7 +131,7 @@ const didsOf = (m: ChatMessage): string[] => {
 /** The list as it reads, oldest first: day breaks, the "New" line, what Tico did, messages, and the agents answering
     (replying.ts). `nested`: a task's comments, each reply under its comment (`nest`), and the Reply being written there
     (`replying`). */
-function itemsOf(rows: ChatMessage[], answering: Replying[], me: string | undefined, id: string, marks: Map<string, number> | null, nested = false, replying: ChatMessage | null = null): Item[] {
+function itemsOf(rows: ChatMessage[], answering: Answering[], me: string | undefined, id: string, marks: Map<string, number> | null, nested = false, replying: ChatMessage | null = null): Item[] {
   const out: Item[] = [];
   let day = '';
   let newShown = false;
@@ -198,7 +198,7 @@ function newSince(items: Item[], seen: string, me: string | undefined): number {
 }
 
 /** What the Dot shows while Tico answers in its own chat. */
-function dotFor(rows: ChatMessage[], answering: Replying[]): DotState | null {
+function dotFor(rows: ChatMessage[], answering: Answering[]): DotState | null {
   const r = answering.find((x) => x.k === 'live' && !x.r.ended);
   if (r?.k === 'live') return r.r.doing === 'wait' ? 'think' : r.r.doing;
   return rows.some((m) => m.pending === 'sending') ? 'think' : null;

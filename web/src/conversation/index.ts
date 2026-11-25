@@ -4,7 +4,7 @@ import './conversation.css';
 export { Conversation, SideHead, type ConversationProps } from './Conversation';
 export { Composer, type ComposerProps } from './Composer';
 export { Message, LiveRow, ReplyLine, type MessageProps } from './Message';
-export { replyingRows, useReplying, type Replying, type ShownIn } from './replying';
+export { replyingRows, useReplying, type Answering, type ShownIn } from './replying';
 export { MessageBones } from './Bones';
 export { SessionLine, type Session } from './Session';
 export { clock, dayKey, dayLabel, stamp } from './dates';
