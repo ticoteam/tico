@@ -616,12 +616,22 @@ export const taskTabsQuery = (slug: string) =>
     queryFn: ({ signal }) => api.get<TaskTabs>(`/api/v2/bots/${at(slug)}/task-tabs`, { signal }),
   });
 
+/** Every 5 minutes while the page is in sight, and on coming back to it: a sidebar counting tasks reads again. */
+export const TASK_COUNTS_EVERY = 5 * 60_000;
+
+/** Whether its sidebar holds a card that counts a pipeline's tasks (backend/cards.py `tasks_by_stage`). Its page hears
+    only the tasks of this agent and the viewer (live/follow.ts `party`), not another agent's move in that pipeline, so
+    it reads again now and then too. */
+export const countsTasks = (place: Place | undefined) => !!place?.pins?.some((p) => p.card?.template === 'tasks_by_stage');
+
 /** What its pinned pages and cards show the viewer (GET /api/v2/places/bot:<slug>): each pin by its `item`, a card
     with what it shows this reader. */
 export const sidebarPinsQuery = (slug: string) =>
   queryOptions({
     queryKey: ['team', 'pins', slug] as const,
     queryFn: ({ signal }) => api.get<Place>(`/api/v2/places/${at(`bot:${slug}`)}`, { signal }),
+    refetchInterval: (q) => (countsTasks(q.state.data) ? TASK_COUNTS_EVERY : false),
+    refetchOnWindowFocus: (q) => (countsTasks(q.state.data) ? 'always' : false),
   });
 
 /** A read refused (signed out, no Read, gone): what it showed before is shown no more. */

@@ -38,50 +38,83 @@ def _tool_of(argv, parser):
     return None
 
 
-# Tools the shared skills (templates/catalog/_shared) name that a code bot is not offered, from before the walk read
-# them: each is a question of whether code bots should have that tool, not a slip. A new one fails.
-SHARED_GAPS = {
-    "tico_chat_ask",
-    "tico_decision_ask",
-    "tico_email_draft",
-    "tico_email_policy",
-    "tico_email_send",
-    "tico_email_thread",
-    "tico_market_delta",
-    "tico_market_find",
-    "tico_message_send",
-    "tico_repo_review",
-    "tico_task_file",
-    "tico_task_requester_save",
-    "tico_task_requesters",
-    "tico_tool_query_search",
+# Tools the shared skills (templates/catalog/_shared) name in one template's files that it is not offered, from before
+# the walk read them: each is a question of whether that bot should have that tool, not a slip. Keyed by where it is
+# named, so the same tool named anywhere else fails; and every one is still named there and still a gap, or it fails.
+_GAPS = {
+    ".claude/skills/brainstorm-a-feature/SKILL.md": (
+        "tico_chat_ask",
+        "tico_email_policy",
+        "tico_market_delta",
+        "tico_market_find",
+        "tico_message_send",
+        "tico_task_requesters",
+        "tico_tool_query_search",
+    ),
+    ".claude/skills/decide-what-not-to-build/SKILL.md": (
+        "tico_chat_ask",
+        "tico_email_draft",
+        "tico_email_policy",
+        "tico_email_send",
+        "tico_task_requester_save",
+    ),
+    ".claude/skills/learn-from-customers/SKILL.md": (
+        "tico_chat_ask",
+        "tico_decision_ask",
+        "tico_email_draft",
+        "tico_email_policy",
+        "tico_email_send",
+        "tico_email_thread",
+        "tico_message_send",
+        "tico_task_requesters",
+    ),
+    ".claude/skills/write-the-spec/SKILL.md": ("tico_chat_ask", "tico_task_requesters", "tico_tool_query_search"),
 }
+SHARED_GAPS = {("feature-owner", rel, tool) for rel, tools in _GAPS.items() for tool in tools}
 
 
-def named_tools(template):
-    """{tool: where it is named} for one code bot's template. bot.yaml and card.yaml are notes for people (the wizard,
-    the seed), not instructions the bot runs, so they are left out."""
+def named_tools(template, kept=None):
+    """{tool: where it is named} for one code bot's template, but for SHARED_GAPS (each one met is added to `kept`).
+    bot.yaml and card.yaml are notes for people (the wizard, the seed), not instructions the bot runs, so they are
+    left out."""
     parser = hubcli.parser()
-    found = {}
+    found, kept = {}, set() if kept is None else kept
+
+    def named(name, rel, where):
+        if (template, rel, name) in SHARED_GAPS:
+            kept.add((template, rel, name))
+        else:
+            found.setdefault(name, where)
+
     # What the bot starts with: the catalog's _base and the _shared files its card names, then its own.
     for rel, path in sorted(catalog.files(template, CATALOG).items()):
         if path.name in ("bot.yaml", "card.yaml"):
             continue
-        where, gaps = f"{template}/{rel}", SHARED_GAPS if (CATALOG / "_shared") in path.parents else set()
+        where = f"{template}/{rel}"
         if path.suffix == ".md":
             text = path.read_text()
             for name in TOOL.findall(text):
-                if name not in gaps:
-                    found.setdefault(name, where)
+                named(name, rel, where)
             for number, line in commands_in(path):
                 argv = argv_of(line)
-                if argv and argv != ["\x00unbalanced quotes"] and (name := _tool_of(argv, parser)) and name not in gaps:
-                    found.setdefault(name, f"{where}:{number}")
+                if argv and argv != ["\x00unbalanced quotes"] and (name := _tool_of(argv, parser)):
+                    named(name, rel, f"{where}:{number}")
         elif path.suffix == ".py":
             for noun, verb in SCRIPT_CALL.findall(path.read_text()):
                 if (name := tool_name(f"{noun} {verb}")) in hubtools.BY_NAME:
                     found.setdefault(name, where)
     return found
+
+
+def test_every_kept_gap_is_still_named_there_and_still_not_offered():
+    kept = set()
+    for template in CODE_TEMPLATES + FEATURE_TEMPLATES:
+        named_tools(template, kept)
+    assert not SHARED_GAPS - kept, f"No longer named there, so drop them from SHARED_GAPS: {sorted(SHARED_GAPS - kept)}"
+    offered = {t["name"] for t in hubtools.listing(True, "bot")}
+    listed = {t: hubtools.FEATURE_TOOLS if t in FEATURE_TEMPLATES else hubtools.DEVELOPER_TOOLS for t in kept}
+    fixed = sorted(g for g in SHARED_GAPS if g[2] not in offered or g[2] in listed[g[0]])
+    assert not fixed, f"No longer a gap, so drop them from SHARED_GAPS: {fixed}"
 
 
 def test_the_code_templates_are_there():

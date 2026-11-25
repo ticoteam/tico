@@ -45,11 +45,15 @@ from . import groups as G
 from . import models as M
 from . import people as P
 from . import read_cache
+from .bot_task_tabs import WIDGETS as SIDEBAR_BUILT_INS
 from .store import H, Problem, encode
 from .api_contract import api_v2
 
 SIZES = ("small", "medium", "large")
 PLACE_MAX = 60  # pins at one place: a page of cards, not an archive
+# The last place a pin may be moved to: on a full agent sidebar, below its pins and its built-in sections, which its
+# positions count too (bot_task_tabs.edit_widget).
+SPOT_MAX = PLACE_MAX + len(SIDEBAR_BUILT_INS) - 1
 CARDS_MAX = 2000
 LIST_MAX = 100
 IDS_MAX = 50
@@ -134,7 +138,7 @@ class CardAdd(M.Contract):
     settings: dict = Field(default_factory=dict)
     place: str = Field(default="", max_length=200)
     size: str = Field(default="medium", max_length=10)
-    position: int | None = Field(default=None, ge=0, le=PLACE_MAX)
+    position: int | None = Field(default=None, ge=0, le=SPOT_MAX)
 
 
 class CardEdit(M.Contract):
@@ -146,12 +150,12 @@ class PinAdd(M.Contract):
     place: str = Field(max_length=200)
     item: str = Field(max_length=200)
     size: str = Field(default="medium", max_length=10)
-    position: int | None = Field(default=None, ge=0, le=PLACE_MAX)
+    position: int | None = Field(default=None, ge=0, le=SPOT_MAX)
 
 
 class PinEdit(M.Contract):
     size: str | None = Field(default=None, max_length=10)
-    position: int | None = Field(default=None, ge=0, le=PLACE_MAX)
+    position: int | None = Field(default=None, ge=0, le=SPOT_MAX)
 
 
 class PlaceAudience(M.Contract):
@@ -310,7 +314,9 @@ class Ctx:
 # ---- settings
 
 
-def clean_settings(ctx, template, given):
+def clean_settings(ctx, template, given, kept=frozenset()):
+    """`given` checked and normalised. `kept`: the keys an edit left as saved, which may name what the editor may not
+    see (a hidden agent): those are kept as they are, and no error names their value."""
     if template not in TEMPLATES:
         raise bad("Unknown card: " + str(template) + ". Cards are " + ", ".join(TEMPLATES))
     fields = TEMPLATES[template]["fields"]
@@ -320,10 +326,17 @@ def clean_settings(ctx, template, given):
     out = {}
     for key, kind in fields.items():
         value = given.get(key)
+
+        def unknown(word, value, key=key):
+            return bad(f"Its saved {word} is gone: pick another" if key in kept else f"Unknown {word}: {value}")
+
+        if kind == "agent" and key in kept:
+            out[key] = value  # as saved: its editor's See is checked on the agent they name, not one they left
+            continue
         if kind == "team":
             value = str(value or "").strip()
             if value and value not in ctx.groups:
-                raise bad("Unknown team: " + value)
+                raise unknown("team", value)
         elif kind == "kpi":
             value = str(value or "").strip()
             if not value:
@@ -339,14 +352,14 @@ def clean_settings(ctx, template, given):
                 (value, value, value, value),
             ).fetchone()
             if not found:
-                raise bad("Pick a pipeline" if not value else "Unknown pipeline: " + value)
+                raise bad("Pick a pipeline") if not value else unknown("pipeline", value)
             value = found["id"]
         elif kind == "agent":
             value = str(value or "").strip()
             if value:
                 found = H.resolve_bot(ctx.c, value)
                 if not found or not ctx.sees_bot(found["id"]):  # a hidden agent is as unknown as a missing one
-                    raise bad("Unknown agent: " + value)
+                    raise unknown("agent", value)
                 value = found["id"]
         elif kind == "metric":
             value = str(value or "").strip()
@@ -357,7 +370,7 @@ def clean_settings(ctx, template, given):
 
             value = str(value or "").strip()
             if value and value not in {ch["slug"] for ch in G.channels(ctx.c)}:
-                raise bad("Unknown channel: " + value)
+                raise unknown("channel", value)
         else:
             low, high, default = kind
             value = default if value is None else value
@@ -1637,6 +1650,14 @@ def place_view(ctx, place, timings=None):
         costs[name] = costs.get(name, 0) + ms
     if timings is not None:
         timings.update(prep=prep, cards=total, kinds=costs)
+    if kind == "bot":
+        from . import bot_task_tabs as T
+
+        # A position on an agent's sidebar counts its built-in sections too, as moving a pin there does, so a pin moved
+        # to the position it is listed at stays where it is.
+        spots = {w["id"]: at for at, w in enumerate(T.saved_widgets(ctx, ident))}
+        for view in shown:
+            view["position"] = spots.get(view["item"], view["position"])
     if kind == "task":
         by_id = {p["id"]: p for p in pins}
         for pin in shown:
@@ -1972,8 +1993,9 @@ def edit_card(ctx, cid, title=None, settings=None):
     if title is not None:
         fields["title"] = title.strip()
     if settings is not None:
-        merged = {**json.loads(row["settings"]), **settings}
-        fields["settings"] = json.dumps(clean_settings(ctx, row["template"], merged))
+        saved = json.loads(row["settings"])
+        merged = {**saved, **settings}
+        fields["settings"] = json.dumps(clean_settings(ctx, row["template"], merged, kept=set(saved) - set(settings)))
     if fields:
         fields.update(updated_at=H.now(), updated_by_id=ctx.who.actor)
         ctx.c.execute("UPDATE cards SET " + ",".join(k + "=?" for k in fields) + " WHERE id=?", (*fields.values(), cid))

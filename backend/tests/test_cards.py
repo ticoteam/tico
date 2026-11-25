@@ -399,6 +399,18 @@ def test_tasks_by_stage_names_no_agent_its_reader_may_not_see(api):
     shown = next(p["card"] for p in place(api, "bot:ops", "cara-test")["pins"] if "card" in p)
     assert shown["hidden"] is True and shown["data"] is None
     assert shown["settings"] == {"pipeline": "videos", "count": 3} and "cpo" not in str(shown)
+    # Ops, which arranges its own sidebar but may not see cpo, changes only the count: the saved agent stays, unchecked
+    # and unnamed; naming cpo itself is refused as an unknown agent is.
+
+    ops = setup_attempt(api, "ops")[2]["token"]
+    edit = api.request("PATCH", "/api/v2/cards/" + made["id"], json={"settings": {"count": 5}}, headers=headers(ops))
+    assert edit.status_code == 200 and "cpo" not in edit.text and edit.json()["card"]["hidden"] is True
+    saved = next(p["card"] for p in place(api, "bot:ops")["pins"] if "card" in p)
+    assert saved["settings"] == {"pipeline": "videos", "agent": "cpo", "count": 5}
+    named = api.request(
+        "PATCH", "/api/v2/cards/" + made["id"], json={"settings": {"agent": "cpo"}}, headers=headers(ops)
+    )
+    assert named.status_code == 422 and named.json()["error"]["detail"] == hidden["error"]["detail"]
     # The picker offers the pipelines, and only the agents its reader may see.
     offered = get(api, "cards/choices", "cara-test")
     assert {"id": "videos", "name": "Videos"} in offered["pipelines"]
@@ -471,6 +483,16 @@ def test_a_position_on_an_agents_sidebar_counts_its_built_ins(api):
     refused, later = mcp(api, "tico_card_add", {**settings, "count": 1}, bot)
     assert refused is False, later
     assert [w for w, _ in widgets_of()(api)] == [first, "updates", "tasks", "files", "card:" + later["card"]["id"]]
+    # Listed at the position it is drawn at, built-ins counted: moved there, it stays.
+    listed = {p["item"]: p["position"] for p in mcp(api, "tico_card_list", {"place": "bot:ops"}, bot)[1]["pins"]}
+    assert listed == {first: 0, "card:" + later["card"]["id"]: 4}
+    assert mcp(api, "tico_pin_update", {"pin": later["pin"], "position": 4}, bot)[0] is False
+    assert [w for w, _ in widgets_of()(api)][-1] == "card:" + later["card"]["id"]
+    # The last spot on a full sidebar, below its 60 pins and 3 built-ins, is one a pin may be moved to.
+    moved = api.request("PATCH", "/api/v2/pins/" + added["pin"], json={"position": 62}, headers=headers(bot))
+    assert moved.status_code == 200, moved.text
+    assert [w for w, _ in widgets_of()(api)][-1] == first
+    assert mcp(api, "tico_pin_update", {"pin": added["pin"], "position": 0}, bot)[0] is False
     assert mcp(api, "tico_pin_update", {"pin": later["pin"], "position": 0}, bot)[0] is False
     assert [w for w, _ in widgets_of()(api)] == ["card:" + later["card"]["id"], first, "updates", "tasks", "files"]
     pins = [p["item"] for p in place(api, "bot:ops")["pins"]]

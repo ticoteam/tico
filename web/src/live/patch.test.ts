@@ -44,6 +44,45 @@ it('reads an agent sidebar again when it changed, and the sidebars counting task
   expect([stale(['team', 'pins', 'ops']), stale(['team', 'tabs', 'ops'])]).toEqual([true, false]);
 });
 
+it('reads a sidebar counting tasks again only for a change that can move a count: not a run, a status line or a title', () => {
+  const pins = ['team', 'pins', 'ops'];
+  const send = (seq: number, t: ReturnType<typeof task>, kind: string) => {
+    queryClient.setQueryData(pins, { pins: [{ item: 'card:c1', card: { template: 'tasks_by_stage' } }] });
+    FakeEventSource.last.feed(taskFrame(seq, t, kind));
+    flushFrame();
+    return !!queryClient.getQueryState(pins)?.isInvalidated;
+  };
+  const t = task('t1', { pipeline_id: 'p1', stage_id: 's1' });
+  expect(send(901, t, 'update')).toBe(true); // not heard of before
+  expect(send(902, t, 'run')).toBe(false);
+  expect(send(903, t, 'status')).toBe(false);
+  expect(send(904, { ...t, title: 'Renamed' }, 'update')).toBe(false);
+  expect(send(905, { ...t, stage_id: 's2' }, 'update')).toBe(true);
+  expect(send(906, { ...t, stage_id: 's2', snoozed: true }, 'update')).toBe(true);
+  expect(send(907, { ...t, stage_id: 's2', snoozed: true, owner_id: 'bot:b2' }, 'update')).toBe(true);
+  expect(send(908, task('t2', { pipeline_id: 'p1' }), 'insert')).toBe(true);
+});
+
+it("reads an agent's sidebar again after a read in flight when the sidebar changes meanwhile", async () => {
+  const pins = ['team', 'pins', 'ops'];
+  const reads: (() => void)[] = [];
+  queryClient.setQueryData(pins, { pins: [] });
+  const read = () => new Promise((done) => reads.push(() => done({ pins: [] })));
+  const seen = new QueryObserver(queryClient, { queryKey: pins, queryFn: read, staleTime: Infinity });
+  const stop = seen.subscribe(() => {});
+  try {
+    void queryClient.invalidateQueries({ queryKey: pins, exact: true });
+    expect(reads).toHaveLength(1);
+    // the pin moves while that read is out: its reply may predate the move, so the sidebar reads once more after it
+    FakeEventSource.last.feed(frame(901, 'bots', { bot: 'b-ops', status: null, sidebar: 'ops' }));
+    flushFrame();
+    await act(() => reads.splice(0).forEach((go) => go()));
+    expect(reads).toHaveLength(1);
+  } finally {
+    stop();
+  }
+});
+
 it('refreshes only the agent whose run state changed', () => {
   const payer = (bot: string) => [...keys.team.paidBy(), bot, true];
   queryClient.setQueryData(payer('ops'), { last_turn: null });

@@ -539,6 +539,8 @@ DEVELOPER_TOOLS = frozenset(
         "tico_task_answer",
         "tico_task_attach",
         "tico_task_create",
+        # A sub-task for a teammate, from the task worked on (a QA's bug back to its Builder).
+        "tico_task_file",
         # A Reviewer files its second review as a check-model sub-task.
         "tico_task_child_create",
         "tico_task_close",
@@ -547,6 +549,8 @@ DEVELOPER_TOOLS = frozenset(
         "tico_task_label",
         "tico_task_snooze",
         "tico_task_queue",
+        # A Reviewer's verdict on the PR, at the head it read (templates/catalog/_shared/.claude/skills/review-code).
+        "tico_repo_review",
         # Access to a tool or a repository a code bot needs (backend/access_requests.py), never a task to a person.
         "tico_access_request",
         "tico_task_release",
