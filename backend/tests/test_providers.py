@@ -203,16 +203,41 @@ def test_the_gateway_still_holds_terra_so_a_live_hq_tier_for_it_stays_hidden(mon
     assert P.gateway_tiers.live_row(tier) is None
 
 
-def test_mercury_on_openrouter_is_offered_only_as_a_meeting_model_and_priced():
+def test_minimax_on_openrouter_is_offered_only_as_a_meeting_model_and_priced():
     from clients import openrouter
 
-    assert P.OPENROUTER_MEETING_MODEL == "mercury-3"
-    assert "mercury-3" in [row["id"] for row in P.provider_models("openrouter", meeting=True)]
-    assert "mercury-3" not in [row["id"] for row in P.provider_models("openrouter")]
-    row = P.MODEL_BY_ID["mercury-3"]
+    assert P.OPENROUTER_MEETING_MODEL == "minimax-m3.1-flash"
+    assert "minimax-m3.1-flash" in [row["id"] for row in P.provider_models("openrouter", meeting=True)]
+    assert "minimax-m3.1-flash" not in [row["id"] for row in P.provider_models("openrouter")]
+    row = P.MODEL_BY_ID["minimax-m3.1-flash"]
     assert (row["runtime"], row["default_effort"], row["efforts"][0]) == ("pi", "low", "low")
-    assert P.PRICES["mercury-3"] == (0.20, 0.02, 0.70)
-    assert openrouter.MODELS["mercury-3"] == "inception/mercury-3"
+    assert P.maker("minimax-m3.1-flash") == "minimax"
+    # OpenRouter's list price, as HQ's meeting row reads it (ticoteam/tico-services#377).
+    assert P.PRICES["minimax-m3.1-flash"] == (0.15, 0.015, 0.60)
+    assert openrouter.MODELS["minimax-m3.1-flash"] == "minimax/minimax-m3.1-flash"
+    # OpenRouter withdrew Mercury 3: nothing offers, prices or maps it any more.
+    assert "mercury-3" not in [row["id"] for row in P.MODEL_CATALOG]
+    assert "mercury-3" not in P.PRICES and "mercury-3" not in openrouter.MODELS
+
+
+def test_a_saved_mercury_3_runs_on_minimax_wherever_it_was_saved():
+    from backend import check_models, task_models
+
+    minimax = "minimax-m3.1-flash"
+    # The company's meeting model and check-model order, as an older release saved them.
+    record = P._record(
+        {"enabled": ["openrouter"], "meeting_model": "mercury-3", "check_models": ["pi:mercury-3", "mercury-3", "pi"]}
+    )
+    assert record["meeting_model"] == minimax
+    assert record["check_models"] == ["pi:" + minimax, minimax, "pi"]
+    assert P.meeting_choice({"enabled": ["openrouter"]}, "mercury-3") == minimax
+    # A bot's own model and its task model.
+    assert P.resolve({**record, "runtime": "", "model": ""}, {"model": "mercury-3"}) == ("pi", minimax)
+    assert task_models.stored({"task_model": {"model": "mercury-3"}})["model"] == minimax
+    assert task_models.choice_of("mercury-3", "low")["model"] == minimax
+    # A check subtask filed on it.
+    check = {"runtime": "pi", "model": "mercury-3", "harness": "pi", "effort": "low"}
+    assert check_models.apply({}, check)["model"] == minimax
 
 
 def test_antigravity_runs_neon_and_hydrogen_on_its_own_runtime_and_claims_with_xhigh(api):

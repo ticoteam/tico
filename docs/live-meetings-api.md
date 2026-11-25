@@ -215,9 +215,10 @@ bot's instructions, memory and hub tools. The model is the meeting's own `meetin
 body sets one, else the company's meeting model (Settings > Computers > Meeting model). That default is
 `tico-meeting-1.0` while the Tico AI Gateway is on and the bot's own model otherwise; `""` means the bot's own
 model. Other bot work is unaffected. If the meeting model cannot run on the bot's computer (a Mac computer
-cannot reach the Gateway's meeting models), a Gateway meeting model falls back to `mercury-3` (OpenRouter
-`inception/mercury-3`, low effort, on pi) when the company has OpenRouter on; if that cannot run either,
-the reply uses the bot's own model. `meeting.model` records each step.
+cannot reach the Gateway's meeting models), a Gateway meeting model falls back to `minimax-m3.1-flash`
+(OpenRouter `minimax/minimax-m3.1-flash`, low effort, on pi) when the company has OpenRouter on; if that cannot run
+either, the reply uses the bot's own model. `meeting.model` records each step. A meeting model saved as
+`mercury-3` (withdrawn from OpenRouter) runs on `minimax-m3.1-flash`.
 
 Each bot has one thread per meeting, kept for the meeting's turns while the bot stays attached, and
 every turn runs on that thread's own harness thread whatever the bot's session setting. So a bot's turns in

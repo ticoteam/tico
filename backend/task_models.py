@@ -35,7 +35,8 @@ def stored(config):
     chosen = (config or {}).get(KEY)
     if not isinstance(chosen, dict):
         return None
-    model = str(chosen.get("model") or "").strip()
+    # A retired id saved before (`mercury-3`) runs as the id it is now (gateway_tiers.new_id).
+    model = providers.gateway_tiers.new_id(str(chosen.get("model") or "").strip())
     effort = str(chosen.get("reasoning_effort") or "")
     compact_at = _context(chosen.get("compact_at"))
     if not (model or effort or compact_at):
@@ -112,7 +113,7 @@ def choice_of(model, effort=None, harness=None, current=None):
     model is: the model is in the catalog and not retired, the harness runs it, and the effort is one it takes (the
     model's default when none is named). `current` is the choice a change keeps what it does not name, while the model
     stays the same. Raises Problem."""
-    row = providers.MODEL_BY_ID.get(model)
+    row = providers.MODEL_BY_ID.get(providers.gateway_tiers.new_id(model))
     if not row:
         raise Problem("model", "Choose one of the supported models", 422)
     refuse_retired(row)

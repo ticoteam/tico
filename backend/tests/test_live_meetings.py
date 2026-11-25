@@ -1162,7 +1162,7 @@ def test_a_failed_decision_keeps_its_code_and_never_its_detail(live):
     assert "synthetic-private-words" not in json.dumps({k: v for k, v in trace.items() if k != "decision_input"})
 
 
-def test_a_gateway_meeting_model_a_computer_cannot_run_falls_back_to_mercury_on_openrouter(live, monkeypatch):
+def test_a_gateway_meeting_model_a_computer_cannot_run_falls_back_to_minimax_on_openrouter(live, monkeypatch):
     settings = live.app.state.store.settings
     gateway_on(live, monkeypatch)
     own = {"runtime": "hermes", "harness": "hermes", "model": "bots-own"}
@@ -1202,12 +1202,12 @@ def test_a_gateway_meeting_model_a_computer_cannot_run_falls_back_to_mercury_on_
         turn = live_meetings_module.turn_config(c, settings, own, "ops", "m-mac", "", turn_id="t-1")
         assert (turn["runtime"], turn["model"], turn["reasoning_effort"], turn["session"]) == (
             "pi",
-            "mercury-3",
+            "minimax-m3.1-flash",
             "low",
             "task",
         )
         payload = said("m-mac")
-        assert (payload["model"], payload["fallback"], payload["ran"]) == (MEETING, "openrouter", "mercury-3")
+        assert (payload["model"], payload["fallback"], payload["ran"]) == (MEETING, "openrouter", "minimax-m3.1-flash")
         assert payload["steps"] == [{"model": MEETING, "reason": "the Tico AI Gateway does not run on this Mac"}]
     with live.app.state.store.transaction() as c:
         providers.save(
@@ -1224,8 +1224,41 @@ def test_a_gateway_meeting_model_a_computer_cannot_run_falls_back_to_mercury_on_
         }
         payload = said("m-no-openrouter")
         assert (payload["fallback"], payload["ran"]) == ("bot_model", "bots-own")
-        assert [step["model"] for step in payload["steps"]] == [MEETING, "mercury-3"]
+        assert [step["model"] for step in payload["steps"]] == [MEETING, "minimax-m3.1-flash"]
         assert payload["steps"][1]["reason"] == "OpenRouter is off for this company"
+
+
+def test_a_meeting_model_saved_as_mercury_3_runs_on_minimax(live, monkeypatch):
+    settings = live.app.state.store.settings
+    own = {"runtime": "hermes", "harness": "hermes", "model": "bots-own"}
+    monkeypatch.setattr(task_models, "why_not", lambda *args, **kwargs: "")
+    with live.app.state.store.transaction() as c:
+        providers.save(
+            c,
+            "human:ana",
+            {"enabled": ["openrouter"], "expected_revision": providers.load(c, settings)["revision"]},
+            H.now(),
+            settings,
+        )
+        # The company's meeting model as a release before OpenRouter withdrew Mercury 3 saved it.
+        stored = json.loads(
+            c.execute("SELECT value FROM registry_metadata WHERE key=?", (providers.KEY,)).fetchone()[0]
+        )
+        c.execute(
+            "UPDATE registry_metadata SET value=? WHERE key=?",
+            (json.dumps({**stored, "meeting_model": "mercury-3"}), providers.KEY),
+        )
+    with live.app.state.store.transaction() as c:
+        assert providers.load(c, settings)["meeting_model"] == "minimax-m3.1-flash"
+        for rid, model in (("m-company", None), ("m-own", "mercury-3")):
+            c.execute(
+                "INSERT INTO live_meetings(id,owner_actor,title,state,window_ms,cooldown_ms,reply_cap,threshold,"
+                "created_at,updated_at,started_at,visibility,meeting_model) "
+                "VALUES(?,'human:ana','t','live',30000,60000,3,0.7,?,?,?,'team',?)",
+                (rid, H.now(), H.now(), H.now(), model),
+            )
+            turn = live_meetings_module.turn_config(c, settings, own, "ops", rid, "", turn_id="t-" + rid)
+            assert (turn["runtime"], turn["model"], turn["reasoning_effort"]) == ("pi", "minimax-m3.1-flash", "low")
 
 
 def handed(api, attempt):

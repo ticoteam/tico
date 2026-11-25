@@ -377,7 +377,7 @@ def _view(c, auth, who, rid):
         "meeting_model": row["meeting_model"],
         # What the meeting's replies are set to run on now: its own model, else the company's (not computer-specific).
         "meeting_model_effective": (
-            row["meeting_model"]
+            providers.gateway_tiers.new_id(row["meeting_model"])
             if row["meeting_model"] is not None
             else providers.load(c, auth.settings)["meeting_model"]
         ),
@@ -559,7 +559,7 @@ def turn_config(c, settings, config, bot, rid, runner_id, job_id=None, turn_id=N
     than low). For another live-meeting reply, use the meeting's model (its own, else the company's meeting model) at
     low effort, on that model's harness and runtime, as a task model is applied. Any other turn and a meeting that sets
     no model keep the bot's own model. A Gateway meeting model that cannot run on the bot's computer (a Mac runs no
-    Gateway model) is tried next as OpenRouter's Mercury when the company has OpenRouter on; a model that cannot be
+    Gateway model) is tried next as OpenRouter's MiniMax when the company has OpenRouter on; a model that cannot be
     used (not in the catalog, its provider off, not installed or not signed in) keeps the bot's own model. Each step is
     said on the meeting (`meeting.model`).
 
@@ -587,7 +587,9 @@ def turn_config(c, settings, config, bot, rid, runner_id, job_id=None, turn_id=N
     ran_on = lambda name: (
         turn and not preview and c.execute("UPDATE live_meeting_turns SET ran_model=? WHERE id=?", (name, turn_id))
     )
-    model = row[0] if row[0] is not None else providers.load(c, settings)["meeting_model"]
+    # A meeting saved on a retired id (`mercury-3`) runs on the id it is now (gateway_tiers.new_id).
+    saved = row[0] if row[0] is not None else providers.load(c, settings)["meeting_model"]
+    model = providers.gateway_tiers.new_id(saved)
     if not model or turn and turn["retries"] >= 2:
         # A second empty reply on the meeting model: the last try runs on the bot's own model (_retry_empty).
         ran_on(None)

@@ -335,7 +335,8 @@ def apply(config, check):
     out = {k: v for k, v in config.items() if k not in ("fallback_models",)}
     out.update(
         runtime=check["runtime"],
-        model=check["model"],
+        # A check saved on a retired id (`mercury-3`) runs on the id it is now (gateway_tiers.new_id).
+        model=providers.gateway_tiers.new_id(check["model"]),
         harness=check["harness"],
         fallback={"off": True},
         session="task",

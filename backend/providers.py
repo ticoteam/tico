@@ -429,13 +429,16 @@ MODEL_CATALOG = tuple(
             "efforts": ("low", "high"),
             "default_effort": "low",
         },
-        # Inception's Mercury 3 (text only, tools, 1M context) through OpenRouter: the meeting model's next step on a computer
-        # that cannot run the Gateway's (backend/live_meetings.py turn_config). A meeting model, never a bot's pick.
+        # MiniMax's M3.1 Flash (text only, tools) through OpenRouter: the meeting model's next step on a computer that
+        # cannot run the Gateway's (backend/live_meetings.py turn_config), and what the Gateway's meeting row runs. A
+        # meeting model, never a bot's pick. It replaced Inception's Mercury 3 when OpenRouter withdrew it (2026-11): a
+        # saved `mercury-3` reads as this id (gateway_tiers.ALIASES).
         {
-            "id": "mercury-3",
-            "label": "mercury 3",
+            "id": "minimax-m3.1-flash",
+            "label": "minimax m3.1 flash",
             "runtime": "pi",
             "provider": "openrouter",
+            "maker": "minimax",
             "meeting": True,
             "efforts": ("low", "high"),
             "default_effort": "low",
@@ -592,8 +595,8 @@ def with_compact_default(config):
 #   Google     ai.google.dev/gemini-api/docs/pricing (paid standard; $0.75/$3.75 until 2026-12-31, doubling from 2027-01-01)
 #   xAI        docs.x.ai/developers/models (prompts under 200k)
 #   pi models  OpenRouter's public model list, openrouter.ai/api/v1/models (what the pi runtime is billed)
-#              mercury-3 (2026-10-29): $0.20 in / $0.70 out, the list price the Gateway's meeting row marks up; cache
-#              reads at 10% of input, as the Gateway prices it
+#              minimax-m3.1-flash (2026-11-19, ticoteam/tico-services#377): $0.15 in / $0.015 cached / $0.60 out, the
+#              list price the Gateway's meeting row marks up
 PRICES_AS_OF = "2026-09-29"
 
 
@@ -655,7 +658,7 @@ PRICES = _Priced(
         "llama-4-maverick": (0.1875, 0.1875, 0.6525),
         "mistral-medium-3.5": (1.5, 1.5, 7.5),
         "devstral-2512": (0.40, 0.04, 2.0),
-        "mercury-3": (0.20, 0.02, 0.70),
+        "minimax-m3.1-flash": (0.15, 0.015, 0.60),
     },
     gateway_tiers.price_for,
 )  # the Gateway's ids are priced in backend/gateway_tiers.py (cached input at 10% of input)
@@ -915,12 +918,21 @@ def _record(value):
         "source": str(stored.get("source") or ""),
         # On unless the owner turned it off: a bot out of quota runs on another provider (default_fallbacks).
         "auto_fallback": stored.get("auto_fallback") is not False,
-        "check_models": [str(entry) for entry in stored.get("check_models") or [] if isinstance(entry, str)],
+        # A retired id saved before (`mercury-3`, an older Gateway id) reads as the id it is now (gateway_tiers.new_id).
+        "check_models": [
+            ":".join(gateway_tiers.new_id(part) for part in entry.split(":"))
+            for entry in stored.get("check_models") or []
+            if isinstance(entry, str)
+        ],
         # The models choice (backend/models_preset.py); '' is the choice as it was before presets.
         "preset": models_preset.normalize(stored.get("preset")),
         # The model live-meeting replies run on (backend/live_meetings.py): None is unset (the Gateway's default
         # while the Gateway is on), '' the bot's own model, else a model id.
-        "meeting_model": None if stored.get("meeting_model") is None else str(stored.get("meeting_model") or ""),
+        "meeting_model": (
+            None
+            if stored.get("meeting_model") is None
+            else gateway_tiers.new_id(str(stored.get("meeting_model") or ""))
+        ),
     }
 
 
@@ -945,7 +957,7 @@ def env_seed(settings):
 # The model live-meeting replies run on when the company has not chosen one and the Tico AI Gateway is on.
 MEETING_MODEL = "tico-meeting-1.0"
 # The same model through OpenRouter, for a computer that cannot run the Gateway's (a Mac runner).
-OPENROUTER_MEETING_MODEL = "mercury-3"
+OPENROUTER_MEETING_MODEL = "minimax-m3.1-flash"
 
 
 def with_gateway(record, connected):
@@ -963,7 +975,7 @@ def with_gateway(record, connected):
 def meeting_choice(record, model):
     """A live-meeting model as a request names it: '' for the bot's own model, else a current model one of the enabled
     providers can run. Raises ProviderError."""
-    model = str(model or "").strip()
+    model = gateway_tiers.new_id(str(model or "").strip())
     if not model:
         return ""
     row = MODEL_BY_ID.get(model)
