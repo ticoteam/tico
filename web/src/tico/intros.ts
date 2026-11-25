@@ -92,13 +92,14 @@ export const INTROS: Readonly<Record<string, Intro>> = {
   learned: { name: 'Learned', line: 'What Tico has learned about how you work.' },
   calendar: { name: 'Calendar', line: 'Meetings, launches and deadlines land here. Agents add them as they plan.' },
   files: { name: 'Files', line: 'Uploads attach to the task you choose.' },
+  pages: { name: 'Pages', line: 'Find published pages, open a version, or duplicate a template.' },
   docs: { name: 'Docs', line: 'Agents write plans and reports here. You can too.' },
   threads: { name: 'Threads', line: 'Every conversation with people and agents, in one place.' },
   settings: { name: 'Settings', line: 'Company settings: people, agents, plans, billing. Your own settings are under your name.' },
 };
 
 const COMPANY = new Set(['strategy', 'growth', 'products', 'risk', 'listening', 'finance', 'rules', 'routines', 'usage']);
-const LIBRARY = new Set(['contacts', 'tools', 'skills', 'files', 'docs']);
+const LIBRARY = new Set(['contacts', 'tools', 'skills', 'files', 'docs', 'pages']);
 const THREAD_TABS = new Set(['catch-up', 'mail', 'messaging']);
 const SINGLE = new Set(['calendar', 'needs-you', 'roadmap', 'learned']);
 

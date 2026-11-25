@@ -9,6 +9,7 @@ person's verdict counts (`--by human`); `--by bot:SLUG` or `--by any` reads thos
 decides, and a version never inherits another's: a new version is a new review.
 """
 
+import json
 import re
 
 from .store import H, Problem
@@ -322,3 +323,18 @@ def _verdict(c, who, versions, by="human"):
         "digest": digest,
         "verdict": None,
     }
+
+
+def approved_current(c, who, versions):
+    """Current page versions approved by a person on a task the caller can read."""
+    if not versions:
+        return set()
+    subjects = {f"file:{fid}@{number}": (fid, number, digest) for fid, number, digest in versions}
+    grants = {
+        row[0]
+        for row in c.execute(
+            "SELECT DISTINCT subject FROM ok_grants WHERE subject IN (SELECT value FROM json_each(?))",
+            (json.dumps(list(subjects)),),
+        )
+    }
+    return {subjects[subject][0] for subject in grants if _verdict(c, who, [subjects[subject]])["approved"]}

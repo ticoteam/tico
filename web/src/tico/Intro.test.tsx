@@ -327,6 +327,7 @@ const ROUTES: Record<string, [path: string, intro: string | null]> = {
   'library.contacts.tsx': ['/library/contacts', 'contacts'],
   'library.docs.tsx': ['/library/docs', 'docs'],
   'library.files.tsx': ['/library/files', 'files'],
+  'library.pages.tsx': ['/library/pages', 'pages'],
   'library.index.tsx': ['/library', 'docs'],
   'library.skills.tsx': ['/library/skills', 'skills'],
   'library.tools.tsx': ['/library/tools', 'tools'],

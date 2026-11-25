@@ -1,6 +1,7 @@
 import { infiniteQueryOptions, keepPreviousData, queryOptions, type InfiniteData } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import type {
+  AccessAudience,
   ApiTool,
   BotFile,
   DocSourceList,
@@ -9,6 +10,7 @@ import type {
   EmailSendingPolicy,
   ExternalDocResult,
   FileLibrary,
+  FileSearch,
   FileTags,
   GitHubApp,
   Group,
@@ -26,6 +28,9 @@ import type {
   LettersSettings,
   LibraryFile,
   MailboxDetail,
+  PageList,
+  PagePublished,
+  PageShown,
   PolicyUpdate,
   PostalMailGrants,
   PostalMailSettings,
@@ -64,6 +69,7 @@ import type { DocsSearchResults } from '@/api/schema';
    the `letters` topic; the Tools page follows it while a mailing address is open. */
 quietRoot('docs');
 quietRoot('files');
+quietRoot('pages');
 quietRoot('skills');
 quietRoot('tools');
 quietRoot('contacts');
@@ -1994,3 +2000,105 @@ export const heldFileQuery = (url: string, mime: string, asText: boolean) =>
     },
     staleTime: Infinity,
   });
+
+/** Pages share the Files text index and version reads. */
+export const pageKinds = ['static', 'live', 'app'] as const;
+export type PageKind = typeof pageKinds[number];
+export type PageFilters = { q?: string; writer?: string; linked?: string; kind?: PageKind; stale?: boolean; tag?: string; archived?: boolean };
+export type PagesSearch = PageFilters & { file?: string; v?: number; vs?: number };
+
+const REFRESH_PAGES_MS = 5 * 60_000;
+
+function params(filters: PageFilters) {
+  const query = new URLSearchParams();
+  if (filters.writer) query.set('writer', filters.writer);
+  if (filters.linked) query.set('linked', filters.linked);
+  if (filters.kind) query.set('page_kind', filters.kind);
+  if (filters.stale) query.set('stale', 'true');
+  if (filters.tag) query.set('tag', filters.tag);
+  return query;
+}
+
+export const pagesListQuery = (filters: PageFilters) =>
+  infiniteQueryOptions({
+    queryKey: ['pages', 'list', filters],
+    initialPageParam: '',
+    refetchInterval: REFRESH_PAGES_MS,
+    queryFn: ({ signal, pageParam }) => {
+      const query = params(filters);
+      if (filters.archived) query.set('archived', 'true');
+      if (pageParam) query.set('cursor', pageParam);
+      return api.get<PageList>(`/api/v2/pages?${query}`, { signal });
+    },
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
+  });
+
+export const pagesSearchQuery = (filters: PageFilters) =>
+  queryOptions({
+    queryKey: ['pages', 'search', filters],
+    refetchInterval: REFRESH_PAGES_MS,
+    enabled: !filters.archived && !!filters.q && filters.q.trim().length > 1,
+    queryFn: async ({ signal }) => {
+      const query = params(filters);
+      query.set('q', filters.q ?? '');
+      query.set('kind', 'page');
+      query.set('limit', '50');
+      const { results } = await api.get<FileSearch>(`/api/v2/files/search?${query}`, { signal });
+      return results.map((result) => ({
+        file_id: result.id,
+        title: result.title,
+        writers: result.writers,
+        links: result.links,
+        stale_days: result.page_marks?.stale_days ?? null,
+        live: result.page_marks?.live,
+        has_app: result.page_marks?.has_app,
+        approved: result.page_marks?.approved,
+      }));
+    },
+  });
+
+export const libraryPageQuery = (id: string) =>
+  queryOptions({
+    queryKey: ['pages', 'detail', id],
+    staleTime: REFRESH_PAGES_MS,
+    refetchInterval: REFRESH_PAGES_MS,
+    refetchOnWindowFocus: true,
+    queryFn: ({ signal }) => api.get<PageShown>(`/api/v2/pages/${enc(id)}`, { signal }),
+  });
+
+export function pageHref({ file, v, vs, ...filters }: PagesSearch) {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries({ ...filters, file, v, vs })) {
+    if (value) query.set(key, String(value));
+  }
+  return `/library/pages${query.size ? '?' + query : ''}`;
+}
+
+export function refreshPages(id: string) {
+  return Promise.all([
+    queryClient.invalidateQueries({ queryKey: ['pages', 'list'] }),
+    queryClient.invalidateQueries({ queryKey: ['pages', 'search'] }),
+    queryClient.invalidateQueries({ queryKey: ['pages', 'detail', id] }),
+    queryClient.invalidateQueries({ queryKey: ['files'] }),
+    queryClient.invalidateQueries({ queryKey: ['team', 'pins'] }),
+    queryClient.invalidateQueries({ queryKey: ['team', 'tabs'] }),
+    queryClient.invalidateQueries({ queryKey: ['task-page', id] }),
+  ]);
+}
+
+export function duplicatePage(id: string, title: string, idempotencyKey: string) {
+  return api.post<PagePublished>(`/api/v2/pages/${enc(id)}/duplicate`, { title }, { idempotencyKey });
+}
+
+export function changePage(id: string, change: { archived: boolean } | { audience: AccessAudience | null }) {
+  return api.patch<PageShown>(`/api/v2/pages/${enc(id)}`, change, { idempotencyKey: crypto.randomUUID() });
+}
+
+export function deleteLibraryPage(id: string) {
+  return api.delete(`/api/v2/files/${enc(id)}`, { idempotencyKey: crypto.randomUUID() });
+}
+
+export function changePagePin(id: string, place: string, pinId?: string) {
+  const options = { idempotencyKey: crypto.randomUUID() };
+  return pinId ? api.delete(`/api/v2/pins/${enc(pinId)}`, options) : api.post('/api/v2/pins', { place, item: `page:${id}`, size: 'small' }, options);
+}

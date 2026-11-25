@@ -43,6 +43,7 @@ const COMPANY: Record<string, [string, string]> = {
 const LIBRARY: Record<string, [string, string]> = {
   docs: ['docs', 'Docs'],
   files: ['docs', 'Files'],
+  pages: ['docs', 'Pages'],
   contacts: ['contacts', 'Contacts'],
   skills: ['skills', 'Skills'],
   tools: ['tools', 'Tools'],

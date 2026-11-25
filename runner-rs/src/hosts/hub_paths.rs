@@ -681,6 +681,7 @@ pub(super) const HUB_PATHS: &[&str] = &[
     "page data list",
     "page data rm",
     "page data set",
+    "page duplicate",
     "page link",
     "page list",
     "page publish",

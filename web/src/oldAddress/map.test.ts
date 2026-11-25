@@ -73,7 +73,7 @@ const CASES: [old: string, now: string | null][] = [
   ['#/library/contacts/c_5?type=person', '/library/contacts?type=person&panel=c_5'],
   ['#/library/directory', '/library/contacts'],
   ['#/library/files?q=lease', '/library/files?q=lease'],
-  ['#/page/pg_1?v=2', '/library/files?file=pg_1&v=2'],
+  ['#/page/pg_1?v=2', '/library/pages?file=pg_1&v=2'],
   ['#/strategy/goals/g_12', '/company/strategy/goals?panel=goal:g_12'],
   ['#/strategy/org', '/company/strategy/org'],
   ['#/strategy/budget', '/company/finance?tab=budgets'],

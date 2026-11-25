@@ -35,6 +35,6 @@ export const pages: ReadonlyArray<readonly [string, string]> = [
     (k) => [`/company/${k.toLowerCase()}`, `Company, ${k}`] as const,
   ),
   ['/library', 'Library'],
-  ...['Files', 'Docs', 'Tools', 'Skills', 'Contacts'].map((k) => [`/library/${k.toLowerCase()}`, `Library, ${k}`] as const),
+  ...['Files', 'Docs', 'Tools', 'Skills', 'Contacts', 'Pages'].map((k) => [`/library/${k.toLowerCase()}`, `Library, ${k}`] as const),
   ['/settings', 'Settings'],
 ];

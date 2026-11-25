@@ -481,12 +481,16 @@ class Library:
                 f["actor_name"] = known.get(f.get("actor") or "", "")
         return {"files": files, "has_more": nxt is not None, "next_cursor": nxt}
 
-    def search(self, who, q, limit=20, *, kind="", linked="", role="", writer="", tag=""):
+    def search(self, who, q, limit=20, *, kind="", linked="", role="", writer="", tag="", page_kind="", stale=False):
         """Files `who` may read whose title or text matches, best first, each with an excerpt. Archived and deleted
         files are left out, as Docs leaves out archived docs. With `tag`, only files carrying it; a tag alone lists
         them, newest first."""
         if who.role not in ("owner", "human", "bot"):
             raise Problem("forbidden", "People and bots search files", 403)
+        if page_kind or stale:
+            if kind and kind != "page":
+                raise Problem("validation", "Page kind and staleness filter pages", 422)
+            kind = "page"
         kind_sql, kind_args = kind_filter(kind)
         tokens = manual.query_words(q)
         if not tokens and not tag:
@@ -498,7 +502,11 @@ class Library:
                     [*kind_args, file_details.tag_id(c, who, tag) or ""],
                 )
             with page_links.visible_filters(c, self.auth, who, linked, role, writer) as (sql, args):
-                where, where_args = " AND ".join([f"({kind_sql})", *sql]), [*kind_args, *args]
+                from .pages import page_list_filters
+
+                page_sql, page_args = page_list_filters(c, kind=page_kind, stale=stale)
+                where = " AND ".join([f"({kind_sql})", *sql, *page_sql])
+                where_args = [*kind_args, *args, *page_args]
                 candidates = (
                     self._candidates(c, tokens, where, where_args) if tokens else self.tagged(c, where, where_args)
                 )
@@ -531,6 +539,9 @@ class Library:
             out = out[:limit]
             page_links.prime(c, [r for _, r in out])
             known = names.lookup(c, {"bot:" + r["bot_id"] for _, r in out})
+            from .pages import list_marks
+
+            page_marks = list_marks(c, who, [r for _, r in out]) if kind == "page" else {}
             return {
                 "results": [
                     {
@@ -546,6 +557,7 @@ class Library:
                         "page": r["page_cadence"] is not None,
                         "excerpt": excerpt(r["text"] or "", tokens),
                         "score": round(score, 3),
+                        **({"page_marks": page_marks[r["id"]]} if r["id"] in page_marks else {}),
                         **(self.page_info(c, who, r) if r["page_cadence"] is not None else {}),
                     }
                     for score, r in out
@@ -846,14 +858,51 @@ def drain(store, blobs, limit=50):
     return removed
 
 
+def backfill_live(store, blobs, after="", limit=20):
+    """Fill in the live mark on older pages, reading their HTML outside the write transaction."""
+    from .live_blocks import has_live
+
+    with store.read() as c:
+        rows = c.execute(
+            "SELECT f.id,f.current_version,v.digest FROM pages p JOIN bot_files f ON f.id=p.file_id "
+            "JOIN bot_file_versions v ON v.file_id=f.id AND v.version=f.current_version "
+            "WHERE (p.live IS NULL OR p.live_version IS NOT f.current_version) "
+            "AND p.file_id>? AND f.state<>'deleted' ORDER BY p.file_id LIMIT ?",
+            (after, limit),
+        ).fetchall()
+    pending = []
+    for row in rows:
+        try:
+            live = has_live(blobs.get(row["digest"]).decode("utf-8", errors="replace"))
+        except (OSError, Problem):
+            LOG.warning("Could not read the HTML to classify page %s", row["id"], exc_info=True)
+            continue
+        pending.append((int(live), row["current_version"], row["id"], row["current_version"]))
+    if pending:
+        with store.transaction() as c:
+            c.executemany(
+                "UPDATE pages SET live=?,live_version=? WHERE file_id=? "
+                "AND (SELECT current_version FROM bot_files WHERE id=pages.file_id)=?",
+                pending,
+            )
+    return rows[-1]["id"] if len(rows) == limit else ""
+
+
 def loop(store, blobs, stop, interval=60):
     """Index and purge in bounded passes beside the server, until `stop` is set."""
     if stop.wait(5):
         return
+    live_after = ""
     while True:
         try:
             for _ in range(20):  # at most 2,000 files a minute
                 if stop.is_set() or not backfill(store, blobs):
+                    break
+            for _ in range(5):
+                if stop.is_set():
+                    break
+                live_after = backfill_live(store, blobs, live_after)
+                if not live_after:
                     break
             drain(store, blobs)
         except Exception:
@@ -930,6 +979,8 @@ def install_library(app, store, auth, files):
         role: str = "",
         writer: str = "",
         tag: str = "",
+        page_kind: str = "",
+        stale: bool = False,
     ):
         """Search the files the caller may read by title and text, filtered by kind or tag, best first with an excerpt;
         a tag alone lists its files, newest first."""
@@ -942,6 +993,8 @@ def install_library(app, store, auth, files):
             role=role,
             writer=writer,
             tag=tag[:200],
+            page_kind=page_kind,
+            stale=stale,
         )
 
     @app.delete(

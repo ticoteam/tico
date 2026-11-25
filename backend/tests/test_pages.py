@@ -6,11 +6,13 @@ import hashlib
 import json
 
 import pytest
+import time_machine
 from datetime import datetime, timedelta, timezone
 
 from backend import blobs as B, file_library, pages as P
 from backend.store import H, encode
-from backend.tests.helpers.api import get, headers, post  # noqa: F401  (fixtures)
+from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner  # noqa: F401  (fixtures)
+from backend.tests.helpers.company import bot
 from backend.tests.helpers.groups import send
 from backend.tests.helpers.files import publish, turn
 from backend.tests.helpers.pages import HTML, page, read
@@ -406,3 +408,118 @@ def test_bytes_written_moments_ago_wait_for_a_later_purge(api):
     aged(api)
     assert file_library.drain(api.app.state.store, api.app.state.blobs) == 1
     assert not on_disk(api, b"Acme draft")
+
+
+def test_page_library_filters_keep_archived_and_unreadable_pages_out(api):
+    from backend.tests.helpers.company import bot
+
+    ops = bot(api, "ops")
+    public = post(api, "tasks", {"owner": "ops", "title": "Launch", "body": "Work"})["id"]
+    private = post(api, "tasks", {"owner": "ops", "title": "Private", "body": "Work", "private": True}, "ben-test")[
+        "id"
+    ]
+    post(api, "tags", {"key": "template", "label": "Template"})
+
+    def make(name, task, html, *, stale=False, archive=False):
+        fields = {
+            "name": name + ".html",
+            "title": name,
+            "text": "<p>Launch copy</p>" + html,
+            "task": task,
+            "cadence": "daily",
+        }
+        if stale:
+            with time_machine.travel(datetime.now(timezone.utc) - timedelta(days=2, minutes=1), tick=False):
+                result = api.post("/api/v2/pages", json=fields, headers=headers(ops))
+        else:
+            result = api.post("/api/v2/pages", json=fields, headers=headers(ops))
+        assert result.status_code == 200, result.text
+        fid = result.json()["page"]["file_id"]
+        tag = api.post(f"/api/v2/files/{fid}/tags", json={"add": ["template"]}, headers=headers(ops))
+        assert tag.status_code == 200, tag.text
+        if archive:
+            archived = api.patch(f"/api/v2/pages/{fid}", json={"archived": True}, headers=headers(ops))
+            assert archived.status_code == 200, archived.text
+        return fid
+
+    live_html = '<tico-tasks waiting-on="viewer"></tico-tasks>'
+    match = make("Launch board", public, live_html, stale=True)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE pages SET live_version=0 WHERE file_id=?", (match,))
+    before = api.get("/api/v2/pages", params={"page_kind": "live"}, headers=headers("cara-test"))
+    assert match not in before.text
+    file_library.backfill_live(api.app.state.store, api.app.state.blobs)
+    outsider = bot(api, "cpo")
+    assert read(api, match, outsider).status_code == 200
+    assert api.post(f"/api/v2/pages/{match}/duplicate", json={}, headers=headers(outsider)).status_code == 403
+    archived = make("Archived board", public, live_html, stale=True, archive=True)
+    hidden = make("Private board", private, live_html, stale=True)
+    static = make("Static board", public, "", stale=True)
+    fresh = make("Fresh board", public, live_html)
+
+    filters = {"page_kind": "live", "stale": "true", "tag": "template", "writer": "bot:ops", "linked": "task:" + public}
+    for path, params, key, id_key in (
+        ("pages", filters, "pages", "file_id"),
+        ("files/search", {**filters, "kind": "page", "q": "Launch copy"}, "results", "id"),
+    ):
+        r = api.get(f"/api/v2/{path}", params=params, headers=headers("cara-test"))
+        assert r.status_code == 200, r.text
+        assert [row[id_key] for row in r.json()[key]] == [match], r.text
+        assert all(fid not in r.text for fid in (archived, hidden, static, fresh))
+        listed = r.json()[key][0]
+        marks = listed if path == "pages" else listed["page_marks"]
+        assert marks["live"] is True and marks["stale_days"] == 2
+        assert marks["approved"] is False and marks["has_app"] is False
+
+
+def test_duplicate_retains_task_scope_and_links_to_the_source(api):
+    ops = bot(api, "ops")
+    task = post(api, "tasks", {"owner": "ops", "title": "Private plan", "body": "Work", "private": True}, "ben-test")[
+        "id"
+    ]
+    html = "<p>Private launch calendar</p>"
+    r = api.post("/api/v2/pages", json={"name": "private.html", "text": html, "task": task}, headers=headers(ops))
+    assert r.status_code == 200, r.text
+    source = r.json()["page"]["file_id"]
+    url = f"/api/v2/pages/{source}/duplicate"
+    body = {"title": "A second launch calendar"}
+    assert api.post(url, json=body, headers=headers("cara-test")).status_code == 404
+    once = {**headers("ben-test"), "idempotency-key": "new-launch-calendar"}
+    made = api.post(url, json=body, headers=once)
+    assert made.status_code == 200, made.text
+    copied = made.json()["page"]
+    assert copied["file_id"] != source and copied["task_id"] == task and copied["version"] == 1
+    assert copied["updated_by"] == "human:ben"
+    assert api.post(url, json=body, headers=once).json() == made.json()
+    target = copied["file_id"]
+    info = api.get(f"/api/v2/files/{target}/info", headers=headers("ben-test")).json()["file"]
+    assert info["parent"]["id"] == source
+    for fid in (target, source):
+        assert api.get(f"/api/v2/files/{fid}/versions/1", headers=headers("ben-test")).text == html
+        assert read(api, fid, "cara-test").status_code == 404
+        assert api.get(f"/api/v2/files/{fid}/versions/1", headers=headers("cara-test")).status_code == 404
+    assert (
+        target
+        not in api.get("/api/v2/files/search", params={"q": "launch calendar"}, headers=headers("cara-test")).text
+    )
+    archived = api.patch(f"/api/v2/pages/{target}", json={"archived": True}, headers=headers("ben-test"))
+    assert archived.status_code == 200, archived.text
+    retry = api.post(url, json=body, headers=once).json()["page"]
+    assert retry["file_id"] == target and retry["archived"] is True
+
+
+def test_a_private_task_run_cannot_duplicate_a_bot_wide_page(api):
+    ops = bot(api, "ops")
+    machine = runner(api)
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    source = api.post(
+        "/api/v2/pages", json={"name": "team.html", "text": "<p>Team plan</p>", "scope": "bot"}, headers=headers(ops)
+    )
+    assert source.status_code == 200, source.text
+    fid = source.json()["page"]["file_id"]
+    post(api, "tasks", {"owner": "ops", "title": "Private plan", "body": "Work", "private": True}, "ben-test")
+    attempt = claim(api, machine, "ops")
+    assert read(api, fid, attempt["token"]).status_code == 200
+    denied = api.post(f"/api/v2/pages/{fid}/duplicate", json={}, headers=headers(attempt["token"]))
+    assert denied.status_code == 403 and "Private task files stay on their task" in denied.text

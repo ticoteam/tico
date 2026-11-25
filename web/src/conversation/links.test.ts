@@ -28,8 +28,13 @@ describe('pointerOf', () => {
   it('reads the app’s files as files, by any of their addresses', () => {
     expect(at('/api/v2/files/file-0123456789abcdef/versions/2')).toEqual({ kind: 'file', file: 'file-0123456789abcdef', version: 2 });
     expect(at(`${HERE}/api/v2/files/f1?v=3`)).toEqual({ kind: 'file', file: 'f1', version: 3 });
-    expect(at('#/page/file-0123456789abcdef')).toMatchObject({ kind: 'file', file: 'file-0123456789abcdef' });
     expect(at('/library/files?file=f2')).toMatchObject({ kind: 'file', file: 'f2' });
+  });
+
+  it('opens Library pages and legacy page links in the full view', () => {
+    expect(at('#/page/file-0123456789abcdef?v=3')).toMatchObject({ kind: 'app', to: '/library/pages?file=file-0123456789abcdef&v=3' });
+    expect(at('/library/pages?file=f2&v=3')).toMatchObject({ kind: 'app', to: '/library/pages?file=f2&v=3', what: 'page' });
+    expect(at('/library/pages')).toMatchObject({ kind: 'app', what: 'page' });
   });
 
   it('leaves what is neither alone', () => {

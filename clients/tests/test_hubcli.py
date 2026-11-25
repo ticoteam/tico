@@ -97,6 +97,19 @@ def test_page_link_queries_reach_the_api_through_cli_and_mcp(monkeypatch):
         ]
         * 2
     )
+    calls.clear()
+    remotecli.run(hubcli.parser().parse_args(["page", "list", "--kind", "live", "--stale", "--tag", "template"]))
+    remotecli.run(hubcli.parser().parse_args(["file", "search", "plan", "--page-kind", "live", "--stale"]))
+    hubtools.pages_list(Api(), {"kind": "live", "stale": True, "tag": "template"})
+    hubtools.files_search(Api(), {"q": "plan", "page_kind": "live", "stale": True})
+    assert (
+        calls
+        == [
+            ("pages", {"page_kind": "live", "stale": True, "tag": "template"}),
+            ("files/search", {"q": "plan", "page_kind": "live", "stale": True}),
+        ]
+        * 2
+    )
 
 
 def test_health_findings_and_report_reach_their_routes(monkeypatch):

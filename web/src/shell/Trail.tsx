@@ -37,7 +37,7 @@ const decode = (s: string) => {
 };
 
 /* the fixed pages under a section; anything else there is one thing by its id (a doc, a thread) */
-const LIBRARY = new Set(['docs', 'files', 'tools', 'skills', 'contacts']);
+const LIBRARY = new Set(['docs', 'files', 'tools', 'skills', 'contacts', 'pages']);
 const THREADS = new Set(['mail', 'messaging', 'catch-up']);
 
 export function trailOf(path: string, n: TrailNames): TrailPart[] {

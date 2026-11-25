@@ -67,3 +67,6 @@ export async function openCold({ location, context }: { location: { pathname: st
   const known = !p || p === 'all' || (await context.queryClient.ensureQueryData(pipelinesQuery).then((ps) => ps.some((x) => x.id === p), () => true));
   throw redirect({ ...(cold ? coldPage(known ? cold : { ...cold, pipeline: undefined }, search) : { to: '/tasks' }), replace: true } as never);
 }
+
+export { frameDoc, markChanges, parsePage } from './changes';
+export { pageVersionQuery } from './queries';

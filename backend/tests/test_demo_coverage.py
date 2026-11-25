@@ -28,6 +28,7 @@ PAGES = {
     "docs": page("docs", "docs"),
     "library": page("docs", "docs"),
     "files": page("files", "files"),
+    "pages": page("pages", "pages"),
     # Library › Skills (ui/app/skills.ts): the directory, its usage and proposals (backend/demo_sections/skills.py).
     "skills": page("skills", "skills"),
     # Library › Contacts (ui/app/directory.ts): the people the demo's company works with (backend/demo_sections/directory.py).

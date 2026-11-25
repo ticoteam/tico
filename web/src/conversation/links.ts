@@ -30,10 +30,11 @@ function appAt(to: string): Pointer {
   if (p === '/library/files' && u.searchParams.get('file')) {
     return { kind: 'file', file: u.searchParams.get('file')!, version: whole(u.searchParams.get('v')) };
   }
+  if (p === '/library/pages' && u.searchParams.get('file')) return { kind: 'app', to, icon: 'tobar', what: 'page' };
   if (/^\/(task|flow)\/[^/]+|^\/tasks\/[^/]+\/[^/]+/.test(p)) return { kind: 'app', to, icon: 'tasks', what: 'task' };
   if (/^\/team\/[^/]+/.test(p)) return { kind: 'app', to, icon: 'people', what: 'teammate' };
   if (/^\/threads\/[^/]+/.test(p)) return { kind: 'app', to, icon: 'threads', what: 'thread' };
-  if (/^\/library\/(?!docs$|files$|skills$|tools$|contacts$)[^/]+$/.test(p)) return { kind: 'app', to, icon: 'library', what: 'doc' };
+  if (/^\/library\/(?!docs$|files$|skills$|tools$|contacts$|pages$)[^/]+$/.test(p)) return { kind: 'app', to, icon: 'library', what: 'doc' };
   return { kind: 'app', to, icon: 'link', what: 'page' };
 }
 
