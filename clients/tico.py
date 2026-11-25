@@ -14,6 +14,8 @@ import urllib.request
 import uuid
 from pathlib import Path
 
+from clients.gateway import DATA_SERVICES, DATA_TIMEOUT
+
 
 def _sleep(seconds):
     """Every pause goes through here, so a test replaces this and not time.sleep for the whole process."""
@@ -53,6 +55,16 @@ def inbound_wait_timeout(method, path, body, default, *, query=None):
     if type(wait) is not int or not 0 <= wait <= 120:
         return default
     return max(default, wait + 10)
+
+
+DATA_POSTS = frozenset(f"/api/v2/gateway/data/{service}" for service in DATA_SERVICES)
+
+
+def gateway_data_timeout(method, path, default):
+    """Give the Gateway time to submit a job or finish a synchronous email check."""
+    if method == "POST" and path in DATA_POSTS:
+        return max(default, DATA_TIMEOUT + 10)
+    return default
 
 
 # Routes the server answers only after a chain of model calls (backend/judge.py CHAIN_SECONDS, 25 s, for decisions):
@@ -195,6 +207,7 @@ class Client:
         path = path.replace("#", "%23")  # a task number ("tasks/#18945") is in the path, not a fragment
         timeout = inbound_wait_timeout(method, path, body, self.timeout)
         timeout = gmail_read_timeout(method, path, timeout)
+        timeout = gateway_data_timeout(method, path, timeout)
         if method == "POST" and path in SLOW_POSTS:
             timeout = max(timeout, SLOW_WAIT)
         if hasattr(data, "read"):

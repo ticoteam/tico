@@ -22,7 +22,7 @@ CLIENT_KEYWORDS |= {"maximum", "additionalProperties (a schema)", "default", "ti
 # Strings that fit the patterns the shipped schemas use, so every schema gets a valid input to break.
 PATTERNED = tuple(
     "2026-11-19 2026-11 2026-11-19T10:00:00Z human:ana bot:ops agent:ops * https://acme.example/x ana@acme.example "
-    "acme/repo /tasks c1 #abc ab abc never auto timer bearer segment:a API_KEY word".split()
+    "acme/repo /tasks c1 #abc ab abc US never auto timer bearer segment:a API_KEY word".split()
 ) + ("0" * 40, "0 9 * * 1")
 
 

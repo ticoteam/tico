@@ -28,12 +28,13 @@ SMOKE = "Acme smoke"
 # Each entry sets arguments the schema alone cannot pick (a value that must exist or match a rule).
 OVERRIDES = {
     "tico_settings_burst_autoscale": {"mode": "on"},
+    "tico_gateway_job": {"id": "gd_" + "0" * 24},
     "tico_subscription_show": {"bot": "missing-provider-agent"},
     # A thread's audience defaults to its members, and every thread needs a title but a DM with one teammate (PR #2371).
     "tico_thread_create": {"title": SMOKE},
 }
 # Values a string must match when its schema gives a pattern (the first candidate that matches is used).
-PATTERN_SAMPLES = ("1h", "30m", "never", "2d", "1", SMOKE)
+PATTERN_SAMPLES = ("1h", "30m", "never", "2d", "1", "US", SMOKE)
 # Set to a folder path to write every tool's outcome there (one file per refused tool) instead of checking it: the way
 # the recorded refusals are regenerated after a deliberate change (review the folder's diff before committing it).
 RECORD = os.environ.get("TICO_E2E_RECORD_REFUSALS", "")

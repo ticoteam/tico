@@ -33,9 +33,14 @@ Daily, every morning. On Mondays, two more checks.
   (`skills/diagnose-a-rising-cost-per-result/SKILL.md`).
 - Ads that tired with no OK'd creative left to replace them: new creative is a bet.
 - Audiences that spend and never convert, and audiences that convert well but are small.
-- What competitors run in public ad libraries, and how they pitch it (`tico market delta`).
+- What competitors run in public ad libraries and how they pitch it. On the weekly Find Social Ads ideas run, use
+  `watch-competitor-ads` for each competitor page and country the team has approved below.
 - Tests in `knowledge/tests.md` that found a winner worth scaling.
 - Kept campaigns that were retired: what to try instead.
+
+## Competitor pages to watch
+
+Record the competitor slug, public Facebook page URL and two-letter country for each lookup the team approves.
 
 ## Upkeep the Social Ads Owner does by itself
 

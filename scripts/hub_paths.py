@@ -143,7 +143,23 @@ def spec_paths():
 
 # Spec'd commands whose tools neither write nor run on this computer, but spend: from the company's Gateway cap, or
 # (`market ask`, `feedback rule-draft`) a model call on the server's key.
-PAID = ("gateway search", "gateway fetch", "gateway digest", "market ask", "feedback rule-draft")
+PAID = (
+    "gateway search",
+    "gateway fetch",
+    "gateway digest",
+    "gateway seo keywords",
+    "gateway seo serp",
+    "gateway seo rankings",
+    "gateway seo backlinks",
+    "gateway ads meta",
+    "gateway ads advertisers",
+    "gateway ads google",
+    "gateway reviews",
+    "gateway places",
+    "gateway email-check",
+    "market ask",
+    "feedback rule-draft",
+)
 # Spec'd reads that also mark something: their first call records a team date (`growth setup` records the first open and
 # the step dates, backend/growth_setup.py), so the runner asks before running them.
 MARKS = ("growth setup",)

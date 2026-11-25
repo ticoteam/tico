@@ -189,6 +189,8 @@ def argument_value(action, command):
         return "JSONFILE"  # a flag whose type reads the file as it parses (`--items-file`)
     if str(action.metavar).lower() == "file":
         return "FILE"  # a file that becomes another property (`brand check <file>` is the tool's `text`)
+    if dest == "id" and list(command) == ["gateway", "job"]:
+        return "gd_" + "0" * 24
     if dest in (
         "id",
         "task",

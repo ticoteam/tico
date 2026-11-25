@@ -2,6 +2,7 @@
 
 from typing import Annotated, Any, Literal
 
+import json
 import re
 
 from pydantic import (
@@ -2623,6 +2624,20 @@ class GatewayVideo(Contract):
         for frame in (self.first_frame, self.last_frame):
             if frame is not None and not frame.startswith(("data:image/png;base64,", "data:image/jpeg;base64,")):
                 raise ValueError("a frame is a PNG or JPEG data URL")
+        return self
+
+
+class GatewayData(Contract):
+    """A data service's request: `op` and that op's fields, passed to the Gateway, which checks each field and refuses
+    an unknown one with its name. Only its size is checked here (HQ's own limit)."""
+
+    model_config = ConfigDict(extra="allow", defer_build=True)
+    op: str | None = Field(default=None, max_length=40)
+
+    @model_validator(mode="after")
+    def within_the_gateways_limit(self):
+        if len(json.dumps(self.model_dump(exclude_unset=True))) > 64 * 1024:
+            raise ValueError("the request is over 64 KB")
         return self
 
 
