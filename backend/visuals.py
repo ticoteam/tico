@@ -330,9 +330,15 @@ def loading_references(data):
 # `#tico-view=card&tico-size=small|medium|large`. The reporter sets `data-tico-view` ("card" or "full") and
 # `data-tico-size` on <html> from it, and again on hashchange, so a page's own CSS can show a compact layout under
 # `[data-tico-view=card]`. No fragment is the full view.
-# Pages are dark by default: a page that colours neither <html> nor <body> gets a dark background, and light text
-# unless it chose its own dark text (then it stays as it was, a light page). A page with its own background keeps
-# its look. It runs as the page's last script.
+# Pages are dark by default: a page that colours or paints neither <html> nor <body> (no background colour or image)
+# gets a dark background, and light text when <body>'s text is left black. A page whose <body> text is its own dark
+# colour is made light instead (a white background), and one with its own background keeps its look. The view is
+# marked first, so a card's CSS has taken effect when it then looks at the page's text: up to 300 visible elements
+# with text of their own, of the first 3,000, leaving out text on a background of its own, in a link or in a page-kit
+# tag. Text in the dark default's light colour, or at least 3:1 against the dark background, reads; below that it
+# does not. When more characters do not read than do, the page is made light, its colours as written, so a light
+# page's palette set on headings and cells (`h1{color:#1a1a1a}`) never sits dark on dark. A colour it cannot read is
+# left out, and nothing it finds stops the rest of the script. It runs as the page's last script.
 # Escape the page itself leaves unhandled is passed on (`ticoVisualKey`), so the large view around it closes as it does
 # on Escape outside the page. It looks once the key's handlers have all run (a task later), so a handler the page
 # adds after this script (a module script's) still wins.

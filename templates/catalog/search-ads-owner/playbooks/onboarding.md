@@ -71,6 +71,8 @@ is left out:
 
     tico page publish reports/search-ads-playbook.html --title "Search Ads playbook" --cadence none --scope bot
 
+Colour the page as `.claude/skills/build-the-page` says, so it reads in dark mode.
+
 Publish it again the same way, on a task, whenever the file changes.
 
 **The cutoff.** "Ads pause when cost per new customer passes N times its 30-day average" is off until a person sets N

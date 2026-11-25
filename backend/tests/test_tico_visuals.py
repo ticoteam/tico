@@ -383,10 +383,28 @@ def test_purging_a_deleted_page_removes_its_copy_from_before_pages_ran_as_writte
         "acme" + current,
         f"acme/visuals/{old[:2]}/{old}",
         *("acme" + tico_storage._visual(digest, "page", ancestors, kit)[0] for kit in V.KITS),
+        *("acme" + tico_storage._visual(digest, "page", ancestors, kit, 3)[0] for kit in (None, *V.KITS)),
     ]
     deleted.clear()
     Blobs.purge(blobs, digest, "svg")
     assert deleted == [f"acme/blobs/{digest[:2]}/{digest}", "acme" + tico_storage._visual(digest, "svg", ancestors)[0]]
+
+
+def test_a_new_height_reporter_gives_every_published_page_a_new_hosted_copy():
+    """A page's hosted copy holds the reporter it was made with, and a copy already held is served as it is. So a
+    reporter that changes what a page shows (the dark default) needs a new copy number: each page's copy then gets a
+    new name, is made again with the reporter of now on its next view, and the old copy goes when the page is purged."""
+    digest, ancestors = "ef" * 32, ["'self'", "https://tico.acme.example"]
+    reporter = hashlib.sha256(V.REPORTER.encode()).hexdigest()[:16]
+    assert (reporter, tico_storage.VISUAL_COPY["page"]) == ("f06b4bbf923e6af1", 4), (
+        "the height reporter changed: raise VISUAL_COPY['page'], add the old number to EARLIER_PAGE_COPIES "
+        "and set the reporter's hash here"
+    )
+    for kit in (None, *V.KITS):
+        now = tico_storage._visual(digest, "page", ancestors, kit)[0]
+        before = tico_storage._visual(digest, "page", ancestors, kit, 3)[0]
+        assert now != before
+        assert before in tico_storage.visual_paths(digest, "page", ancestors)
 
 
 def test_a_local_install_may_frame_pages_from_either_loopback_spelling(api):

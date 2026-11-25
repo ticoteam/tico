@@ -191,6 +191,7 @@ The bot asks for an OK only for:
   window shaded, and escalation dates marked; monthly occupancy cost by site as a stacked bar (rent, operating
   expenses, other) with cost per regular user; the next five critical dates with days left; open issues. Mark it
   "Read from the signed leases on file as of <date>. Have counsel confirm before acting on a date."
+  Colour the page as `.claude/skills/build-the-page` says, so it reads in dark mode.
 - **A decision page** for any new space or renewal: the need in one paragraph, the options as a table on whole-term
   cost and exit cost, a chart of cumulative cost by month for each option, and the recommendation.
 - **A review page** for a draft lease: the issues table, the whole-term cost, the facts checked.

@@ -55,7 +55,7 @@ one for yourself:
 
 On that task (or on this one, when setup runs on a task), write the file as an HTML page and publish it. Bold, code
 and lists become HTML tags, with no `**` or backtick left on the page, and the sentence that calls the file a starter
-is left out:
+is left out. Colour it as `.claude/skills/build-the-page` says, so it reads in dark mode:
 
     tico page publish reports/content-playbook.html --title "Content playbook" --cadence none --scope bot
 

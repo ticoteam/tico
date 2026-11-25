@@ -178,6 +178,7 @@ recommendation and what it does to the last 12 months, and keep reporting on the
 
 One HTML page, published with
 `tico page publish reports/pnl-<YYYY-MM>.html --title "P&L <Month YYYY>" --cadence monthly --as-of <last day> --task <id>`.
+Colour the page as `.claude/skills/build-the-page` says, so it reads in dark mode.
 Numbers first, words second. In this order:
 
 1. **Five figures** across the top, each with its change on last month: revenue, gross margin percent, operating

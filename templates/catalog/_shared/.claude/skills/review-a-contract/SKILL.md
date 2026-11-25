@@ -197,6 +197,8 @@ One review page, published with
 - **Versions:** the table from step 14.
 - Last line: "Summary for a human, not legal advice."
 
+Colour the page as `.claude/skills/build-the-page` says, so it reads in dark mode.
+
 Also: the markup itself in the format the other side sent (a tracked-changes file where the Tools allow, otherwise a
 numbered change list), and the cover note. For an NDA, also write `reports/ndas/<party>.md` so the NDA desk report
 keeps working.

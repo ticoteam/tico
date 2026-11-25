@@ -197,6 +197,7 @@ and covers exactly the version shown.
   monthly`), with no person-level figures: gross and headcount by group as a 12-run bar chart, contractors against
   employees, the next three pay dates, a map or table of states with registration status, W-9s on file against
   contractors paid, open blockers and open agency letters.
+  Colour the page as `.claude/skills/build-the-page` says, so it reads in dark mode.
 - **Records**: the provider's confirmation and register attached to the run's task; `knowledge/payroll.md`,
   `knowledge/payroll-calendar.md`, `knowledge/baseline.md`, `knowledge/contractors.md`; a decision record for every
   worker's status.

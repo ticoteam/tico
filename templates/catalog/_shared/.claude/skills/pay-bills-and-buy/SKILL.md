@@ -213,6 +213,7 @@ Never: pay to details that failed or skipped verification; pay from a personal a
    - Held bills with the reason and who can clear each; duplicates stopped; bank-detail changes in progress.
    - Coming up: a bar of bills due by week for the next six weeks.
    - After release: paid, failed, waiting on an OK.
+   - Colour it as `.claude/skills/build-the-page` says, so it reads in dark mode.
 3. **For a purchase in band 3 or above, a one-page comparison**: the need, the options side by side on the scorecard,
    three-year totals as a bar, the recommendation, the exit plan.
 4. **`knowledge/vendor-details.md`** updated: verification, tax form, renewal date, usual amount.

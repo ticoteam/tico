@@ -76,4 +76,6 @@ It lands in Watching, where your Watch routine checks it.
     tico page publish reports/<task>-results.html --title "Results: <title>" --task <id>
     tico task attach <id> page:<file id> --req "Results" --version N
 
+Colour the page as `.claude/skills/build-the-page` says, so it reads in dark mode.
+
 Jev checks it and the task is Done.

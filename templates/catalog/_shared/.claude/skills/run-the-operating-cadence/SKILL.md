@@ -99,6 +99,7 @@ run at the time in answer 1 that opens a task "Weekly review, week ending <date>
 9. **Publish the weekly review.** Build the page from `references/weekly-review-page.md` and publish:
    `tico page publish reports/weekly-<date>.html --title "Weekly review" --cadence weekly --as-of <Sunday>`.
    Do not send separate messages announcing it unless the settings name readers who want one.
+   Colour the page as `.claude/skills/build-the-page` says, so it reads in dark mode.
 10. **Close the week.** Finish the routine's task with a three-line summary and the page link. Add anything you
     learned about a source or a definition to `memory/learnings.md`.
 

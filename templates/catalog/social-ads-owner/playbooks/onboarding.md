@@ -68,6 +68,8 @@ is left out:
 
     tico page publish reports/social-ads-playbook.html --title "Social Ads playbook" --cadence none --scope bot
 
+Colour the page as `.claude/skills/build-the-page` says, so it reads in dark mode.
+
 Publish it again the same way, on a task, whenever the file changes.
 
 Then tell the person about the cutoff in "Cutoffs: set these in Rules": it is off until a person sets N in Rules, and

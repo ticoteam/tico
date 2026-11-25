@@ -62,6 +62,7 @@ Build it as HTML and publish for the team with
 cannot open a Tico page, so send them the same content as an attachment or in the email body
 (`tico email draft ... --attach <file>`), after removing anything internal: the fit score, other partners' numbers,
 the team's margins.
+Colour the page as `.claude/skills/build-the-page` says, so it reads in dark mode.
 
 Sections:
 

@@ -58,6 +58,8 @@ is left out:
 
     tico page publish reports/seo-playbook.html --title "SEO playbook" --cadence none --scope bot
 
+Colour the page as `.claude/skills/build-the-page` says, so it reads in dark mode.
+
 Publish it again the same way, on a task, whenever the file changes.
 
 ## 7. Set up your KPI

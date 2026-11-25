@@ -210,6 +210,7 @@ escalating to the approver.
   will be sent; the gate checklist. Marked "Prepared for the approver. Facts and options, not legal advice." Write
   the page as if the other side will read it one day: a bot's analysis is not protected the way a lawyer's is, so
   it holds facts and options, never "we are liable".
+  Colour the page as `.claude/skills/build-the-page` says, so it reads in dark mode.
 - **The reply** with numbered exhibits, in the format the channel takes.
 - **`facts.md`**, the matter row, the hold decision and the calendar dates.
 - **A counsel brief** when the stop list or the exposure calls for one.
