@@ -173,7 +173,11 @@ impl Stderr {
 
     /// `line` with the process's own secrets (`scrub`, its environment's) and every lent attempt's taken out.
     fn scrubbed(&self, line: &[u8], scrub: &Redactor) -> String {
-        let mut text = String::from_utf8_lossy(&scrub.scrub_bytes(line)).into_owned();
+        let mut bytes = scrub.scrub_bytes(line);
+        for lent in self.4.lock().unwrap().iter() {
+            bytes = lent.scrub_bytes(&bytes);
+        }
+        let mut text = String::from_utf8_lossy(&bytes).into_owned();
         for lent in self.4.lock().unwrap().iter() {
             text = lent.scrub_text(&text).into_owned();
         }
@@ -300,34 +304,47 @@ mod tests {
     /// decoded, so the emitted diagnostic holds the mark and none of the value (Review on c4b9a23).
     #[tokio::test]
     async fn a_non_ascii_secret_in_utf16_on_stderr_is_masked_in_the_emitted_event() {
-        let secret = "granted-wïde-sécret";
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut env = crate::env::Env::new();
-        env.insert("TICO_TEST_TOKEN".into(), secret.into());
-        let escaped: String = secret
-            .encode_utf16()
-            .flat_map(|u| u.to_le_bytes())
-            .map(|b| format!("\\{b:03o}"))
-            .collect();
-        let mut child = tokio::process::Command::new("sh")
-            .args(["-c", &format!("printf 'failure {escaped}\\n' >&2")])
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .unwrap();
-        let tail = Stderr::capture(&mut child, tx, &env);
-        child.wait().await.unwrap();
-        let ev = tokio::time::timeout(Duration::from_secs(5), rx.recv())
-            .await
-            .unwrap()
-            .unwrap();
-        let shown = ev["stderr_tail"].as_str().unwrap();
-        let ascii: String = "granted-w".chars().flat_map(|c| [c, '\0']).collect();
-        assert!(shown.starts_with("failure "), "{shown:?}");
-        assert!(shown.contains(crate::redact::MASK), "{shown:?}");
-        assert!(
-            !shown.contains(&ascii) && !tail.tail().contains(&ascii),
-            "{shown:?}"
-        );
+        // The process's own (its environment's) and one only an attempt lent it (Stderr::lend).
+        for lent in [false, true] {
+            use tokio::io::AsyncWriteExt;
+            let secret = "granted-wïde-sécret";
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let mut env = crate::env::Env::new();
+            if !lent {
+                env.insert("TICO_TEST_TOKEN".into(), secret.into());
+            }
+            let escaped: String = secret
+                .encode_utf16()
+                .flat_map(|u| u.to_le_bytes())
+                .map(|b| format!("\\{b:03o}"))
+                .collect();
+            let mut child = tokio::process::Command::new("sh")
+                .args(["-c", &format!("read l; printf 'failure {escaped}\\n' >&2")])
+                .stdin(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            let tail = Stderr::capture(&mut child, tx, &env);
+            if lent {
+                tail.lend(Some(Arc::new(Redactor::new(&[secret.to_string()]))));
+            }
+            let mut stdin = child.stdin.take().unwrap();
+            stdin.write_all(b"go\n").await.unwrap();
+            drop(stdin);
+            child.wait().await.unwrap();
+            let ev = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            let shown = ev["stderr_tail"].as_str().unwrap();
+            let ascii: String = "granted-w".chars().flat_map(|c| [c, '\0']).collect();
+            assert!(shown.starts_with("failure "), "{lent} {shown:?}");
+            assert!(shown.contains(crate::redact::MASK), "{lent} {shown:?}");
+            assert!(
+                !shown.contains(&ascii) && !tail.tail().contains(&ascii),
+                "{lent} {shown:?}"
+            );
+        }
     }
 
     #[tokio::test]

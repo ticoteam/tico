@@ -2116,7 +2116,7 @@ mod tests {
     /// An `agy acp` for one turn, answering as agy 1.5.16 does (its `initialize` as it gave it). It logs its argv, its
     /// pid, every request after `initialize` (`.calls`), its client's answers (`.replies`) and the prompt (`.prompts`).
     /// A prompt is answered with the fixture (`$FIXTURE`: its lines, `@ID@` the prompt's id and `@SID@` the session's;
-    /// with its `.stderr` beside it, that on stderr and exit 1 in place of an answer), or with the prompt as the reply.
+    /// a permission request in it waits for its answer; with its `.stderr` beside it, that on stderr and exit 1 in place of an answer), or with the prompt as the reply.
     /// `session/new` begins `$NEW` (else SAVED). A resume is refused with `$LOSE`, never answered with `$NOINIT`. With
     /// `$REFUSE_FRESH` a prompt in a conversation it began is refused; with `$SIGNED_OUT` it has no sign-in; with `$LINK`
     /// it prints a sign-in link on `authenticate` and has no Google sign-in. A prompt adds a `$STEP` step (`$STEP_TEXT`)
@@ -2225,6 +2225,15 @@ for line in sys.stdin:
             for row in open(fixture).read().splitlines():
                 if row.strip():
                     sys.stdout.write(row.replace("@ID@", str(i)).replace("@SID@", sid) + "\n")
+                    if '"session/request_permission"' in row:
+                        # Like agy, wait for the answer before the turn goes on.
+                        sys.stdout.flush()
+                        asked = json.loads(row)["id"]
+                        for reply in sys.stdin:
+                            if json.loads(reply).get("method") is None:
+                                open(log + ".replies", "a").write(reply)
+                                if json.loads(reply).get("id") == asked:
+                                    break
             sys.stdout.flush()
             stderr = fixture[: -len(".jsonl")] + ".stderr"
             if os.path.exists(stderr):

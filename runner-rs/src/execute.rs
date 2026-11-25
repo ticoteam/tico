@@ -3204,7 +3204,7 @@ impl Runner {
             }
             // Only now, started, does a kept app-server's token file hold this turn's token.
             if let Host::Codex(c) = &*h {
-                c.lend_started(&settings);
+                c.lend_started(&settings)?;
             }
             if !continuing.is_empty() && (!resumed || (th != continuing && previous.as_deref() != Some(continuing.as_str()))) {
                 // Started, so the server holds it for review rather than queueing it again; no prompt was sent.
@@ -4146,7 +4146,11 @@ impl Runner {
             let kept = keeps
                 && ended
                 && match h {
-                    Host::Codex(codex) => codex.release(thread.as_deref(), hold.take()).await,
+                    Host::Codex(codex) => {
+                        codex
+                            .release(thread.as_deref(), hold.take(), &flags.lost)
+                            .await
+                    }
                     _ => true,
                 };
             if !kept {
