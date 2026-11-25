@@ -15,7 +15,7 @@ Launch task on which the Engineering Lead asks Dana a ❓, two numbered question
 calls it, so the others' Needs you holds the two emails alone) and POST /_e2e/made (a task on which the Engineering Lead
 made a video, two pictures and a page; only the journey that looks at them calls it) and POST /_e2e/turn (an agent's
 next run, as the fake runner runs it: `step=start` claims and starts it and writes the first words of its reply,
-`step=done` completes it with the whole reply).
+`step=done` completes it with the whole reply, or with none when `text` is empty).
 """
 
 import base64
@@ -257,8 +257,9 @@ USAGE = {
 def turns(world):
     """POST /_e2e/turn?bot=...&step=start&text=...: the bot's next run starts on the world's runner and writes `text`,
     the first words of its reply; it answers the run's id. POST /_e2e/turn?attempt=...&step=done&text=...: that run
-    completes with `text`, its whole reply."""
+    completes with `text`, its whole reply, or with no reply when `text` is empty."""
     runner = world.runner["token"]
+    sent = {}  # each run's last event seq, which its completion names
 
     def turn(step: str, text: str, bot: str = "", attempt: str = ""):
         if step == "start":
@@ -271,10 +272,13 @@ def turns(world):
             attempt = claim["attempt"]["id"]
             base = f"/api/v2/attempts/{attempt}"
             _ok(world.api("post", f"{base}/started", {"thread_id": "e2e"}, who=runner), "start")
-            words = {"events": [{"seq": 1, "kind": "delta", "payload": {"text": text}}]}
-            _ok(world.api("post", f"{base}/events", words, who=runner), "words")
+            sent[attempt] = 1 if text else 0
+            if text:
+                words = {"events": [{"seq": 1, "kind": "delta", "payload": {"text": text}}]}
+                _ok(world.api("post", f"{base}/events", words, who=runner), "words")
         else:
-            done = {"outcome": "completed", "text": text, "last_seq": 1, "limited": False, "usage": USAGE}
+            done = {"outcome": "completed", "last_seq": sent.get(attempt, 1), "limited": False, "usage": USAGE}
+            done.update({"text": text} if text else {})
             _ok(world.api("post", f"/api/v2/attempts/{attempt}/complete", done, who=runner), "complete")
         return JSONResponse({"attempt": attempt})
 

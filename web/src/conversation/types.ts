@@ -78,8 +78,9 @@ export interface TimelinePage {
   messages: ChatMessage[];
   next_cursor?: string | number | null;
   read_marks?: Record<string, number>;
-  /** First page only: the bots the thread waits on. */
+  /** First page only: the bots the thread waits on, and the version of that read (a later read is never older). */
   bot_status?: BotWait[];
+  bot_status_version?: string;
 }
 
 /** A reply being written, from the `runs` topic (compact output). */
@@ -96,26 +97,21 @@ export interface LiveRun {
       it finishes first ("Busy with other work"). */
   label?: string;
   ended: boolean;
-  /** The person's message it answers, as the thread's bot status names it: a run that ends without a reply says so
-      only then. */
-  message?: string;
-  /** How it ended: the run's state ('completed', 'failed', 'interrupted', ...). */
-  end?: string;
-  /** It ended and no reply came: its row is the one line that says so ('none': it finished without one). */
-  quiet?: 'none' | 'failed';
 }
 
-/** One bot the thread waits on, and why (GET /api/v2/threads/{id}/bot-status, backend/thread_bot_status.py): the
-    timeline's first page brings them and the `threads` topic's `bot_status` keeps them current. */
+/** A person's message that woke a bot here, and what became of it (GET /api/v2/threads/{id}/bot-status,
+    backend/thread_bot_status.py): the timeline's first page brings them and the `threads` topic's `bot_status` keeps
+    them current. */
 export interface BotWait {
   actor: string;
   name: string;
-  /** 'up_next': it got the message and finishes other work first; 'working': its run here is going; 'cant_reply':
-      something stops it (`detail` says what). */
-  state: 'working' | 'up_next' | 'cant_reply';
+  /** 'up_next': it got the message and finishes other work first; 'cant_reply': something stops it (`detail` says
+      what); 'working': a run took it; 'replied', 'no_reply', 'stopped': how that run ended, for a minute. */
+  state: 'up_next' | 'cant_reply' | 'working' | 'replied' | 'no_reply' | 'stopped';
   detail: string;
   since: string;
+  /** The run, while it works and the reader reads it. */
   run_id: string | null;
-  /** The newest message of a person's that woke it here, when the reader reads it. */
-  message_id?: string | null;
+  /** The message that woke it (the newest, when several did). */
+  message_id: string;
 }

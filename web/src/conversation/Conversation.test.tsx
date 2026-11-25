@@ -177,6 +177,7 @@ describe('Conversation', () => {
 
     const reply = msg(3, 'bot:qa', 'Checking the label service again.', { refs: { turn_id: 'r1' } });
     emit('messages', [{ id: reply.id, conversation_id: T, message: reply }]);
+    emit('threads', [{ kind: 'bot_status', thread_id: T, bots: [{ actor: 'bot:qa', name: 'QA', state: 'replied', detail: '', since: at(3), run_id: null, fix: null, message_id: 'm2' }] }]);
     expect(document.querySelector('.msg.is-live')).toBeNull();
     expect(screen.getAllByText('Checking the label service again.')).toHaveLength(1);
   });
@@ -682,12 +683,15 @@ describe('a chat head', () => {
 
 describe('an agent answering', () => {
   const qa: Actor = { id: 'bot:qa', kind: 'agent', name: 'QA Owner', slug: 'qa-owner' };
-  const wait = (state: 'up_next' | 'working' | 'cant_reply', message: string | null, more: Record<string, unknown> = {}) => ({
+  type State = 'up_next' | 'cant_reply' | 'working' | 'replied' | 'no_reply' | 'stopped';
+  const wait = (state: State, message: string, more: Record<string, unknown> = {}) => ({
     actor: 'bot:qa', name: 'QA Owner', state, detail: 'Starting', since: at(3), run_id: null, fix: null, message_id: message, ...more,
   });
   const waiting = (...bots: Record<string, unknown>[]) => emit('threads', [{ kind: 'bot_status', thread_id: T, root_id: T, bots }]);
   const live = () => document.querySelector('.msg.is-live')?.textContent ?? null;
   const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+  const words = (text: string) => emit('runs', [{ run_id: 'r1', conversation_id: T, output: { kind: 'delta', payload: { text } } }]);
+  const starts = (run = 'r1') => emit('runs', [{ run_id: run, conversation_id: T, bot_id: 'qa', state: 'running' }]);
   beforeEach(() => {
     serve(() => ({ status: 200, body: {} }));
     queryClient.setQueryData(['directory'], { actors: [qa], byId: { [qa.id]: qa } });
@@ -708,11 +712,11 @@ describe('an agent answering', () => {
     expect(live()).toContain('Got it · Busy with other work');
 
     // its run starts: the same row, now at work, and its words as they come
-    emit('runs', [{ run_id: 'r1', conversation_id: T, bot_id: 'qa', state: 'running' }]);
+    starts();
     waiting(wait('working', ask.id, { run_id: 'r1', detail: 'Thinking' }));
     expect(document.querySelectorAll('.msg.is-live')).toHaveLength(1);
     expect(live()).toContain('Thinking');
-    emit('runs', [{ run_id: 'r1', conversation_id: T, output: { kind: 'delta', payload: { text: 'The page loads an old stylesheet' } } }]);
+    words('The page loads an old stylesheet');
     expect(live()).toContain('The page loads an old stylesheet');
 
     // an agent's work for anything else stays in its session, not here
@@ -725,116 +729,104 @@ describe('an agent answering', () => {
       if (d) queryClient.setQueryData(comments, upsertMessage(d, T, reply));
     });
     emit('messages', [{ id: reply.id, conversation_id: T, message: reply }]);
-    waiting();
+    waiting(wait('replied', ask.id));
     expect(live()).toBeNull();
     expect(screen.getAllByText('The page loads an old stylesheet: fixed.')).toHaveLength(1);
   });
 
-  it('says in one line when the run ends with no reply, and the agent posting later takes the line away', () => {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  it("says in one line that the run ended with no reply, and an unrelated later message of the agent's leaves its row and that line", () => {
     show();
     waiting(wait('up_next', 'm2'));
-    emit('runs', [{ run_id: 'r1', conversation_id: T, bot_id: 'qa', state: 'running' }]);
+    starts();
     waiting(wait('working', 'm2', { run_id: 'r1', detail: 'Thinking' }));
+    // the agent posts about something else: the server still says it works on m2
+    const other = msg(3, 'bot:qa', 'Unrelated: the nightly report is out.');
+    emit('messages', [{ id: other.id, conversation_id: T, message: other }]);
     expect(live()).toContain('Thinking');
-    emit('runs', [{ run_id: 'r1', conversation_id: T, bot_id: 'qa', state: 'completed' }]);
-    waiting();
-    act(() => vi.advanceTimersByTime(2000));
+
+    waiting(wait('no_reply', 'm2'));
     expect(live()).toBeNull();
     expect(screen.getByText('QA Owner finished without replying')).toBeTruthy();
-
-    const later = msg(3, 'bot:qa', 'Sorry, here it is.');
-    emit('messages', [{ id: later.id, conversation_id: T, message: later }]);
-    expect(screen.queryByText('QA Owner finished without replying')).toBeNull();
+    const another = msg(4, 'bot:qa', 'Also unrelated.');
+    emit('messages', [{ id: another.id, conversation_id: T, message: another }]);
+    expect(screen.getByText('QA Owner finished without replying')).toBeTruthy();
+    // a minute on the server lists it no more
+    waiting();
+    expect(screen.queryByText(/without replying/)).toBeNull();
   });
 
-  it('says the agent stopped when its run fails before a reply', () => {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  it('says the agent stopped when its run fails before a reply, and its next run takes the line away', () => {
     show();
-    waiting(wait('up_next', 'm2'));
-    emit('runs', [{ run_id: 'r1', conversation_id: T, bot_id: 'qa', state: 'running' }]);
+    starts();
     waiting(wait('working', 'm2', { run_id: 'r1' }));
-    emit('runs', [{ run_id: 'r1', conversation_id: T, bot_id: 'qa', state: 'failed' }]);
-    waiting();
-    act(() => vi.advanceTimersByTime(2000));
+    waiting(wait('stopped', 'm2'));
     expect(live()).toBeNull();
     expect(screen.getByText('QA Owner stopped before replying')).toBeTruthy();
 
-    // its next run takes the line's place
-    emit('runs', [{ run_id: 'r2', conversation_id: T, bot_id: 'qa', state: 'running' }]);
-    waiting(wait('working', 'm2', { run_id: 'r2', detail: 'Thinking' }));
+    starts('r2');
+    waiting(wait('working', 'm2', { run_id: 'r2', detail: 'Thinking' }), wait('stopped', 'm2'));
     expect(screen.queryByText('QA Owner stopped before replying')).toBeNull();
     expect(live()).toContain('Thinking');
   });
 
-  it("leaves no line for a run no one's message here started, and says what stops an agent that can't reply", () => {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  it("draws nothing for a run the server lists no row for, and says what stops an agent that can't reply", () => {
     show();
-    emit('runs', [{ run_id: 'r1', conversation_id: T, bot_id: 'qa', state: 'running' }]);
-    emit('runs', [{ run_id: 'r1', conversation_id: T, bot_id: 'qa', state: 'completed' }]);
-    act(() => vi.advanceTimersByTime(2000));
+    starts();
+    words('Working on something else');
     expect(live()).toBeNull();
-    expect(screen.queryByText(/without replying/)).toBeNull();
 
     waiting(wait('cant_reply', 'm2', { detail: 'Its computer is offline' }));
     expect(screen.getByText("QA Owner can't reply. Its computer is offline")).toBeTruthy();
   });
 
-  it("shows the agent at work from the thread's status when the chat opens mid-run", () => {
-    queryClient.setQueryData(['thread', T, 'waits'], [wait('working', 'm2', { run_id: 'r9', detail: 'Reading Finance' })]);
+  it('counts a reply the agent posted with a tool: no typing comes back while its run goes on', () => {
+    show();
+    starts();
+    waiting(wait('working', 'm2', { run_id: 'r1' }));
+    words('Let me file it');
+    expect(live()).toContain('Let me file it');
+    const posted = msg(3, 'bot:qa', 'Filed it: see the task.', { refs: { by_run: 'r1' } });
+    emit('messages', [{ id: posted.id, conversation_id: T, message: posted }]);
+    waiting(wait('replied', 'm2'));
+    expect(live()).toBeNull();
+    words(' and more');
+    emit('runs', [{ run_id: 'r1', conversation_id: T, output: { kind: 'tool', compact: true, seq: 9, label: 'Reading Finance' } }]);
+    expect(live()).toBeNull();
+  });
+
+  it('shows the agent at work from the thread status when the chat opens mid-run', () => {
+    queryClient.setQueryData(['thread', T, 'waits'], { bots: [wait('working', 'm2', { run_id: 'r9', detail: 'Reading Finance' })], version: '' });
     show();
     expect(live()).toContain('Reading Finance');
   });
 
-  const stale = { run: 'r0', bot: 'bot:qa', parts: ['Old words'], typing: null, doing: 'type', ended: false, message: 'm2' };
-
-  it('draws nothing on opening for a run the stream last had under way when the server waits on no one', () => {
-    queryClient.setQueryData(['thread', T, 'live'], [stale]);
-    queryClient.setQueryData(['thread', T, 'waits'], []);
+  it('draws nothing on opening for a run the stream last had under way when the server lists no row', () => {
+    queryClient.setQueryData(['thread', T, 'live'], [{ run: 'r0', bot: 'bot:qa', parts: ['Old words'], typing: null, doing: 'type', ended: false }]);
+    queryClient.setQueryData(['thread', T, 'waits'], { bots: [], version: '' });
     show();
     expect(live()).toBeNull();
     expect(screen.queryByText('Old words')).toBeNull();
   });
 
-  it('says the run ended with no reply when the chat opened mid-run and never saw it start', () => {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    queryClient.setQueryData(['thread', T, 'waits'], [wait('working', 'm2', { run_id: 'r9', detail: 'Reading Finance' })]);
+  it('keeps the newest status when an older read lands after it', async () => {
+    const v1 = '2026-11-25T10:00:00.000Z';
+    const v2 = '2026-11-25T10:00:05.000Z';
+    let read: () => void = () => {};
+    serve((url) =>
+      url.includes('/bot-status')
+        ? new Promise((done) => (read = () => done({ status: 200, body: { bots: [wait('working', 'm2', { run_id: 'r1', detail: 'Thinking' })], version: v1 } })))
+        : { status: 200, body: {} },
+    );
     show();
-    expect(live()).toContain('Reading Finance');
-    emit('runs', [{ run_id: 'r9', conversation_id: T, bot_id: 'qa', state: 'completed' }]);
-    waiting();
-    act(() => vi.advanceTimersByTime(2000));
+    // a read starts (the stream said the status moved without carrying it), then the stream's newer status lands
+    emit('threads', [{ kind: 'bot_status', thread_id: T }]);
+    emit('threads', [{ kind: 'bot_status', thread_id: T, bots: [wait('no_reply', 'm2')], version: v2 }]);
+    expect(screen.getByText('QA Owner finished without replying')).toBeTruthy();
+    await act(async () => read());
+    await waitFor(() => expect(queryClient.isFetching({ queryKey: ['thread', T, 'waits'] })).toBe(0));
     expect(live()).toBeNull();
     expect(screen.getByText('QA Owner finished without replying')).toBeTruthy();
-  });
-
-  it('counts a reply the agent posted with a tool: its run then ending with no words says nothing more', () => {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    show();
-    emit('runs', [{ run_id: 'r1', conversation_id: T, bot_id: 'qa', state: 'running' }]);
-    waiting(wait('working', 'm2', { run_id: 'r1' }));
-    const posted = msg(3, 'bot:qa', 'Filed it: see the task.');
-    emit('messages', [{ id: posted.id, conversation_id: T, message: posted }]);
-    expect(live()).toBeNull();
-    emit('runs', [{ run_id: 'r1', conversation_id: T, bot_id: 'qa', state: 'completed' }]);
-    waiting();
-    act(() => vi.advanceTimersByTime(2000));
-    expect(live()).toBeNull();
-    expect(screen.queryByText(/without replying/)).toBeNull();
-  });
-
-  it('says the run ended with no reply when it wrote words but posted none', () => {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    show();
-    emit('runs', [{ run_id: 'r1', conversation_id: T, bot_id: 'qa', state: 'running' }]);
-    waiting(wait('working', 'm2', { run_id: 'r1' }));
-    emit('runs', [{ run_id: 'r1', conversation_id: T, output: { kind: 'delta', payload: { text: 'Let me look' } } }]);
-    expect(live()).toContain('Let me look');
-    emit('runs', [{ run_id: 'r1', conversation_id: T, bot_id: 'qa', state: 'completed' }]);
-    waiting();
-    act(() => vi.advanceTimersByTime(2000));
-    expect(live()).toBeNull();
-    expect(screen.getByText('QA Owner finished without replying')).toBeTruthy();
+    expect(queryClient.getQueryData<{ version: string }>(['thread', T, 'waits'])?.version).toBe(v2);
   });
 
   it('never gives a queued @mention the agent run on something else: the comment shows it got it, not that work', () => {
@@ -842,20 +834,19 @@ describe('an agent answering', () => {
     const ask = msg(3, ME, '@qa-owner can you check this?');
     queryClient.setQueryData(['thread', T, 'timeline', view], { pages: [{ messages: [ask], next_cursor: null }], pageParams: [null] });
     render(<Conversation id={T} variant="task" view={view} task={{ id: 'k1' }} />, { wrapper });
-    emit('runs', [{ run_id: 'r1', conversation_id: T, bot_id: 'qa', state: 'running' }]);
-    emit('runs', [{ run_id: 'r1', conversation_id: T, output: { kind: 'delta', payload: { text: 'Filing the report' } } }]);
-    waiting(wait('working', null, { run_id: 'r1', detail: 'Thinking' }), wait('up_next', ask.id, { detail: 'Busy with other work' }));
+    starts();
+    words('Filing the report');
+    waiting(wait('working', 'm9', { run_id: 'r1', detail: 'Thinking' }), wait('up_next', ask.id, { detail: 'Busy with other work' }));
     expect(document.querySelectorAll('.msg.is-live')).toHaveLength(1);
     expect(live()).toContain('Got it · Busy with other work');
     expect(screen.queryByText('Filing the report')).toBeNull();
-    expect(queryClient.getQueryData<{ run: string; message?: string }[]>(['thread', T, 'live'])?.find((r) => r.run === 'r1')?.message).toBeUndefined();
   });
 
-  it('draws one row for an agent with two runs: the one the server names, over a stale one and one that ended', () => {
-    queryClient.setQueryData(['thread', T, 'live'], [stale, { ...stale, run: 'r1', parts: ['Ended words'], ended: true, end: 'failed' }]);
+  it('draws one row for an agent with two runs: the one the server lists first', () => {
+    queryClient.setQueryData(['thread', T, 'live'], [{ run: 'r0', bot: 'bot:qa', parts: ['Old words'], typing: null, doing: 'type', ended: false }]);
     show();
-    emit('runs', [{ run_id: 'r2', conversation_id: T, bot_id: 'qa', state: 'running' }]);
-    waiting(wait('working', 'm2', { run_id: 'r2', detail: 'Thinking' }));
+    starts('r2');
+    waiting(wait('working', 'm2', { run_id: 'r2', detail: 'Thinking' }), wait('working', 'm1', { run_id: 'r0' }));
     emit('runs', [{ run_id: 'r2', conversation_id: T, output: { kind: 'delta', payload: { text: 'New words' } } }]);
     expect(document.querySelectorAll('.msg.is-live')).toHaveLength(1);
     expect(live()).toContain('New words');

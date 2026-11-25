@@ -484,6 +484,16 @@ test("an agent answering: an @mention in a task's comments shows it got it, its 
   await call(hub, `/_e2e/turn?step=done&attempt=${next.attempt}&text=${encodeURIComponent('Friday, on the board.')}`, 'POST');
   await expect(own.locator('.msg', { hasText: 'Friday, on the board.' })).toBeVisible();
   await expect(own.locator('.msg.is-live')).toHaveCount(0);
+
+  // a run that ends with no reply leaves one line that says so
+  await say.fill('And the budget?');
+  await say.press('Enter');
+  await expect(own.locator('.msg.is-live')).toContainText('Got it');
+  const quiet = await call<{ attempt: string }>(hub, '/_e2e/turn?step=start&bot=engineering-manager&text=', 'POST');
+  await call(hub, `/_e2e/turn?step=done&attempt=${quiet.attempt}&text=`, 'POST');
+  await expect(own.getByText(/finished without replying/)).toBeVisible();
+  await expect(own.locator('.msg.is-live')).toHaveCount(0);
+  await dm.screenshot({ path: test.info().outputPath('chat-working-dm-ended-1440.png') });
   clean(dm);
 });
 

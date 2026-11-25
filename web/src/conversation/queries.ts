@@ -65,7 +65,7 @@ export const timelineQuery = (id: string, view?: TimelineView | null) =>
         { signal },
       );
       // the first page says which bots the thread waits on: the same read, so a chat opened mid-run shows it
-      if (page.bot_status) setWaits(id, page.bot_status);
+      if (page.bot_status) setWaits(id, page.bot_status, page.bot_status_version);
       return page;
     },
     initialPageParam: null as string | number | null,
@@ -91,6 +91,16 @@ export const liveQuery = (id: string) =>
 /** How long the bots a thread waits on go without the stream before they are read again: a backstop only. */
 const WAITS_BACKSTOP_MS = 5 * 60_000;
 
+/** The thread's bot status rows as the server last said (replying.ts draws them), with the version of that read. */
+export interface Waits {
+  bots: BotWait[];
+  version: string;
+}
+
+/** Whether a read of version `now` is older than the one held (`was`): it landed late, and is dropped. A read with no
+    version is taken. */
+const older = (was: string | undefined, now: string | undefined) => !!was && !!now && now < was;
+
 /** The bots the thread waits on (replying.ts), as the server last said: the timeline's first page and the `threads`
     topic's `bot_status` set them, or have them read again where the stream does not carry them (a chat that follows
     its conversation, not its thread); while any are listed they are read again every few minutes, in case the stream
@@ -98,14 +108,14 @@ const WAITS_BACKSTOP_MS = 5 * 60_000;
 export const waitsQuery = (id: string) =>
   queryOptions({
     queryKey: waitsKey(id),
-    queryFn: async ({ signal }) => {
-      const bots = (await api.get<{ bots?: BotWait[] }>(`/api/v2/threads/${enc(id)}/bot-status`, { signal })).bots ?? [];
-      setRuns(id, (runs) => stampRuns(runs, bots));
-      return bots;
+    queryFn: async ({ signal }): Promise<Waits> => {
+      const read = await api.get<Partial<Waits>>(`/api/v2/threads/${enc(id)}/bot-status`, { signal });
+      const was = queryClient.getQueryData<Waits>(waitsKey(id));
+      return was && older(was.version, read.version) ? was : { bots: read.bots ?? [], version: read.version ?? '' };
     },
-    initialData: [] as BotWait[],
+    initialData: { bots: [], version: '' } as Waits,
     staleTime: Infinity,
-    refetchInterval: (q) => (q.state.data?.length ? WAITS_BACKSTOP_MS : false),
+    refetchInterval: (q) => (q.state.data?.bots.length ? WAITS_BACKSTOP_MS : false),
     enabled: !!id,
   });
 
@@ -359,14 +369,13 @@ interface RunEvent {
   conversation_id?: string;
   bot_id?: string;
   state?: string;
-  /** A job's event: the message the run took. */
-  message_id?: string;
   output?: { kind?: string; compact?: boolean; label?: string; payload?: { text?: string; final?: boolean; delta_kind?: string } };
 }
 interface ThreadEvent {
   kind?: string;
   thread_id?: string;
   bots?: BotWait[];
+  version?: string;
 }
 interface MessageEvent {
   id?: string;
@@ -376,8 +385,6 @@ interface MessageEvent {
 }
 
 const END_WAIT_MS = 2000;
-/** The states a run or its job ends in. */
-const ENDS = new Set(['completed', 'failed', 'interrupted', 'expired', 'canceled', 'uncertain']);
 /** Runs whose output came before their start was seen: drawn from the middle they would start mid-sentence. */
 const late = new Set<string>();
 
@@ -399,10 +406,7 @@ export function dropRun(cid: string, run: string): void {
   setRuns(cid, (runs) => (runs.some((x) => x.run === run && !x.ended) ? runs.filter((x) => x.run !== run) : runs));
 }
 
-/** One run's state change or piece of output, as the server's live reply joins them (backend/turns.py reply_parts). A
-    run starting takes the place of its bot's line about the last one that ended without a reply; a run that ends is
-    kept even when its start was missed (the chat opened mid-run), so it can still say it ended without a reply. A job's
-    event names the message the run took. */
+/** One run's state change or piece of output, as the server's live reply joins them (backend/turns.py reply_parts). */
 export function stepRun(runs: LiveRun[], d: RunEvent): LiveRun[] {
   const run = d.run_id;
   if (!run) return runs;
@@ -410,16 +414,12 @@ export function stepRun(runs: LiveRun[], d: RunEvent): LiveRun[] {
   const r = runs[i];
   const out = d.output;
   if (!out) {
-    const took = d.message_id && !r?.message ? { message: d.message_id } : {};
-    const bot = `bot:${d.bot_id}`;
     if (d.state === 'leased' || d.state === 'running') {
-      if (r) return runs.with(i, { ...r, ...took });
-      if (!d.bot_id || late.has(run)) return runs;
-      return [...runs.filter((x) => !(x.quiet && x.bot === bot)), { run, bot, parts: [], typing: null, doing: 'think', ended: false, ...took }];
+      if (r || !d.bot_id || late.has(run)) return runs;
+      return [...runs, { run, bot: `bot:${d.bot_id}`, parts: [], typing: null, doing: 'think', ended: false }];
     }
-    if (!d.state || !ENDS.has(d.state)) return runs;
-    if (!r) return d.bot_id ? [...runs, { run, bot, parts: [], typing: null, doing: 'think', ended: true, end: d.state, ...took }] : runs;
-    return runs.with(i, r.ended ? { ...r, ...took } : { ...r, ended: true, end: d.state, ...took });
+    if (r && !r.ended && d.state && d.state !== 'input') return runs.with(i, { ...r, ended: true });
+    return runs;
   }
   if (!r) {
     late.add(run);
@@ -444,32 +444,10 @@ export function stepRun(runs: LiveRun[], d: RunEvent): LiveRun[] {
   return runs.with(i, next);
 }
 
-/** A run that ended, once its reply had time to come (END_WAIT_MS): one that took a person's message (`message`)
-    stays as the line that it ended without a reply, which the chat draws only while no reply of its bot's follows that
-    message (replying.ts); any other goes. */
-export function settleRun(runs: LiveRun[], run: string): LiveRun[] {
-  const i = runs.findIndex((x) => x.run === run);
-  const r = runs[i];
-  if (!r || r.quiet) return runs;
-  if (r.message) return runs.with(i, { ...r, quiet: r.end === 'completed' ? 'none' : 'failed', typing: null });
-  return runs.toSpliced(i, 1);
-}
-
-/** The person's message each run took, as the bots the thread waits on name it: by the run's own id, never its bot. */
-export function stampRuns(runs: LiveRun[], waits: readonly BotWait[]): LiveRun[] {
-  let out = runs;
-  for (const [i, r] of runs.entries()) {
-    const message = waits.find((w) => w.run_id === r.run)?.message_id;
-    if (message && message !== r.message) out = out.with(i, { ...r, message });
-  }
-  return out;
-}
-
-/** The bots the thread waits on, as the server lists them now: what the chat draws (replying.ts). Its runs learn which
-    message they took. */
-export function setWaits(cid: string, bots: BotWait[]): void {
-  queryClient.setQueryData(waitsKey(cid), bots);
-  setRuns(cid, (runs) => stampRuns(runs, bots));
+/** The bots the thread waits on, as the server lists them now (what the chat draws, replying.ts), unless a newer read
+    already landed. */
+export function setWaits(cid: string, bots: BotWait[], version?: string): void {
+  queryClient.setQueryData<Waits>(waitsKey(cid), (was) => (was && older(was.version, version) ? was : { bots, version: version ?? '' }));
 }
 
 /** What the live row says: its pieces and what is being typed, a blank line between. */
@@ -495,18 +473,18 @@ export function installConversationLive(): void {
       }
       if (!cid || !run) continue;
       const was = queryClient.getQueryData<LiveRun[]>(liveKey(cid))?.find((x) => x.run === run);
-      const waits = queryClient.getQueryData<BotWait[]>(waitsKey(cid)) ?? [];
-      setRuns(cid, (runs) => stampRuns(stepRun(runs, d), waits));
+      setRuns(cid, (runs) => stepRun(runs, d));
       const now = queryClient.getQueryData<LiveRun[]>(liveKey(cid))?.find((x) => x.run === run);
-      // Its reply, posted as the run ends, may come a moment later: the row waits for it, then goes, or says none came.
-      if (now?.ended && !was?.ended) setTimeout(() => setRuns(cid, (runs) => settleRun(runs, run)), END_WAIT_MS);
+      // Its reply, posted as the run ends, may come a moment later: the row waits for it, then goes.
+      if (now?.ended && !was?.ended)
+        setTimeout(() => setRuns(cid, (runs) => (runs.some((x) => x.run === run) ? runs.filter((x) => x.run !== run) : runs)), END_WAIT_MS);
     }
   });
   onTopic<ThreadEvent>('threads', (batch) => {
     for (const e of batch) {
       if (e.kind !== 'bot_status' || !e.thread_id) continue;
       // a stream that follows the conversation, not the thread, is told only that they moved: an open chat reads them
-      if (e.bots) setWaits(e.thread_id, e.bots);
+      if (e.bots) setWaits(e.thread_id, e.bots, e.version);
       else void queryClient.invalidateQueries({ queryKey: waitsKey(e.thread_id), exact: true, refetchType: 'active' });
     }
   });
@@ -535,7 +513,6 @@ export function installConversationLive(): void {
     }
   });
   onTopic('reset', () => {
-    late.clear();
     for (const [key, runs] of queryClient.getQueriesData<LiveRun[]>({ queryKey: ['thread'] }))
       if (key[2] === 'live' && runs?.length) queryClient.setQueryData(key, []);
   });

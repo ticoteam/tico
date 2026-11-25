@@ -210,7 +210,7 @@ function shownIn(view: TimelineView | undefined, rows: ChatMessage[]): ShownIn |
   if (!view) return undefined;
   if ('session' in view) return (bot) => bot === view.session;
   const ids = new Set(rows.map((m) => m.id));
-  return (_bot, message) => !!message && ids.has(message);
+  return (_bot, message) => ids.has(message);
 }
 
 /** A teammate's page, `/team/<agent slug or id>` as features/team's whoHref writes it; none for Tico or no one. */
@@ -271,7 +271,7 @@ export function Conversation({ id, variant, title, actor, session, from, starter
   const own = rowsOf(timeline.data);
   // Every agent answering, the same row in every chat: a session shows its own agent's; the comments, each agent's
   // answer to a comment shown here (its work for anything else is in its session).
-  const answering = useReplying(id, own, shownIn(view, own));
+  const answering = useReplying(id, shownIn(view, own));
   const rows = withExtra(own, extra, !!timeline.hasNextPage);
   const extraIds = new Set(extra?.map((m) => m.id));
 
