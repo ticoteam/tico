@@ -443,6 +443,23 @@ def test_the_visual_route_is_apart_from_the_sign_in_and_runs_the_page_as_written
     assert api.get("/visuals/nonsense", headers=headers("ben-test")).status_code == 404
 
 
+def test_the_visual_address_answers_visuals_and_health_alone(api):
+    """An author's page runs there with same-origin: the app's sign-in, API and web app never answer on its host, so
+    the page cannot reach them as its own origin. The app's own host is unchanged."""
+    _, _, comment = visual_on_task(api, private=False)
+    src = comment["refs"]["attachments"][0]["src"]
+    assert src.startswith(VISUALS + "/visuals/") and api.get(src).status_code == 200
+    assert api.head(src).status_code == 200
+    assert api.get(VISUALS + "/healthz").status_code == 200
+    me = headers("ben-test")
+    for path in ("/api/v2/config", "/", "/auth/login", "/auth/callback?code=x&state=y"):
+        assert api.get(VISUALS + path, headers=me).status_code == 404, path
+    assert api.post(VISUALS + "/api/v2/tasks", json={"title": "x"}, headers=me).status_code == 404
+    assert api.post(VISUALS + src[len(VISUALS) :]).status_code == 404  # a visual is read, never written
+    assert api.get("/api/v2/config", headers=me).status_code == 200
+    assert api.get("/healthz").status_code == 200
+
+
 def test_video_on_the_visual_route_serves_byte_ranges(api):
     """3/4 test 13 needs seeking: bytes=0-1, a mid-file range, and a range past the end."""
     _, attempt = turn(api)

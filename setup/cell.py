@@ -161,6 +161,8 @@ PY_SPY_WHEELS = {
 }
 PY_SPY_MEMBER = f"py_spy-{PY_SPY_VERSION}.data/scripts/py-spy"
 
+# A company's visuals host is <slug><VISUALS_SUFFIX>.<domain>, so no new slug ends in it.
+VISUALS_SUFFIX = "-visuals"
 # Never given to a company: our own names under the domain.
 RESERVED = frozenset(
     {
@@ -590,6 +592,9 @@ def check_slug(value: str, *, new: bool = False) -> str:
         )
     if new and slug in RESERVED:
         raise CellError("reserved_name", f"{slug} is reserved for Tico's own use")
+    if new and slug.endswith(VISUALS_SUFFIX):
+        # <slug>.<domain> would be another company's visuals host: whichever came second would be refused.
+        raise CellError("reserved_name", f"a name ending in {VISUALS_SUFFIX} is kept for companies' visuals hosts")
     return slug
 
 
@@ -2449,7 +2454,8 @@ class Cell:
 
     def add(self, args) -> dict:
         started = self.system.monotonic()
-        slug = check_slug(args.company, new=True)
+        slug = check_slug(args.company)
+        check_slug(slug, new=self.load(slug) is None)  # a name rule never refuses a company that already exists
         cell = self.load_cell()
         meet = self.meet()
         domain = (args.domain or "").strip().lower()
@@ -2583,7 +2589,11 @@ class Cell:
                     raise CellError("bad_domain", f"--alias {domain} is the company's --domain")
                 extra = self.extra_env(slug) if carried is None else carried
                 # Live chat pages need a visual origin apart from the app's (backend/visuals.py); a carried one wins.
-                visual = "" if (extra.get("TICO_VISUAL_ORIGIN") or "").strip() else f"{slug}-visuals.{cell['domain']}"
+                visual = (
+                    ""
+                    if (extra.get("TICO_VISUAL_ORIGIN") or "").strip()
+                    else f"{slug}{VISUALS_SUFFIX}.{cell['domain']}"
+                )
                 if visual == domain:
                     raise CellError("bad_domain", f"--domain {domain} is the company's visuals host")
                 host = (old or {}).get("page_host", "") if page_host is None else page_host
