@@ -129,6 +129,8 @@ RUNTIME_LABELS = {
     "cursor": "Cursor",
     "musecode": "Muse Code",
 }
+# The runtimes a Connect installs on a computer when no online one has the CLI (`_install_target`).
+INSTALL_ON_CONNECT = ("antigravity", "codex")
 # The plans a person's pool takes turns from (agent_subscriptions.read, the model_subscriptions_plan_pool index).
 POOL_KINDS = tuple(kind for kind, spec in KINDS.items() if spec["billing"] == "subscription")
 API_KINDS = tuple(kind for kind, spec in KINDS.items() if spec.get("billing") == "api")
@@ -3189,7 +3191,7 @@ def _install_target(c, auth, spec):
         state = tool.get("state") or ""
         busy = state in ("queued", "installing")
         active = choice is True or busy
-        # The person's own agy, older than Tico runs, which Tico does not replace: only when no other is left.
+        # The person's own CLI, older than Tico runs, which Tico does not replace: only when no other is left.
         blocked = bool(tool.get("installed") and not tool.get("managed") and not cli_current(runner, runtime))
         key = (blocked, state == "failed", not active, not busy, runner["created_at"] or "", runner["id"])
         found.append((key, runner, tool))
@@ -3307,27 +3309,29 @@ def connect(c, settings, auth, who, body):
                 **({"message": message} if message else {}),
             }
 
-        # Antigravity: no online computer has agy, so one installs it, and the page asks again until it has.
-        target = _install_target(c, auth, spec) if spec["runtime"] == "antigravity" else None
+        # Antigravity or Codex: no online computer has the CLI, so one installs it, and the page asks again until it
+        # has. A new hosted company's Bot computer runs Claude bots only, so it has no Codex until a Connect asks.
+        tool_name = RUNTIME_LABELS[spec["runtime"]]
+        target = _install_target(c, auth, spec) if spec["runtime"] in INSTALL_ON_CONNECT else None
         if target:
             runner, tool, active = target
             if tool.get("installed") and not tool.get("managed") and not cli_current(runner, spec["runtime"]):
-                # The person's own agy, older than Tico runs, on the only computer left: Tico does not replace it.
+                # The person's own CLI, older than Tico runs, on the only computer left: Tico does not replace it.
                 from clients import harness_manifests as manifests
 
                 least = (manifests.get(spec["runtime"]) or {}).get("minimum") or ""
-                return waiting(False, f"Update Antigravity on {runner['label']} to {least} or later.")
+                return waiting(False, f"Update {tool_name} on {runner['label']} to {least} or later.")
             if tool.get("state") == "failed":
-                return waiting(False, f"Antigravity couldn't install on {runner['label']}; Tico will retry.")
+                return waiting(False, f"{tool_name} couldn't install on {runner['label']}; Tico will retry.")
             if not active:
                 if who.role != "owner":
-                    return waiting(False, "Ask the owner to press Connect for Antigravity once, to install it.")
+                    return waiting(False, f"Ask the owner to press Connect for {tool_name} once, to install it.")
                 from . import harness_actions
 
                 harness_actions.choose(c, who, runner["id"], spec["runtime"], True, settings)
             if runner["id"] == _shared_runner(c):
                 cloud_machines.keep_signin_asked(c, settings)
-            return waiting(True, f"Installing Antigravity on {runner['label']}.")
+            return waiting(True, f"Installing {tool_name} on {runner['label']}.")
         # No computer is online to run it, and the company has a cloud computer: it is started for the sign-in, and
         # the page asks again until it is up (`waking`, no sign-in yet).
         if cloud_machines.signin_wake(c, settings):

@@ -117,6 +117,42 @@ def test_a_chatgpt_plan_connects_on_the_codex_sign_in(api):
     ]
 
 
+def test_a_chatgpt_connect_installs_codex_on_the_owners_computer_that_lacks_it(api):
+    # A new hosted company's Bot computer runs Claude bots only, so it reports Codex but has none (wanted: false).
+    setup(api)
+    company(api)
+    m = runner(api, operator="ana", label="Bot computer")
+
+    def beat(installed):
+        readiness = {
+            "schema_version": 1,
+            "runtimes": {"codex": {"installed": installed, "authenticated": "missing"}},
+            "harnesses": {
+                "codex": {
+                    "runtime": "codex",
+                    "installed": installed,
+                    "version": "0.140.0" if installed else "",
+                    "managed": installed,
+                    "wanted": False,
+                    "state": "idle",
+                }
+            },
+            "bots": {},
+        }
+        body = {"version": "test", "platform": "test", "capabilities": CAPS, "readiness": readiness}
+        post(api, "runners/heartbeat", body, token=m["token"])
+
+    beat(False)
+    asked = post(api, "model-subscriptions/connect", {"kind": "codex_login"})
+    assert (asked["id"], asked["waking"], asked["message"]) == ("", True, "Installing Codex on Bot computer.")
+    with api.app.state.store.read() as c:
+        chosen = [tuple(r) for r in c.execute("SELECT runner_id,harness,enabled FROM runner_harness_choices")]
+    assert chosen == [(m["runner_id"], "codex", 1)]
+    beat(True)
+    login = post(api, "model-subscriptions/connect", {"kind": "codex_login"})
+    assert (login["runtime"], login["runner_id"]) == ("codex", m["runner_id"])
+
+
 def test_reconnect_asks_before_the_sign_in_when_runs_would_restart_and_replaces_the_value(api):
     setup(api)
     company(api)
