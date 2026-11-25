@@ -71,7 +71,8 @@
     "tico_page_list",
     {
      "archived": false,
-     "operation_id": null
+     "operation_id": null,
+     "stale": false
     }
    ]
   ],
@@ -109,6 +110,7 @@
      "cursor": "c2",
      "limit": 5,
      "operation_id": null,
+     "stale": false,
      "task": "T1"
     }
    ]
