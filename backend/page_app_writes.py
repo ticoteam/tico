@@ -121,14 +121,14 @@ def _text(value: Any, name: str, most: int) -> str:
 def _task(apps: "PageApps", c: Any, both: tuple[Any, Any], ident: Any) -> Any:
     """The task when the viewer and the page's writer both read it: a page names only what its writer could read."""
     try:
-        return [cast(Any, apps.auth).task(c, x, _text(ident, "task", 100), tags=False) for x in both][0]
+        return [apps.auth.task(c, x, _text(ident, "task", 100), tags=False) for x in both][0]
     except Problem:
         raise Problem("not_found", "Task not found", 404) from None
 
 
 def _file(apps: "PageApps", c: Any, both: tuple[Any, Any], ident: Any) -> Any:
     row = c.execute("SELECT * FROM bot_files WHERE id=?", (_text(ident, "file", 100),)).fetchone()
-    if not row or row["archived"] or not all(cast(Any, apps.files).visible(c, x, row, {}) for x in both):
+    if not row or row["archived"] or not all(apps.files.visible(c, x, row, {}) for x in both):
         raise Problem("not_found", "File not found", 404)
     return row
 
@@ -166,7 +166,7 @@ def action(apps: "PageApps", c: Any, who: Any, writer: Any, kind: Any, payload: 
         where = ""
         if "owner" in p:
             try:
-                body["owner"] = str(cast(Any, apps.auth).target(c, who, _text(p["owner"], "owner", 200)))
+                body["owner"] = str(apps.auth.target(c, who, _text(p["owner"], "owner", 200)))
             except Problem:
                 raise Problem("not_found", "No person or agent " + repr(str(p["owner"])[:60]), 404) from None
             where = " for " + str(cast(Any, H).actor_name(c, body["owner"]))
@@ -249,7 +249,7 @@ def store_write(apps: "PageApps", who: Any, fid: str, body: "AppCall", opened: C
             return {"removed": P.data_rm(c, fid, collection, args.get("id"))}
         return {"row": P.data_set(c, fid, collection, args.get("id"), args.get("data"), who.actor)}
 
-    return cast(Any, apps.store).write(who, work)
+    return apps.store.write(who, work)
 
 
 def hold(
@@ -271,7 +271,7 @@ def hold(
         step, line = action(apps, c, who, writer, kind, one.get("payload"))
         steps.append(step)
         lines.append(line)
-    title = cast(Any, apps.pages).rows(c, [fid])[fid]["title"]
+    title = apps.pages.rows(c, [fid])[fid]["title"]
     key = apps.pending.put({"viewer": who.actor, "fid": fid, "version": body.version, "acts": acts, "steps": steps})
     return {"key": key, "page": title, "lines": lines}
 
@@ -287,7 +287,8 @@ def outcome(response: Any) -> dict[str, Any]:
         except (ValueError, AttributeError):
             hold = None
         if hold:
-            reason = (hold.get("reason") or hold.get("text")) if isinstance(hold, dict) else None
+            said = cast(dict[str, Any], hold) if isinstance(hold, dict) else {}
+            reason = said.get("reason") or said.get("text")
             result["error"] = ("A company rule held it: " + str(reason or "see Needs you"))[:300]
     return result
 
@@ -307,7 +308,7 @@ async def answer(apps: "PageApps", request: Request, fid: str, body: ActAnswer) 
     def check() -> None:
         """The page as it opened the sheet, and each action as it was shown: read again by both the viewer and the
         writer now (a writer who lost a task since, or a task that changed, ends it)."""
-        with cast(Any, apps.store).read() as c:
+        with apps.store.read() as c:
             writer = apps.check_open(c, who, fid, entry["version"])[1]
             for item, shown in zip(entry["acts"], entry["steps"], strict=True):
                 if action(apps, c, who, writer, item["kind"], item.get("payload"))[0] != shown:
@@ -330,8 +331,8 @@ async def answer(apps: "PageApps", request: Request, fid: str, body: ActAnswer) 
     detail = {"version": entry["version"], "paths": [p for _, p, _ in entry["steps"]], "ok": [i["ok"] for i in items]}
 
     def record() -> None:
-        with cast(Any, apps.store).transaction() as c:
-            H.event(c, who.actor, "page.app.act", fid, detail)
+        with apps.store.transaction() as c:
+            cast(Any, H).event(c, who.actor, "page.app.act", fid, detail)
 
     await asyncio.to_thread(record)
     return {"status": "done" if all(i["ok"] for i in items) else "failed", "items": items}
