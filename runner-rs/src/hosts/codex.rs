@@ -2993,7 +2993,7 @@ for line in sys.stdin:
         assert!(Arc::ptr_eq(&kept.0, &first.0) && kept.warm() && kept.alive());
         // What the previous turn left running cannot read the next turn's token before the hub has started it.
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "");
-        kept.lend_started(&two);
+        kept.lend_started(&two).unwrap();
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "turn-2");
         assert_eq!(kept.resume_thread(&th, &two).await.unwrap(), th);
         let turn = kept.start_turn(&th, "Go on", None).await.unwrap();
