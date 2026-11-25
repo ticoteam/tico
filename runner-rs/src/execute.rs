@@ -1963,8 +1963,14 @@ impl Runner {
                 ));
             }
             // Carried once is carried for good: the hub hands it over again until it is acknowledged, and a turn that
-            // takes steers by then (a busy-model retry, drive.rs) must not get it before the carried turn does too.
-            if phase.as_deref() == Some("carried") {
+            // takes steers by then (a busy-model retry, drive.rs) must not get it before the carried turn does too. An
+            // input after a carried one waits behind it, in order.
+            if phase.as_deref() == Some("carried")
+                || (!carried.is_empty() && phase.as_deref() != Some("applied"))
+            {
+                if phase.as_deref() != Some("carried") {
+                    self.state.input_phase(aid, &mid, Some("carried"))?;
+                }
                 carried.insert(mid, message.clone());
                 continue;
             }

@@ -342,7 +342,10 @@ impl Runner {
                 }
                 goal.failure = Some(reason.unwrap_or_else(|| "Stopped by a person".into()));
                 end_step!();
-                let _ = host.interrupt(thread, &turn).await;
+                if retry.is_none() {
+                    // A turn waiting for its overload retry has already ended: nothing to interrupt.
+                    let _ = host.interrupt(thread, &turn).await;
+                }
                 return Ok(Drove {
                     outcome: "interrupted".into(),
                     reply: answer(&earlier, &reply),
@@ -360,7 +363,10 @@ impl Runner {
             if let Some(line) = self.drain.due(aid, Instant::now()) {
                 let _ = self.state.append(aid, "status", &json!({"yielded": line}));
                 end_step!();
-                let _ = host.interrupt(thread, &turn).await;
+                if retry.is_none() {
+                    // A turn waiting for its overload retry has already ended: nothing to interrupt.
+                    let _ = host.interrupt(thread, &turn).await;
+                }
                 return Ok(Drove {
                     outcome: "interrupted".into(),
                     reply: answer(&earlier, &reply),
@@ -397,7 +403,10 @@ impl Runner {
                     .into(),
                 );
                 end_step!();
-                let _ = host.interrupt(thread, &turn).await;
+                if retry.is_none() {
+                    // A turn waiting for its overload retry has already ended: nothing to interrupt.
+                    let _ = host.interrupt(thread, &turn).await;
+                }
                 let why = if late {
                     format!("Timeout: {}", d.limit_name)
                 } else if self.stopping() {
@@ -558,6 +567,8 @@ impl Runner {
                     && overloads < OVERLOAD_TRIES
                     && matches!(host, Host::Codex(_))
                     && !clearing
+                    && !goal_running
+                    && pausing.is_none()
                     && salvage.is_none()
                     && truthy(event.get("limit"))
                     && hosts::is_capacity(&text_of(&event["error"]))
@@ -808,6 +819,11 @@ impl Runner {
                 }
             }
             if !host.alive() {
+                // A busy-model failure waiting for its retry still decides the run when the app-server goes meanwhile.
+                if let Some((_, failed)) = retry.take() {
+                    overloads = OVERLOAD_TRIES;
+                    queue.push(failed);
+                }
                 // A step that read is heard out first: a lease it found lost turns this into a salvage read.
                 settle_step!();
                 // Whatever it said before it went is read first.
@@ -2086,13 +2102,14 @@ mod tests {
     async fn a_stop_while_a_busy_codex_turn_waits_for_its_retry_starts_no_turn() {
         OVERLOAD_WAIT.with(|w| w.set(Duration::from_secs(3600)));
         let (drove, inputs, errors) = busy_codex_turn("BUSY1", true).await;
+        OVERLOAD_WAIT.with(|w| w.set(Duration::from_millis(1)));
         assert_eq!(drove.outcome, "interrupted");
         assert_eq!(inputs, [json!([{"type": "text", "text": "BUSY1"}])]);
         assert_eq!(errors, ["Model overloaded, retrying (1/5)"]);
     }
 
     /// An input a turn refused is carried to the turn after it; the hub hands it over again until it is acknowledged,
-    /// and a turn that would take a steer by then (a busy-model retry) does not get it too.
+    /// and a turn that would take a steer by then (a busy-model retry) gets neither it nor an input after it.
     #[tokio::test]
     async fn an_input_carried_once_is_never_steered_into_a_later_turn() {
         let (url, seen) = quiet_hub().await;
@@ -2111,13 +2128,25 @@ mod tests {
             .state
             .input_phase("acme-late", "m-1", Some("carried"))
             .unwrap();
-        let message = json!({"id": "m-1", "body": "Also add Q3.", "from_actor": "human:ana"});
+        // The carried one, then one that came after it: that one waits behind it rather than going first.
+        let messages = [
+            json!({"id": "m-1", "body": "Also add Q3.", "from_actor": "human:ana"}),
+            json!({"id": "m-2", "body": "And Q4.", "from_actor": "human:ana"}),
+        ];
         let mut carried = BTreeMap::new();
         runner
-            .steer_inputs("acme-late", &host, &th, &turn, &mut carried, &[message])
+            .steer_inputs("acme-late", &host, &th, &turn, &mut carried, &messages)
             .await
             .unwrap_or_else(|e| panic!("refused: {}", e.text));
-        assert_eq!(carried.keys().collect::<Vec<_>>(), ["m-1"]);
+        assert_eq!(carried.keys().collect::<Vec<_>>(), ["m-1", "m-2"]);
+        assert_eq!(
+            runner
+                .state
+                .input_phase("acme-late", "m-2", None)
+                .unwrap()
+                .as_deref(),
+            Some("carried")
+        );
         assert!(!crate::hosts::codex::tests::calls(&fake)
             .iter()
             .any(|c| c["method"] == "turn/steer"));
