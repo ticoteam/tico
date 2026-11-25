@@ -3373,33 +3373,37 @@ for line in sys.stdin:
         std::fs::remove_dir_all(dir).ok();
     }
 
-    /// What a kept app-server wrote to stderr in an earlier turn, a line it left unfinished included, is not the next
-    /// turn's: that turn's diagnostics carry only its own.
+    /// A kept app-server's stderr is the process's: what it says during a later turn is scrubbed of that turn's
+    /// secrets and of every earlier turn's it was lent, whichever turn caused it.
     #[tokio::test]
-    async fn a_kept_app_servers_next_turn_carries_only_its_own_stderr() {
+    async fn a_kept_app_servers_stderr_is_scrubbed_of_every_turns_secrets() {
         let (dir, env) = kept_rig("codex-kept-stderr");
         let keeper = Arc::new(Keeper::new(dir.join("kept"), 8));
         let first = CodexHost::on_home(env.clone(), tokio::sync::mpsc::unbounded_channel().0, None)
             .with_keeper(keeper.clone())
             .unwrap();
-        let th = first_turn(
-            &first,
-            &turn_settings("turn-1", "gpt-5.5"),
-            "ERR:noise-1\npart",
-        )
-        .await;
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        first.set_attempt(Some(Arc::new(Redactor::new(&[
+            "synthetic-first-secret".to_string()
+        ]))));
+        let th = first_turn(&first, &turn_settings("turn-1", "gpt-5.5"), "ERR:noise-1\n").await;
         assert!(first.release(Some(&th), None).await);
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let next = CodexHost::on_home(env, tx, None)
             .with_keeper(keeper.clone())
             .unwrap();
+        next.set_attempt(Some(Arc::new(Redactor::new(&[
+            "synthetic-second-secret".to_string()
+        ]))));
         let kept = next
             .take_kept(Some(&th), &turn_settings("turn-2", "gpt-5.5"), None)
             .await
             .expect("warm");
         let turn = kept
-            .start_turn(&th, "ERR:ial\nnoise-2\n", None)
+            .start_turn(
+                &th,
+                "ERR:old synthetic-first-secret\nnew synthetic-second-secret\n",
+                None,
+            )
             .await
             .unwrap();
         ended(&kept, &turn).await;
@@ -3410,13 +3414,11 @@ for line in sys.stdin:
                 tails.push(tail.to_string());
             }
         }
-        assert!(tails.iter().any(|t| t.contains("noise-2")), "{tails:?}");
         assert!(
-            tails
-                .iter()
-                .all(|t| !t.contains("noise-1") && !t.contains("part")),
+            tails.iter().any(|t| t.contains("old") && t.contains("new")),
             "{tails:?}"
         );
+        assert!(tails.iter().all(|t| !t.contains("synthetic-")), "{tails:?}");
         kept.finish_turn().await;
         drop((first, next, kept));
         std::fs::remove_dir_all(dir).ok();
