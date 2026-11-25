@@ -198,10 +198,13 @@ describe('a read whose rows stay on screen through a failure', () => {
       startLive();
       FakeEventSource.last.feed(opening(900));
       await vi.waitFor(() => expect(restart.read).toHaveBeenCalledTimes(1));
+      // that read failed again (a read still on its way is joined, not sent again)
+      await vi.waitFor(() => expect(queryClient.isFetching()).toBe(0));
       vi.advanceTimersByTime(FIVE_MIN);
       await vi.waitFor(() => expect(restart.read).toHaveBeenCalledTimes(2));
       expect(refused.read).not.toHaveBeenCalled();
       // one no longer on screen is not read
+      await vi.waitFor(() => expect(queryClient.isFetching()).toBe(0));
       restart.stop();
       vi.advanceTimersByTime(FIVE_MIN);
       await Promise.resolve();
