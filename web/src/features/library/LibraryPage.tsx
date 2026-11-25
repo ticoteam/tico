@@ -1,5 +1,5 @@
 import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
-import { useRouter } from '@tanstack/react-router';
+import { useLocation, useRouter } from '@tanstack/react-router';
 import { useMemo, useState } from 'react';
 import { ApiError } from '@/api/client';
 import type { PageShown } from '@/api/schema';
@@ -20,6 +20,7 @@ const sandbox = 'allow-scripts allow-popups allow-popups-to-escape-sandbox';
 
 export function LibraryPage({ id, search }: { id: string; search: PagesSearch }) {
   const router = useRouter();
+  const openedFromThread = useLocation({ select: (location) => (location.search as Record<string, unknown>).via === 'thread' });
   const { data, error } = useSuspenseQuery(libraryPageQuery(id));
   const { page } = data;
   const config = useQuery(configQuery);
@@ -37,7 +38,7 @@ export function LibraryPage({ id, search }: { id: string; search: PagesSearch })
   });
   const prior = useQuery({ ...pageVersionQuery(id, against ?? 0), enabled: !!against });
   const [action, setAction] = useState<PageAction | null>(null);
-  const replace = (change: PagesSearch) => void router.navigate({ href: pageHref({ ...search, ...change }) });
+  const replace = (change: PagesSearch) => void router.navigate({ href: pageHref({ ...search, ...change }), replace: openedFromThread });
   const leave = () => router.navigate({ href: pageHref({ ...search, file: undefined, v: undefined, vs: undefined }), replace: true });
   const navigateTo = (file: string) => router.navigate({ href: pageHref({ file }) });
   const latest = versions.find((v) => v.version === version);
@@ -57,7 +58,7 @@ export function LibraryPage({ id, search }: { id: string; search: PagesSearch })
         path={pageHref({ file: id })}
         className="lib lib-page"
         sub={<span>{latest ? when(latest.created_at) : when(page.updated_at)} · v{version}{page.archived ? ' · Archived' : ''}</span>}
-        onBack={() => void leave()}
+        onBack={openedFromThread ? undefined : () => void leave()}
         actions={
           <>
             {!current && <Button data-phone onClick={() => replace({ v: undefined, vs: undefined })}>Latest</Button>}
@@ -71,6 +72,7 @@ export function LibraryPage({ id, search }: { id: string; search: PagesSearch })
             versions={versions}
             version={version}
             compare={before.map((v) => v.version)}
+            retryHistory={history.isError ? () => void history.refetch() : undefined}
             onOpen={setAction}
             onVersion={(v) => replace({ v: v === page.version ? undefined : v, vs: undefined })}
             onCompare={(v) => replace({ vs: v })}
@@ -106,12 +108,13 @@ function HostedPage({ src, title, app }: { src: string; title: string; app: bool
 }
 
 function PageMenu({
-  data, versions, version, compare, onOpen, onVersion, onCompare,
+  data, versions, version, compare, retryHistory, onOpen, onVersion, onCompare,
 }: {
   data: PageShown;
   versions: FileVersion[];
   version: number;
   compare: number[];
+  retryHistory?: () => void;
   onOpen: (action: PageAction) => void;
   onVersion: (version: number) => void;
   onCompare: (version: number) => void;
@@ -120,6 +123,7 @@ function PageMenu({
   return (
     <Menu trigger={<IconButton icon="more" label="Page actions" />}>
       {data.can_manage && <MenuItem label="Who can see it" onSelect={() => onOpen('access')} />}
+      {retryHistory && <MenuItem label="Reload version history" icon="refresh" onSelect={retryHistory} />}
       {versions.length > 1 && (
         <MenuSub label="Versions" icon="clock">
           {versions.map((v) => <MenuItem key={v.version} label={`v${v.version}`} meta={when(v.created_at)} lead={<Face actor={v.actor} />} on={v.version === version} onSelect={() => onVersion(v.version)} />)}

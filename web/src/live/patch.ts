@@ -775,7 +775,7 @@ export function installPatchers(): void {
     'tasks',
     (e) => {
       if (e.gone) return [['team', 'tabs'], ['team', 'pins'], ...madeRecently(), ['pages']];
-      if (e.kinds?.includes('files')) return [['team', 'pins'], ...madeRecently(), ['pages', 'list'], ['pages', 'search']];
+      if (e.kinds?.includes('files')) return [['team', 'pins'], ...madeRecently(), ['pages'], ['files', 'versions']];
       if (runOnly(e)) return [];
       // a sidebar on its first read may hold one too: it reads again after that read
       const pins = queryClient.getQueryCache().findAll({ queryKey: ['team', 'pins'] });

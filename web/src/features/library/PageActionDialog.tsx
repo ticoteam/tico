@@ -108,6 +108,7 @@ function PageAudience({ audience, onChange }: { audience: AccessAudience | null;
   const people = useQuery(peopleQuery);
   const groups = useQuery(groupsQuery);
   const agents = useQuery(agentsQuery);
+  const failed = [people, groups, agents].filter((query) => query.isError);
   const current = audience ?? emptyAudience;
   const choices = [
     ['People', 'people', people.data ?? []],
@@ -121,6 +122,11 @@ function PageAudience({ audience, onChange }: { audience: AccessAudience | null;
   return (
     <>
       <Segmented label="Access" value={audience ? 'listed' : 'inherited'} options={[{ value: 'inherited', label: 'Inherit access' }, { value: 'listed', label: 'Only listed' }]} onValueChange={(value) => onChange(value === 'listed' ? emptyAudience : null)} />
+      {audience && failed.length > 0 && (
+        <Empty icon="alert" title="Some access options did not load">
+          <Button onClick={() => Promise.all(failed.map((query) => query.refetch()))}>Try again</Button>
+        </Empty>
+      )}
       {audience && choices.map(([label, key, items]) => (
         <fieldset className="page-audience" key={key}>
           <legend>{label}</legend>

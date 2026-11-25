@@ -2061,6 +2061,7 @@ export const libraryPageQuery = (id: string) =>
   queryOptions({
     queryKey: ['pages', 'detail', id],
     staleTime: REFRESH_PAGES_MS,
+    refetchInterval: REFRESH_PAGES_MS,
     refetchOnWindowFocus: true,
     queryFn: ({ signal }) => api.get<PageShown>(`/api/v2/pages/${enc(id)}`, { signal }),
   });
