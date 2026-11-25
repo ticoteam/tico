@@ -205,7 +205,7 @@ def test_a_colour_it_cannot_read_or_a_failing_style_never_stops_the_rest_of_the_
             "kids": [
                 {"tag": "p", "css": {"color": "oklch(none none none)"}, "text": "x" * 50},
                 {"tag": "p", "css": {"color": "oklch(none 0.1 120 / 0.5)"}, "text": "y" * 50},
-                {"tag": "p", "css": {"color": "color(srgb 1e-05 0 0)"}, "text": "tiny dark"},
+                {"tag": "p", "css": {"color": "oklch(1e-05 0 0)"}, "text": "tiny dark"},
                 {"tag": "p", "css": {"color": "oklch(0.95 0.01 120)"}, "text": "reads well"},
                 {"tag": "p", "css": {"color": "lab(10 0 0)"}, "text": "no"},
             ]
