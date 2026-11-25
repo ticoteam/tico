@@ -65,11 +65,12 @@ def test_page_card_sends_the_rows_to_the_card_route_and_only_bots_are_offered_it
 
 
 def test_duplicate_passes_the_same_title_and_idempotency_to_the_page_api():
-    from clients.commands.content import pages_duplicate
     from clients.commands import _access
+    from clients.commands.content import pages_duplicate
 
     class Api:
-        _tico_is_agent_ops = False
+        def __init__(self):
+            self._tico_is_agent_ops = False
 
         def post(self, path, body, key=None):
             assert (path, body, key) == ("pages/file-123/duplicate", {"title": "New plan"}, "copy-once")
