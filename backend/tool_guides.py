@@ -200,7 +200,7 @@ def registry(c: Any, tools: Tools) -> dict[str, Entry]:
             continue
         if row is not None and row["origin"] != "built" and slug in tools.every and not vrows:
             row = None
-        if row is None and slug not in ship:
+        if row is None and slug not in ship and not vrows:
             continue
         name = vrows[0]["vendor_name"] if vrows else ""
         guide = _guide(slug, None, None, name) if archived else _guide(slug, row, ship.get(slug), name)
