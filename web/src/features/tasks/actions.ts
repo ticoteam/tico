@@ -207,7 +207,8 @@ export const moveAll = defineAction({
     if (to === 'closed' && closed > 0)
       toast({
         text: `Closed ${plural(closed)}`,
-        action: moved.length ? { label: 'Undo', run: () => void moveMany(moved, 'reopen') } : undefined,
+        // a reopen needs a reason from everyone (task_engine._need_why)
+        action: moved.length ? { label: 'Undo', run: () => void moveMany(moved, 'reopen', 'Closed by mistake').then((r) => tell(r.skipped, moved.length)) } : undefined,
       });
     return left;
   },

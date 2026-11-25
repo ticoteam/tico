@@ -454,13 +454,13 @@ async function many<T extends { skipped: readonly { reason: string }[] }>(
 }
 
 /** Move tasks to a stage of their pipeline, or to `done`, `closed` or `reopen`, in one write. */
-export async function moveMany(ids: readonly string[], to: string) {
+export async function moveMany(ids: readonly string[], to: string, why?: string) {
   const now = new Date().toISOString();
   const leaves = to === 'done' || to === 'closed';
   const { moved, moved_unseen, skipped } = await many(
     ids,
     (t) => (leaves ? null : to === 'reopen' ? t : { ...t, stage_id: to, stage_since: now }),
-    (idempotencyKey) => api.post<TaskMoveResult>('/api/v2/tasks/move', { ids, to }, { idempotencyKey }),
+    (idempotencyKey) => api.post<TaskMoveResult>('/api/v2/tasks/move', why ? { ids, to, why } : { ids, to }, { idempotencyKey }),
   );
   return { moved, movedUnseen: moved_unseen, skipped: skippedOf(skipped) };
 }

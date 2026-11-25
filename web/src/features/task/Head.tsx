@@ -372,30 +372,28 @@ export function OwnerPick({ t }: { t: TaskData }) {
   );
 }
 
-/** An open task's Snooze and Close, one press from the head. Each is busy until the server answers. */
+/** An open task's Snooze and Close, one press from the head (on a phone, under ⋯). Each stays busy until the server
+    answers, though the task shows snoozed or closed at once. */
 export function QuickActions({ t }: { t: TaskData }) {
-  const [snoozing, setSnoozing] = useState(false);
-  const snooze = async (until: string | null) => {
-    setSnoozing(true);
-    const r = await run("task.snooze", { task: t.id, until }, { via: "click" });
-    setSnoozing(false);
+  const [busy, setBusy] = useState<"snooze" | "close" | null>(null);
+  const press = async (what: "snooze" | "close", id: string, input: object) => {
+    setBusy(what);
+    const r = await run(id, { task: t.id, ...input }, { via: "click" });
+    setBusy(null);
     if (!r.ok) failed(r);
   };
-  const close = async () => {
-    const r = await run("task.move", { task: t.id, to: "closed" }, { via: "click" });
-    if (!r.ok) failed(r);
-  };
-  if (t.status !== "open") return null;
+  const snooze = (until: string | null) => press("snooze", "task.snooze", { until });
+  if (t.status !== "open" && busy !== "close") return null;
   return (
     <>
       {t.snoozed ? (
-        <Button icon="clock" busy={snoozing} data-phone onClick={() => snooze(null)}>
+        <Button icon="clock" busy={busy === "snooze"} disabled={!!busy} onClick={() => snooze(null)}>
           Unsnooze
         </Button>
       ) : (
         <Menu
           trigger={
-            <Button icon="clock" busy={snoozing} data-phone>
+            <Button icon="clock" busy={busy === "snooze"} disabled={!!busy}>
               Snooze
             </Button>
           }
@@ -405,7 +403,13 @@ export function QuickActions({ t }: { t: TaskData }) {
           ))}
         </Menu>
       )}
-      <Button icon="archive" data-phone onClick={close}>
+      <Button
+        icon="archive"
+        aria-label="Close task"
+        busy={busy === "close"}
+        disabled={!!busy}
+        onClick={() => press("close", "task.move", { to: "closed" })}
+      >
         Close
       </Button>
     </>

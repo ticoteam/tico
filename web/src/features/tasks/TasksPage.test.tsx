@@ -622,7 +622,7 @@ describe('Tasks: more of the page @s0 @s9 @s10', () => {
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Close all' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Undo' }));
     await waitFor(() => expect(posts).toHaveLength(2));
-    expect(posts[1]?.body).toEqual({ ids: ['a1'], to: 'reopen' });
+    expect(posts[1]?.body).toEqual({ ids: ['a1'], to: 'reopen', why: 'Closed by mistake' });
   });
 
   it("search's New task lands with the box up; closing it takes new=1 out of the address", async () => {

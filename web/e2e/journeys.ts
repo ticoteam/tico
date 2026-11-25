@@ -424,7 +424,7 @@ test('board: drag a card to another stage, and Move to does the same', async ({ 
 
   const card = page.locator(`.tk-item[data-task="${date!.id}"]`);
   await card.hover();
-  await card.getByRole('button', { name: 'Move to' }).click();
+  await card.getByRole('button', { name: 'Change' }).click();
   await page.getByRole('menuitem', { name: 'Ship' }).click();
   await expect(col('ship')).toContainText(date!.title);
   await expect.poll(() => stageOf(date!.id)).toBe('launch-ship');

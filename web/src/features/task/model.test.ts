@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TaskDocument, TaskFileView, TaskRequirement } from '@/api/schema';
-import { decisionName, decisionOf, defaultTab, reasonOf, refusalOf, reviewOf, slugOf, tabAddress, tabsOf } from './model';
+import { decisionName, decisionOf, defaultTab, failedToast, reasonOf, refusalOf, reviewOf, slugOf, tabAddress, tabsOf } from './model';
 import type { TaskData } from './queries';
 
 const doc = (file_id: string, name: string, more: Partial<TaskDocument> = {}) => ({ file_id, name, version: 2, ...more }) as TaskDocument;
@@ -110,6 +110,7 @@ describe('the open task', () => {
     expect(reasonOf({ error: 'not_allowed' })).toBe('You can’t do that on this task');
     expect(reasonOf({ error: 'http_500: ' })).toBe('Something went wrong. Try again.');
     expect(reasonOf({ error: 'http_502: Bad Gateway' })).toBe('Something went wrong. Try again.');
+    expect(failedToast({ error: 'http_500: ' })).toEqual({ text: 'Not saved', name: 'Something went wrong. Try again.', kind: 'failed' });
   });
 
   it('reads a refusal: its code, its reason, and each thing missing', () => {

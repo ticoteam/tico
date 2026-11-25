@@ -893,16 +893,27 @@ describe('the task’s Snooze and Close', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Unsnooze' }).getAttribute('aria-busy')).toBeNull());
   });
 
-  it('closes from the head, busy until the server answers', async () => {
+  it('closes from the head, busy until the server answers, and only then goes', async () => {
     const reply = holdReply();
     serve((url) => (url.endsWith('/move') ? reply.promise : undefined));
     details();
-    const close = await screen.findByRole('button', { name: 'Close' });
-    fireEvent.click(close);
+    fireEvent.click(await screen.findByRole('button', { name: 'Close task' }));
     await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/tasks/t1/move', body: { to: 'closed' } }));
-    expect(close.getAttribute('aria-busy')).toBe('true');
-    await act(async () => reply.resolve({ status: 200, body: { task: task() } }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Close' }).getAttribute('aria-busy')).toBeNull());
+    // shown closed at once, and the button stays, busy, until the answer
+    expect(screen.getByRole('button', { name: 'Close task' }).getAttribute('aria-busy')).toBe('true');
+    await act(async () => reply.resolve({ status: 200, body: { task: task({ status: 'closed' } as Partial<TaskData>) } }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Close task' })).toBeNull());
+  });
+
+  it('a refused close comes back open, no longer busy', async () => {
+    serve((url) =>
+      url.endsWith('/move') ? { status: 409, body: { error: { code: 'task_turn_running', detail: 'A turn is running' } } } : undefined,
+    );
+    details();
+    fireEvent.click(await screen.findByRole('button', { name: 'Close task' }));
+    await waitFor(() => expect(sent.at(-1)?.url).toBe('/api/v2/tasks/t1/move'));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Close task' }).getAttribute('aria-busy')).toBeNull());
+    expect(screen.getByRole('button', { name: 'Stage: Review' })).toBeTruthy();
   });
 
   it('closes from ⋯, beside Mark done', async () => {
@@ -918,7 +929,7 @@ describe('the task’s Snooze and Close', () => {
     details();
     await screen.findByRole('heading', { level: 1, name: 'Fix the sign-in page' });
     expect(screen.queryByRole('button', { name: 'Snooze' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Close' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Close task' })).toBeNull();
   });
 });
 
