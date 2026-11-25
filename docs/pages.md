@@ -241,10 +241,11 @@ A page version can be an app: it reads Tico as the person viewing it, through Ti
   app is never the shared hosted copy, so without a visual address it is an **Open** card.
 - **`window.tico`** is there when the page runs inside Tico. Every call is a promise:
   `tico.me()` (`{actor, name}`), `tico.query(kind, {limit, cursor, ...})` (`{rows, next}`), `tico.thumb(fileId)`
-  (`{url}`: a small picture as a `data:` address up to 200 KB, or `null` when the file has none, so use `.url` as the
-  `src`, never the answer itself), `tico.open("task:ID" | "file:ID" | "page:ID")` (Tico goes there, the frame
-  stays; only for a declared kind the viewer and the writer may both read), and `tico.store(collection).get(id)`
-  (`{row}`) and `.list({after, limit})` (`{rows, next}`). A refusal rejects with an error whose `code` says why.
+  (`{url}`, where `url` is a `data:` address for a picture of up to 200 KB, or `null` when the file has none: use
+  `.url` as the `src`, never the answer itself), `tico.open("task:ID" | "file:ID" | "page:ID")` (`{href}`; Tico goes
+  there, the frame stays; only for a declared kind the viewer and the writer may both read), and
+  `tico.store(collection).get(id)` (`{row}`, `row` is `null` when there is none) and `.list({after, limit})`
+  (`{rows, next}`). A refusal rejects with an error whose `code` says why.
   Outside Tico every call rejects.
 - **What it reads** is the viewer's own rows, cut to what the version's writer may also read: a list filtered by a
   task is empty unless both may read that task, and live tags in an app are left unfilled. A script can't show or
@@ -296,7 +297,7 @@ write makes a new version.
     tico page publish votes.html --app "reads=tasks writes=comment,move,store:votes"
 
 - **Page data.** `writes=store:<collection>` lets each viewer write rows in that collection with
-  `tico.store(collection).set(id, data)` and `.rm(id)`, with no confirm. Each row records who wrote it
+  `tico.store(collection).set(id, data)` (`{row}`) and `.rm(id)` (`{removed}`), with no confirm. Each row records who wrote it
   (`updated_by`). Other collections stay read-only to viewers, and the writer must still be one of the page's
   writers.
 - **Actions.** `tico.act(kind, payload)` asks for one action, `tico.act([{kind, payload}, ...])` for up to 20 on one
