@@ -1,14 +1,14 @@
 ---
 name: watch-competitor-ads
-description: Use on the weekly Find Social Ads ideas run to save public competitor ads and their creative for the team's swipe file.
+description: Save public competitor ads and their creative for the team's swipe file on the weekly Social Ads ideas run or when assigned a competitor-ad lookup.
 ---
 
 # Watch competitor ads
 
 1. Read the approved competitor Facebook page URLs, competitor slugs and two-letter countries in
-   `knowledge/channel-playbook.md`. If none are recorded, skip the lookup. Ask for what is missing in the routine's
-   task. Check `tico rules list --mine` and the team's spending ceiling before a paid lookup.
-2. Look up each page and country once per weekly run. Use this command with the approved page and country:
+   `knowledge/channel-playbook.md` or the task that assigned the lookup. If none are recorded, ask for what is missing
+   in the task and skip the lookup. Check `tico rules list --mine` and the team's spending ceiling before a paid lookup.
+2. Look up each approved page and country once per run. Use this command with the approved page and country:
 
        tico gateway ads meta --page-url https://www.facebook.com/acme --country US --limit 50
 
