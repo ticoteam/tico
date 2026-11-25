@@ -289,7 +289,7 @@ export function onlyIfOf(d: OnlyIfDraft): OnlyIf | null {
   return Number.isInteger(n) && n >= 1 && n <= 1000 ? { read, at_least: n } : null;
 }
 
-/** The About row: "Release ready has a task", "gotidy has a PR idle 48h", otherwise the read; `none` "… is empty". */
+/** The About row: "Release ready has a task", "app has a PR idle 48h", otherwise the read; `none` "… is empty". */
 export function onlyIfWords(o: OnlyIf, stageName: (id: string) => string | undefined = () => undefined): string {
   const s = onlyIfSource(o.read);
   const n = o.at_least ?? 1;

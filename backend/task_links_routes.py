@@ -13,9 +13,10 @@ from .api_contract import api_v2
 from .api_answers.tasks import PullRequestList, TaskMergeChecks, TaskMergeResult, TaskResult
 
 
-def pr_rows(c, visible_sql, repo=None, state=None, idle_hours=None, limit=100, offset=0):
-    """Pull request links on the tasks `visible_sql` (Auth.task_sql) admits, oldest activity first: `GET /api/v2/prs`
-    and an automation's Only if (backend/automation_only_if.py) read the same rows. `repo` is owner/name or a name."""
+MAX_IDLE_HOURS = 8760  # a year: every cutoff it makes stays a date
+
+
+def _pr_where(visible_sql, repo, state, idle_hours):
     where, args = ["l.kind='pr'"], []
     if repo:
         where.append("(lower(l.repo)=lower(?) OR lower(substr(l.repo, instr(l.repo, '/') + 1))=lower(?))")
@@ -26,13 +27,26 @@ def pr_rows(c, visible_sql, repo=None, state=None, idle_hours=None, limit=100, o
     if idle_hours is not None:
         where.append("coalesce(l.state,'') IN ('open','draft') AND coalesce(l.activity_at, l.created_at)<=?")
         args.append(H.shift(H.now(), hours=-idle_hours))
+    where.append(f"l.task_id IN (SELECT id FROM tasks WHERE ({visible_sql}))")
+    return " AND ".join(where), args
+
+
+def pr_rows(c, visible_sql, repo=None, state=None, idle_hours=None, limit=100, offset=0):
+    """Pull request links on the tasks `visible_sql` (Auth.task_sql) admits, oldest activity first: `GET /api/v2/prs`
+    and an automation's Only if (backend/automation_only_if.py) read the same rows. `repo` is owner/name or a name."""
+    where, args = _pr_where(visible_sql, repo, state, idle_hours)
     rows = c.execute(
         "SELECT l.id, l.task_id, l.url, l.title, l.state, l.repo, l.number, l.created_at, l.activity_at "
-        f"FROM task_links l WHERE {' AND '.join(where)} AND l.task_id IN (SELECT id FROM tasks WHERE ({visible_sql})) "
-        "ORDER BY coalesce(l.activity_at, l.created_at), l.id LIMIT ? OFFSET ?",
+        f"FROM task_links l WHERE {where} ORDER BY coalesce(l.activity_at, l.created_at), l.id LIMIT ? OFFSET ?",
         [*args, limit, offset],
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def pr_count(c, visible_sql, repo=None, state=None, idle_hours=None):
+    """How many rows `pr_rows` selects, in one COUNT."""
+    where, args = _pr_where(visible_sql, repo, state, idle_hours)
+    return c.execute(f"SELECT count(*) FROM task_links l WHERE {where}", args).fetchone()[0]
 
 
 def register(app, auth, mover, mutate, person_only, settings, store, task_view):
@@ -125,8 +139,10 @@ def register(app, auth, mover, mutate, person_only, settings, store, task_view):
             raise Problem("filter", f"Unknown filter: {', '.join(unknown)}. Filters: idle_hours, repo, state.", 422)
         if limit < 1 or limit > 500:
             raise Problem("limit", "limit is between 1 and 500", 422)
-        if offset < 0 or (idle_hours is not None and idle_hours < 0):
-            raise Problem("filter", "offset and idle_hours are 0 or more", 422)
+        if offset < 0:
+            raise Problem("filter", "offset is 0 or more", 422)
+        if idle_hours is not None and not 0 <= idle_hours <= MAX_IDLE_HOURS:
+            raise Problem("filter", f"idle_hours is from 0 to {MAX_IDLE_HOURS}", 422)
         with store.read() as c:
             rows = pr_rows(c, auth.task_sql(c, who), repo, state, idle_hours, limit + 1, offset)
         return {"prs": rows[:limit], "next_offset": offset + limit if len(rows) > limit else None}

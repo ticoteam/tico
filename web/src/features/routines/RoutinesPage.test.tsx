@@ -903,21 +903,21 @@ describe('Only if', () => {
   const skippedRun = (reason: string) => ({ id: 'run1', automation_id: 'r1', status: 'skipped', started_at: '2026-11-18T07:00:00Z', cost: 0, reason, steps: [], version: 1 });
   beforeEach(() => {
     queryClient.setQueryData(pipelinesQuery.queryKey, [{ id: 'p1', name: 'Release', stages: [{ id: 'st-ready', name: 'Release ready' }], owner: null, done: null, closed: null }] as never);
-    queryClient.setQueryData(reposQuery.queryKey, { repositories: [{ full_name: 'acme/gotidy' }] });
+    queryClient.setQueryData(reposQuery.queryKey, { repositories: [{ full_name: 'acme/app' }] });
   });
   const event = (only_if?: { read: string; at_least?: number; none?: boolean; set_by?: string }) => ({ type: 'event', name: 'task.created', ...(only_if ? { only_if } : {}) }) as Routine['trigger'];
 
   it('says its check in plain words', () => {
     expect(onlyIfWords({ read: 'tasks?stage=Release ready&status=open', at_least: 1 })).toBe('Release ready has a task');
-    expect(onlyIfWords({ read: 'prs?repo=gotidy&idle_hours=48', at_least: 1 })).toBe('gotidy has a PR idle 48h');
+    expect(onlyIfWords({ read: 'prs?repo=app&idle_hours=48', at_least: 1 })).toBe('app has a PR idle 48h');
     expect(onlyIfWords({ read: READY, none: true }, (id) => (id === 'st-ready' ? 'Release ready' : undefined))).toBe('Release ready is empty');
     expect(onlyIfWords({ read: 'tasks?owner=ops&label=candidate', none: true })).toBe('tasks?owner=ops&label=candidate is empty');
     expect(onlyIfWords({ read: 'tasks?label=candidate', at_least: 3 })).toBe('tasks?label=candidate has at least 3');
   });
 
   it('reads a simple read back into the pickers and writes it the same; any other read is a Query', () => {
-    for (const read of ['tasks?stage=Release ready&status=open', 'prs?repo=acme/gotidy&idle_hours=48', 'prs?repo=gotidy']) expect(onlyIfRead(onlyIfSource(read))).toBe(read);
-    expect(onlyIfSource('prs?repo=acme/gotidy&idle_hours=48')).toEqual({ kind: 'prs', repo: 'acme/gotidy', idle: 48 });
+    for (const read of ['tasks?stage=Release ready&status=open', 'prs?repo=acme/app&idle_hours=48', 'prs?repo=app']) expect(onlyIfRead(onlyIfSource(read))).toBe(read);
+    expect(onlyIfSource('prs?repo=acme/app&idle_hours=48')).toEqual({ kind: 'prs', repo: 'acme/app', idle: 48 });
     expect(onlyIfSource('tasks?stage=Release ready&label=x')).toEqual({ kind: 'query', read: 'tasks?stage=Release ready&label=x' });
     // Closed tasks count too without status=open: the picker would change what it counts, so it stays a Query.
     expect(onlyIfSource('tasks?stage=Release ready')).toEqual({ kind: 'query', read: 'tasks?stage=Release ready' });
@@ -955,11 +955,11 @@ describe('Only if', () => {
     await menu(await openRoutine({ trigger: event() }), 'Edit');
     fireEvent.click(screen.getByRole('button', { name: '+ Only if' }));
     await pick('Only if', 'PRs');
-    await pick('Repo', 'acme/gotidy');
+    await pick('Repo', 'acme/app');
     fireEvent.change(screen.getByRole('spinbutton', { name: 'Count' }), { target: { value: '2' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(sent).toHaveLength(1));
-    expect((sent[0]!.body as { trigger: unknown }).trigger).toEqual({ type: 'event', name: 'task.created', only_if: { read: 'prs?repo=acme/gotidy', at_least: 2 } });
+    expect((sent[0]!.body as { trigger: unknown }).trigger).toEqual({ type: 'event', name: 'task.created', only_if: { read: 'prs?repo=acme/app', at_least: 2 } });
   });
 
   it('an edit that leaves the check alone sends it back exactly as it was saved', async () => {
@@ -988,7 +988,7 @@ describe('Only if', () => {
   });
 
   it('a skipped run in Runs is dim, says Skipped, names its reason on hover, and shows a cost only when work was done', async () => {
-    const reason = 'Only if: prs?repo=gotidy has 0, needs at least 1';
+    const reason = 'Only if: prs?repo=app has 0, needs at least 1';
     const runs = {
       next: null,
       since: '2026-11-18T07:00:00Z',

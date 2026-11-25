@@ -4,20 +4,20 @@
 An event says something just happened; it cannot say whether something is still true. A trigger's `only_if`
 (`{read, at_least: N}` or `{read, none: true}`) counts one list and the run starts only when the rule holds.
 
-`read` is written as an API read (`tasks?stage=Release ready&status=open`, `prs?repo=gotidy&idle_hours=48`), but it is
+`read` is written as an API read (`tasks?stage=Release ready&status=open`, `prs?repo=acme/app&idle_hours=48`), but it is
 never sent through the HTTP stack: it names one of SOURCES and that source's filters, and each source is a direct query
 of the database with the reader's own visibility, the same `Auth.task_sql` fragment `GET /api/v2/tasks` and
 `GET /api/v2/prs` apply. Nothing a source runs writes, refreshes a token or calls out. An unknown source or filter is
 refused when the automation is saved (`check`).
 
-It reads with the access of whoever last set it (`set_by`, which backend/automations.py `_save` writes: a save that
-changes the read or its rule binds it to the editor, any other save keeps it), never with the owner's: a person who may
-edit a routine but not see a private task cannot learn whether it matched. The run's record keeps the count and the
-rule, never the items; the items reach only the run's steps, as `only_if.items`.
+It reads with the access of whoever last set what the run does (`set_by`, which backend/automations.py `_save` writes:
+a save that changes the check, the steps or anything else the run does binds it to the editor; a rename or a pause
+keeps it), never with the owner's: a person who may edit a routine but not see a private task cannot learn whether it
+matched, nor have its items sent where they choose. The run's record keeps the count and the rule, never the items; the
+items reach only the run's steps, as `only_if.items`.
 
-The count is one COUNT-style query (a PR count stops at MAX_AT_LEAST, all any rule needs); the items are the first
-MAX_ITEMS rows. A miss, or
-a check that cannot be read (its reader left, a stage or person it names is gone), skips the run with its reason.
+The count is one COUNT query and the items are the first MAX_ITEMS rows, both in one read snapshot. A miss, or a check
+that cannot be read (its reader left, a stage or person it names is gone), skips the run with its reason.
 """
 
 import logging
@@ -36,7 +36,7 @@ MAX_READ = 500
 MAX_AT_LEAST = 1000
 MAX_ITEMS = 20
 ITEM_TEXT = 500  # what an item keeps of its title, as a find's items are cut
-MAX_IDLE_HOURS = 8760
+MAX_IDLE_HOURS = 8760  # as GET /api/v2/prs takes it (task_links_routes.MAX_IDLE_HOURS)
 # Each source's filters. A filter not here is refused on save, so a misspelled one never widens the count.
 SOURCES: dict[str, frozenset[str]] = {
     "tasks": frozenset({"stage", "status", "owner", "requester", "label", "lane", "q"}),
@@ -79,7 +79,7 @@ def parse(read: str) -> tuple[str, dict[str, str]]:
     if params.get("state") and params["state"].lower() not in PR_STATES:
         raise Refused(f"state is {', '.join(PR_STATES)}")
     idle = params.get("idle_hours")
-    if idle is not None and not (idle.isdigit() and int(idle) <= MAX_IDLE_HOURS):
+    if idle is not None and not (idle.isascii() and idle.isdigit() and int(idle) <= MAX_IDLE_HOURS):
         raise Refused(f"idle_hours is a whole number of hours, up to {MAX_IDLE_HOURS}")
     return path, params
 
@@ -171,23 +171,19 @@ def _tasks(c: Any, visible: str, params: dict[str, str]) -> tuple[int, list[Json
 
 
 def _prs(c: Any, visible: str, params: dict[str, str]) -> tuple[int, list[Json]]:
-    """Pull requests as `GET /api/v2/prs` selects them for this reader."""
+    """Pull requests as `GET /api/v2/prs` selects them for this reader: one COUNT, then the first MAX_ITEMS rows."""
     from . import task_links_routes
 
     links: Any = task_links_routes
     idle = params.get("idle_hours")
-    rows = cast(
-        "list[Json]",
-        links.pr_rows(
-            c,
-            visible,
-            repo=params.get("repo"),
-            state=params.get("state"),
-            idle_hours=int(idle) if idle is not None else None,
-            limit=MAX_AT_LEAST,
-        ),
-    )
-    return len(rows), rows[:MAX_ITEMS]
+    selection: Json = {
+        "repo": params.get("repo"),
+        "state": params.get("state"),
+        "idle_hours": int(idle) if idle is not None else None,
+    }
+    count = int(links.pr_count(c, visible, **selection))
+    rows = cast("list[Json]", links.pr_rows(c, visible, limit=MAX_ITEMS, **selection)) if count else []
+    return count, rows
 
 
 def evaluate(app: Any, only_if: Json) -> tuple[Json, list[Json]]:
@@ -200,7 +196,7 @@ def evaluate(app: Any, only_if: Json) -> tuple[Json, list[Json]]:
             raise Unread("the server is stopping")
         source, params = parse(read)
         auth: Any = app.state.auth
-        with app.state.store.read() as c:
+        with app.state.store.read_transaction() as c:  # one snapshot: the count and the items agree
             who = reader(c, auth, str(only_if.get("set_by") or ""))
             visible = str(auth.task_sql(c, who))
             count, items = (_tasks if source == "tasks" else _prs)(c, visible, params)

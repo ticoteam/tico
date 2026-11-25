@@ -2015,7 +2015,11 @@ def _only_if(app, flow, state):
     state = {
         **state,
         "only_if": checked,
-        "payload": {**(state.get("payload") or {}), "only_if": {"count": checked["count"], "items": items}},
+        # A skipped run keeps no items: no step reads them.
+        "payload": {
+            **(state.get("payload") or {}),
+            "only_if": {"count": checked["count"], "items": items if checked["ok"] else []},
+        },
     }
     if not checked["ok"]:
         state.update(status="skipped", threads=[])
@@ -2023,16 +2027,23 @@ def _only_if(app, flow, state):
 
 
 def _bind_only_if(flow, before, actor):
-    """An Only if reads with the access of whoever last set it (backend/automation_only_if.py): a save or proposal
-    that changes its read or rule binds it to `actor`; any other keeps the reader it had. A `set_by` a client sent is
-    never kept."""
+    """An Only if reads with the access of whoever last set what the run does (backend/automation_only_if.py): its
+    items reach the steps, so a save or proposal that changes the check, the steps or anything else the run does binds
+    it to `actor`, and an editor never has items sent where they chose that only another could see. A save that
+    changes nothing the run does (a rename, a pause) keeps the reader. A `set_by` a client sent is never kept."""
     only_if = (flow.get("trigger") or {}).get("only_if")
     if not isinstance(only_if, dict):
         return flow
     from . import automation_only_if as O
 
+    def does(f):
+        trigger = dict((f or {}).get("trigger") or {})
+        if isinstance(trigger.get("only_if"), dict):
+            trigger["only_if"] = O.rule(trigger["only_if"])
+        return _versioned({**(f or {}), "trigger": trigger})
+
     was = ((before or {}).get("trigger") or {}).get("only_if")
-    kept = was.get("set_by") if isinstance(was, dict) and O.rule(was) == O.rule(only_if) else None
+    kept = was.get("set_by") if isinstance(was, dict) and does(flow) == does(before) else None
     bound = {**O.rule(only_if), "set_by": kept or actor}
     return {**flow, "trigger": {**flow["trigger"], "only_if": bound}}
 
@@ -3006,7 +3017,7 @@ class Hub:
                 # that is picked up again goes on from it, and is never skipped after a step had an effect.
                 with self.store.transaction() as c:
                     kept = c.execute(
-                        "UPDATE automation_runs SET saved_state=? WHERE id=? AND claim_token=?",
+                        "UPDATE automation_runs SET saved_state=? WHERE id=? AND status='running' AND claim_token=?",
                         (json.dumps(state, default=str), rid, token),
                     ).rowcount
                 if not kept:

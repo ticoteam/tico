@@ -49,8 +49,12 @@ def task(api, title, token="ana-test", **extra):
     return post(api, "tasks", {"owner": "ops", "title": title, "body": "x", **extra}, token=token)
 
 
+def saved_trigger(api, aid):
+    return json.loads(sql(api, "SELECT flow FROM automations WHERE id=?", (aid,))[0]["flow"])["trigger"]
+
+
 def saved_only_if(api, aid):
-    return json.loads(sql(api, "SELECT flow FROM automations WHERE id=?", (aid,))[0]["flow"])["trigger"]["only_if"]
+    return saved_trigger(api, aid)["only_if"]
 
 
 # ---------------------------------------------------------------------------------------------- checked on save
@@ -69,6 +73,8 @@ def saved_only_if(api, aid):
         {"read": "tasks?status=open&status=done", "at_least": 1},  # twice
         {"read": "tasks?label=", "at_least": 1},  # empty: it would widen to every task
         {"read": "prs?idle_hours=soon", "at_least": 1},
+        {"read": "prs?idle_hours=\u00b2", "at_least": 1},  # a digit that is not a decimal one
+        {"read": "prs?idle_hours=9000", "at_least": 1},  # past a year
         {"read": "", "at_least": 1},
         {"read": "tasks", "at_least": 1, "none": True},  # both rules
         {"read": "tasks"},  # neither
@@ -87,7 +93,7 @@ def test_a_bad_only_if_is_refused_on_save(only_if):
 def test_a_good_only_if_saves_on_every_trigger_but_listening(api):
     for only_if in (
         {"read": "tasks?stage=Release ready&status=open", "at_least": 1},
-        {"read": "prs?repo=gotidy&idle_hours=48", "at_least": 1},
+        {"read": "prs?repo=app&idle_hours=48", "at_least": 1},
         {"read": "tasks?owner=ops&label=candidate&lane=product", "none": True},
         {"read": "tasks", "at_least": 3},
     ):
@@ -155,7 +161,7 @@ def test_a_run_by_hand_is_not_checked(api):
 
 
 # ---------------------------------------------------------------------------------------------- whose access it reads with
-def test_the_check_reads_as_whoever_set_it_and_a_change_to_it_rebinds_it(api):
+def test_the_check_reads_as_whoever_last_changed_what_the_run_does(api):
     task(api, "Acme zzqxv review", private=True)  # Ana's and ops's; Cara cannot see it
     caras = make(api, owner="person:cara", token="cara-test", read=MISSING, at_least=1)
     assert saved_only_if(api, caras)["set_by"] == "human:cara"
@@ -163,16 +169,19 @@ def test_the_check_reads_as_whoever_set_it_and_a_change_to_it_rebinds_it(api):
     assert shown["status"] == "skipped" and shown["reason"] == f"Only if: {MISSING} has 0, needs at least 1"
     # A rename keeps who it reads as; a set_by a client sends is never kept.
     patch(api, caras, {"name": "Renamed"})
-    rule = {"read": MISSING, "at_least": 1, "set_by": "human:ana"}
-    patch(api, caras, {"trigger": {"type": "event", "name": "x.y", "only_if": rule}})
+    forged = saved_trigger(api, caras)
+    patch(api, caras, {"trigger": {**forged, "only_if": {**forged["only_if"], "set_by": "human:ana"}}})
     assert saved_only_if(api, caras)["set_by"] == "human:cara"
     assert run(api, caras)[0]["status"] == "skipped"
-    # Ana changes the check: it reads as Ana now, who sees the private task.
-    patch(
-        api, caras, {"trigger": {"type": "event", "name": "x.y", "only_if": {"read": "tasks?q=zzqxv", "at_least": 1}}}
-    )
+    # Ana changes only the steps: the items reach steps she chose, so it reads as Ana now, who sees the private task.
+    patch(api, caras, {"steps": [{**NOTE, "args": {"text": "Ana saw {{only_if.count}}"}}]})
     assert saved_only_if(api, caras)["set_by"] == "human:ana"
     assert run(api, caras)[0]["status"] == "ok"
+    # Cara changes the check: it reads as Cara again.
+    changed = {"read": "tasks?q=zzqxv", "at_least": 1}
+    patch(api, caras, {"trigger": {**saved_trigger(api, caras), "only_if": changed}}, token="cara-test")
+    assert saved_only_if(api, caras)["set_by"] == "human:cara"
+    assert run(api, caras)[0]["status"] == "skipped"
 
 
 # ---------------------------------------------------------------------------------------------- a real run
@@ -244,11 +253,11 @@ def test_prs_lists_the_pull_requests_on_tasks_the_reader_can_see_and_only_if_cou
     hidden = task(api, "Acme secret", private=True)["id"]
     now = H.now()
     links = [
-        ("idle", seen, "open", H.shift(now, hours=-50), "acme/gotidy"),
-        ("fresh", seen, "open", now, "acme/gotidy"),
-        ("merged", seen, "merged", H.shift(now, hours=-50), "acme/gotidy"),
+        ("idle", seen, "open", H.shift(now, hours=-50), "acme/app"),
+        ("fresh", seen, "open", now, "acme/app"),
+        ("merged", seen, "merged", H.shift(now, hours=-50), "acme/app"),
         ("other", seen, "open", H.shift(now, hours=-50), "acme/web"),
-        ("secret", hidden, "open", H.shift(now, hours=-50), "acme/gotidy"),
+        ("secret", hidden, "open", H.shift(now, hours=-50), "acme/app"),
     ]
     with api.app.state.store.transaction() as c:
         for number, (name, tid, state, activity, repo) in enumerate(links, 1):
@@ -262,13 +271,14 @@ def test_prs_lists_the_pull_requests_on_tasks_the_reader_can_see_and_only_if_cou
     def ids(path, token="ana-test"):
         return [p["id"] for p in get(api, path, token=token)["prs"]]
 
-    assert ids("prs?repo=gotidy&idle_hours=48") == ["link_idle", "link_secret"]
-    assert ids("prs?repo=acme/gotidy&idle_hours=48", token="cara-test") == ["link_idle"]
+    assert ids("prs?repo=app&idle_hours=48") == ["link_idle", "link_secret"]
+    assert ids("prs?repo=acme/app&idle_hours=48", token="cara-test") == ["link_idle"]
     assert sorted(ids("prs?state=merged")) == ["link_merged"]
     page = get(api, "prs?limit=2")
     assert len(page["prs"]) == 2 and page["next_offset"] == 2
-    get(api, "prs?repository=gotidy", expected=422)
+    get(api, "prs?repository=app", expected=422)
+    get(api, "prs?idle_hours=24000000000", expected=422)
     # The same rows, counted as Cara: only the one on a task she can see.
-    caras = make(api, owner="person:cara", token="cara-test", read="prs?repo=gotidy&idle_hours=48", at_least=2)
+    caras = make(api, owner="person:cara", token="cara-test", read="prs?repo=app&idle_hours=48", at_least=2)
     shown, row = run(api, caras)
-    assert shown["reason"] == "Only if: prs?repo=gotidy&idle_hours=48 has 1, needs at least 2"
+    assert shown["reason"] == "Only if: prs?repo=app&idle_hours=48 has 1, needs at least 2"

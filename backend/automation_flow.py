@@ -1041,8 +1041,8 @@ def shape_text():
         "",
         "Any trigger but listening may carry `only_if` (`{\"read\", \"at_least\": N}` or `{\"read\", \"none\": true}`): "
         "when it fires, Tico counts `read` (`tasks` with stage, status, owner, requester, label, lane or q; `prs` with "
-        "repo, state or idle_hours) as whoever last set the check; a miss skips the run with the reason. The run reads "
-        "`only_if.count` and `only_if.items`. Example: "
+        "repo, state or idle_hours) as whoever last changed what the automation does; a miss skips the run with the "
+        "reason. The run reads `only_if.count` and `only_if.items`. Example: "
         "`\"only_if\": {\"read\": \"tasks?stage=Release ready&status=open\", \"at_least\": 1}`.",
     ]
     lines += ["", "Steps (each has `id`, `type` and `enabled`; ids are unique):"]
