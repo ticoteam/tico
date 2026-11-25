@@ -95,10 +95,14 @@ export function reviewOf(t: Pick<TaskData, 'children'>): string | null {
 /** The email a requirement shows (`email:<id>`): its send's id. */
 export const emailOf = (r: TaskRequirement | null | undefined): string | null => r?.shows?.find((x) => x.startsWith('email:'))?.slice(6) || null;
 
+/** A task's file as it stands now: its current version. */
+const currentOf = (f: TaskFileView) => f.versions.find((v) => v.n === f.current_version) ?? f.versions.at(-1);
+
 /** What waits on the person comes first, marked with the Dot (plan/approvals.html): the page, the file or the email it
     asks about, the one it is about (`targetOf`, at the version it pinned) before the others it shows; one that is not
     this task's opens as a tab of its own once the files are read (`files` given), never the review page beside it. Then the stage's other pages and Markdown files, each with its state (more.js taskflow); the task's
-    other files but its pictures (Details walks those), so a PDF, a Word file or a sound opens as a tab too; the other
+    other files but its pictures and videos (the top of the task shows those), so a PDF, a Word file or a sound opens
+    as a tab too; the other
     emails its requirements show; the chat; then Details. A page linked in two roles is one tab.
     `decision`: what the tabs are marked for and pinned at: the task's first ask that is not an email's (an email's OK
     has its own tab), unless a caller names another (a card for one ask). When an email's OK comes first, its tab still
@@ -126,7 +130,7 @@ export function tabsOf(t: TaskData, files?: TaskFileView[], chosen?: TaskRequire
     return [{ slug, label: tabLabel(doc.title || doc.name), mark: asked.has(doc.file_id) ? 'ask' : ok ? 'ok' : 'none', doc, ...pinned(doc.file_id) }];
   });
   const others = (files ?? [])
-    .filter((f) => !f.archived && !seen.has(f.id) && (asked.has(f.id) || !(f.versions.find((v) => v.n === f.current_version) ?? f.versions.at(-1))?.mime.startsWith('image/')))
+    .filter((f) => !f.archived && !seen.has(f.id) && (asked.has(f.id) || !/^(image|video)\//.test(currentOf(f)?.mime ?? '')))
     .map((f): TaskTab => ({ slug: free(f.title || f.name), label: tabLabel(f.title || f.name), file: f, ...pinned(f.id), ...(asked.has(f.id) && { mark: 'ask' as const }) }));
   const here = [...docs, ...others].some((x) => (x.doc?.file_id ?? x.file?.id) === target?.id);
   const away: TaskTab[] = target && files && !here ? [{ slug: free('File'), label: 'File', mark: 'ask', other: target.id, ...pinned(target.id) }] : [];
@@ -149,9 +153,6 @@ export function tabsOf(t: TaskData, files?: TaskFileView[], chosen?: TaskRequire
     { slug: DETAILS, label: 'Details' },
   ];
 }
-
-/** A task's file as it stands now: its current version. */
-const currentOf = (f: TaskFileView) => f.versions.find((v) => v.n === f.current_version) ?? f.versions.at(-1);
 
 /** A picture or a video of the task, at its current version. */
 export interface Media {

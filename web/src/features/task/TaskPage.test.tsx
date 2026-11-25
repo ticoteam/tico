@@ -1225,6 +1225,10 @@ describe('a task’s files and pages @s56 @s76 @s780', () => {
     const rows = [...document.querySelectorAll('.dt-file')].map((row) => row.getAttribute('title'));
     expect(rows).toEqual(['Shot list']);
     expect(strip.compareDocumentPosition(screen.getByText('Has it')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // a video is not a tab of its own, as a picture is not: the strip opens it
+    const tabs = screen.getByRole('navigation', { name: / pages$/ });
+    expect(within(tabs).getByRole('link', { name: /Shot list/ })).toBeTruthy();
+    expect(within(tabs).queryByRole('link', { name: /Beach cut/ })).toBeNull();
     fireEvent.click(within(strip).getByRole('button', { name: 'Beach cut' }));
     await waitFor(() => expect((router.state.location.search as Record<string, unknown>)['task.file']).toBe('v1'));
   });
