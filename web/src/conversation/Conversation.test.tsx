@@ -11,7 +11,7 @@ import { Conversation } from './Conversation';
 import { Message } from './Message';
 import { showPageName } from '@/tico/pageName';
 import type { Session } from './Session';
-import type { Timeline } from './queries';
+import { waitsQuery, type Timeline } from './queries';
 import type { ChatMessage } from './types';
 
 /* The stream, stood in for: handlers register as they do in the app; `emit` applies one frame. A `messages` frame
@@ -795,22 +795,22 @@ describe('an agent answering', () => {
   });
 
   it('shows the agent at work from the thread status when the chat opens mid-run', () => {
-    queryClient.setQueryData(['thread', T, 'waits'], { bots: [wait('working', 'm2', { run_id: 'r9', detail: 'Reading Finance' })], version: '' });
+    queryClient.setQueryData(['thread', T, 'waits'], { bots: [wait('working', 'm2', { run_id: 'r9', detail: 'Reading Finance' })], version: 0 });
     show();
     expect(live()).toContain('Reading Finance');
   });
 
   it('draws nothing on opening for a run the stream last had under way when the server lists no row', () => {
     queryClient.setQueryData(['thread', T, 'live'], [{ run: 'r0', bot: 'bot:qa', parts: ['Old words'], typing: null, doing: 'type', ended: false }]);
-    queryClient.setQueryData(['thread', T, 'waits'], { bots: [], version: '' });
+    queryClient.setQueryData(['thread', T, 'waits'], { bots: [], version: 0 });
     show();
     expect(live()).toBeNull();
     expect(screen.queryByText('Old words')).toBeNull();
   });
 
   it('keeps the newest status when an older read lands after it', async () => {
-    const v1 = '2026-11-25T10:00:00.000Z';
-    const v2 = '2026-11-25T10:00:05.000Z';
+    const v1 = 4;
+    const v2 = 7;
     let read: () => void = () => {};
     serve((url) =>
       url.includes('/bot-status')
@@ -826,7 +826,41 @@ describe('an agent answering', () => {
     await waitFor(() => expect(queryClient.isFetching({ queryKey: ['thread', T, 'waits'] })).toBe(0));
     expect(live()).toBeNull();
     expect(screen.getByText('QA Owner finished without replying')).toBeTruthy();
-    expect(queryClient.getQueryData<{ version: string }>(['thread', T, 'waits'])?.version).toBe(v2);
+    expect(queryClient.getQueryData<{ version: number }>(['thread', T, 'waits'])?.version).toBe(v2);
+  });
+
+  it("keeps the agent's \"Got it\" when a read made before the thread's first status change lands after it", async () => {
+    let read: () => void = () => {};
+    serve((url) =>
+      url.includes('/bot-status') ? new Promise((done) => (read = () => done({ status: 200, body: { bots: [], version: 0 } }))) : { status: 200, body: {} },
+    );
+    show();
+    emit('threads', [{ kind: 'bot_status', thread_id: T }]);
+    emit('threads', [{ kind: 'bot_status', thread_id: T, bots: [wait('up_next', 'm2')], version: 3 }]);
+    expect(live()).toContain('Got it');
+    await act(async () => read());
+    await waitFor(() => expect(queryClient.isFetching({ queryKey: ['thread', T, 'waits'] })).toBe(0));
+    expect(live()).toContain('Got it');
+  });
+
+  it('reads the status again every few minutes only while a row could still end without the stream saying so', () => {
+    const every = waitsQuery(T).refetchInterval as unknown as (q: { state: { data?: { bots: unknown[] } } }) => number | false;
+    expect(every({ state: { data: { bots: [wait('replied', 'm2')] } } })).toBe(false);
+    expect(every({ state: { data: { bots: [] } } })).toBe(false);
+    expect(every({ state: { data: { bots: [wait('replied', 'm2'), wait('up_next', 'm3')] } } })).toBe(5 * 60_000);
+  });
+
+  it("an agent's session opened mid task turn shows its reply being written, though no person's message woke it", () => {
+    queryClient.setQueryData(['thread', T, 'live'], [
+      { run: 'r5', bot: 'bot:qa', parts: [], typing: 'Fixing the header', doing: 'type', ended: false },
+      { run: 'r6', bot: 'bot:builder', parts: [], typing: 'Another agent', doing: 'type', ended: false },
+    ]);
+    queryClient.setQueryData(['thread', T, 'waits'], { bots: [], version: 0 });
+    const view = { session: 'bot:qa' } as const;
+    queryClient.setQueryData(['thread', T, 'timeline', view], { pages: [{ messages: [], next_cursor: null }], pageParams: [null] });
+    render(<Conversation id={T} variant="task" view={view} task={{ id: 'k1' }} />, { wrapper });
+    expect(document.querySelectorAll('.msg.is-live')).toHaveLength(1);
+    expect(live()).toContain('Fixing the header');
   });
 
   it('never gives a queued @mention the agent run on something else: the comment shows it got it, not that work', () => {

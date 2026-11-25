@@ -269,9 +269,9 @@ export function Conversation({ id, variant, title, actor, session, from, starter
   const comments = !!view && 'comments' in view;
   // the Agent bar's rows that failed when its DM changed under them, kept by its agent, for Retry here
   const own = rowsOf(timeline.data);
-  // Every agent answering, the same row in every chat: a session shows its own agent's; the comments, each agent's
-  // answer to a comment shown here (its work for anything else is in its session).
-  const answering = useReplying(id, shownIn(view, own));
+  // Every agent answering, the same row in every chat: a session shows its own agent's, and every run of its here; the
+  // comments, each agent's answer to a comment shown here (its work for anything else is in its session).
+  const answering = useReplying(id, shownIn(view, own), view && 'session' in view ? view.session : undefined);
   const rows = withExtra(own, extra, !!timeline.hasNextPage);
   const extraIds = new Set(extra?.map((m) => m.id));
 

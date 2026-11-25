@@ -892,7 +892,8 @@ def install(app, store, auth, mutate, rule_check):
         from . import visuals
 
         later = []
-        with store.read() as c:
+        # one snapshot: the page's messages, its `bot_status` and that status's version agree
+        with store.read_transaction() as c:
             out = threads.timeline(
                 c,
                 threads.viewer(auth, request.state.identity),

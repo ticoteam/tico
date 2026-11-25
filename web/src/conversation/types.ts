@@ -80,7 +80,7 @@ export interface TimelinePage {
   read_marks?: Record<string, number>;
   /** First page only: the bots the thread waits on, and the version of that read (a later read is never older). */
   bot_status?: BotWait[];
-  bot_status_version?: string;
+  bot_status_version?: number;
 }
 
 /** A reply being written, from the `runs` topic (compact output). */

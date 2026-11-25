@@ -531,11 +531,13 @@ in the root that woke a bot (`queue`/`steer` delivery, `pending`, `delivered` or
 `message_deliveries_open_bots`), whose message the reader reads, with what became of it; a client draws the rows and
 infers nothing. The reader's check of each message comes before anything is counted or limited. A wake says something
 while it is capped, its job is live, the run that took it (its job's run, else the running turn it went into as an
-input, of the same bot) is going or ended in the last minute, or it is an outside agent's that it has not read yet. A
-bot has one row per run of its that took a wake here, naming the newest such message, and one for its wakes no run
-took yet, naming the newest. Someone who reads only a migrated Home's old history gets `[]` (REST, timeline and SSE).
-`version` is the time of the root's newest `bot_status` change when read (`""` before any), read before the rows: a
-client drops a read older than the one it holds. At most 5 bots, oldest wait first:
+input, of the same bot) is going or ended in the last minute, or it is an outside agent's that it has not read yet;
+the read starts from those few rows (capped wakes, live jobs, runs going or just ended, an outside agent's unread
+carriers), never from the root's history. A bot has one row per run of its that took a wake here, naming the newest
+such message, and one for its wakes no run took yet, naming the newest. Someone who reads only a migrated Home's old
+history gets `[]` (REST, timeline and SSE). `version` is the seq of the root's newest `bot_status` change when read (`0`
+before any), read with the rows in one transaction: a client drops a read with a smaller version than the one it holds,
+`0` included. At most 5 bots, oldest wait first:
 ```json
 {"actor": "bot:legal", "name": "Legal", "state": "up_next|cant_reply|working|replied|no_reply|stopped",
  "detail": "...", "since": "<wait start>", "run_id": "<attempt id>|null",
@@ -544,10 +546,14 @@ client drops a read older than the one it holds. At most 5 bots, oldest wait fir
 - `working`: the run that took it is going. `run_id`, `detail` (the run's current step: its last tool or progress
   line, "Writing a reply", "Thinking", "Starting") and `since` (its start) only when the reader reads the run as the
   `runs` stream sends it (the bot's activity, the thread the run started in, the run itself); else `run_id` null,
-  `detail` "" and `since` the wake's time.
-- `replied`: the run that took it posted after it in the root: its reply (`refs.turn_id`) or a tool post it made
-  (`refs.by_run`, stamped from the run's own token by `hubdb._write_message`), while the run goes or for a minute after.
-  A later post of the bot's that no run of this wake made changes nothing.
+  `detail` "" and `since` the wake's time. On purpose: the person whose message woke the bot is told it is working on
+  it and how that ended (`replied`, `no_reply`, `stopped`), with no run id, step or time when the run itself is not
+  theirs to read.
+- `replied`: the run that took it posted after it in the root, as the run's own bot: its reply (`refs.turn_id`) or a
+  tool post it made (`refs.by_run`, stamped from the run's own token by `hubdb._write_message`, which drops a caller's
+  `by_run` before the wake rules read the refs), while the run goes or for a minute after. A later post of the bot's
+  that no run of this wake made, or another bot's post naming the run, changes nothing. A wake whose job is queued
+  again is `up_next`, whatever an earlier run of it posted.
 - `no_reply` / `stopped`: its run ended (completed / failed, stopped or lost) with no such post: kept a minute.
 - `up_next`: it is running elsewhere; "Finishing <task title>" or "Finishing # <thread title>" only when the viewer
   reads that task or thread, else "Busy with other work".

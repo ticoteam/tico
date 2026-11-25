@@ -254,6 +254,60 @@ def test_a_task_comment_that_mentions_an_agent_is_named_on_its_status_row_until_
     assert (after["state"], after["run_id"], after["message_id"]) == ("replied", None, comment["id"])
 
 
+def test_a_comment_a_run_posted_can_be_edited_and_deleted_by_its_bot(api):
+    """A run's post carries `by_run` (hubdb._write_message): it is still a plain comment its author may change."""
+    machine = machine_for(api)
+    task = post(api, "tasks", {"title": "Fix the page", "body": "It looks bad.", "owner": "human:ana"})
+    post(api, f"tasks/{task['id']}/comments", {"text": "@ops can you see why this page looks bad?"})
+    attempt = claim(api, machine)
+    said = post(api, f"tasks/{task['id']}/comments", {"text": "Old stylesheet."}, token=attempt["token"])["comment"]
+    assert H._json(row_of(api, said["id"])["refs"], {})["by_run"] == attempt["id"]
+    post(api, f"tasks/{task['id']}/comments/{said['id']}", {"text": "An old stylesheet."}, token=attempt["token"])
+    assert row_of(api, said["id"])["edited_at"]
+    post(api, f"tasks/{task['id']}/comments/{said['id']}/delete", {}, token=attempt["token"])
+    assert row_of(api, said["id"])["deleted_at"]
+
+
+def test_another_bots_post_naming_a_run_is_not_that_runs_answer(api):
+    machine = machine_for(api)
+    thread = new_thread(api, members=("human:ben", "bot:ops", "bot:cpo"))
+    asked = say(api, thread["id"], "@ops can you check this?")
+    attempt = claim(api, machine)
+    bot_post(api, "bot:cpo", thread["id"], "Checked: all fine.", refs={"turn_id": attempt["id"]})
+    [row] = bot_status(api, thread["id"])
+    assert (row["state"], row["run_id"], row["message_id"]) == ("working", attempt["id"], asked["id"])
+
+
+def test_a_wake_whose_job_is_queued_again_waits_whatever_its_last_run_posted(api):
+    machine = machine_for(api)
+    thread = new_thread(api)
+    asked = say(api, thread["id"], "@ops can you check this?")
+    attempt = claim(api, machine)
+    run_post(api, attempt, "bot:ops", thread["id"], "Looking at it.")
+    assert bot_status(api, thread["id"])[0]["state"] == "replied"
+    # the run fails and its job goes back to the queue, still naming the run (execution.complete's requeue)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET state='failed', finished_at=? WHERE id=?", (H.now(), attempt["id"]))
+        c.execute("UPDATE jobs SET state='queued' WHERE attempt_id=?", (attempt["id"],))
+    [row] = bot_status(api, thread["id"])
+    assert (row["state"], row["run_id"], row["message_id"]) == ("up_next", None, asked["id"])
+
+
+def test_two_status_changes_in_the_same_millisecond_read_as_two_versions(api):
+    thread = new_thread(api)
+    store, at, seen = api.app.state.store, H.now(), []
+    for _ in range(2):
+        with store.transaction() as c:
+            c.execute(
+                "INSERT INTO changes(topic,kind,subject_id,conversation_id,created_at) "
+                "VALUES('threads','bot_status',?1,?1,?2)",
+                (thread["id"], at),
+            )
+        with store.read() as c:
+            seen.append(thread_bot_status.version(c, thread["id"]))
+    assert isinstance(seen[0], int) and seen[0] < seen[1]
+
+
 def run_post(api, attempt, bot, thread_id, text):
     """A post the run makes itself, as a tool call: the run's token sets H.RUN for its requests (app.py)."""
     reset = H.RUN.set(attempt["id"])
@@ -555,7 +609,8 @@ def test_an_offline_outside_agent_is_waited_on_without_a_job(api, monkeypatch):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops'")
     assert bot_status(api, thread["id"]) == []  # a bot here: its turn ended, nothing waits
-    monkeypatch.setattr(agents, "external_harness", lambda c, bot, *a, **kw: "acme-agent" if bot == "ops" else None)
+    with api.app.state.store.transaction() as c:
+        assert c.execute("UPDATE bot_settings SET harness='hermes' WHERE bot_id='ops'").rowcount == 1
     monkeypatch.setattr(agents, "presence", lambda c, bot, *a, **kw: {"online": False} if bot == "ops" else None)
     [row] = bot_status(api, thread["id"])
     assert row["actor"] == "bot:ops" and row["state"] == "cant_reply" and row["detail"] == thread_bot_status.OFFLINE
@@ -611,6 +666,42 @@ def test_a_thousand_open_wakes_for_one_bot_are_read_in_a_bounded_number_of_state
         clone_wakes(c, first["id"], 1000, "b")
     found, more_statements = read()
     assert len(found) == 2001 and more_statements == statements
+
+
+def test_a_long_history_of_closed_wakes_is_never_read_again(api):
+    """Five hundred wakes whose runs ended long ago, an outside agent's among them that it read: a status read reads none
+    of them, in SQL or in Python."""
+    machine = machine_for(api)
+    thread = new_thread(api)
+    first = say(api, thread["id"], "@ops can you check this?")
+    end_run(api, machine, claim(api, machine))
+    store = api.app.state.store
+    ana = who(api, "ana-test")
+    with store.transaction() as c:
+        c.execute("UPDATE attempts SET finished_at=? WHERE bot_id='ops'", (H.shift(H.now(), seconds=-3600),))
+        # now an outside agent's, which read every carrier it got
+        assert c.execute("UPDATE bot_settings SET harness='hermes' WHERE bot_id='ops'").rowcount == 1
+        c.execute("UPDATE messages SET delivered_at=?1, read_at=?1 WHERE recipient_id='bot:ops'", (H.now(),))
+
+    def read():
+        steps, statements = [0], []
+        viewer = threads.viewer(None, ana)
+        with store.read() as c:
+            c.set_trace_callback(statements.append)
+            c.set_progress_handler(lambda: steps.__setitem__(0, steps[0] + 1), 100)
+            try:
+                return thread_bot_status.status(c, viewer, thread["id"]), steps[0], len(statements)
+            finally:
+                c.set_progress_handler(None, 0)
+                c.set_trace_callback(None)
+
+    rows, steps, statements = read()
+    assert rows == []
+    with store.transaction() as c:
+        clone_wakes(c, first["id"], 500, "old")
+    rows, more_steps, more_statements = read()
+    assert rows == [] and more_statements == statements
+    assert more_steps - steps <= 5, (steps, more_steps)  # each step is 100 SQLite instructions
 
 
 def test_an_sse_status_read_with_several_runs_going_reads_a_fixed_number_of_statements(api, monkeypatch):

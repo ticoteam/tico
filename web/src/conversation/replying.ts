@@ -30,9 +30,17 @@ function waitRun(w: BotWait): LiveRun {
  * The rows a chat draws for its agents answering: the server's rows (`waits`) as they are, the first this view shows per
  * agent. A `replied` row draws nothing (its reply is in the chat); a `working` one draws its run's reply as written so
  * far when the stream has that run.
+ *
+ * An agent's session (`session`, the agent it shows) also draws that agent's runs the stream has and no row names: the
+ * server lists only the runs a person's message woke, and a session shows all its agent's work there (a task turn, a
+ * pipeline stage, a handoff). The `runs` stream already sent them only to a reader of the run.
  */
-export function replyingRows(live: readonly LiveRun[], waits: readonly BotWait[], shown: ShownIn = () => true): Answering[] {
+export function replyingRows(live: readonly LiveRun[], waits: readonly BotWait[], shown: ShownIn = () => true, session?: string): Answering[] {
   const out: Answering[] = [];
+  if (session) {
+    const named = new Set(waits.map((w) => w.run_id).filter(Boolean));
+    for (const r of live) if (r.bot === session && !named.has(r.run)) out.push({ k: 'live', key: `live:${r.run}`, r, text: liveText(r) });
+  }
   const done = new Set<string>();
   for (const w of waits) {
     if (done.has(w.actor) || !shown(w.actor, w.message_id)) continue;
@@ -50,8 +58,8 @@ export function replyingRows(live: readonly LiveRun[], waits: readonly BotWait[]
 }
 
 /** A thread's agents answering, as `replyingRows` draws them, for every chat. */
-export function useReplying(id: string, shown?: ShownIn): Answering[] {
+export function useReplying(id: string, shown?: ShownIn, session?: string): Answering[] {
   const { data: live = [] } = useQuery(liveQuery(id));
   const { data: waits } = useQuery(waitsQuery(id));
-  return replyingRows(live, waits?.bots ?? [], shown);
+  return replyingRows(live, waits?.bots ?? [], shown, session);
 }

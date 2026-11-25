@@ -310,7 +310,7 @@ describe("an agent's run over its session box", () => {
   it('says nothing while its reply is being written', async () => {
     run = { state: 'running', label: 'Working', bot_id: 'r2' };
     queryClient.setQueryData(['thread', 'c7', 'live'], [{ run: 'r1', bot: 'bot:r2', parts: [], typing: null, doing: 'think', ended: false }]);
-    queryClient.setQueryData(['thread', 'c7', 'waits'], { bots: [{ actor: 'bot:r2', name: 'R2', state: 'working', detail: 'Thinking', since: '', run_id: 'r1', fix: null, message_id: 'm1' }], version: '' });
+    queryClient.setQueryData(['thread', 'c7', 'waits'], { bots: [{ actor: 'bot:r2', name: 'R2', state: 'working', detail: 'Thinking', since: '', run_id: 'r1', fix: null, message_id: 'm1' }], version: 0 });
     show(<SessionRun t={t} agent="bot:r2" />, '/tasks/p1/12');
     await waitFor(() => expect(calls.length).toBe(1));
     expect(screen.queryByText('Working')).toBeNull();

@@ -94,12 +94,19 @@ const WAITS_BACKSTOP_MS = 5 * 60_000;
 /** The thread's bot status rows as the server last said (replying.ts draws them), with the version of that read. */
 export interface Waits {
   bots: BotWait[];
-  version: string;
+  version?: number;
 }
+
+/** A read's version as a number: 0 (or "") is a read made before the thread's first status change, the oldest there is;
+    none at all is a read that says no version. */
+const versionOf = (v: number | string | null | undefined) => (v === undefined || v === null ? undefined : Number(v) || 0);
 
 /** Whether a read of version `now` is older than the one held (`was`): it landed late, and is dropped. A read with no
     version is taken. */
-const older = (was: string | undefined, now: string | undefined) => !!was && !!now && now < was;
+const older = (was: number | undefined, now: number | string | null | undefined) => {
+  const at = versionOf(now);
+  return was !== undefined && at !== undefined && at < was;
+};
 
 /** The bots the thread waits on (replying.ts), as the server last said: the timeline's first page and the `threads`
     topic's `bot_status` set them, or have them read again where the stream does not carry them (a chat that follows
@@ -111,11 +118,12 @@ export const waitsQuery = (id: string) =>
     queryFn: async ({ signal }): Promise<Waits> => {
       const read = await api.get<Partial<Waits>>(`/api/v2/threads/${enc(id)}/bot-status`, { signal });
       const was = queryClient.getQueryData<Waits>(waitsKey(id));
-      return was && older(was.version, read.version) ? was : { bots: read.bots ?? [], version: read.version ?? '' };
+      return was && older(was.version, read.version) ? was : { bots: read.bots ?? [], version: versionOf(read.version) };
     },
-    initialData: { bots: [], version: '' } as Waits,
+    initialData: { bots: [] } as Waits,
     staleTime: Infinity,
-    refetchInterval: (q) => (q.state.data?.bots.length ? WAITS_BACKSTOP_MS : false),
+    // a `replied` row ends nothing the stream could miss: its reply is in the chat
+    refetchInterval: (q) => (q.state.data?.bots.some((b) => b.state !== 'replied') ? WAITS_BACKSTOP_MS : false),
     enabled: !!id,
   });
 
@@ -375,7 +383,7 @@ interface ThreadEvent {
   kind?: string;
   thread_id?: string;
   bots?: BotWait[];
-  version?: string;
+  version?: number;
 }
 interface MessageEvent {
   id?: string;
@@ -446,8 +454,8 @@ export function stepRun(runs: LiveRun[], d: RunEvent): LiveRun[] {
 
 /** The bots the thread waits on, as the server lists them now (what the chat draws, replying.ts), unless a newer read
     already landed. */
-export function setWaits(cid: string, bots: BotWait[], version?: string): void {
-  queryClient.setQueryData<Waits>(waitsKey(cid), (was) => (was && older(was.version, version) ? was : { bots, version: version ?? '' }));
+export function setWaits(cid: string, bots: BotWait[], version?: number): void {
+  queryClient.setQueryData<Waits>(waitsKey(cid), (was) => (was && older(was.version, version) ? was : { bots, version: versionOf(version) }));
 }
 
 /** What the live row says: its pieces and what is being typed, a blank line between. */

@@ -285,9 +285,9 @@ SCHEMAS.update(
             {
                 "bots": items(ref("ThreadBotStatusRow")),
                 "version": {
-                    "type": "string",
-                    "description": "The time of the root's newest status change when read (\"\" before any): a "
-                    "client drops a read older than the rows it holds",
+                    "type": "integer",
+                    "description": "The seq of the root's newest status change when read (0 before any): a client "
+                    "drops a read older than the rows it holds",
                 },
             },
             required=["bots", "version"],
@@ -331,7 +331,7 @@ SCHEMAS.update(
                     "items": ref("ThreadBotStatusRow"),
                     "description": "First page only: the bots the root waits on, as `GET .../bot-status` gives them",
                 },
-                "bot_status_version": {"type": "string", "description": "First page only: `bot_status`'s `version`"},
+                "bot_status_version": {"type": "integer", "description": "First page only: `bot_status`'s `version`"},
                 "read_marks": {
                     "type": "object",
                     "additionalProperties": {"type": "integer"},

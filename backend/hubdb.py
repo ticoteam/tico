@@ -2245,6 +2245,9 @@ def _write_message(
 
     if isinstance(refs, dict) and wake_rule_engine.PARKED_NOTICE in refs:
         refs = {k: v for k, v in refs.items() if k != wake_rule_engine.PARKED_NOTICE}
+    if isinstance(refs, dict) and "by_run" in refs:
+        # Only the run's own token says which run wrote a post (below), and a caller's mark never reaches the rules.
+        refs = {k: v for k, v in refs.items() if k != "by_run"}
     decision = (
         None if outside else wake_rule_engine.judge(conn, actor, target, kind, refs, body, conv, in_reply_to, decided)
     )
@@ -2256,8 +2259,6 @@ def _write_message(
         held = decision.reason
         if held:
             refs = {**refs, "quiet": True, wake_rules.MARK: held}
-    if isinstance(refs, dict) and "by_run" in refs:
-        refs = {k: v for k, v in refs.items() if k != "by_run"}  # only the run's own token says which run wrote it
     run = RUN.get()
     if run and is_bot(actor) and not (refs or {}).get("turn_id"):
         found = conn.execute("SELECT bot_id FROM attempts WHERE id=?", (run,)).fetchone()
@@ -4677,6 +4678,7 @@ def is_comment(msg):
                 "can_wait",
                 "held_by",
                 "no_mentions",  # an agent's done note (task_calls.done_note)
+                "by_run",  # a comment a run posted with a tool call (_write_message)
             }
         )
     )

@@ -22,6 +22,7 @@ listed bot: the root's wakes with their job and run, the viewer's check of their
 import json
 
 from . import runner_online
+from .harnesses import EXTERNAL_HARNESSES
 from .store import H, bot_readiness, readiness_document
 
 MAX_BOTS = 5
@@ -51,30 +52,70 @@ _OPEN = (
     "d.root_id=?1 AND d.recipient LIKE 'bot:%' AND d.mode IN ('queue','steer') "
     "AND d.state IN ('pending','delivered','capped') AND d.cause='human'"
 )  # word for word the partial index message_deliveries_open_bots
-_BOTS_SQL = f"SELECT DISTINCT d.recipient FROM message_deliveries d WHERE {_OPEN}"
-# The root's wakes that still say something, with the job that carries each and the run that took it (its job's run,
-# else the running turn it went into as an input): capped, its job live, its run going or ended in the last ENDED_S, or
-# an outside agent's (?3) that it has not read yet. A wake whose job and run ended long ago is not read further.
+# Each SQL list below is word for word the partial index it reads: jobs_live_created, attempts_live_lease, and
+# attempts_finished_state's states for a run that ended.
+_JOB_LIVE = "j.state IN ('queued','leased','running','input')"
+_RUN_LIVE = "a.state IN ('leased','running')"
+_RUN_ENDED = "a.state IN ('input','completed','failed','interrupted','expired') AND a.finished_at>=?2"
+# The root's wakes that can still say something, read from the few rows that can: capped ones, those whose job is live
+# or whose run is going or ended in the last ENDED_S (the jobs it holds, or its inputs by the waking message),
+# and an outside agent's that it has not read yet (its carrier, read from the reader's unread index). A wake whose job
+# and run ended long ago is never read, however long the root's history. CROSS JOIN and INDEXED BY keep each lookup
+# going from the few live rows to the root's, never the other way.
+_PICKED_SQL = (
+    "SELECT d.id FROM message_deliveries d INDEXED BY message_deliveries_capped WHERE {open} AND d.state='capped' "
+    "UNION SELECT d.id FROM jobs j CROSS JOIN message_deliveries d INDEXED BY message_deliveries_carrier "
+    "ON d.carrier_id=j.message_id "
+    f"WHERE {_JOB_LIVE} AND {{open}} "
+    "UNION SELECT d.id FROM jobs j CROSS JOIN message_deliveries d ON d.message_id=j.message_id "
+    f"AND d.recipient='bot:'||j.bot_id WHERE {_JOB_LIVE} AND {{open}} "
+    "UNION SELECT d.id FROM took a CROSS JOIN jobs j ON j.attempt_id=a.id CROSS JOIN message_deliveries d "
+    "INDEXED BY message_deliveries_carrier ON d.carrier_id=j.message_id WHERE {open} "
+    "UNION SELECT d.id FROM took a CROSS JOIN jobs j ON j.attempt_id=a.id CROSS JOIN message_deliveries d "
+    "ON d.message_id=j.message_id AND d.recipient='bot:'||j.bot_id WHERE {open} "
+    "UNION SELECT d.id FROM took a CROSS JOIN attempt_inputs i ON i.attempt_id=a.id CROSS JOIN message_deliveries d "
+    "ON d.message_id=i.message_id AND d.recipient='bot:'||a.bot_id WHERE {open} "
+    "UNION SELECT d.id FROM outside o CROSS JOIN messages m ON m.recipient_id=o.bot "
+    "CROSS JOIN message_deliveries d INDEXED BY message_deliveries_carrier ON d.carrier_id=m.id "
+    "WHERE (m.delivered_at IS NULL OR m.read_at IS NULL) "
+    "AND m.deleted_at IS NULL AND m.read_at IS NULL AND {open}"
+).format(open=_OPEN)
+# The bots run by an outside agent (enqueue.external_bot_sql): they take their work with no job here, when they read it.
+_OUTSIDE_SQL = "SELECT 'bot:'||bot_id AS bot FROM bot_settings WHERE harness IN ({})".format(
+    ",".join("'" + h + "'" for h in EXTERNAL_HARNESSES)
+)
+# Those wakes with the job that carries each and the run that took it (its job's run, else the running turn it went
+# into as an input), and whether it waits on an outside agent's read.
 _WAKES_SQL = (
+    f"WITH outside(bot) AS ({_OUTSIDE_SQL}), "
+    f"took AS (SELECT a.id, a.bot_id FROM attempts a WHERE {_RUN_LIVE} "
+    f"UNION ALL SELECT a.id, a.bot_id FROM attempts a WHERE {_RUN_ENDED}), "
+    f"picked(id) AS ({_PICKED_SQL}) "
     "SELECT d.recipient, d.state, d.message_id, d.created_at, j.state AS job, a.id AS run, a.state AS run_state, "
     "COALESCE(a.started_at, a.created_at) AS started, a.finished_at, "
     "(SELECT m.conversation_id FROM jobs s JOIN messages m ON m.id=s.message_id WHERE s.id=a.job_id) AS run_thread, "
-    "(SELECT read_at FROM messages WHERE id=d.carrier_id) AS carrier_read FROM message_deliveries d "
+    "(d.recipient IN (SELECT bot FROM outside) AND EXISTS (SELECT 1 FROM messages c WHERE c.id=d.carrier_id "
+    "AND c.read_at IS NULL)) AS outside_unread FROM message_deliveries d "
     "LEFT JOIN jobs j ON j.message_id=COALESCE(d.carrier_id, d.message_id) AND 'bot:'||j.bot_id=d.recipient "
     "LEFT JOIN attempts a ON a.id=COALESCE(j.attempt_id, "
     "(SELECT i.attempt_id FROM attempt_inputs i WHERE i.message_id=d.message_id)) AND 'bot:'||a.bot_id=d.recipient "
-    f"WHERE {_OPEN} AND (d.state='capped' OR j.state IN {LIVE_JOBS} OR a.state IN {RUNNING} OR a.finished_at>=?2 "
-    "OR d.recipient IN (SELECT value FROM json_each(?3))) ORDER BY d.created_at"
+    "WHERE d.id IN (SELECT id FROM picked) ORDER BY d.created_at"
 )
-# The newest post of each of these runs in the root, by the run's bot: its reply or a tool post it made.
+# The newest post of each of these runs in the root by the run's own bot: its reply or a tool post it made. Another
+# bot's post naming the run is not its answer.
 _REPLIES_SQL = (
-    "SELECT COALESCE(json_extract(refs,'$.turn_id'), json_extract(refs,'$.by_run')) AS run, MAX(seq) FROM messages "
-    "WHERE conversation_id IN (SELECT id FROM conversations WHERE id=?1 OR root_id=?1) AND seq>?2 "
-    "AND sender_id LIKE 'bot:%' AND deleted_at IS NULL "
-    "AND COALESCE(json_extract(refs,'$.turn_id'), json_extract(refs,'$.by_run')) IN (SELECT value FROM json_each(?3)) "
-    "GROUP BY 1"
+    "SELECT run, MAX(seq) FROM (SELECT COALESCE(json_extract(refs,'$.turn_id'), json_extract(refs,'$.by_run')) AS run, "
+    "seq, sender_id FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE id=?1 OR root_id=?1) "
+    "AND seq>?2 AND sender_id LIKE 'bot:%' AND deleted_at IS NULL) p "
+    "WHERE run IN (SELECT value FROM json_each(?3)) AND sender_id=(SELECT 'bot:'||bot_id FROM attempts WHERE id=p.run) "
+    "GROUP BY run"
 )
-_LAST_STATUS_SQL = "SELECT MAX(created_at) FROM changes WHERE topic='threads' AND kind='bot_status' AND subject_id=?"
+# The root's newest `bot_status` change, the newest of its time first (the partial index changes_bot_status walked
+# back one step), its seq the read's version.
+_LAST_STATUS_SQL = (
+    "SELECT created_at, seq FROM changes WHERE topic='threads' AND kind='bot_status' AND subject_id=? "
+    "ORDER BY created_at DESC, seq DESC LIMIT 1"
+)
 
 
 # The running turns and their roots (the partial index one_active_attempt_per_lane holds exactly these).
@@ -102,7 +143,7 @@ def trailing_roots(c):
         if not root or root in roots:
             continue
         if root not in last:
-            last[root] = c.execute(_LAST_STATUS_SQL, (root,)).fetchone()[0]
+            last[root] = (c.execute(_LAST_STATUS_SQL, (root,)).fetchone() or [None])[0]
         if not last[root] or last[root] >= quiet:
             continue
         step = c.execute(_NEWEST_STEP_SQL, (attempt_id,)).fetchone()
@@ -135,21 +176,21 @@ def _root(c, root):
 
 
 def version(c, root):
-    """The time of the root's newest `bot_status` change, "" before any: a read made later never has an older one, so a
-    client keeps the newest read's rows and drops an older read that lands after it. Read before the rows, so a read
+    """The seq of the root's newest `bot_status` change (the newest by its time, then by seq), 0 before any: a read made
+    later never has a smaller one, and two changes in the same millisecond still differ, so a client keeps the newest
+    read's rows and drops an older read that lands after it. Read before the rows, in the same transaction, so a read
     never claims a newer version than its rows."""
     root_id = _root(c, root)
-    return (c.execute(_LAST_STATUS_SQL, (root_id,)).fetchone()[0] or "") if root_id else ""
+    row = c.execute(_LAST_STATUS_SQL, (root_id,)).fetchone() if root_id else None
+    return int(row[1]) if row else 0
 
 
 def candidates(c, v, root_id):
     """The root's wakes that still say something to viewer `v`, oldest first: each a _WAKES_SQL row whose message `v`
     reads, with `kind` (up_next, capped, working, replied, no_reply or stopped) and `run` (the run that took it, None
     while none has). The viewer's check comes first: no wake `v` cannot read is counted or limited."""
-    seen = {}
-    outside = [bot for (bot,) in c.execute(_BOTS_SQL, (root_id,)) if _outside(c, bot, seen)]
     since = H.shift(H.now(), seconds=-ENDED_S)
-    rows = [dict(r) for r in c.execute(_WAKES_SQL, (root_id, since, json.dumps(outside)))]
+    rows = [dict(r) for r in c.execute(_WAKES_SQL, (root_id, since))]
     seqs = _readable_wakes(c, v, [r["message_id"] for r in rows])
     rows = [r for r in rows if r["message_id"] in seqs]
     runs = sorted({r["run"] for r in rows if r["run"]})
@@ -164,15 +205,17 @@ def candidates(c, v, root_id):
         recent = bool(run) and (going or (r["finished_at"] or "") >= since)
         if r["state"] == "capped":
             kind = "capped"
+        elif r["job"] == "queued":
+            kind = "up_next"  # its job waits again (deferred out of a run, or its run gave it back): no run has it now
         elif recent and (replies.get(run) or 0) > seq:
             kind = "replied"  # its run posted after it: going or not, the reply is in the chat
         elif recent and going:
             kind = "working"
         elif r["job"] in LIVE_JOBS:
-            kind = "up_next"  # its job waits again (a run that never started gave it back)
+            kind = "up_next"  # its job is live, and no run of it is going yet
         elif recent:
             kind = "no_reply" if r["run_state"] == "completed" else "stopped"
-        elif r["recipient"] in outside and not r["carrier_read"]:
+        elif r["outside_unread"]:
             kind = "up_next"  # an outside agent takes it with no job here, when it reads it
         else:
             continue
@@ -217,16 +260,6 @@ def _runs_shown(c, v, wakes):
         if task_privacy.attempt_readable(c, principal, run):
             out.add(run)
     return out
-
-
-def _outside(c, actor, seen):
-    """Whether the bot is an outside agent (agents.presence): it takes its work with no job here. `seen` caches the
-    answer per bot."""
-    if actor not in seen:
-        from .agents import external_harness
-
-        seen[actor] = bool(external_harness(c, H.actor_id(actor)))
-    return seen[actor]
 
 
 _STEP_SQL = (

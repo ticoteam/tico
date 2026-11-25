@@ -200,7 +200,7 @@ export function snapshotRun(run: RunSnapshot, agent: string): LiveRun {
     read made since the view opened draws anything: a kept one may be of a run that has ended. */
 export function SessionRun({ t, agent }: { t: Pick<TaskData, 'id' | 'conversation_id'>; agent: string }) {
   const thread = t.conversation_id ?? '';
-  const said = useReplying(thread, (bot) => bot === agent).length > 0;
+  const said = useReplying(thread, (bot) => bot === agent, agent).length > 0;
   const read = useQuery({ ...sessionRunQuery(t.id, agent), refetchOnMount: 'always' });
   const run = read.isFetchedAfterMount ? read.data : undefined;
   useEffect(() => {
