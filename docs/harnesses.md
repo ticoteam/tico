@@ -112,6 +112,32 @@ it as `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, its auto-compact window, which it reads
 summary buffer) and keeps it within its own 100k to 1M range and the model's window. A turn that carries no Compact at
 leaves Claude Code its own default.
 
+One `claude -p` process serves a conversation's turns (`persistent_session`), as T3 Code keeps its Claude query: the
+next message is the next stream-json user message on the same stdin, so the turn skips Claude's start and session load.
+After a turn that completed, or one a person's Stop or a drain ended on Claude's interrupt, the runner's session keeper
+(`keeper.rs`) holds the process, with stdin open, `HUB_TOKEN` read from a token file of its own (`tico-file:`, blanked
+between attempts and before it is stopped), and nothing reading what it says. It stops it after 2 minutes unused, when
+the runner stops, or when the thread's next turn would start it differently: another model or effort, a changed
+environment or granted secret, a hub token where there was none, MCP servers, folder (a copy made again at the same
+path is another), background wait, or plan and the revision of its sign-in, so a reconnected or refreshed login starts
+Claude again (`fingerprint` in `hosts/claude.rs`); that one has stopped before the new one starts. This is decided once,
+as the turn takes the process and before it is lent a token (`reuse`): a process that has gone, whose login home's
+sign-in file is no longer the one Claude started on (read as a plain, bounded file, never through a link or a pipe), or
+that runs anything beyond what it ran when it said it was up is stopped then, and the turn starts Claude with
+`--resume`. Once the message is queued, a kept process that dies is a crash: the turn fails and nothing is sent again.
+A kept Claude that names another session than the thread's before or in its echo of the message fails the turn and is
+stopped. A turn routed through a plan exit, one with a credential file, one that leaves any process under Claude beyond
+what it ran when it said it was up (or whose process table cannot be read whole), one stopped while Claude had not
+answered the stop, one whose Claude did not echo the prompt by the id it was written with, and one whose Claude said
+something before that echo are never kept. The process check is best effort: a job one of Claude's own helpers starts
+after it runs as the same bot on the same thread. Nor is a turn with a
+granted tool reached through the hub's tool proxy: its token is each attempt's own, so every turn starts Claude cold
+until the proxy has a token that can be handed over between attempts. Nor is a turn that ends with background work
+running: it ends only once that work has, or on its wait with Claude killed, so the keeper's 4-hour hold for background
+work does not apply to Claude. A full Claude login's turn home stays while its process runs and gets each new token, as
+every home of that plan does (`model_subscriptions.rs` `keep_home`). Without the keeper a turn's stdin closes once it is over and
+Claude exits.
+
 **Compact at** applies to a pi turn: the turn's `settings.json` (in the same agent folder) sets pi's
 `compaction.reserveTokens` to the model's context window less the bot's Compact at (`reserve_tokens` in `hosts/pi.rs`,
 kept between pi's default 16,384 and a compaction point of 100,000). The Tico Gateway's models have a 200,000-token window,
@@ -553,7 +579,7 @@ another bot's home; all turns use the original login in its own home.
 | `voice_session` | The harness can answer live call questions in one resident session | `false` |
 | `voice_session_runner` | Additional heartbeat capability required to place a resident call session on the runner | `voice_sessions_v1` suffices |
 | `steer` | A message sent while a turn runs is written into that turn (Claude Code, Codex and pi; Claude Code also needs a CLI that echoes its input) | The message waits for the next turn; DM says so and offers Stop and redirect |
-| `persistent_session` | One process per conversation is kept between turns: pi's own pool (15 minutes), Antigravity and Codex in the runner's session keeper (`keeper.rs`, T3 Code's: 2 minutes unused, checked every 15 seconds, up to 4 hours while background work runs; Claude next) | One process per turn |
+| `persistent_session` | One process per conversation is kept between turns: pi's own pool (15 minutes), Antigravity, Codex and Claude Code in the runner's session keeper (`keeper.rs`, T3 Code's: 2 minutes unused, checked every 15 seconds, up to 4 hours while background work runs, which a Claude turn never leaves) | One process per turn |
 | `goal_runs_across_turns` | A native goal keeps the thread going after a turn completes, and a clear is reconciled | A goal ends with its turn |
 | `serial_cold_start` | An expired stored token is refreshed by the first turn; the others wait for it | Turns start together |
 | `isolated_user` | The CLI keeps no owner-only sign-in state in the bot's home, so on a Docker runner with a turn-user pool each turn runs as its own leased OS user that cannot enter another bot's checkout. Only pi sets it: Claude Code, Codex, Gemini CLI, Cursor, Grok, Muse Code and Antigravity keep 0600 sign-in files shared across turns | The turn runs as `bot`; readiness reports it as not isolated |

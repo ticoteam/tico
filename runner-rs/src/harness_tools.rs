@@ -2590,7 +2590,7 @@ mod tests {
             caps.compaction
                 && caps.repo_commands
                 && caps.resume_after_interrupt
-                && !caps.persistent_session
+                && caps.persistent_session
         );
         assert!(
             all["codex"].capabilities.resume_after_interrupt

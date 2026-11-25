@@ -114,13 +114,23 @@ impl Stderr {
         send: impl Fn(serde_json::Value) + Send + 'static,
         env: &crate::env::Env,
     ) -> Self {
+        let scrub = Arc::new(Redactor::new(&redact::env_secrets(env)));
+        Self::capture_scrubbed(child, send, scrub)
+    }
+
+    /// `capture_with`, masking what `scrub` holds when each line comes: a process that serves several turns has each
+    /// one's secrets added to it.
+    pub fn capture_scrubbed(
+        child: &mut Child,
+        send: impl Fn(serde_json::Value) + Send + 'static,
+        scrub: Arc<Redactor>,
+    ) -> Self {
         let tail = Self::default();
         let Some(mut pipe) = child.stderr.take() else {
             tail.1.store(true, std::sync::atomic::Ordering::SeqCst);
             return tail;
         };
         let kept = tail.clone();
-        let scrub = Redactor::new(&redact::env_secrets(env));
         tokio::spawn(async move {
             let mut buf = [0u8; 4096];
             let mut pending = Vec::new();
