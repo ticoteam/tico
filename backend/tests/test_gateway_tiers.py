@@ -368,7 +368,7 @@ def _meeting_row(**change):
             {
                 "version": "1.0",
                 "id": "tico-meeting-1.0",
-                "model": "Inception Mercury 3",
+                "model": "MiniMax M3.1 Flash",
                 "inputs": ["text"],
                 "price": {"input": 0.30, "output": 1.05, "cached_input": 0.03},
                 "long_prompt": None,
@@ -458,6 +458,42 @@ def test_a_held_pinned_id_is_refused_by_the_model_check(monkeypatch):
     )
 
 
+def _card(cat):
+    """What the Gateway card (gateway_page.overview) and an agent's lineup show from `cat`: the models table and every
+    service's fields. A price HQ has not set reads the same as null or empty text."""
+    from backend import gateway_page
+
+    services = [
+        {
+            "id": row["id"],
+            "name": row["name"],
+            "for": row.get("for") or "",
+            "price": row.get("price") or "",
+            "status": row["status"],
+            "tools": row["tools"],
+            "details": row.get("details") or [],
+        }
+        for row in cat["services"]
+    ]
+    return {"as_of": cat.get("as_of", ""), "models": gateway_page.models(cat), "services": services}
+
+
+def test_the_release_copy_shows_what_hqs_catalog_shows():
+    """The Gateway card is the same before the first refresh (the release's copy, backend/gateway_catalog.json) and
+    after it (HQ's answer, validated). The fixture is HQ's `build()` as it answers. To regenerate it, run this at the
+    root of a ticoteam/tico-services checkout on main (with its requirements installed) and copy the file here, then
+    over backend/gateway_catalog.json for the release:
+    `python -c "import json; from gateway import catalog; print(json.dumps(catalog.build(), indent=1,
+    ensure_ascii=False), end='')" > gateway_catalog_hq.json`."""
+    hq = json.loads((Path(__file__).parent / "fixtures" / "gateway_catalog_hq.json").read_text(encoding="utf-8"))
+    before, after = _card(T.SNAPSHOT), _card(T.validate(hq))
+    assert before["models"] == after["models"]
+    assert [row["id"] for row in before["services"]] == [row["id"] for row in after["services"]]
+    for mine, theirs in zip(before["services"], after["services"]):
+        assert mine == theirs, mine["id"]
+    assert before == after
+
+
 def test_a_services_details_come_through_and_an_older_hqs_rows_have_none():
     """The Gateway card shows each service's details (label and value pairs); a row from an older HQ has none."""
     hq = {
@@ -475,7 +511,7 @@ def test_a_services_details_come_through_and_an_older_hqs_rows_have_none():
     assert cleaned[0]["details"] == [{"label": "Low", "value": "Jev"}] and all(
         row["details"] == [] for row in cleaned[1:]
     )
-    # The release's copy has the same shape, with this app's own tool names.
+    # The release's copy has the same shape, with this app's own tool names (HQ lists them by these names too).
     assert all(isinstance(row["details"], list) and row["for"] for row in T.SNAPSHOT["services"])
     assert next(row for row in T.SNAPSHOT["services"] if row["id"] == "mail.physical")["tools"] == [
         "tico_mail_list",
