@@ -21,7 +21,7 @@ instance:
                                             (and the same for its Slack gateway, when `set-slack` turned it on)
     <root>/companies/<slug>/extra.env       0600, settings carried from an install moved here (`add --env-file`)
     <root>/companies/<slug>/company.json    what the cell knows about it (no secrets): port, index, version, state,
-                                            aliases
+                                            aliases, visuals host
     <root>/companies/<slug>/data/           the server's /data (owned by the server's user, 10001)
     <root>/companies/<slug>/control/        the server's /control: updater-token (0600, 10001), its updater's secret
     <root>/companies/<slug>/updater-status.json   the last outcome its updater reports (setup/cell_updater.py)
@@ -29,7 +29,9 @@ instance:
 
 A company's index (the smallest free one, kept until `remove` without --keep-data) gives it its loopback port
 (20000 + index) and its two private networks, so no two companies ever share one, across restarts too. The router maps
-the Host header to that port: the company's domain and its aliases (`--alias`), no host on two companies. cloudflared
+the Host header to that port: the company's domain, its aliases (`--alias`) and its visuals host, no host on two
+companies. The visuals host is `<slug>-visuals.<domain>` (`visual_host` in its record, TICO_VISUAL_ORIGIN in its .env),
+so its chat pages show live, unless its carried settings (`--env-file`) set TICO_VISUAL_ORIGIN themselves. cloudflared
 sends `*.<domain>` to the router, and before that wildcard, each company host it does not match (it matches exactly one
 label: hub.tico.team yes; a.b.tico.team, tidy.rocks no). `add` and `remove` rewrite that list when it changes and
 restart cloudflared then (it reads its config only when it starts; every company drops for those seconds). DNS for such
@@ -57,7 +59,8 @@ files `add` derives from the record (compose.yaml, compose.cell.yaml, the update
 core, and restarts the server only when one changed: that is how a company made by an older core picks this up.
 
 Moving an existing install here (staff only; HQ never does): `--own-domain` lets --domain be any hostname instead of
-<slug>.<domain>; `--alias` adds hostnames (its runner and visual addresses); `--env-file` carries its other settings
+<slug>.<domain>; `--alias` adds hostnames (its runner address, or a visual address of its own); `--env-file` carries
+its other settings
 (kept in extra.env and merged into every .env `add` and `update` write; a key the cell writes with a value, or owns, is
 refused and named in "ignored"); `--import-data` unpacks its /data archive, checked whole first (no absolute names, no
 `..`, no symlinks, hard links only to its own files, no special files), into an empty data folder before the first
@@ -1038,7 +1041,7 @@ def router_config(companies: list[dict], routes: list[dict] = (), meet: bool = F
         "",
     ]
     for c in sorted(companies, key=lambda c: c["domain"]):
-        sites = ", ".join(f"http://{h}:{ROUTER_PORT}" for h in [c["domain"], *c.get("aliases", [])])
+        sites = ", ".join(f"http://{h}:{ROUTER_PORT}" for h in app_hosts(c))
         lines += company_site(c, sites, meet)
         if c.get("page_host"):
             lines += page_site(c)
@@ -1220,9 +1223,17 @@ def route_site(r: dict) -> list[str]:
     ]
 
 
+def app_hosts(c: dict) -> list[str]:
+    """The hosts its server answers on as itself: its domain, its aliases and its visuals host (once, should an alias
+    name it too)."""
+    return list(
+        dict.fromkeys([c["domain"], *c.get("aliases", []), *([c["visual_host"]] if c.get("visual_host") else [])])
+    )
+
+
 def hosts_of(c: dict) -> list[str]:
-    """Every host a company answers on: its domain, its aliases and its page host (the wake service checks these too)."""
-    return [c["domain"], *c.get("aliases", []), *([c["page_host"]] if c.get("page_host") else [])]
+    """Every host a company answers on: app_hosts and its page host (the wake service checks these too)."""
+    return [*app_hosts(c), *([c["page_host"]] if c.get("page_host") else [])]
 
 
 def tunnel_hosts(
@@ -1532,13 +1543,17 @@ def cell_env(values: dict[str, str], c: dict, meet: dict | None = None) -> dict[
 
     Tico Meet (`meet`, Cell.meet: the cell's TURN domain and key pair, or None while it is off): browsers connect to
     the company's own host (the router sends /rtc to LiveKit), and its server calls LiveKit's API on its default
-    network's gateway, as it calls its updater. Off, the keys are removed, so calls answer meet_unavailable."""
+    network's gateway, as it calls its updater. Off, the keys are removed, so calls answer meet_unavailable.
+
+    The record's visuals host is the visual origin; without one, a TICO_VISUAL_ORIGIN the settings carry stays."""
     out = {k: v for k, v in values.items() if k != "TICO_UPDATES" and k not in MEET_ENV_KEYS}
     out.update(
         TICO_UPDATER_URL=updater_url(c["index"]),
         TICO_CELL="1",
         COMPOSE_PROFILES=SLACK_SERVICE if c.get("slack") else "",
     )
+    if c.get("visual_host"):
+        out["TICO_VISUAL_ORIGIN"] = f"https://{c['visual_host']}"
     if meet:
         out.update(
             TICO_MEET_URL=f"wss://{c['domain']}",
@@ -2566,10 +2581,15 @@ class Cell:
                 aliases = (old or {}).get("aliases", []) if aliases is None else aliases
                 if domain in aliases:
                     raise CellError("bad_domain", f"--alias {domain} is the company's --domain")
+                extra = self.extra_env(slug) if carried is None else carried
+                # Live chat pages need a visual origin apart from the app's (backend/visuals.py); a carried one wins.
+                visual = "" if (extra.get("TICO_VISUAL_ORIGIN") or "").strip() else f"{slug}-visuals.{cell['domain']}"
+                if visual == domain:
+                    raise CellError("bad_domain", f"--domain {domain} is the company's visuals host")
                 host = (old or {}).get("page_host", "") if page_host is None else page_host
-                if host in {domain, *aliases} and host:
+                if host in {domain, *aliases, visual} and host:
                     raise CellError("bad_domain", f"--page-host {host} is one of the company's own hosts")
-                self.refuse_taken(slug, {domain, *aliases, *([host] if host else [])})
+                self.refuse_taken(slug, {domain, *aliases, host, visual} - {""})
                 index = old["index"] if old else self.allocate()
                 d = self.dir(slug)
                 old_env = envfile.parse(_read(d / ".env"))
@@ -2586,6 +2606,8 @@ class Cell:
                 }
                 if aliases:
                     c["aliases"] = aliases
+                if visual:
+                    c["visual_host"] = visual
                 if host:
                     c["page_host"] = host
                 sleep_minutes = sleep_minutes if sleep_minutes is not None else (old or {}).get("sleep_minutes")
@@ -2668,7 +2690,6 @@ class Cell:
                 env = cell_env(env, c, meet)
                 # Carried settings fill only what the cell leaves unset: a key it writes with a value is its own.
                 written = {k for k, v in env.items() if v}
-                extra = self.extra_env(slug) if carried is None else carried
                 ignored = sorted(k for k in extra if k in written or cell_owned(k))
                 extra = {k: v for k, v in extra.items() if v and k not in ignored}
                 env.update(extra)
@@ -3053,7 +3074,7 @@ class Cell:
             c = self.live(slug)
             if c.get("state") != "running":
                 raise CellError("not_running", f"{slug} is {c.get('state')}; start it before giving it a page host")
-            if host and host in {c["domain"], *c.get("aliases", [])}:
+            if host and host in app_hosts(c):
                 raise CellError("bad_domain", f"--host {host} is one of the company's own hosts")
             if host == c.get("page_host", "") and not c.get("page_pending"):
                 with self.lock("cell"):

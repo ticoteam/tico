@@ -113,8 +113,8 @@ Each command prints exactly one JSON object on stdout and exits 0 or 1. An error
 | `bad_args` | A flag is missing or a value is invalid |
 | `bad_slug` | The slug is not 1 to 40 lowercase letters, digits and single hyphens |
 | `reserved_name` | The name is one of Tico's own (the list below) |
-| `bad_domain` | `--domain` is not `<slug>.<the cell's domain>` (without `--own-domain`), or `--domain`/`--alias` is not a plain hostname, is the cell's domain, or repeats a host |
-| `domain_taken` | Another company has this host as its domain or an alias |
+| `bad_domain` | `--domain` is not `<slug>.<the cell's domain>` (without `--own-domain`), or `--domain`/`--alias` is not a plain hostname, is the cell's domain, or repeats a host, or `--domain`/`--page-host` is the company's visuals host |
+| `domain_taken` | Another company has this host as its domain, an alias or its visuals host |
 | `secret_file` | A secret file is missing, empty, readable by others or has the wrong content |
 | `company_file` | The company file is not a valid company YAML |
 | `data_exists` | `--import-data`, but the company's data folder is not empty. Nothing was touched |
@@ -189,6 +189,12 @@ A company's `state` is one of `running`, `starting`, `unhealthy`, `stopped`, `sl
   aliases and carried settings (`--env-file`). A
   failed `add` leaves the company in place, so the same `add` resumes it. `add` never changes a company's release:
   `--version` with another release is refused (`use_update`), since a new release migrates the database.
+- **Live chat pages.** Every company also answers on its visuals host, `<slug>-visuals.<the cell's domain>`, under
+  the same wildcard as its domain, and its `.env` has `TICO_VISUAL_ORIGIN=https://<that host>`, so visual pages and
+  SVG show inline in its threads ([Visuals](visuals.md)). It is kept in `company.json` (`visual_host`), never in the
+  alias list, so `--alias` cannot drop it. Carried settings (`--env-file`) that set `TICO_VISUAL_ORIGIN` win: the
+  company then gets no visuals host. `add` sets it for a new company and for one that runs already; `update` writes
+  what the record has, so a company made before this gets its visuals host from its next `add`.
 - **Reserved names:** hub, admin, accounts, updates, preview, runner, www, api, app, mail, status, docs, help,
   support, hq, gateway, hooks, cloud, tico, team.
 - **The backup key file** is either `KEY=VALUE` lines (`LITESTREAM_ACCESS_KEY_ID` and `LITESTREAM_SECRET_ACCESS_KEY`,
@@ -389,8 +395,8 @@ python3 -m setup cell add --company ticoteam --own-domain --domain hub.tico.team
   the cell's domain) instead of `<slug>.<the cell's domain>`. Reserved names limit only slugs, so the slug is
   `ticoteam` and the domain can still be `hub.tico.team`. Pass the flag on every `add` for that company.
 - **`--alias HOST`** (up to 5): more hostnames for the same server, such as the runner address (`TICO_RUNNER_URL`'s
-  host) and the visual address (`TICO_VISUAL_ORIGIN`'s host). The same rules as an own domain; not the domain itself
-  and not twice. No host (domain or alias) belongs to two companies that are not removed. Passing `--alias` replaces
+  host) and a visual address of its own (`TICO_VISUAL_ORIGIN`'s host, carried with `--env-file`). The same rules as
+  an own domain; not the domain itself and not twice. No host (domain or alias) belongs to two companies that are not removed. Passing `--alias` replaces
   the saved list; `--alias ""` alone clears it; leaving it out keeps it. The router sends the domain and every alias to
   the server's port.
 - **The tunnel and DNS.** Cloudflare's `*.<domain>` matches exactly one label: `hub.tico.team` and `runner.tico.team`
@@ -634,7 +640,7 @@ No database migration or company data is involved.
 | `.../compose.yaml` | The stock `compose.yaml` from the checkout, unchanged |
 | `.../compose.cell.yaml` | The memory limit, `data/` mounted as `/data` and `control/` as `/control`, `TICO_CELL`, the default network and the `tico.cell.company` label |
 | `.../extra.env` | Settings carried from a moved install (`--env-file`, 0600) |
-| `.../company.json` | The slot, port, release, memory, state, aliases, the sleep policy (`sleep_minutes`), whether its Slack gateway is on (`slack`), and a pending update (the release before it and its snapshot). No secrets |
+| `.../company.json` | The slot, port, release, memory, state, aliases, the visuals host (`visual_host`), the sleep policy (`sleep_minutes`), whether its Slack gateway is on (`slack`), and a pending update (the release before it and its snapshot). No secrets |
 | `.../data/`, `company-file/` | The server's `/data`, and the starter plan (both owned by user 10001) |
 | `.../control/updater-token` | The company's updater token (0600, owned by 10001); its server reads it as `/control/updater-token` |
 | `.../updater-status.json` | The cell updater's last status for the company (0600) |
