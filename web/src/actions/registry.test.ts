@@ -30,6 +30,17 @@ describe('registry', () => {
     expect([...r.keys()]).toEqual(['tasks.open']);
   });
 
+  it('skips a file that had not loaded, naming it, and keeps the rest (v0.6.282: one unset file failed every page)', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const r = buildRegistry({ 'a.ts': undefined, 'b.ts': { open: make() } });
+      expect([...r.keys()]).toEqual(['tasks.open']);
+      expect(error).toHaveBeenCalledWith(expect.stringContaining('a.ts'));
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   it('builds from every features/*/actions.ts with unique ids', () => {
     expect(registry.has('shell.goTo')).toBe(true);
     expect(registry.has('task.open')).toBe(true);
