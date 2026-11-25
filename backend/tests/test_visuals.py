@@ -456,6 +456,9 @@ def test_the_visual_address_answers_visuals_and_health_alone(api):
         assert api.get(VISUALS + path, headers=me).status_code == 404, path
     assert api.post(VISUALS + "/api/v2/tasks", json={"title": "x"}, headers=me).status_code == 404
     assert api.post(VISUALS + src[len(VISUALS) :]).status_code == 404  # a visual is read, never written
+    host = V.hostname(VISUALS)
+    for other in (f"{host}:8080", f"{host}.", f"{host.upper()}.:443"):  # any port, a trailing dot: still its host
+        assert api.get("/api/v2/config", headers={**me, "host": other}).status_code == 404, other
     assert api.get("/api/v2/config", headers=me).status_code == 200
     assert api.get("/healthz").status_code == 200
 

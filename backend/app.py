@@ -1021,7 +1021,9 @@ def _install_request_guard(
             # its visuals and health alone: no sign-in, API, files or web app a page there could reach as its own.
             if (
                 settings.visual_origin
-                and visuals.on_host(request, settings.visual_origin)
+                # Its hostname in any port, a trailing dot dropped: check_origin keeps that hostname apart from the app's.
+                and visuals.hostname("//" + request.headers.get("host", "")).rstrip(".")
+                == visuals.hostname(settings.visual_origin)
                 and not (
                     request.method in ("GET", "HEAD")
                     and (request.url.path.startswith("/visuals/") or request.url.path == "/healthz")
