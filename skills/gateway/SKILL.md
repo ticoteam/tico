@@ -1,7 +1,7 @@
 ---
 name: gateway
 version: 1
-description: Read when you need to know which Tico AI Gateway models and services exist, what they cost, or which one a job should run on - when you need a web search with sources, a page read, a picture (low, high or a vector SVG), a short video, or data: SEO, competitors' ads, Google reviews, business listings or an email check. Tico's `tico_gateway_catalog`, `tico_gateway_search`, `tico_gateway_fetch`, `tico_gateway_image`, `tico_gateway_video`, `tico_gateway_video_status`, `tico_gateway_seo`, `tico_gateway_ads`, `tico_gateway_reviews`, `tico_gateway_places`, `tico_gateway_email_check` and `tico_gateway_job` tools, or `tico gateway catalog`, `tico gateway search`, `tico gateway fetch`, `tico gateway image`, `tico gateway video` and `tico gateway seo|ads|reviews|places|email-check|job`.
+description: Read when you need to know which Tico AI Gateway models and services exist, what they cost, or which one a job should run on - when you need a web search with sources, a page read, a picture (low, high or a vector SVG), a short video, or data: SEO, competitors' ads, Google reviews, business listings or an email check. Tico's `tico_gateway_catalog`, `tico_gateway_search`, `tico_gateway_fetch`, `tico_gateway_image`, `tico_gateway_video`, `tico_gateway_video_status`, `tico_gateway_seo`, `tico_gateway_ads`, `tico_gateway_reviews`, `tico_gateway_places`, `tico_gateway_email_check` and `tico_gateway_job` tools, or `tico gateway catalog`, `tico gateway search`, `tico gateway fetch`, `tico gateway image`, `tico gateway video` and the data lookup commands under `tico gateway`.
 ---
 
 # The Tico AI Gateway

@@ -437,7 +437,11 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
             ).fetchone()
             if prior:
                 if not hmac.compare_digest(prior["request_hash"], fingerprint):
-                    raise Problem("idempotency_conflict", "This Idempotency-Key was used for another lookup", 409)
+                    raise Problem(
+                        "idempotency_conflict",
+                        "This Idempotency-Key belongs to different lookup details or a previous Gateway connection",
+                        409,
+                    )
                 return json.loads(prior["response"])
             c.execute(
                 "INSERT INTO idempotency(actor,operation,key,request_hash,response,created_at)"
@@ -453,7 +457,16 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
             # Email validation describes the field without relaying vendor text that could contain the address.
             detail = answer.get("detail") if service != "email-check" else None
             return Problem("gateway_data_invalid", detail or "The Gateway refused the lookup's fields", 422)
-        return Problem("gateway_data_failed", f"{service} failed: {code or status}", 503)
+        return Problem(
+            "gateway_data_failed", f"{service} failed: {code or status}", 429 if code == "rate_limited" else 422
+        )
+
+    def data_unconfirmed():
+        return Problem(
+            "gateway_data_unconfirmed",
+            "The Gateway did not confirm this lookup. Check Gateway usage before trying another operation ID",
+            409,
+        )
 
     def data_response(answer, status=200):
         answer = {("job_id" if field == "id" else field): value for field, value in answer.items()}
@@ -501,9 +514,7 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
                 raise Problem(
                     "gateway_data_already_checked", "This email check already ran. Its results are not kept", 409
                 )
-            raise Problem(
-                "gateway_data_unconfirmed", "The Gateway has yet to confirm this lookup. Retry using the same key", 409
-            )
+            raise data_unconfirmed()
 
         if status in (200, 202):
             with store.transaction(durable=True) as c:
@@ -516,11 +527,7 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
             with store.transaction() as c:
                 c.execute(f"DELETE FROM idempotency WHERE {data_receipt}", operation)
             raise data_problem(status, answer, code, service)
-        raise Problem(
-            "gateway_data_unconfirmed",
-            "The Gateway did not confirm this lookup. Check Gateway usage before trying again",
-            409,
-        )
+        raise data_unconfirmed()
 
     @app.get("/api/v2/gateway/data/jobs/{job_id}")
     def gateway_data_job(job_id: str, request: Request):

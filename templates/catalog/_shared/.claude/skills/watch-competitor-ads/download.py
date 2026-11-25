@@ -4,6 +4,7 @@ import argparse
 import http.client
 import ipaddress
 import os
+import signal
 import socket
 import tempfile
 from pathlib import Path
@@ -48,19 +49,14 @@ def connection(parts):
         def connect(self):
             # TLS verifies the hostname while the socket uses only the addresses checked above.
             for family, kind, proto, _, address in addresses:
-                sock = socket.socket(family, kind, proto)
-                try:
-                    sock.settimeout(self.timeout)
-                    sock.connect(address)
-                except OSError:
-                    sock.close()
-                    continue
-                try:
+                with socket.socket(family, kind, proto) as sock:
+                    try:
+                        sock.settimeout(self.timeout)
+                        sock.connect(address)
+                    except OSError:
+                        continue
                     self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
-                except BaseException:
-                    sock.close()
-                    raise
-                return
+                    return
             raise OSError("Could not connect to the media host")
 
     return PinnedHTTPS(host, timeout=15)
@@ -107,15 +103,23 @@ def download(url, stem):
     raise ValueError("Too many redirects")
 
 
+def deadline(signum, frame):
+    raise ValueError("The download took longer than 60 seconds")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("url")
     parser.add_argument("output_stem", type=Path)
     args = parser.parse_args()
+    signal.signal(signal.SIGALRM, deadline)
+    signal.alarm(60)
     try:
         print(download(args.url, args.output_stem))
     except (OSError, ValueError, http.client.HTTPException) as exc:
         parser.exit(1, f"Download refused: {exc}\n")
+    finally:
+        signal.alarm(0)
 
 
 if __name__ == "__main__":

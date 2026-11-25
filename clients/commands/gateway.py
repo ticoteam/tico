@@ -712,8 +712,8 @@ def gateway_places(api, args):
 @tool(
     "tico_gateway_email_check",
     "Check whether up to 20 email addresses can receive mail, through the Tico AI Gateway: each answers deliverable, "
-    "risky, undeliverable or unknown, with catch_all, disposable, role and free. Tico and the Gateway discard "
-    "the addresses. Billed per call at the vendor's cost plus 25%, from the company's Gateway cap.",
+    "risky, undeliverable or unknown, with catch_all, disposable, role and free. Lookup receipts keep no "
+    "addresses or results. Billed per call at the vendor's cost plus 25%, from the company's Gateway cap.",
     {
         "operation_id": DATA_OPERATION,
         "emails": {
@@ -886,7 +886,7 @@ GATEWAY = (
     ),
     Command(
         "gateway email-check",
-        "whether up to 20 addresses can receive mail; nothing is kept",
+        "whether up to 20 addresses can receive mail",
         args=(Arg("emails", positional=True, nargs="+", action="store"),),
         example="tico gateway email-check ana@acme.example",
     ),

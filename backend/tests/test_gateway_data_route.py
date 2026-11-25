@@ -140,7 +140,7 @@ def test_the_data_routes_report_refusals_and_expired_results(api, monkeypatch):
     for answer, code, status in [
         ((503, {}, "unconfigured"), "gateway_data_unavailable", 503),
         ((422, {"detail": "country is required"}, "invalid"), "gateway_data_invalid", 422),
-        ((429, {}, "cap_reached"), "gateway_data_failed", 503),
+        ((429, {}, "cap_reached"), "gateway_data_failed", 422),
     ]:
         monkeypatch.setattr(G, "data_call", lambda *a, answer=answer: answer)
         refused = asked(api)
@@ -208,7 +208,8 @@ def test_the_gateway_client_uses_the_hq_paths_and_marks_third_party_rows_untrust
 
 @pytest.fixture
 def downloader():
-    path = Path("templates/catalog/_shared/.claude/skills/watch-competitor-ads/download.py")
+    root = Path(__file__).resolve().parents[2]
+    path = root / "templates/catalog/_shared/.claude/skills/watch-competitor-ads/download.py"
     spec = importlib.util.spec_from_file_location("competitor_ad_download", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
