@@ -203,7 +203,13 @@ def test_the_pinning_rule(api):
     post(api, "pins", {"place": "bot:cpo", "item": "page:" + own}, bot, expected=403)
     post(api, "pins", {"place": "bot:ops", "item": "page:" + other}, bot, expected=404)  # not its own
     post(api, "pins", {"place": "bot:ops", "item": "page:" + own}, bot)
-    assert [w["id"] for w in get(api, "bots/ops/task-tabs")["widgets"]] == ["updates", "tasks", "files", "page:" + own]
+    assert [w["id"] for w in get(api, "bots/ops/task-tabs")["widgets"]] == [
+        "updates",
+        "tasks",
+        "files",
+        "tools",
+        "page:" + own,
+    ]
     # A bot pins only cards it made; a person who manages the bot pins another bot's page there.
     card = post(api, "cards", {"template": "tasks_by_status"})["card"]
     post(api, "pins", {"place": "bot:ops", "item": "card:" + card["id"]}, bot, expected=403)
@@ -251,11 +257,18 @@ def test_a_runner_reads_no_sidebar_and_one_who_only_sees_the_bot_gets_its_defaul
     with api.app.state.store.transaction() as c:
         restrict(c, "ops", see={"people": ["ana", "cara"]}, read={"people": ["ana"]}, write={"people": ["ana"]})
     seen = get(api, "bots/ops/task-tabs", "cara-test")
-    assert [w["id"] for w in seen["widgets"]] == ["updates", "tasks", "files"]
+    assert [w["id"] for w in seen["widgets"]] == ["updates", "tasks", "files", "tools"]
     assert "Launch" not in [t["name"] for t in seen["tabs"]]
     assert (seen["saved"], seen["can_edit"]) == (False, False)
     mine = get(api, "bots/ops/task-tabs")
-    assert [w["id"] for w in mine["widgets"]] == ["page:" + ops, "card:" + card["id"], "updates", "tasks", "files"]
+    assert [w["id"] for w in mine["widgets"]] == [
+        "page:" + ops,
+        "card:" + card["id"],
+        "updates",
+        "tasks",
+        "files",
+        "tools",
+    ]
     assert [t["name"] for t in mine["tabs"]] == ["Launch"]
 
 
@@ -482,19 +495,33 @@ def test_a_position_on_an_agents_sidebar_counts_its_built_ins(api):
     first = "card:" + added["card"]["id"]
     refused, later = mcp(api, "tico_card_add", {**settings, "count": 1}, bot)
     assert refused is False, later
-    assert [w for w, _ in widgets_of()(api)] == [first, "updates", "tasks", "files", "card:" + later["card"]["id"]]
+    assert [w for w, _ in widgets_of()(api)] == [
+        first,
+        "updates",
+        "tasks",
+        "files",
+        "tools",
+        "card:" + later["card"]["id"],
+    ]
     # Listed at the position it is drawn at, built-ins counted: moved there, it stays.
     listed = {p["item"]: p["position"] for p in mcp(api, "tico_card_list", {"place": "bot:ops"}, bot)[1]["pins"]}
-    assert listed == {first: 0, "card:" + later["card"]["id"]: 4}
-    assert mcp(api, "tico_pin_update", {"pin": later["pin"], "position": 4}, bot)[0] is False
+    assert listed == {first: 0, "card:" + later["card"]["id"]: 5}
+    assert mcp(api, "tico_pin_update", {"pin": later["pin"], "position": 5}, bot)[0] is False
     assert [w for w, _ in widgets_of()(api)][-1] == "card:" + later["card"]["id"]
-    # The last spot on a full sidebar, below its 60 pins and 3 built-ins, is one a pin may be moved to.
-    moved = api.request("PATCH", "/api/v2/pins/" + added["pin"], json={"position": 62}, headers=headers(bot))
+    # The last spot on a full sidebar, below its 60 pins and 4 built-ins, is one a pin may be moved to.
+    moved = api.request("PATCH", "/api/v2/pins/" + added["pin"], json={"position": 63}, headers=headers(bot))
     assert moved.status_code == 200, moved.text
     assert [w for w, _ in widgets_of()(api)][-1] == first
     assert mcp(api, "tico_pin_update", {"pin": added["pin"], "position": 0}, bot)[0] is False
     assert mcp(api, "tico_pin_update", {"pin": later["pin"], "position": 0}, bot)[0] is False
-    assert [w for w, _ in widgets_of()(api)] == ["card:" + later["card"]["id"], first, "updates", "tasks", "files"]
+    assert [w for w, _ in widgets_of()(api)] == [
+        "card:" + later["card"]["id"],
+        first,
+        "updates",
+        "tasks",
+        "files",
+        "tools",
+    ]
     pins = [p["item"] for p in place(api, "bot:ops")["pins"]]
     assert pins == ["card:" + later["card"]["id"], first]
 
@@ -521,7 +548,7 @@ def test_a_page_its_reader_may_not_read_moves_no_position_on_an_agents_sidebar(a
         return visible(c, auth, who, row, cache) and (who.role != "bot" or row["id"] != hidden)
 
     monkeypatch.setattr(F, "file_visible", unread_by_the_agent)
-    saved = ["updates", "page:" + hidden, "tasks", "files", card]
+    saved = ["updates", "page:" + hidden, "tasks", "files", card, "tools"]
     put(api, "bots/ops/task-tabs", {"tabs": tabs, "widgets": [{"id": w} for w in saved]})
     assert listed() == {card: 3}
     pin = next(p["id"] for p in place(api, "bot:ops")["pins"] if p["item"] == card)
@@ -545,7 +572,7 @@ def test_a_pin_moved_to_where_its_reader_sees_it_stays_before_a_page_they_may_no
         return visible(c, auth, who, row, cache) and (who.role != "bot" or row["id"] != hidden)
 
     monkeypatch.setattr(F, "file_visible", unread_by_the_agent)
-    saved = [card, "page:" + hidden, "updates", "tasks", "files"]
+    saved = [card, "page:" + hidden, "updates", "tasks", "files", "tools"]
     tabs = get(api, "bots/ops/task-tabs")["tabs"]
     put(api, "bots/ops/task-tabs", {"tabs": tabs, "widgets": [{"id": w} for w in saved]})
     pin = next(p["id"] for p in place(api, "bot:ops")["pins"] if p["item"] == card)
@@ -558,9 +585,9 @@ def test_the_last_pin_on_the_fullest_sidebar_a_layout_saves_moves_to_where_it_is
     from backend.models import SIDEBAR_WIDGETS
 
     tabs = get(api, "bots/ops/task-tabs")["tabs"]
-    built_ins = ["updates", "tasks", "files"]
+    built_ins = ["updates", "tasks", "files", "tools"]
     made = [post(api, "cards", {"template": "tasks_by_status"})["card"]["id"] for _ in range(SIDEBAR_WIDGETS)]
-    cards, more = ["card:" + c for c in made[3:]], ["card:" + c for c in made[:3]]
+    cards, more = ["card:" + c for c in made[4:]], ["card:" + c for c in made[:4]]
     full = built_ins + cards
     put(api, "bots/ops/task-tabs", {"tabs": tabs, "widgets": [{"id": w} for w in full]})
     last = place(api, "bot:ops")["pins"][-1]

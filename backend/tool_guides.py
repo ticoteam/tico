@@ -289,7 +289,7 @@ def _access(c, who, vrows):
             "request": None,
         }
         if row["kind"] == "api" and tid:
-            item["level"] = LEVELS.get(api_tools.subject_level(c, tid, who.actor), "none")
+            item["level"] = LEVELS.get(api_tools.subject_level(c, tid, who.actor) or "", "none")
             item["env"] = sorted({k["env"] for k in api_tools._keys(c, tid) if k["env"]})
             proxied = row.get("delivery") == "proxy"
             item["arrives"] = "proxy" if proxied else "env"

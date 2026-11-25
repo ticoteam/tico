@@ -2490,7 +2490,7 @@ class BotSidebarWidget(Contract):
     Tasks: 500)."""
 
     id: str = Field(
-        pattern=r"^(tasks|updates|files|routines|(page|card):[A-Za-z0-9_.-]{1,100})$",
+        pattern=r"^(tasks|updates|files|tools|routines|(page|card):[A-Za-z0-9_.-]{1,100})$",
         description="A built-in widget, or a pinned page (page:<file id>) or card (card:<id>)",
     )
     hidden: bool = False
