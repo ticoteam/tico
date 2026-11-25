@@ -78,6 +78,8 @@ export interface TimelinePage {
   messages: ChatMessage[];
   next_cursor?: string | number | null;
   read_marks?: Record<string, number>;
+  /** First page only: the bots the thread waits on. */
+  bot_status?: BotWait[];
 }
 
 /** A reply being written, from the `runs` topic (compact output). */
@@ -87,9 +89,33 @@ export interface LiveRun {
   bot: string;
   parts: string[];
   typing: string | null;
-  /** The last thing it did: 'think' before any output, 'work' on a tool step, 'type' while text streams. */
-  doing: 'think' | 'work' | 'type';
-  /** Its newest tool call in a few words ("Reading Finance"), from the `runs` topic's step `label`. */
+  /** The last thing it did: 'think' before any output, 'work' on a tool step, 'type' while text streams; 'wait': it
+      got the message and its run has not started (replying.ts draws it from the thread's bot status). */
+  doing: 'think' | 'work' | 'type' | 'wait';
+  /** Its newest tool call in a few words ("Reading Finance"), from the `runs` topic's step `label`; while it waits, what
+      it finishes first ("Busy with other work"). */
   label?: string;
   ended: boolean;
+  /** The person's message it answers, as the thread's bot status names it: a run that ends without a reply says so
+      only then. */
+  message?: string;
+  /** How it ended: the run's state ('completed', 'failed', 'interrupted', ...). */
+  end?: string;
+  /** It ended and no reply came: its row is the one line that says so ('none': it finished without one). */
+  quiet?: 'none' | 'failed';
+}
+
+/** One bot the thread waits on, and why (GET /api/v2/threads/{id}/bot-status, backend/thread_bot_status.py): the
+    timeline's first page brings them and the `threads` topic's `bot_status` keeps them current. */
+export interface BotWait {
+  actor: string;
+  name: string;
+  /** 'up_next': it got the message and finishes other work first; 'working': its run here is going; 'cant_reply':
+      something stops it (`detail` says what). */
+  state: 'working' | 'up_next' | 'cant_reply';
+  detail: string;
+  since: string;
+  run_id: string | null;
+  /** The newest message of a person's that woke it here, when the reader reads it. */
+  message_id?: string | null;
 }

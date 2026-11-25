@@ -535,7 +535,8 @@ history gets `[]` (REST, timeline and SSE). At most 5, oldest wait
 first:
 ```json
 {"actor": "bot:legal", "name": "Legal", "state": "working|up_next|cant_reply", "detail": "...",
- "since": "<wait start>", "run_id": "<attempt id>|null", "fix": {"label": "Fix", "href": "#/settings/computers"}|null}
+ "since": "<wait start>", "run_id": "<attempt id>|null", "fix": {"label": "Fix", "href": "#/settings/computers"}|null,
+ "message_id": "<the newest person's message that woke it here, if the reader reads it>|null"}
 ```
 - `working`: its run for this root is running; `detail` is the run's current step (its last tool or progress line,
   "Writing a reply", "Thinking", "Starting").

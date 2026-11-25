@@ -149,7 +149,8 @@ def _inputs_live(c, message_ids):
 
 
 def candidates(c, root_id):
-    """{bot actor: {"since", "capped", "run"}} for the bots this root waits on, before they are explained."""
+    """{bot actor: {"since", "capped", "run", "message"}} for the bots this root waits on, before they are explained.
+    `message` is the newest person's message that woke it here (None for a run no one's message here started)."""
     found = {}
     rows = [dict(r) for r in c.execute(_OPEN_SQL, (root_id, OPEN_PER_BOT))]
     keys = [r["carrier_id"] or r["message_id"] for r in rows]
@@ -167,14 +168,15 @@ def candidates(c, root_id):
         )
         if r["state"] != "capped" and not run and not (job and job[0] in LIVE_JOBS) and not _outside(c, bot, outside):
             continue  # its turn ended without a post here: nothing waits any more
-        at = found.setdefault(r["recipient"], {"since": r["created_at"], "capped": False, "run": None})
+        at = found.setdefault(r["recipient"], {"since": r["created_at"], "capped": False, "run": None, "message": None})
         at["capped"] = at["capped"] or r["state"] == "capped"
+        at["message"] = r["message_id"]  # oldest first: the newest wake is kept
         at["since"] = min(at["since"], r["created_at"])
         if run:
             at["run"] = run
     for r in c.execute(_RUNS_SQL, (root_id,)):
         actor = "bot:" + r["bot_id"]
-        at = found.setdefault(actor, {"since": r["since"], "capped": False, "run": None})
+        at = found.setdefault(actor, {"since": r["since"], "capped": False, "run": None, "message": None})
         at["run"] = at["run"] or r["id"]
     return found
 
@@ -331,6 +333,13 @@ def _elsewhere(c, v, bot_id, root_id):
     return BUSY
 
 
+def _readable_message(c, v, message_id):
+    """The message that woke the bot, when the viewer reads it: a chat draws the bot's status under it."""
+    from . import threads
+
+    return message_id if message_id and threads.readable(c, v, message_id) else None
+
+
 def _fix(href):
     return {"label": "Fix", "href": href} if href else None
 
@@ -442,6 +451,7 @@ def status(c, v, root):
             "since": at["since"],
             "run_id": None,
             "fix": None,
+            "message_id": _readable_message(c, v, at["message"]),
         }
         if at["run"]:
             started = c.execute(
@@ -461,5 +471,5 @@ def status(c, v, root):
                 row.update(state="cant_reply", detail=blocked[0], fix=blocked[1])
             else:
                 row.update(state="up_next", detail=_elsewhere(c, v, bot, root_id) or STARTING)
-        out.append({k: row[k] for k in ("actor", "name", "state", "detail", "since", "run_id", "fix")})
+        out.append({k: row[k] for k in ("actor", "name", "state", "detail", "since", "run_id", "fix", "message_id")})
     return out

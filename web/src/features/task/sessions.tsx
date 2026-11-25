@@ -1,6 +1,6 @@
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useSyncExternalStore } from 'react';
-import { activityQuery, agentWords, dropRun, liveQuery, markRead, rowsOf, seedRun, timelineQuery, type LiveRun, type TimelineView } from '@/conversation';
+import { activityQuery, agentWords, dropRun, liveQuery, markRead, rowsOf, seedRun, timelineQuery, useReplying, type LiveRun, type TimelineView } from '@/conversation';
 import { keys, useActor } from '@/data';
 import { useCards } from '@/kit/Popover';
 import { Row } from '@/kit/Row';
@@ -195,12 +195,12 @@ export function snapshotRun(run: RunSnapshot, agent: string): LiveRun {
 /** An agent's run on the task as its session shows it (GET .../execution?agent=), read on opening and again on each
     of that agent's job and run changes on the thread, queued ones too (useTaskLive). A run already under way when the
     view opened is drawn as its reply being written (its snapshot), and the stream carries on from there; one that
-    waits or stopped is said over the box ("Saved — queued", "Stopped"). Only a read made since the view opened draws
-    anything: a kept one may be of a run that has ended. */
+    waits or stopped is said over the box ("Saved — queued", "Stopped") while the chat itself says nothing of it (its
+    row for the agent answering, replying.ts, says it got the message, is at work, or ended without a reply). Only a
+    read made since the view opened draws anything: a kept one may be of a run that has ended. */
 export function SessionRun({ t, agent }: { t: Pick<TaskData, 'id' | 'conversation_id'>; agent: string }) {
   const thread = t.conversation_id ?? '';
-  const live = useQuery(liveQuery(thread)).data ?? [];
-  const working = live.some((r) => r.bot === agent && !r.ended);
+  const said = useReplying(thread, (bot) => bot === agent).length > 0;
   const read = useQuery({ ...sessionRunQuery(t.id, agent), refetchOnMount: 'always' });
   const run = read.isFetchedAfterMount ? read.data : undefined;
   useEffect(() => {
@@ -208,6 +208,6 @@ export function SessionRun({ t, agent }: { t: Pick<TaskData, 'id' | 'conversatio
     if (UNDER_WAY.has(run.state)) seedRun(thread, snapshotRun(run, agent));
     else dropRun(thread, run.attempt_id);
   }, [thread, agent, run]);
-  if (working || !run || run.state === 'completed' || (UNDER_WAY.has(run.state) && run.attempt_id)) return null;
+  if (said || !run || run.state === 'completed' || (UNDER_WAY.has(run.state) && run.attempt_id)) return null;
   return <span className="status-line">{run.label}</span>;
 }

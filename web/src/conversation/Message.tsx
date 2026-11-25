@@ -13,6 +13,7 @@ import { ContextMenu, MenuItem } from '@/kit/Menu';
 import { useCards } from '@/kit/Popover';
 import { SkeletonRows } from '@/kit/Skeleton';
 import { toast } from '@/kit/Toast';
+import { DidLine } from '@/kit/DidLine';
 import { Dot } from '@/tico/dot';
 import { clock, took } from './dates';
 import { Markdown } from '@/kit/Markdown';
@@ -439,7 +440,15 @@ export function Message({ m, variant, me, cont, onRetry, card, below, onReply, q
   );
 }
 
-/** A reply being written: its text so far, or what it is doing, with the typing dots. Heard once, when posted. */
+/** What a reply being written with no words yet says it is doing: that it got the message (and what it finishes
+    first), its tool step, or thinking. */
+function doingWords(r: LiveRun): string {
+  if (r.doing === 'wait') return r.label ? `Got it · ${r.label}` : 'Got it';
+  return r.doing === 'work' ? r.label || 'Working' : 'Thinking';
+}
+
+/** A reply being written: its text so far, or what it is doing, with the typing dots; from the moment the agent got
+    the message (`doing: 'wait'`). Heard once, when posted. */
 export function LiveRow({ r, variant, text }: { r: LiveRun; variant: Variant; text: string }) {
   const who = whoOf({ sender_id: r.bot }, variant, undefined, useActor(r.bot)?.name);
   const dots = (
@@ -456,8 +465,17 @@ export function LiveRow({ r, variant, text }: { r: LiveRun; variant: Variant; te
         <div className="msg-meta">
           <b>{who.name}</b>
         </div>
-        {text ? <Markdown text={text} compact streaming tail={r.ended ? null : dots} /> : <p>{r.doing === 'work' ? r.label || 'Working' : 'Thinking'}{dots}</p>}
+        {text ? <Markdown text={text} compact streaming tail={r.ended ? null : dots} /> : <p>{doingWords(r)}{dots}</p>}
       </div>
     </div>
   );
+}
+
+/** Where a reply ends without being one: something stops the agent (`stuck`, what), or its run ended with no reply
+    ('none': it finished; 'failed': it stopped). One line, so the person is never left waiting on nothing. */
+export function ReplyLine({ bot, variant, why, detail }: { bot: string; variant: Variant; why: 'none' | 'failed' | 'stuck'; detail?: string }) {
+  const who = whoOf({ sender_id: bot }, variant, undefined, useActor(bot)?.name);
+  if (why === 'stuck') return <DidLine text={detail ? `${who.name} can't reply. ${detail}` : `${who.name} can't reply`} fault />;
+  if (why === 'failed') return <DidLine text={`${who.name} stopped before replying`} fault />;
+  return <DidLine text={`${who.name} finished without replying`} face={<Face who={who} size={22} />} />;
 }

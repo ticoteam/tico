@@ -13,7 +13,9 @@ seed() returns the ids a journey needs. It also adds test routes on the server: 
 email queue, as the server's own sender runs it), GET /_e2e/sent (what reached the fake Gmail) and POST /_e2e/ask (a
 Launch task on which the Engineering Lead asks Dana a ❓, two numbered questions under it, with three suggested answers; only the journey that answers one
 calls it, so the others' Needs you holds the two emails alone) and POST /_e2e/made (a task on which the Engineering Lead
-made a video, two pictures and a page; only the journey that looks at them calls it).
+made a video, two pictures and a page; only the journey that looks at them calls it) and POST /_e2e/turn (an agent's
+next run, as the fake runner runs it: `step=start` claims and starts it and writes the first words of its reply,
+`step=done` completes it with the whole reply).
 """
 
 import base64
@@ -242,6 +244,43 @@ def made(world):
     _route(world, "/_e2e/made", make, ["POST"])
 
 
+USAGE = {
+    "input_tokens": 1000,
+    "cached_tokens": 0,
+    "output_tokens": 100,
+    "model": "claude-opus-5-5",
+    "runtime": "claude",
+    "billing": "api",
+}
+
+
+def turns(world):
+    """POST /_e2e/turn?bot=...&step=start&text=...: the bot's next run starts on the world's runner and writes `text`,
+    the first words of its reply; it answers the run's id. POST /_e2e/turn?attempt=...&step=done&text=...: that run
+    completes with `text`, its whole reply."""
+    runner = world.runner["token"]
+
+    def turn(step: str, text: str, bot: str = "", attempt: str = ""):
+        if step == "start":
+            world.scheduler_pass()
+            claim = _ok(
+                world.api("post", "/api/v2/jobs/claim", {"bot": bot, "start_places": True}, who=runner), "claim"
+            )
+            if not (claim or {}).get("attempt"):
+                raise RuntimeError(f"no run of {bot} to claim: {claim}")
+            attempt = claim["attempt"]["id"]
+            base = f"/api/v2/attempts/{attempt}"
+            _ok(world.api("post", f"{base}/started", {"thread_id": "e2e"}, who=runner), "start")
+            words = {"events": [{"seq": 1, "kind": "delta", "payload": {"text": text}}]}
+            _ok(world.api("post", f"{base}/events", words, who=runner), "words")
+        else:
+            done = {"outcome": "completed", "text": text, "last_seq": 1, "limited": False, "usage": USAGE}
+            _ok(world.api("post", f"/api/v2/attempts/{attempt}/complete", done, who=runner), "complete")
+        return JSONResponse({"attempt": attempt})
+
+    _route(world, "/_e2e/turn", turn, ["POST"])
+
+
 def providers(world):
     _ok(
         world.api(
@@ -263,4 +302,5 @@ def seed(world):
     providers(world)
     asks(world)
     made(world)
+    turns(world)
     return {"mail": mail(world), "board": board(world), "thread": thread(world)}

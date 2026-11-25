@@ -230,6 +230,36 @@ def test_a_working_bot_names_its_run_and_up_next_never_names_a_place_the_viewer_
     assert for_ana["state"] == "up_next" and "Secret plan" in for_ana["detail"]
 
 
+def test_a_task_comment_that_mentions_an_agent_is_named_on_its_status_row_until_it_replies(api):
+    """The task's chat draws "got it", then the work, under the comment that woke the agent: the row names it, in the
+    comments' own first page too, and goes once the agent replies."""
+    machine = machine_for(api)
+    task = post(api, "tasks", {"title": "Fix the page", "body": "It looks bad."})
+    said = post(api, f"tasks/{task['id']}/comments", {"text": "@ops can you see why this page looks bad?"})
+    comment = said["comment"]
+    thread = comment["conversation_id"]
+    [row] = bot_status(api, thread)
+    assert row["actor"] == "bot:ops" and row["state"] == "up_next" and row["message_id"] == comment["id"]
+    assert timeline(api, thread, comments="true", flat="1")["bot_status"] == [row]
+    attempt = claim(api, machine)
+    [working] = bot_status(api, thread)
+    assert working["state"] == "working" and working["run_id"] == attempt["id"]
+    assert working["message_id"] == comment["id"]
+    bot_post(api, "bot:ops", thread, "The page loads an old stylesheet.")
+    assert bot_status(api, thread) == []
+
+
+def test_a_run_whose_wake_was_answered_names_no_message(api):
+    machine = machine_for(api)
+    thread = new_thread(api)
+    say(api, thread["id"], "@ops can you check this?")
+    assert claim(api, machine)
+    bot_post(api, "bot:ops", thread["id"], "On it.")
+    with api.app.state.store.read() as c:
+        [row] = thread_bot_status.status(c, who(api, "ana-test"), thread["id"])
+    assert row["state"] == "working" and row["message_id"] is None
+
+
 def test_a_bot_that_posted_since_is_no_longer_waited_on(api):
     machine_for(api)
     thread = new_thread(api)

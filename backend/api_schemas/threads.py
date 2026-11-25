@@ -268,6 +268,11 @@ SCHEMAS.update(
                     "oneOf": [obj({"label": "s", "href": "s"}, required=["label", "href"]), {"type": "null"}],
                     "description": "Where to fix what stops it (cant_reply only)",
                 },
+                "message_id": {
+                    "type": ["string", "null"],
+                    "description": "The newest message of a person's that woke it here, when the reader reads it; "
+                    "null for a run no one's message here started",
+                },
             },
             required=["actor", "name", "state", "detail", "since", "run_id", "fix"],
         ),
