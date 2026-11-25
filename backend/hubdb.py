@@ -2256,6 +2256,14 @@ def _write_message(
         held = decision.reason
         if held:
             refs = {**refs, "quiet": True, wake_rules.MARK: held}
+    if isinstance(refs, dict) and "by_run" in refs:
+        refs = {k: v for k, v in refs.items() if k != "by_run"}  # only the run's own token says which run wrote it
+    run = RUN.get()
+    if run and is_bot(actor) and not (refs or {}).get("turn_id"):
+        found = conn.execute("SELECT bot_id FROM attempts WHERE id=?", (run,)).fetchone()
+        if found and "bot:" + str(found[0]) == actor:
+            # A run's own post (a tool call): the chat's status reads it as the run's answer (thread_bot_status).
+            refs = {**(refs or {}), "by_run": run}
     row = {
         "id": new_id(),
         "conversation_id": conv["id"],

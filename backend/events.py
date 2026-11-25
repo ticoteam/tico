@@ -2842,6 +2842,7 @@ def _threads(view, rows, threads_scope=()):
             if viewed is None:
                 viewed = _viewed_roots(view.c, threads_scope) if threads_scope else set()
             if entry["root_id"] in viewed:
+                entry["version"] = thread_bot_status.version(view.c, found)
                 entry["bots"] = thread_bot_status.status(view.c, view.reader, found)
         elif kind == "routed":
             message = H.message(view.c, ref) if ref else None

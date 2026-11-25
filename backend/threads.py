@@ -85,6 +85,7 @@ SAFE_REF_KEYS = frozenset(
         "mentions",
         "warnings",
         "thread",
+        "by_run",  # the run that posted it (hubdb._write_message): an id that grants nothing
     }
 )
 MODES = ("steer", "queue", "defer", "digest", "none")
@@ -5770,6 +5771,7 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None, flat=Fal
     if cursor in (None, ""):
         from . import thread_bot_status
 
+        out["bot_status_version"] = thread_bot_status.version(c, row)
         out["bot_status"] = thread_bot_status.status(c, v, row)
     return out
 

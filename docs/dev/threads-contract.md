@@ -525,24 +525,30 @@ id>": <the viewer's last_read_seq>}` for the root and each thread a message on t
 read nothing; one query, `threads.read_marks`): a client reads each message against its own thread's mark.
 
 ### 4.10 Bot status (`backend/thread_bot_status.py`)
-`GET /api/v2/threads/{id}/bot-status` → `{"bots": [...]}` for the thread's root, and the same list as `bot_status` on
-the first timeline page (no `cursor`). Rows for each bot the root waits on: a person's message gave it an open wake
-(`queue`/`steer` delivery, `pending`, `delivered` or `capped`, partial index `message_deliveries_open_bots`) and the bot
-has not posted in the root since; a delivery with no live job or running attempt is left out, except an outside
-agent's (it takes work with no job here). Each bot's newest 50 open wakes are read, so one bot's never crowd out
-another's; a running turn's inputs count only for that turn's bot. Someone who reads only a migrated Home's old
-history gets `[]` (REST, timeline and SSE). A wake whose message the reader does not read is left out before anything
-is counted; a run the reader may not read (the `runs` stream's check) is `working` with no `run_id` and its step said as
-"Thinking", or left out when no wake the reader reads is its. A bot has one `working` row per run of its here, naming
-the message that run took (`message_id`, else null), and one row for its newest wake no run took yet: a queued wake is
-never paired with another run. At most 5 bots, oldest wait first:
+`GET /api/v2/threads/{id}/bot-status` → `{"bots": [...], "version"}` for the thread's root, and the same list as
+`bot_status` (with `bot_status_version`) on the first timeline page (no `cursor`). Every row is a wake: a person's message
+in the root that woke a bot (`queue`/`steer` delivery, `pending`, `delivered` or `capped`, partial index
+`message_deliveries_open_bots`), whose message the reader reads, with what became of it; a client draws the rows and
+infers nothing. The reader's check of each message comes before anything is counted or limited. A wake says something
+while it is capped, its job is live, the run that took it (its job's run, else the running turn it went into as an
+input, of the same bot) is going or ended in the last minute, or it is an outside agent's that it has not read yet. A
+bot has one row per run of its that took a wake here, naming the newest such message, and one for its wakes no run
+took yet, naming the newest. Someone who reads only a migrated Home's old history gets `[]` (REST, timeline and SSE).
+`version` is the time of the root's newest `bot_status` change when read (`""` before any), read before the rows: a
+client drops a read older than the one it holds. At most 5 bots, oldest wait first:
 ```json
-{"actor": "bot:legal", "name": "Legal", "state": "working|up_next|cant_reply", "detail": "...",
- "since": "<wait start>", "run_id": "<attempt id>|null", "fix": {"label": "Fix", "href": "#/settings/computers"}|null,
- "message_id": "<the person's message here this row answers: its run took it, or it waits for one>|null"}
+{"actor": "bot:legal", "name": "Legal", "state": "up_next|cant_reply|working|replied|no_reply|stopped",
+ "detail": "...", "since": "<wait start>", "run_id": "<attempt id>|null",
+ "fix": {"label": "Fix", "href": "#/settings/computers"}|null, "message_id": "<the person's message that woke it>"}
 ```
-- `working`: its run for this root is running; `detail` is the run's current step (its last tool or progress line,
-  "Writing a reply", "Thinking", "Starting").
+- `working`: the run that took it is going. `run_id`, `detail` (the run's current step: its last tool or progress
+  line, "Writing a reply", "Thinking", "Starting") and `since` (its start) only when the reader reads the run as the
+  `runs` stream sends it (the bot's activity, the thread the run started in, the run itself); else `run_id` null,
+  `detail` "" and `since` the wake's time.
+- `replied`: the run that took it posted after it in the root: its reply (`refs.turn_id`) or a tool post it made
+  (`refs.by_run`, stamped from the run's own token by `hubdb._write_message`), while the run goes or for a minute after.
+  A later post of the bot's that no run of this wake made changes nothing.
+- `no_reply` / `stopped`: its run ended (completed / failed, stopped or lost) with no such post: kept a minute.
 - `up_next`: it is running elsewhere; "Finishing <task title>" or "Finishing # <thread title>" only when the viewer
   reads that task or thread, else "Busy with other work".
 - `cant_reply`, `fix` set: paused or draining → "Paused" (bot Info); its computer offline or none → "Its computer is
@@ -551,7 +557,7 @@ never paired with another run. At most 5 bots, oldest wait first:
   claim refusal → its `health.HELD` words. Refusals are the scheduler's `queue-refusal:<bot>` record (one per bot,
   carrying its computer), written only when the reason changes.
 
-SSE: a `threads` event `bot_status` `{"thread_id": <root>, "bots": [...]}`, rendered per viewer, to the root's readers
+SSE: a `threads` event `bot_status` `{"thread_id": <root>, "bots": [...], "version"}`, rendered per viewer, to the root's readers
 (`bots` only to a stream whose `?thread=` is under that root; the others get the event without it) whenever a wake, job, attempt, refusal, bot state or drain changes for it; a run's steps send at most one per root
 every 1 s (`changes_bot_status`), and a step held back is sent by the scheduler's next tick
 (`thread_bot_status.send_trailing`).

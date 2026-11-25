@@ -22,7 +22,9 @@ everything on token saving 2/9's always-wake list never reach this rule: only bo
 # Plain says and a bot's own notices can wait; every other kind wakes.
 KINDS = ("say", "notice")
 # The references a plain message carries. Anything else marks a message that is more than words.
-PLAIN_REFS = frozenset({"task", "comment", "attachments", "files", "unsolicited", "turn_id", "warnings", "via", "rule"})
+PLAIN_REFS = frozenset(
+    {"task", "comment", "attachments", "files", "unsolicited", "turn_id", "by_run", "warnings", "via", "rule"}
+)
 WAKES = (
     "flagged needs-action",
     "an ask, answer or steer",

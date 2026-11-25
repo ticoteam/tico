@@ -915,23 +915,24 @@ def install(app, store, auth, mutate, rule_check):
         **api_v2(
             "Threads",
             "getThreadBotStatus",
-            "The bots the thread's root waits on, at most 5, oldest wait first: `working` (its current step), `up_next` (finishing other work first) or `cant_reply` (what stops it, and `fix`)",
+            "The bots the thread's root waits on, at most 5, oldest wait first: one row per person's message that woke a bot, `up_next` (finishing other work first), `cant_reply` (what stops it, and `fix`), `working` (its current step), or how it ended (`replied`, `no_reply`, `stopped`), with the read's `version`",
             "ThreadBotStatus",
         ),
     )
     def bot_status(request: Request, thread_id: str):
-        """The bots the thread's root waits on, and why (threads-contract §4.10): `{"bots": [...]}`, five at most,
-        oldest wait first. 404 for a thread the viewer cannot read."""
+        """The bots the thread's root waits on, and why (threads-contract §4.10): `{"bots": [...], "version"}`, five
+        at most, oldest wait first. 404 for a thread the viewer cannot read."""
         from . import thread_bot_status
 
-        with store.read() as c:
+        with store.read_transaction() as c:
             v = threads.viewer(auth, request.state.identity)
             row = threads.require(c, v, thread_id)
             root = threads.root_of(c, row)
             assert root is not None  # a thread's root is always one of its rows
             if root["id"] != row["id"]:
                 root = threads.require(c, v, root["id"])
-            return {"bots": thread_bot_status.status(c, v, root)}
+            version = thread_bot_status.version(c, root)
+            return {"bots": thread_bot_status.status(c, v, root), "version": version}
 
     @app.get(
         "/api/v2/threads/{thread_id}/reach",
