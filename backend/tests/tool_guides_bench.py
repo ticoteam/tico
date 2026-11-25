@@ -16,12 +16,13 @@ from pathlib import Path
 from backend import tool_guides as new
 from backend import tool_services as TS
 from backend.auth import Auth, Identity
-from backend.store import H
+from backend.store import H, Problem
 from backend.tests.helpers.company import company_store
 
 OLD = "326c39df03"
 TOOLS, CALLS, AGENTS, REPEATS = 300, 200_000, 20, 5
 ADMINS = ("ana@acme.example", "ben@acme.example")
+SERVICES = ["stripe", *[s for s in TS.SERVICES if s != "stripe"][:29]]  # Stripe, a shipped guide, is the detail read
 
 
 def old_module():
@@ -42,7 +43,7 @@ def old_module():
 
 def seed(c):
     now = H.now()
-    services = [s for s in TS.SERVICES][:30]
+    services = SERVICES
     agents = [f"agent-{n}" for n in range(AGENTS)]
     tools, keys = [], []
     for n in range(TOOLS):
@@ -86,7 +87,10 @@ def median_ms(run):
     times = []
     for _ in range(REPEATS):
         start = time.perf_counter()
-        run()
+        try:
+            run()
+        except Problem as e:  # the old module's detail is a 404 for a reader who sees none of the vendor's tools
+            return e.status
         times.append((time.perf_counter() - start) * 1000)
     return round(statistics.median(times), 1)
 
@@ -104,7 +108,7 @@ def main():
             "ops (agent)": Identity("bot:ops", "bot"),
         }
         with store.read() as c:
-            vendor = max(new.tools_of(c, readers["ana (owner)"], ADMINS, auth).seen.items(), key=lambda v: len(v[1]))[0]
+            vendor = "stripe"
             print(f"{TOOLS} tools, {CALLS} calls; detail of `{vendor}`; median of {REPEATS} (ms)")
             print("| reader | list old | list new | detail old | detail new |")
             print("|---|---|---|---|---|")
@@ -116,7 +120,7 @@ def main():
                     median_ms(lambda: new.detail(c, who, auth, ADMINS, vendor)),
                 ]
                 print(f"| {label} | " + " | ".join(str(t) for t in times) + " |")
-            ids = [f"{s}-{n}" for n, s in enumerate([s for s in TS.SERVICES][:30] * 10)]
+            ids = [f"{s}-{n}" for n, s in enumerate(SERVICES * 10)]
             marks = ",".join("?" * len(ids))
             since = H.shift(H.now(), days=-30)
             for name, sql in (
