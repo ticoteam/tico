@@ -2,8 +2,8 @@
 
 A page is a bot file (backend/files.py) with a `pages` row beside it: how often the bot means to update it, the date
 its data is from, the page that replaced it and whether it is archived. Versions, visibility and storage are the
-file's; the bytes are cleaned as a visual page is (backend/visuals.py `clean`), so a page runs no script and loads
-nothing from elsewhere. The status line (updated, by, version, cadence, data date, stale or replaced) is drawn by the
+file's; the bytes are stored as written and run as a visual page does (backend/visuals.py `policy`), from a host
+apart from the app's. The status line (updated, by, version, cadence, data date, stale or replaced) is drawn by the
 app from these fields, outside the page, so a page cannot fake it.
 """
 
@@ -333,7 +333,7 @@ class Pages:
 
     # ------------------------------------------------------------------ writes
     def publish(self, request, who, fields, data):
-        """Publish cleaned HTML and links atomically; a page id continues its versions across writers."""
+        """Publish HTML and links atomically; a page id continues its versions across writers."""
         importing = any(k in fields for k in ("written_by", "written_at"))
         if importing and who.role != "owner":
             raise Problem("forbidden", "Only the owner may import writer or time", 403)
@@ -370,8 +370,7 @@ class Pages:
             with self.store.read() as c:
                 visual_specs.check_publish(c, task)
             data = visual_specs.inline_styles(data)
-        cleaned, unembedded = visuals.clean(data, "page", base=False)
-        if len(cleaned) > visuals.LIMITS["page"]:
+        if len(data) > visuals.LIMITS["page"]:
             raise Problem("file_refused", "A page is at most 10 MB", 422)
         # The original's digest stands for the version, so publishing the same page again is no new version.
         fields = {**fields, "name": name, "etag": hashlib.sha256(data).hexdigest()}
@@ -459,13 +458,13 @@ class Pages:
                 {},
                 include_audience=True,
             )
-            return {"page": shown, "links": shown["links"], "unembedded": unembedded}
+            return {"page": shown, "links": shown["links"], "unembedded": []}
 
         return self.files.publish(
             request,
             who,
             fields,
-            cleaned,
+            data,
             extra=extra,
             page_publish=True,
             task_role=task_role,
@@ -752,15 +751,15 @@ def install_pages(app, store, auth, files):
         **api_v2(
             "Pages",
             "publishPage",
-            "Publish an HTML page or a new version by page id (raw or JSON); scripts and outside loads are removed",
+            "Publish an HTML page or a new version by page id (raw or JSON); it is stored and runs as written",
             PagePublished,
             openapi_extra=publish_doc,
         ),
     )
     async def publish(request: Request):
         """A person, bot or its computer publishes a page: an .html file, raw with its fields in the
-        query, or JSON with text or content_base64. Scripts and anything that would load from elsewhere are removed
-        (`unembedded` lists what was). Up to 10 MB."""
+        query, or JSON with text or content_base64. It is stored and runs as written (`unembedded` is always empty).
+        Up to 10 MB."""
         fields, data = files.read_input(
             request.headers.get("content-type", ""), await request.body(), request.query_params
         )

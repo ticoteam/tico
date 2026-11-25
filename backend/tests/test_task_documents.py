@@ -63,9 +63,9 @@ def test_a_bot_writes_a_spec_and_a_person_adds_a_version_to_the_same_document(ap
     ]
     assert all(v["at"] for v in spec["versions"])
 
-    # Each version is the cleaned page: what a reader opens is the HTML without its scripts.
+    # Each version is the page as written.
     page = api.get(f"/api/v2/files/{first['file_id']}?v=1", headers=headers())
-    assert page.status_code == 200 and "Export spec" in page.text and "<script" not in page.text
+    assert page.status_code == 200 and page.text == SPEC
     assert "CSV and JSON" in api.get(f"/api/v2/files/{first['file_id']}?v=2", headers=headers()).text
 
 

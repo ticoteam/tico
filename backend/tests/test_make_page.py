@@ -74,7 +74,7 @@ def test_make_page_files_and_pins_clean_html_as_the_person_with_authenticated_at
     assert (shown["bot_id"], shown["updated_by"], shown["task_id"]) == ("assistant", "human:ben", t["id"])
     stored = api.get("/api/v2/files/" + fid, headers=headers("cara-test"))
     assert stored.status_code == 200, stored.text
-    assert b"<script" not in stored.content and b"42 deals" in stored.content
+    assert stored.content == HTML  # as written
     with api.app.state.store.read() as c:
         f = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
         v = c.execute("SELECT * FROM bot_file_versions WHERE file_id=?", (fid,)).fetchone()

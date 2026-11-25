@@ -599,8 +599,10 @@ def page_blobs(c, bid):
     return [rows[fid] for fid in ids if fid in rows]
 
 
-def page_blob_visible(c, auth, who, bid):
-    return all(file_visible(c, auth, who, row, {}) for row in page_blobs(c, bid))
+def page_blob_visible(c, auth, who, bid, cache=None):
+    """Whether `who` may see every page this blob's bytes belong to. `cache` is file_visible's, for one read by `who`."""
+    cache = {} if cache is None else cache
+    return all(file_visible(c, auth, who, row, cache) for row in page_blobs(c, bid))
 
 
 def stored_version(c, fid, number):
@@ -612,19 +614,22 @@ def stored_version(c, fid, number):
     ).fetchone()
 
 
-def version_refusal(c, auth, who, row, number, v):
+def version_refusal(c, auth, who, row, number, v, cache=None):
     """The check that refuses `who` version `number` of the file `row` (`v`, its `stored_version`, None when there is
     none), or None when they may read its bytes: the one read check Files.serve makes, for every caller that hands
-    those bytes on. Checks run in serve's order and the first refusal is named."""
+    those bytes on. Checks run in serve's order and the first refusal is named. `cache` is file_visible's, for one
+    read by `who`: a page of messages checks many files of the same chats and tasks."""
     from . import relationship_runs
+
+    cache = {} if cache is None else cache
 
     relationship = who.actor == relationship_runs.ACTOR
     if relationship:
-        if not file_visible(c, auth, who, row, {}):
+        if not file_visible(c, auth, who, row, cache):
             return "file_fence"
-    elif not page_audience_visible(c, auth, auth.run_viewer(c, who), row, {}):  # as file_visible reads it
+    elif not page_audience_visible(c, auth, auth.run_viewer(c, who), row, cache):  # as file_visible reads it
         return "audience"
-    if v and not page_blob_visible(c, auth, who, v["blob_id"]):
+    if v and not page_blob_visible(c, auth, who, v["blob_id"], cache):
         return "blob_fence"
     from . import postal_mail
 
@@ -633,7 +638,7 @@ def version_refusal(c, auth, who, row, number, v):
         if not scan or not privacy.blob_readable(c, privacy.actor(who), v["blob_id"]):
             return "scan"
     else:
-        if not relationship and not file_visible(c, auth, who, row, {}):
+        if not relationship and not file_visible(c, auth, who, row, cache):
             return "file_fence"
         if asked_to_read(c, who, row["id"]) and not asked_to_read(c, who, row["id"], number):
             return "rules_read"  # the Rules Owner's read names one version of it
@@ -992,7 +997,9 @@ def _primed_names_none(c, value):
     return True
 
 
-def page_ref_denials(c, auth, who, refs):
+def page_ref_denials(c, auth, who, refs, cache=None):
+    """{page id: its placeholder label} for each page `refs` name that `who` may not open. `cache` is file_visible's, for
+    one read by `who` (a page of messages)."""
     ids = page_references(refs, c)
     if not ids:
         return {}
@@ -1000,7 +1007,7 @@ def page_ref_denials(c, auth, who, refs):
 
     relationship = who.actor == relationship_runs.ACTOR
     pages = page_rows(c, ids) if relationship else restricted_page_rows(c, ids)
-    cache = {}
+    cache = {} if cache is None else cache
     bound = relationship_runs.scope(c, who.attempt_id) if relationship and not auth else None
     sponsor = teammate_access._viewer_for(c, bound.sponsor) if bound else None
 
@@ -1051,11 +1058,12 @@ def _marked(value):
     return False
 
 
-def readable_page_refs(c, auth, who, refs, *, task_id=None):
-    """Remove the entire metadata object of a denied page, even on undecorated message transports."""
+def readable_page_refs(c, auth, who, refs, *, task_id=None, cache=None):
+    """Remove the entire metadata object of a denied page, even on undecorated message transports. `cache` is
+    file_visible's, for one read by `who`."""
     original = refs
     refs = H._json(refs, {}) if isinstance(refs, str) else refs
-    denied = page_ref_denials(c, auth, who, refs)
+    denied = page_ref_denials(c, auth, who, refs, cache)
 
     def removed_page(value):
         if isinstance(value, dict):
@@ -1189,7 +1197,7 @@ def readable_page_refs(c, auth, who, refs, *, task_id=None):
         if isinstance(value, list):
             return [clean(v, parent, tid, context) for v in value]
         if isinstance(value, str) and value.startswith(("{", "[")):
-            return readable_page_refs(c, auth, who, value, task_id=tid)
+            return readable_page_refs(c, auth, who, value, task_id=tid, cache=cache)
         if direct:
             return {"removed": True, "label": denied[sorted(direct)[0]]}
         return value
@@ -1660,10 +1668,13 @@ class Files:
         last = c.execute(
             "SELECT * FROM bot_file_versions WHERE file_id=? AND version=?", (row["id"], row["current_version"])
         ).fetchone()
+        # Bytes stored as given are compared as stored: a page published again after it was once stored cleaned
+        # (before pages ran as written) is a new version, though its source is the same.
+        as_given = source_digest is None or source_digest == digest
         changed = (
             created
             or last is None
-            or (source_digest or digest) != (last["source_digest"] or last["digest"])
+            or (digest != last["digest"] if as_given else source_digest != (last["source_digest"] or last["digest"]))
             or bool(version_actor and version_actor != last["actor"])
             or bool(version_time and version_time != last["created_at"])
         )
@@ -2912,10 +2923,25 @@ class Files:
         return row
 
     def info(self, who, fid):
-        """One file as the Files rail lists it, for a view opened from a link (the review view, docs/files.md)."""
+        """One file as the Files rail lists it, for a view opened from a link (the review view, docs/files.md). A page
+        also has `visual_src`, the address its current version shows live from (visuals.view_for, the reader checked as
+        for a message's page); null where this install can't show it inline."""
+        from . import visuals
+
+        later, seen = [], None
         with self.store.read() as c:
             row = self.visible_file(c, who, fid)
-            return {"file": self.view(c, who, row, {"task": {}, "repo": {}})}
+            shown = self.view(c, who, row, {"task": {}, "repo": {}})
+            page = shown["size"] is not None and visuals.kind_of(row["mime"], shown["size"]) == "page"
+            if page and not row["archived"] and row["locator"] == "tico_blob":
+                seen = visuals.view_for(
+                    self.app, self.store.settings, c, who, fid, int(row["current_version"] or 0), "page", later
+                )
+        for settle in later:  # Tico file hosting's check asks its bucket: never while holding a connection
+            settle()
+        if page:
+            shown["visual_src"] = seen.get("src") if seen else None
+        return {"file": shown}
 
     def versions(self, who, fid):
         with self.store.read() as c:

@@ -41,12 +41,12 @@ own check.
 
 A 404 or `not_found` from HQ means it does not offer file hosting yet: nothing changes.
 
-Pages and SVG (Dev 458, spec test 1b). A page or SVG held in Tico's bucket also gets its cleaned copy there, beside it
-(`visual_link`): the bytes visuals.serve would show (visuals.clean, and the height reporter for a page) at
-`/visuals/<2 hex>/<name>`, typed `text/html; charset=utf-8` or `image/svg+xml`, inline, with the content policy's two
-slots in its metadata (`tico-visual-policy-version: 1`, `tico-visual-ancestors`, and `tico-visual-script` for a page),
-as agreed with DevOps on Dev 457 (docs/files.md, infra/files-edge). The edge builds the policy from its fixed templates
-and those slots, so nothing written there can lift the sandbox. `<name>` is a hash of the original's digest, the kind,
+Pages and SVG (Dev 458, spec test 1b). A page or SVG held in Tico's bucket also gets its hosted copy there, beside it
+(`visual_link`): the bytes visuals.serve would show (a page as written with the height reporter added, an SVG
+cleaned by visuals.clean) at `/visuals/<2 hex>/<name>`, typed `text/html; charset=utf-8` or `image/svg+xml`, inline,
+with the content policy's slots in its metadata (`tico-visual-policy-version`, 2 for a page and 1 for an SVG, and
+`tico-visual-ancestors`), as agreed with DevOps on Dev 457 (docs/files.md, infra/files-edge). The edge builds the
+policy from its fixed templates and those slots, so nothing written there can widen the sandbox. `<name>` is a hash of the original's digest, the kind,
 the slots and `VISUAL_COPY`, so a new reporter or a new app address gets a new copy and an old one is never
 overwritten. The copy is made when the file is uploaded there (`Blobs._landing`), when Move existing files copies it
 there (`copy_one`), or else on its first view, and is checked like a moved file: S3's SHA-256 of what it received,
@@ -560,8 +560,12 @@ def _held(blobs, location, digest, size, mime):
 # ---------------------------------------------------------------------------------------------- pages and SVG
 # The stored type of each kind's copy; the edge sends a 404 for any other (infra/files-edge/response.js).
 VISUAL_TYPES = {"page": "text/html; charset=utf-8", "svg": "image/svg+xml"}
-# Raise when visuals.clean or visuals.with_reporter change what a copy holds: every copy is then made again.
-VISUAL_COPY = 2
+# Per kind, raise when visuals.clean or visuals.with_reporter change what its copy holds: each copy is then made again.
+VISUAL_COPY = {"page": 3, "svg": 2}
+# The edge template a copy asks for (infra/files-edge/response.js): 2 runs a page as written (visuals.policy); an SVG
+# keeps 1, its closed template, which every deployed edge serves, so its copies stay as they were. An edge that does not
+# know 2 yet sends a 404 for a page, and the chat card falls back to its plain page card.
+POLICY_VERSION = {"page": "2", "svg": "1"}
 # The frame-ancestors sources the edge keeps (docs/files.md): the app writes only those, at most 8.
 ANCESTOR = re.compile(
     r"^(?:'self'|https://[a-z0-9.-]+(?::[0-9]{1,5})?|http://(?:localhost|127\.0\.0\.1)(?::[0-9]{1,5})?)$"
@@ -577,28 +581,42 @@ def visual_kind(mime, size):
 
 
 def _visual(digest, kind, ancestors):
-    """(path below the company's folder, metadata) of the cleaned copy of `digest` for these frame ancestors."""
-    from .visuals import REPORTER_HASH
-
+    """(path below the company's folder, metadata) of the hosted copy of `digest` for these frame ancestors."""
     meta = {
-        "tico-visual-policy-version": "1",
+        "tico-visual-policy-version": POLICY_VERSION[kind],
         "tico-visual-ancestors": " ".join([a for a in dict.fromkeys(ancestors) if ANCESTOR.fullmatch(a)][:8]),
     }
-    if kind == "page":
-        meta["tico-visual-script"] = "'" + REPORTER_HASH + "'"
     name = hashlib.sha256(
         "\n".join(
             [
                 "tico-visual",
-                str(VISUAL_COPY),
+                str(VISUAL_COPY[kind]),
                 kind,
                 digest,
                 meta["tico-visual-ancestors"],
-                meta.get("tico-visual-script", ""),
+                # The script slot a page's copy once named, always empty for an SVG: its copies keep their names.
+                *([""] if kind == "svg" else []),
             ]
         ).encode()
     ).hexdigest()
     return f"/visuals/{name[:2]}/{name}", meta
+
+
+# The script slot of a page's copy made before pages ran as written (copy 2, policy 1): the hash of the height reporter
+# released then. Such a copy is no longer read, but a deleted page's purge removes it too (`visual_paths`).
+OLD_PAGE_SCRIPT = "'sha256-CGsvWZjIPhztoFjn2PxxlX/LGUIoZ4mKDQcJ16au+Aw='"
+
+
+def visual_paths(digest, kind, ancestors):
+    """Every path a copy of `digest` may be held at for these ancestors: its own, and for a page the one its copy had
+    before pages ran as written (Blobs.purge removes both)."""
+    path, meta = _visual(digest, kind, ancestors)
+    if kind != "page":
+        return [path]
+    old = hashlib.sha256(
+        "\n".join(["tico-visual", "2", kind, digest, meta["tico-visual-ancestors"], OLD_PAGE_SCRIPT]).encode()
+    ).hexdigest()
+    return [path, f"/visuals/{old[:2]}/{old}"]
 
 
 def _visual_ok(head, kind, meta, sha=None, size=None):
@@ -658,8 +676,9 @@ def _writable(blobs, found):
 
 
 def make_visual(blobs, digest, kind, data, ancestors):
-    """Write the cleaned copy of the page or SVG `data` (the bytes of `digest`) beside it in Tico's bucket and check
-    it there without reading it back. Whether it is held as made; never raises."""
+    """Write the copy of the page or SVG `data` (the bytes of `digest`) beside it in Tico's bucket and check it there
+    without reading it back: a page as written with the height reporter added, an SVG cleaned. Whether it is held as
+    made; never raises."""
     from .visuals import clean, with_reporter
     from .live_blocks import has_live
 
@@ -671,9 +690,7 @@ def make_visual(blobs, digest, kind, data, ancestors):
         return False
     path, meta = _visual(digest, kind, ancestors)
     try:
-        body, _ = clean(data, kind)
-        if kind == "page":
-            body = with_reporter(body)
+        body = with_reporter(data) if kind == "page" else clean(data, kind)[0]
         sha = hashlib.sha256(body).hexdigest()
         key = _visual_key(at.settings, path)
         s3 = at.s3 if at.s3 is not None else at.sources.client_for(at.sources.kind)
@@ -699,7 +716,7 @@ def make_visual(blobs, digest, kind, data, ancestors):
         )
         held = _visual_ok(head, kind, meta, sha, len(body))
     except Exception:
-        LOG.warning("%s: the cleaned copy of a page or SVG could not be stored", LABEL, exc_info=True)
+        LOG.warning("%s: the hosted copy of a page or SVG could not be stored", LABEL, exc_info=True)
         held = False
     if held:
         blobs._edge_seen[(found["location"], path)] = True
@@ -708,7 +725,7 @@ def make_visual(blobs, digest, kind, data, ancestors):
 
 def visual_ready(blobs, digest, size, mime, ancestors):
     """Whether a page or SVG version shows inline from the company's address: its file is held in Tico's bucket, and
-    its cleaned copy is there or can be made now. A card (visuals.decorate) otherwise."""
+    its hosted copy is there or can be made now. A card (visuals.decorate) otherwise."""
     found = getattr(blobs, "edge", None)
     kind = visual_kind(mime, size) if found else None
     if not kind or not _held(blobs, found["location"], digest, size, mime):
@@ -718,7 +735,7 @@ def visual_ready(blobs, digest, size, mime, ancestors):
 
 
 def visual_link(blobs, digest, size, mime, ancestors, now=None):
-    """A four-minute link to the cleaned copy of a page or SVG version on the company's address, making the copy first
+    """A four-minute link to the hosted copy of a page or SVG version on the company's address, making the copy first
     when it is missing (`make_visual`, from the file read through that address), or None: then it can't show inline
     from there. The caller has checked access already."""
     found = getattr(blobs, "edge", None)
@@ -931,7 +948,7 @@ def copy_one(blobs, digest, length, content_type, at):
             mime = (content_type or "").split(";", 1)[0].strip().lower()
             blobs._edge_seen[(blobs.edge["location"], digest, mime)] = True
             if visual_kind(mime, length):
-                # A page or SVG: its cleaned copy too, from the bytes in hand. A copy that fails is made on first view.
+                # A page or SVG: its hosted copy too, from the bytes in hand. A copy that fails is made on first view.
                 staged.seek(0)
                 landed(blobs, digest, length, mime, staged.read())
         elif at.settings.blob_bucket:

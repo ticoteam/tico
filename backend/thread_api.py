@@ -889,8 +889,11 @@ def install(app, store, auth, mutate, rule_check):
         task's thread, `session=<agent>` reads only that agent's session and `comments=true` only the comments.
         `next_cursor` is the seq to pass as `cursor` for the page above. Each message has `reply_to` and `routed`; the
         first page has `bot_status`. A person's direct chat with a bot can also have `task_activity` in that seq window."""
+        from . import visuals
+
+        later = []
         with store.read() as c:
-            return threads.timeline(
+            out = threads.timeline(
                 c,
                 threads.viewer(auth, request.state.identity),
                 thread_id,
@@ -901,6 +904,11 @@ def install(app, store, auth, mutate, rule_check):
                 session=session,
                 comments=comments,
             )
+            # Each visual as this reader sees it now, as the live stream and a send's answer give it: history agrees.
+            visuals.for_reader(app, store.settings, c, request.state.identity, out["messages"], later)
+        for settle in later:  # Tico file hosting's checks ask its bucket: never while holding a connection
+            settle()
+        return out
 
     @app.get(
         "/api/v2/threads/{thread_id}/bot-status",

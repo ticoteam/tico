@@ -16,15 +16,14 @@ from backend.tests.helpers.files import publish, turn
 from backend.tests.helpers.pages import HTML, page, read
 
 
-def test_a_published_page_is_cleaned_and_reads_with_its_status_fields_only_for_whoever_may_see_it(api):
+def test_a_published_page_is_stored_as_written_and_reads_with_its_status_fields_only_for_whoever_may_see_it(api):
     _, attempt = turn(api)  # ben's chat with ops
     made = page(api, attempt, title="Engineering weekly", cadence="weekly", as_of="2026-10-27")
     assert made.status_code == 200, made.text
     body = made.json()
     fid = body["page"]["file_id"]
-    assert body["unembedded"] == ["https://cdn.acme.example/x.png"]
-    stored = api.get("/api/v2/files/" + fid, headers=headers("ben-test")).content
-    assert b"<script" not in stored and b"cdn.acme.example" not in stored and b"42 deals" in stored
+    assert body["unembedded"] == []
+    assert api.get("/api/v2/files/" + fid, headers=headers("ben-test")).content == HTML
     seen = read(api, fid, "ben-test").json()["page"]
     assert set(seen) >= {
         "file_id",
@@ -59,6 +58,25 @@ def test_a_published_page_is_cleaned_and_reads_with_its_status_fields_only_for_w
     assert page(api, attempt).json()["page"]["version"] == 1
     assert page(api, attempt, data=HTML.replace(b"42", b"43")).json()["page"]["version"] == 2
     assert read(api, fid, "ben-test").json()["page"]["title"] == "Engineering weekly"  # named: its <title> never wins
+
+
+def test_a_page_stored_cleaned_before_is_stored_as_written_when_published_again_unchanged(api):
+    """Pages were once cleaned when published (their scripts removed): the version kept the original's digest as its
+    source. The same source published again now stores the page as written, so it runs; again after that is no change."""
+    _, attempt = turn(api)
+    fid = page(api, attempt).json()["page"]["file_id"]
+    # A version as an old publish stored it: cleaned bytes, with the source's digest beside them.
+    with api.app.state.store.transaction() as c:
+        old = dict(c.execute("SELECT * FROM bot_file_versions WHERE file_id=? AND version=1", (fid,)).fetchone())
+        old |= {"version": 2, "digest": "0" * 64, "source_digest": hashlib.sha256(HTML).hexdigest()}
+        c.execute(
+            f"INSERT INTO bot_file_versions({','.join(old)}) VALUES({','.join('?' * len(old))})", tuple(old.values())
+        )
+        c.execute("UPDATE bot_files SET current_version=2 WHERE id=?", (fid,))
+    again = page(api, attempt).json()["page"]
+    assert again["version"] == 3
+    assert api.get("/api/v2/files/" + fid, headers=headers("ben-test")).content == HTML
+    assert page(api, attempt).json()["page"]["version"] == 3
 
 
 def test_a_page_has_an_inline_address_only_with_a_visual_address(api):

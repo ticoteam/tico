@@ -1,5 +1,5 @@
 """Tico file hosting 1b, the app half (Dev 458): a page or SVG held in Tico's bucket shows inline from the company's
-ticofiles.com address, from a cleaned copy stored beside it with the policy slots the edge reads (Dev 457, docs/files.md),
+ticofiles.com address, from a hosted copy stored beside it with the policy slots the edge reads (Dev 457, docs/files.md),
 through a five-minute signed link handed out only after the reader is checked. Fake S3, HQ and edge: no network."""
 
 import base64
@@ -81,7 +81,7 @@ def follow(api, src, who_ok=True):
 
 
 def test_a_page_and_an_svg_uploaded_to_tico_storage_show_inline_from_the_companys_address(api, tico):
-    """Spec 1b: stored there at upload with a cleaned copy beside it, typed, inline and with the policy slots; the
+    """Spec 1b: stored there at upload with its hosted copy beside it, typed, inline and with the policy slots; the
     reader gets a `src` on the app's own route, which sends them to a signed link to the copy. Making and checking
     the copy reads nothing back through the edge, so nothing is counted as delivered for it."""
     made, hq, sync = tico
@@ -91,8 +91,8 @@ def test_a_page_and_an_svg_uploaded_to_tico_storage_show_inline_from_the_company
     tid, files, comment = page_and_svg(api)
     bucket = made["AKIATICOHOSTING0001"]
     copies = visuals_in(bucket)
-    # Each page and SVG stored there: the page as uploaded, the version posting it made (references removed) and the SVG.
-    assert len(copies) == 3, sorted(bucket.objects)
+    # Each page and SVG stored there: the page as written (posted as it is) and the SVG.
+    assert len(copies) == 2, sorted(bucket.objects)
     delivered = hq.edge.delivered.get(ADDRESS, 0)
 
     class Unread:  # a read there is through the company's address, as delivery
@@ -115,10 +115,11 @@ def test_a_page_and_an_svg_uploaded_to_tico_storage_show_inline_from_the_company
         key = "c/acme" + path
         assert key in copies, (key, sorted(copies))
         body = copies[key]
-        assert b"tracker.example" not in body and b"steal()" not in body, "the cleaned bytes, not the upload"
         kind_type, how = bucket.meta[key]
         meta = bucket.metadata[key]
-        assert how == "inline" and meta["tico-visual-policy-version"] == "1"
+        # A page asks for the open template; an SVG keeps the closed one every deployed edge serves.
+        assert how == "inline" and "tico-visual-script" not in meta
+        assert meta["tico-visual-policy-version"] == {"page": "2", "svg": "1"}[kind]
         assert meta["sha256"] == hashlib.sha256(body).hexdigest()
         assert (
             meta["tico-visual-ancestors"].split()
@@ -126,10 +127,11 @@ def test_a_page_and_an_svg_uploaded_to_tico_storage_show_inline_from_the_company
         )
         if kind == "page":
             assert kind_type == "text/html; charset=utf-8"
-            assert meta["tico-visual-script"] == "'" + V.REPORTER_HASH + "'"
-            assert body.endswith(b"<script>" + V.REPORTER.encode() + b"</script>"), "the height reporter is appended"
+            assert body == PAGE.encode() + b"<script>" + V.REPORTER.encode() + b"</script>", (
+                "as written, plus the reporter"
+            )
         else:
-            assert kind_type == "image/svg+xml" and "tico-visual-script" not in meta
+            assert kind_type == "image/svg+xml"
             assert body == V.clean(SVG.encode(), "svg")[0]
         # The edge serves the copy on that link.
         served = hq.edge(urllib.request.Request(location), 60).read()
@@ -180,7 +182,7 @@ def test_an_old_page_in_tico_storage_gets_its_copy_on_first_view(api, tico):
     follow(api, shown["svg"]["src"])
     assert len(visuals_in(bucket)) == 2
     first = hq.edge.delivered[ADDRESS] - before
-    assert first == shown["page"]["size"] + shown["svg"]["size"], "each posted version read once, to clean it"
+    assert first == shown["page"]["size"] + shown["svg"]["size"], "each posted version read once, to copy it"
     follow(api, shown["page"]["src"])
     assert hq.edge.delivered[ADDRESS] - before == first, "later views use the copy"
 
@@ -204,7 +206,7 @@ def test_move_existing_files_stores_the_copy_and_until_then_a_page_on_disk_stays
     tico_storage.start_move(api.app.state.store, api.app.state.blobs, Owner(), size, wait=True)
     assert hq.edge.delivered == delivered, "the copies are made from the bytes moved, nothing read back"
     bucket = made["AKIATICOHOSTING0001"]
-    assert len(visuals_in(bucket)) == 3, "the page as uploaded, the version posted and the SVG"
+    assert len(visuals_in(bucket)) == 2, "the page as written and the SVG"
     shown = items(api, tid, comment)
     for kind in ("page", "svg"):
         follow(api, shown[kind]["src"])
@@ -328,6 +330,61 @@ def test_src_for_one_file_version_follows_the_same_rules_as_a_message(api, tico)
     notes = api.post(f"/api/v2/tasks/{tid}/files", files={"file": ("notes.txt", b"plain")}, headers=headers("ben-test"))
     with app.state.store.read() as c:
         assert V.src_for(app, settings, c, ben, notes.json()["file_id"], 1) is None
+
+
+def test_an_svgs_hosted_copy_keeps_its_name_and_closed_template_so_an_edge_not_yet_redeployed_still_serves_it():
+    """Only pages moved to the edge's open template (version 2). An SVG's copy is the one made before, by name and
+    metadata, so the deployed edge (which knows only version 1) keeps serving it and no copy is made again."""
+    digest, ancestors = "ab" * 32, ["'self'", "https://tico.acme.example"]
+    before = hashlib.sha256(
+        "\n".join(["tico-visual", "2", "svg", digest, " ".join(ancestors), ""]).encode()
+    ).hexdigest()
+    path, meta = tico_storage._visual(digest, "svg", ancestors)
+    assert path == f"/visuals/{before[:2]}/{before}"
+    assert meta == {"tico-visual-policy-version": "1", "tico-visual-ancestors": " ".join(ancestors)}
+    page, page_meta = tico_storage._visual(digest, "page", ancestors)
+    assert page != path and page_meta["tico-visual-policy-version"] == "2"
+
+
+def test_purging_a_deleted_page_removes_its_copy_from_before_pages_ran_as_written_too(tmp_path):
+    """A page copied before this release has its copy at the old name (copy 2, policy 1, the reporter of then in its
+    script slot). Nothing reads it now, so purging the page's bytes deletes that copy as well as the current one; an
+    SVG has one name."""
+    import threading
+    from types import SimpleNamespace
+
+    from backend.blobs import Blobs
+
+    digest, ancestors = "cd" * 32, ["'self'", "https://tico.acme.example"]
+    old = hashlib.sha256(
+        "\n".join(["tico-visual", "2", "page", digest, " ".join(ancestors), tico_storage.OLD_PAGE_SCRIPT]).encode()
+    ).hexdigest()
+    deleted = []
+    s3 = SimpleNamespace(delete_object=lambda **kw: deleted.append(kw["Key"]))
+    place = SimpleNamespace(blob_bucket="tico-files", blob_prefix="acme")
+    blobs = SimpleNamespace(
+        directory=tmp_path,
+        key=Blobs.key,
+        s3_key=lambda d, settings=None: "acme/" + Blobs.key(d),
+        settings=place,
+        _sources=None,
+        _s3=s3,
+        _earlier=[],
+        _write_lock=threading.Lock(),
+        edge={"location": "tico-files/acme"},
+        visual_ancestors=ancestors,
+        _edge_seen={},
+    )
+    current = tico_storage._visual(digest, "page", ancestors)[0]
+    Blobs.purge(blobs, digest, "page")
+    assert deleted == [
+        f"acme/blobs/{digest[:2]}/{digest}",
+        "acme" + current,
+        f"acme/visuals/{old[:2]}/{old}",
+    ]
+    deleted.clear()
+    Blobs.purge(blobs, digest, "svg")
+    assert deleted == [f"acme/blobs/{digest[:2]}/{digest}", "acme" + tico_storage._visual(digest, "svg", ancestors)[0]]
 
 
 def test_a_local_install_may_frame_pages_from_either_loopback_spelling(api):

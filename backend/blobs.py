@@ -800,7 +800,8 @@ class Blobs:
 
     def purge(self, digest, kind=None):
         """Remove `digest`'s bytes from every place this server reads them from: this computer's disk, the place new
-        files go to and each earlier place, with Tico file hosting's cleaned copy of a page or SVG (`kind`). Only for
+        files go to and each earlier place, with Tico file hosting's copy of a page or SVG (`kind`; a page's copy from
+        before pages ran as written too, tico_storage.visual_paths). Only for
         bytes no row needs any more (backend/file_library.py `drain`). Raises, naming each place that refused, so the
         caller tries again; a place that does not hold them is fine."""
         key = self.key(digest)
@@ -813,17 +814,13 @@ class Blobs:
                 continue
             keys = [self.s3_key(digest, place)]
             found = self.edge
-            if (
-                kind
-                and found
-                and location_of(place) == found["location"]
-                and getattr(self, "visual_ancestors", None) is not None
-            ):
-                from .tico_storage import _visual, _visual_key
+            ancestors = getattr(self, "visual_ancestors", None)  # set by tico_storage when Tico hosts the files
+            if kind and found and location_of(place) == found["location"] and ancestors is not None:
+                from .tico_storage import _visual_key, visual_paths
 
-                path = _visual(digest, kind, self.visual_ancestors)[0]
-                keys.append(_visual_key(place, path))
-                self._edge_seen.pop((found["location"], path), None)
+                for path in visual_paths(digest, kind, ancestors):
+                    keys.append(_visual_key(place, path))
+                    self._edge_seen.pop((found["location"], path), None)
             try:
                 s3 = client if client is not None else sources.client_for(sources.kind)
                 for each in keys:

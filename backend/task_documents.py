@@ -68,13 +68,12 @@ def file_name(name: str) -> str:
 
 
 def clean(text: str | None) -> bytes:
-    """The HTML a version stores: cleaned as a page is, so nothing in it loads or runs from elsewhere."""
+    """The HTML a version stores: as written, as a page is (backend/visuals.py `policy`)."""
     from . import visuals
 
     if text is None or not text.strip():
         raise Problem("validation", "A document is HTML text: send it as text", 422)
-    cleaner = cast(Callable[..., tuple[bytes, list[Any]]], visuals.clean)
-    cleaned, _ = cleaner(text.encode("utf-8"), "page", base=False)
+    cleaned = text.encode("utf-8")
     if len(cleaned) > visuals.LIMITS["page"]:
         raise Problem("file_refused", "A document is at most 10 MB", 422)
     return cleaned

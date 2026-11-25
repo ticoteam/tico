@@ -32,7 +32,7 @@ function handler(event) {
     if (visual) {
         headers['cache-control'] = {value: 'private, no-cache'};
         headers['content-disposition'] = {value: 'inline'};
-        if (version !== '1' || (kind !== 'text/html' && kind !== 'image/svg+xml') ||
+        if ((version !== '1' && version !== '2') || (kind !== 'text/html' && kind !== 'image/svg+xml') ||
             (response.statusCode !== 200 && response.statusCode !== 304)) {
             response.statusCode = 404;
             response.statusDescription = 'Not Found';
@@ -42,6 +42,11 @@ function handler(event) {
             delete headers['content-range'];
             delete headers.location;
             headers['content-type'] = {value: 'text/plain; charset=utf-8'};
+        } else if (kind === 'text/html' && version === '2') {
+            // Version 2: the page runs as written, kept from the app by this host alone (docs/files.md).
+            headers['content-type'] = {value: 'text/html; charset=utf-8'};
+            policy = 'sandbox allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox ' +
+                'allow-downloads allow-modals; frame-ancestors ' + ancestors;
         } else if (kind === 'text/html') {
             headers['content-type'] = {value: 'text/html; charset=utf-8'};
             policy = "default-src 'none'; script-src " + scripts + "; img-src data:; font-src data:; media-src data:; " +
