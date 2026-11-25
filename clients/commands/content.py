@@ -405,14 +405,14 @@ def pin_remove(api, args):
 def files_search(api, args):
     if not args.get("q") and not args.get("tag"):
         raise ValueError("Give words to find, a tag, or both")
-    return api.get(
-        "files/search",
-        **{
-            key: args[key]
-            for key in ("q", "tag", "limit", "kind", "linked", "role", "writer", "page_kind", "stale")
-            if args.get(key) is not None
-        },
-    )
+    query = {
+        key: args[key]
+        for key in ("q", "tag", "limit", "kind", "linked", "role", "writer", "page_kind")
+        if args.get(key) is not None
+    }
+    if args.get("stale"):
+        query["stale"] = True
+    return api.get("files/search", **query)
 
 
 def _fid(value):
