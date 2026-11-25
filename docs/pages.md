@@ -240,10 +240,12 @@ A page version can be an app: it reads Tico as the person viewing it, through Ti
   and no other page on the same host can reach its frame. It still runs its scripts, forms and loads as written. An
   app is never the shared hosted copy, so without a visual address it is an **Open** card.
 - **`window.tico`** is there when the page runs inside Tico. Every call is a promise:
-  `tico.me()`, `tico.query(kind, {limit, cursor, ...})` (rows and `next`), `tico.thumb(fileId)` (a small picture
-  as a `data:` address, up to 200 KB), `tico.open("task:ID" | "file:ID" | "page:ID")` (Tico goes there, the frame
-  stays; only for a declared kind the viewer and the writer may both read), and `tico.store(collection).get(id)` and `.list({after, limit})`. A refusal rejects with an error whose
-  `code` says why. Outside Tico every call rejects.
+  `tico.me()` (`{actor, name}`), `tico.query(kind, {limit, cursor, ...})` (`{rows, next}`), `tico.thumb(fileId)`
+  (`{url}`: a small picture as a `data:` address up to 200 KB, or `null` when the file has none, so use `.url` as the
+  `src`, never the answer itself), `tico.open("task:ID" | "file:ID" | "page:ID")` (Tico goes there, the frame
+  stays; only for a declared kind the viewer and the writer may both read), and `tico.store(collection).get(id)`
+  (`{row}`) and `.list({after, limit})` (`{rows, next}`). A refusal rejects with an error whose `code` says why.
+  Outside Tico every call rejects.
 - **What it reads** is the viewer's own rows, cut to what the version's writer may also read: a list filtered by a
   task is empty unless both may read that task, and live tags in an app are left unfilled. A script can't show or
   send anything its writer couldn't already see. If the writer is gone, calls are refused with `writer_gone`, and
