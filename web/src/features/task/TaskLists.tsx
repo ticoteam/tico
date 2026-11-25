@@ -1,9 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { Suspense, lazy, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import { useActor } from '@/data';
-import { filtersOf, flowQuery, inOrder, isFiltered, loadListTools, loadMore, needsYouRows, pipelinesQuery, pipelineTasksQuery, sortOf, stageCount, stagePriorityQuery, taskSearchQuery, useNeedsYou, useNeedsYouDrawn, useStageSort, validateTasksSearch, waitsOnMe, type FlowItem, type TaskItem } from '@/features/tasks/routing';
-import { openTasksQuery, type OwnTask } from '@/features/team/routing';
+import { ApiError } from '@/api/client';
+import { directoryQuery, useActor } from '@/data';
+import { filtersOf, flowQuery, inOrder, isFiltered, loadListTools, loadMore, needsYouRows, pipelinesQuery, pipelineTasksQuery, sortOf, stageCount, stagePriorityQuery, taskHitsQuery, useNeedsYou, useNeedsYouDrawn, useStageSort, validateTasksSearch, waitsOnMe, type FlowItem, type TaskItem } from '@/features/tasks/routing';
+import { ownerListQuery, type OwnTask } from '@/features/team/routing';
 import { Ago } from '@/kit/Ago';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
@@ -15,6 +16,7 @@ import { Menu as DropMenu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { LatePill } from '@/kit/Pill';
 import { VirtualList, type VirtualListHandle } from '@/kit/VirtualList';
 import { useFollow } from '@/live/follow';
+import { HITS } from '@/search/helpers';
 import { boardSearch, hearPlaces, holdRow, NEEDS_YOU, noteList, type ListRow } from '@/lib';
 
 /* The list beside a task open over a page (plan: the task modal): the list it was opened from. A board's stage (its
@@ -26,7 +28,7 @@ const ListToolItems = lazy(() => loadListTools().then((m) => ({ default: m.ListT
 const ListFind = lazy(() => loadListTools().then((m) => ({ default: m.ListFind })));
 
 const SEARCH = 'search:';
-/** What kind of list `list` names. */
+/** What kind of list `list` names (lib openOf keeps only one of these). */
 export const listKind = (list: string | undefined): 'needs' | 'search' | 'who' | 'pipeline' =>
   !list ? 'needs' : list.startsWith(SEARCH) ? 'search' : list.includes(':') ? 'who' : 'pipeline';
 
@@ -38,18 +40,28 @@ export interface TaskListProps {
   list: string | undefined;
   /** The open task, as the address names it. */
   open: string;
-  /** What the open task's stage is, once read: a pipeline's list shows that stage first. */
-  stage?: string;
+  /** The open task, once read: a pipeline's list shows its stage first; a teammate's or a search's has it, the list it
+      was found in as the person found it (a done task, one of an agent's own lists). */
+  current?: Shown;
   /** Between the title and the end of the head (the modal's fold). */
   end?: ReactNode;
 }
 
-export function TaskList({ list, open, stage, end }: TaskListProps) {
+/** A task row as a list draws it. */
+type Shown = Pick<OwnTask, 'id' | 'number' | 'title' | 'status' | 'pipeline_id' | 'owner_id' | 'late' | 'updated_at'> & { stage_id?: string | null };
+
+export function TaskList({ list, open, current, end }: TaskListProps) {
   const kind = listKind(list);
   if (kind === 'needs') return <NeedsYouList open={open} end={end} />;
-  if (kind === 'search') return <SearchList words={list!.slice(SEARCH.length)} list={list!} open={open} end={end} />;
-  if (kind === 'who') return <WhoList who={list!} open={open} end={end} />;
-  return <PipelineList key={list} pipeline={list!} open={open} stage={stage} end={end} />;
+  if (kind === 'search') return <SearchList words={list!.slice(SEARCH.length)} list={list!} open={open} current={current} end={end} />;
+  if (kind === 'who') return <WhoList who={list!} open={open} current={current} end={end} />;
+  return <PipelineList key={list} pipeline={list!} open={open} stage={current?.stage_id ?? undefined} end={end} />;
+}
+
+/** The rows read, with the open task first when they lack it: the list it was opened from always has it. */
+function withCurrent<T extends Shown>(tasks: readonly T[] | undefined, open: string, current: Shown | undefined): readonly (T | Shown)[] | undefined {
+  if (!tasks || !current || tasks.some((t) => isOpen(t, open))) return tasks;
+  return [current, ...tasks];
 }
 
 /** A list's rows as an answer goes on down them. */
@@ -259,7 +271,7 @@ function PipelineList({ pipeline, open, stage, end }: { pipeline: string; open: 
    sort lands meanwhile), the open task the row the person is on. Past SIDE_LONG it draws only what is on screen. */
 const SIDE_LONG = 50;
 const SIDE_ROW_H = 34;
-function NeedsYouList({ open, end }: { open: string; end?: ReactNode }) {
+function NeedsYouList({ open, end, noteAs = NEEDS_YOU }: { open: string; end?: ReactNode; noteAs?: string }) {
   const { data: flow } = useQuery(flowQuery);
   const order = useNeedsYouDrawn(flow);
   const rows = useMemo(() => (flow ? needsYouRows(flow, order) : undefined), [flow, order]);
@@ -272,7 +284,8 @@ function NeedsYouList({ open, end }: { open: string; end?: ReactNode }) {
     if (at) holdRow(at);
   }, [at]);
   useEffect(() => () => holdRow(null), []);
-  useNoteRows(NEEDS_YOU, open, rows);
+  // noted as the list the address names (one in its place, a teammate gone), for the row below an answer
+  useNoteRows(noteAs, open, rows);
   const long = useRef<VirtualListHandle>(null);
   const many = !!items && items.length > SIDE_LONG;
   useEffect(() => {
@@ -296,13 +309,17 @@ function NeedsYouList({ open, end }: { open: string; end?: ReactNode }) {
 
 /* ---------------------------------------------------------------- a teammate's tasks, search hits */
 
-function WhoList({ who, open, end }: { who: string; open: string; end?: ReactNode }) {
+function WhoList({ who, open, current, end }: { who: string; open: string; current?: Shown; end?: ReactNode }) {
   const actor = useActor(who);
-  const read = useQuery(openTasksQuery(who));
+  // one the roster does not know (gone, or never one): Needs you, never every task
+  const known = useQuery({ ...directoryQuery, select: (d) => !!d.byId[who] }).data;
+  const read = useQuery(ownerListQuery(who));
   const needs = useNeedsYou();
-  const tasks = read.data?.tasks;
+  const tasks = useMemo(() => withCurrent(read.data?.tasks, open, current), [read.data, open, current]);
   const rows = useMemo(() => tasks?.map((t) => ({ id: t.id, n: numberOf(t) })), [tasks]);
-  useNoteRows(who, open, rows);
+  const refused = known === false || (read.error instanceof ApiError && read.error.status === 422);
+  useNoteRows(who, open, refused ? undefined : rows);
+  if (refused) return <NeedsYouList open={open} end={end} noteAs={who} />;
   return (
     <>
       <Head list={who} end={end} title={<span className="li-stage-name">{actor?.name ?? 'Tasks'}</span>} />
@@ -311,11 +328,11 @@ function WhoList({ who, open, end }: { who: string; open: string; end?: ReactNod
   );
 }
 
-const HITS = 50;
-function SearchList({ words, list, open, end }: { words: string; list: string; open: string; end?: ReactNode }) {
-  const read = useQuery(taskSearchQuery(words, HITS));
+/** Search hits as Cmd+K found them (the same read, the same few), the task picked among them. */
+function SearchList({ words, list, open, current, end }: { words: string; list: string; open: string; current?: Shown; end?: ReactNode }) {
+  const read = useQuery(taskHitsQuery(words, HITS));
   const needs = useNeedsYou();
-  const tasks = read.data?.tasks;
+  const tasks = useMemo(() => withCurrent(read.data?.tasks, open, current), [read.data, open, current]);
   const rows = useMemo(() => tasks?.map((t) => ({ id: t.id, n: numberOf(t) })), [tasks]);
   useNoteRows(list, open, rows);
   return (
@@ -326,7 +343,7 @@ function SearchList({ words, list, open, end }: { words: string; list: string; o
   );
 }
 
-function Rows({ read, tasks, open, needs, empty }: { read: { isError: boolean; refetch: () => unknown }; tasks: readonly (OwnTask | TaskItem)[] | undefined; open: string; needs: ReadonlySet<string> | undefined; empty: string }) {
+function Rows({ read, tasks, open, needs, empty }: { read: { isError: boolean; refetch: () => unknown }; tasks: readonly Shown[] | undefined; open: string; needs: ReadonlySet<string> | undefined; empty: string }) {
   return (
     <div className="nav-scroll li-body">
       {read.isError && !tasks ? (

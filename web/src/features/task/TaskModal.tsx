@@ -95,7 +95,7 @@ export function TaskModal() {
             )}
             {/* a press on a row here opens it in place, with this list (router.tsx) */}
             <nav className="pane nav list tmd-list" aria-label="List" data-list={shown.list ?? ''}>
-              <TaskList list={shown.list} open={shown.task} stage={t?.stage_id ?? undefined} end={fold} />
+              <TaskList list={shown.list} open={shown.task} current={t} end={fold} />
             </nav>
             <aside className="pane side chat chat-2 tmd-chat" aria-label="Chat">
               <TaskChat task={shown.task} />

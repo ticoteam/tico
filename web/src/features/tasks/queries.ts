@@ -232,13 +232,26 @@ export const pipelineTasksQuery = (pipeline: string, f: Filters) => {
   });
 };
 
-/** Search's tasks: any pipeline's, by title words or #N (the server's `search`), a few. Under the list root, so the
-    stream's changes reach it. */
-export const taskSearchQuery = (q: string, limit: number) => {
-  const params = { search: q, limit, brief: 'true' };
+/** A task's id as a board shows it, with its pipeline's letters ("G35001", "E-12"): the number in it. */
+const BOARD_ID = /^#?[a-z]{1,2}-?(\d{2,})$/i;
+export const numberIn = (words: string): string | undefined => BOARD_ID.exec(words)?.[1];
+
+/** Search's task hits (Cmd+K, and the list of a task opened from it, so the task picked is in it): any pipeline's, by
+    title words or #N (the server's `search`), and by the id a board shows (the server knows a task by its number, not
+    its pipeline's letters), that one first. Under the list root, so the stream's changes reach it. */
+export const taskHitsQuery = (words: string, limit: number) => {
+  const params = { search: words, limit, brief: 'true' };
   return queryOptions({
-    queryKey: keys.tasks.list(params),
-    queryFn: ({ signal }) => api.get<TaskPage>(`/api/v2/tasks?${query(params)}`, { signal }),
+    queryKey: keys.tasks.list({ ...params, hits: 'true' }),
+    queryFn: async ({ signal }) => {
+      const id = numberIn(words);
+      const [found, byId] = await Promise.all([
+        api.get<TaskPage>(`/api/v2/tasks?${query(params)}`, { signal }),
+        id ? api.get<TaskPage>(`/api/v2/tasks?${query({ ...params, search: id })}`, { signal }).catch(() => null) : null,
+      ]);
+      const exact = byId?.tasks.filter((t) => String(t.number) === id) ?? [];
+      return { ...found, tasks: [...exact, ...found.tasks.filter((t) => !exact.some((e) => e.id === t.id))].slice(0, limit) };
+    },
   });
 };
 

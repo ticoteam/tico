@@ -57,11 +57,15 @@ export function pageSearch(search: Record<string, unknown>): Record<string, unkn
   return Object.fromEntries(Object.entries(search).filter(([k]) => !isTaskKey(k)));
 }
 
+/** A list a task opens from: a pipeline's id (no colon), a teammate's id, or a search's words; anything else is none
+    (Needs you). */
+const LIST = /^(?:[^:]+|(?:human|bot):.+|search:.+)$/;
+
 /** The task open over the page, or null. */
 export function openOf(search: Record<string, unknown>): Required<Pick<TaskOpen, 'task' | 'words'>> & { list?: string } | null {
   const task = text(search.task);
   if (!task) return null;
-  const list = text(search.list);
+  const list = [text(search.list)].find((l) => l && LIST.test(l));
   return { task, ...(list && { list }), words: wordsOf(search, (w) => PREFIX + w) };
 }
 

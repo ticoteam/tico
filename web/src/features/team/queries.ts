@@ -588,6 +588,16 @@ export const openTasksQuery = (actor: string) => {
   });
 };
 
+/** A teammate's open tasks as the list beside a task opened from their page reads them: one page, its owner exact (one
+    not on the roster is refused, never read as no filter at all). */
+export const ownerListQuery = (actor: string) => {
+  const params = { owner: actor, status: 'open', brief: 'true', exact: 'true', limit: 200 };
+  return queryOptions({
+    queryKey: keys.tasks.list(params),
+    queryFn: ({ signal }) => api.get<OwnTasks>(`/api/v2/tasks?${q(params)}`, { signal }),
+  });
+};
+
 /** What they finished since `since` (an ISO day): the figures and the Done fold. */
 export const doneTasksQuery = (actor: string, since: string) => {
   const params = { owner: actor, status: 'done', brief: 'true', updated_since: since, limit: 500 };
