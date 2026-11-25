@@ -6268,7 +6268,12 @@ class Execution:
         # Quiet notes ride along with whatever woke the bot: every note waiting for this bot, each with when it was
         # sent, so the run can tell yesterday's from this morning's.
         notes = []
-        if getattr(body, "next_run", False) and not (check or scope or making_page or voice_call or relationship):
+        # A command turn is sent its command alone (runner prompt): notes and deferred deliveries wait for a turn that
+        # reads them.
+        command = bool((msg.get("refs") or {}).get("command"))
+        if getattr(body, "next_run", False) and not (
+            check or scope or making_page or voice_call or relationship or command
+        ):
             from . import bot_to_bot
             from . import threads
 
@@ -6302,7 +6307,7 @@ class Execution:
         deferred_ids = set()
         deferred = (
             ""
-            if making_page or voice_call or relationship
+            if making_page or voice_call or relationship or command
             else delivery.summary(
                 delivery.carried(
                     c,
@@ -7417,8 +7422,10 @@ class Execution:
             if attempt["stop_requested_at"]:
                 return {"messages": [], "call_voice": {"closed": True}}
             return call_sessions.inputs(c, attempt, ref["voice_call"], self.auth, phase=voice, if_idle=if_idle)
-        if "make_page" in (origin.get("refs") or {}):
-            return {"messages": []}
+        from . import idle_compact
+
+        if "make_page" in (origin.get("refs") or {}) or idle_compact.ours(origin):
+            return {"messages": []}  # an idle compaction takes in nothing: what queued behind it gets its own turn
         if card_slot.of(c.execute("SELECT slot FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()):
             return {"messages": []}  # a card slot's run carries its own job alone (backend/card_slot.py)
         origin_task = work_task_id(origin, H.conversation(c, origin["conversation_id"]))
@@ -8067,12 +8074,14 @@ class Execution:
             kept = task_text_keys.mask_on_task(c, on, actor, body.text)
             if kept != body.text:
                 body = body.model_copy(update={"text": kept})
-        # Keep-warm turns are gone. One still out on a computer at the upgrade answers its hidden notice ("ok"): nothing
-        # is posted for it, and its text stays on the run.
-        kept_warm = row["purpose"] == "keep warm"
+        # Tico's own runs on a session post nothing; their text stays on the run: an idle compaction
+        # (backend/idle_compact.py), and a keep-warm turn still out on a computer at that feature's removal.
+        from . import idle_compact
+
+        system_run = row["purpose"] in ("keep warm", idle_compact.PURPOSE)
         if (
             body.text
-            and not kept_warm
+            and not system_run
             and body.outcome == "completed"
             and msg["deleted_at"] is None
             and source is not None
@@ -8290,7 +8299,7 @@ class Execution:
                 from . import question_marks
 
                 question_marks.unasked_reply(c, aid, actor, task["id"], text, posted=reply is not None, woken_by=msg)
-        if check and body.outcome == "completed" and not held and not kept_warm:
+        if check and body.outcome == "completed" and not held and not system_run:
             check_unanswered(c, aid, actor, check_task, check, body, reply)
         # Quota is a terminal provider pause even when it happens halfway through fallback work. Reuse the
         # restart safety judgement: local work may continue, while used OKs and outside actions stay held.
@@ -8384,6 +8393,8 @@ class Execution:
         # a third limit in a row waits longer and tells a person in Needs attention. Only
         # interrupted or failed work, which may have acted, is held for review.
         # A turn a person stopped is over by their choice: nothing to retry and nothing to review.
+        # An idle compaction that did not finish ends as quietly as a skipped turn: nothing to retry, review or count.
+        skipped = skipped or row["purpose"] == idle_compact.PURPOSE and body.outcome != "completed"
         stopped = bool(row["stop_requested_at"]) and body.outcome != "completed" or skipped
         # A quarantine's Stop is no choice to drop the work: what it held back waits for review, not canceled.
         held_back = bool(benched) and not quarantine_stops.requeues(c, row)
@@ -8690,7 +8701,9 @@ class Execution:
                 (state, deferred, incoming["message_id"]),
             )
         slotted = card_slot.of(c.execute("SELECT slot FROM jobs WHERE id=?", (row["job_id"],)).fetchone())
-        if body.outcome == "completed" and not slotted:  # a card slot's run settles its own job alone
+        if (
+            body.outcome == "completed" and not slotted and not system_run
+        ):  # a card slot's run settles its own job alone
             # Notices that queued in this turn's conversation before it was claimed were in the
             # room page it was given, so the turn has read them. Leaving their jobs queued costs
             # one more run each to read the same thing again: a bot could accumulate
@@ -8732,7 +8745,9 @@ class Execution:
         from . import counsel
 
         # The Rules Owner's completed turn on a document's read task finishes that task.
-        counsel.turn_done(c, row, "stopped" if stopped else body.outcome, work_task_id(msg, conv), body.text)
+        counsel.turn_done(
+            c, row, "stopped" if stopped or system_run else body.outcome, work_task_id(msg, conv), body.text
+        )
         # The checkpoint goes on the task whose session the turn ran in: a subtask's turn runs in its session
         # root's lane (`task:<root>`, set at claim), so it checkpoints that root, never the subtask, even if
         # the subtask moved during the turn. A lane naming a task this bot does not own checkpoints nothing.
@@ -8775,6 +8790,7 @@ class Execution:
             and not notice_only
             and body.text
             and checkpoint_task
+            and not system_run
         ):
             # Where the task stood after this turn: a later turn that cannot resume this session
             # starts from it (runner prompt). It is not the task's activity, so `updated_at` stays.

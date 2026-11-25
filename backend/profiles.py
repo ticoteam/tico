@@ -650,7 +650,8 @@ def mismatches(c):
         elif name == DOER:
             seen = c.execute(
                 "SELECT count(*) AS n, sum(coalesce(did_nothing,0)=1) AS idle FROM attempts WHERE bot_id=? "
-                "AND created_at>? AND settled_at IS NOT NULL",
+                # An idle compaction (backend/idle_compact.py) is Tico's, not the bot's work or idleness.
+                "AND created_at>? AND settled_at IS NOT NULL AND coalesce(purpose,'')<>'idle compact'",
                 (bot, since),
             ).fetchone()
             created = c.execute("SELECT created_at FROM bots WHERE id=?", (bot,)).fetchone()

@@ -42,6 +42,7 @@ else was said in between, so the same words sent again after an answer are a new
 """
 
 import json
+import logging
 
 from . import hubdb as H
 from . import bot_settings as BS
@@ -270,7 +271,8 @@ HELD_DUE_SQL = (
 def tick(c, at=None):
     """The one release check. Plan each newly held job's Due, then let go of what is due: a notice batch at its Due, a
     policy job at Due when it does not prefer warm, in the bot's warm window when it does, and at its deadline cold or
-    skipped. Runs in the scheduler's write transaction every tick."""
+    skipped; then send big idle Claude sessions `/compact` while their cache is warm (backend/idle_compact.py, once a
+    minute). Runs in the scheduler's write transaction every tick."""
     at = at or H.now()
     hours = {}
     for job in c.execute(HELD_NEW_SQL).fetchall():
@@ -303,6 +305,17 @@ def tick(c, at=None):
         _release(c, bot, jobs)
     for bot, jobs in waiting.items():
         _release_policy(c, bot, jobs, at)
+    # After the releases, so a dream let go this tick holds its bot's compaction. Its own savepoint: a compaction that
+    # fails is logged and never undoes the releases above.
+    from . import idle_compact
+
+    c.execute("SAVEPOINT idle_compact")
+    try:
+        idle_compact.sweep(c, at)
+    except Exception:  # noqa: BLE001 - a compaction is a saving, never a reason to hold the release check
+        c.execute("ROLLBACK TO idle_compact")
+        logging.getLogger("tico.idle_compact").warning("idle compact sweep failed", exc_info=True)
+    c.execute("RELEASE idle_compact")
 
 
 def _repeat_slot(c, job, due):

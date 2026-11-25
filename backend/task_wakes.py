@@ -824,9 +824,11 @@ def _runs_of(k: str) -> str:
     # CROSS JOIN keeps this order (task, message, job, run), and `+` keeps a test for "names none" off an index: else
     # SQLite may start from every run with no message or no task.
     alone = " AND +x.task_id IS NULL"
-    out = [f"SELECT {k}.t AS t, x.rowid AS rid FROM {k} CROSS JOIN attempts x ON x.task_id = {k}.t"]
+    # An idle compaction (backend/idle_compact.py) is no run on its task: not a try, not one of the 7, not when it stopped.
+    system = " AND coalesce(x.purpose, '') <> 'idle compact'"
+    out = [f"SELECT {k}.t AS t, x.rowid AS rid FROM {k} CROSS JOIN attempts x ON x.task_id = {k}.t{system}"]
     for n, way in enumerate(ways):
-        extra = alone if n == 2 else ""
+        extra = (alone if n == 2 else "") + system
         found = f"SELECT {k}.t, x.rowid FROM {k} CROSS JOIN messages y ON {way} CROSS JOIN "
         out.append(f"{found}attempts x ON x.message_id = y.id{extra}")
         out.append(
@@ -960,6 +962,15 @@ def may_start(conn: "sqlite3.Connection", message: str | Row, attempt: str | Non
         # pursuing a task goal that ended, so it reaches the old owner's session even when the task is no longer
         # theirs. Only the server's own: refs a bot sends are not trusted to skip the hold.
         return True
+    if found[3] == H.TICO_ACTOR and refs.get("wake") == "idle_compact":
+        # Tico's idle compaction (backend/idle_compact.py) does no work and is no run on the task (`_runs_of`): it needs
+        # no turn and is not held to the 7 runs, only to everything that sent it still holding, in the same session.
+        from . import idle_compact
+
+        if idle_compact.may_start(conn, message_id, refs, attempt):
+            return True
+        conn.execute("UPDATE jobs SET state='canceled' WHERE message_id=? AND state='queued'", (message_id,))
+        return False
     parts = str(found[0] or "").split(":")
     task = E.task(conn, parts[0]) if found[0] else None
     if task is None:

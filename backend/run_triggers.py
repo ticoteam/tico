@@ -311,7 +311,8 @@ def turn_result(conn, actor, row, outcome, event, to=None):
     by = str(actor)[4:] if str(actor).startswith("bot:") else ""
     turn = conn.execute(
         "SELECT id FROM attempts WHERE task_id=? AND bot_id<>? AND (job_id IS NULL OR trigger IS NOT NULL) "
-        "AND (? IS NULL OR created_at<=?) ORDER BY bot_id=? DESC, created_at DESC LIMIT 1",
+        "AND coalesce(purpose,'')<>'idle compact' AND (? IS NULL OR created_at<=?) "
+        "ORDER BY bot_id=? DESC, created_at DESC LIMIT 1",
         (row["id"], by, reached, reached, owner[4:]),
     ).fetchone()
     if (
