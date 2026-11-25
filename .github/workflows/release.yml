@@ -228,6 +228,36 @@ jobs:
           python3 -c 'import json, sys; json.load(open(sys.argv[1]))' dist/openapi-v2.json
           echo "API spec: $(wc -c < dist/openapi-v2.json) bytes"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Check if Sentry uploads are enabled
+        id: sentry
+        if: env.DRY_RUN == 'false'
+        continue-on-error: true
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: |
+          if [ -n "$SENTRY_AUTH_TOKEN" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build private web source maps
+        id: sentry_maps
+        if: steps.sentry.outcome == 'success' && steps.sentry.outputs.enabled == 'true'
+        continue-on-error: true
+        run: |
+          docker buildx build --target web-sourcemaps --output "type=local,dest=$RUNNER_TEMP/web-sourcemaps" . \
+            || { echo "::warning::Building web source maps for Sentry failed"; exit 1; }
+      - name: Upload web source maps to Sentry
+        if: steps.sentry_maps.outcome == 'success'
+        continue-on-error: true
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: tico-ws
+          SENTRY_PROJECT: '4512298593681408'
+        run: |
+          docker run --rm -e SENTRY_AUTH_TOKEN -e SENTRY_ORG -e SENTRY_PROJECT \
+            -v "$RUNNER_TEMP/web-sourcemaps:/work:ro" \
+            getsentry/sentry-cli:3.8.2@sha256:633122f5fbd774716a0ebbcd7ece9c0584aa781cc61a84e7ce57964c635d6559 \
+            sourcemaps upload --release "$VERSION" --url-prefix 'app:///next/assets' /work \
+            || { echo "::warning::Web source map upload to Sentry failed"; exit 1; }
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io

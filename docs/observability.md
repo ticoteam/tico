@@ -38,11 +38,10 @@ one PostHog project between several apps by filtering on the `app` property (Tic
 5. Enable it in production only after the staging check. To disable, remove the relevant key/DSN or required environment and restart
    the API. The web app reads the config once per page load; reload open tabs to apply changes.
 
-No `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, or `SENTRY_PROJECT` is sent to the browser. Stack
-locations are restricted to known static filenames and line/column numbers. The web app's files
-(`/next/assets/<name>-<hash>.js`, built from `web/`) are minified, and nothing is uploaded to Sentry.
-If upload is added later, its authentication token must remain in CI/build secrets, never in
-public config or browser assets. Release/debug mapping needs its own tested privacy policy.
+Stack locations are restricted to known static filenames and line/column numbers. When the
+release workflow has the `SENTRY_AUTH_TOKEN` GitHub Actions secret, it builds hidden web source
+maps and uploads them to the Tico Sentry project under the version tag and `app:///next/assets`.
+The upload token stays in CI, and the published images contain only the regular web build.
 
 ## Web app errors
 
