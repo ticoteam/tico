@@ -168,7 +168,6 @@ SCHEMAS.update(
                 "links_more": "i",
                 "writers": items(ref("PageWriter")),
                 "may_write": "b",
-                "tags": items(ref("FileTag")),
             },
             required=["id", "bot", "title", "kind", "library_kind", "version", "last_activity_at"],
         ),

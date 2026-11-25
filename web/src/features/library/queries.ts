@@ -326,7 +326,7 @@ export function tagFile(id: string, key: string, on: boolean) {
     settle: (cur: BotFile | undefined, answer) => cur && { ...cur, tags: answer.tags },
     send: (idempotencyKey) => api.post(`/api/v2/files/${enc(id)}/tags`, on ? { add: [key] } : { remove: [key] }, { idempotencyKey }),
   }).then(async (r) => {
-    await queryClient.invalidateQueries({ queryKey: ['files', 'list'] });
+    await Promise.all([queryClient.invalidateQueries({ queryKey: ['files', 'list'] }), queryClient.invalidateQueries({ queryKey: ['files', 'search'] })]);
     return r;
   });
 }

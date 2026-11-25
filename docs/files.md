@@ -288,8 +288,7 @@ Whoever may read the file reads them, in its details and from `tico file show ID
   the original sees nothing of it.
 
 `POST /api/v2/files/{id}/tags` (`{"add": [...], "remove": [...]}`), `GET` and `PATCH /api/v2/files/{id}/metadata`
-(`{"set": {...}, "remove": [...]}`), `PATCH /api/v2/files/{id}` with `parent` (`""` clears it), and `from` on
-`POST /api/v2/files/uploads` and `/api/v2/pages`. On the command line:
+(`{"set": {...}, "remove": [...]}`), and `from` on `POST /api/v2/files/uploads` and `/api/v2/pages`. On the command line:
 
 ```sh
 tico file tag f1 add client:acme

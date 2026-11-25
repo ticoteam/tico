@@ -476,9 +476,6 @@ class Library:
             page_links.prime(c, rows)
             known = names.lookup(c, {"bot:" + r["bot_id"] for r in rows})
             files = [self.row_view(c, who, r, caches, known) for r in rows]
-            tags = file_details.tags_of(c, who, [r["id"] for r in rows])
-            for f in files:
-                f["tags"] = tags[f["id"]]
             known.update(names.lookup(c, {f["actor"] for f in files if f.get("actor")}))
             for f in files:
                 f["actor_name"] = known.get(f.get("actor") or "", "")

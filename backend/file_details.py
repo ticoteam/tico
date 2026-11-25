@@ -5,8 +5,8 @@
   the tags each of them may read.
 - Metadata: one JSON object of a team's own fields per file, up to META_BYTES, on the file rather than a version, so
   it is kept across versions. Its own table keeps the many `bot_files` reads small.
-- Made from: `bot_files.parent_id`, the file this one was made from (`tico file publish --from`). The writer must read
-  the parent, and a chain never loops or runs past PARENT_STEPS.
+- Made from: `bot_files.parent_id`, the file this one was made from (`from` on a publish). The writer must read the
+  parent, and a chain never loops or runs past PARENT_STEPS.
 
 Whoever may write the file changes all three (page_links.may_write: the file's bot, its managers, the owner, a page's
 writers); whoever may read it reads them.
@@ -153,15 +153,16 @@ def change_tags(c, auth, files, who, fid, body):
         if attach and tag["is_template"]:
             raise Problem("validation", f"{tag['key']} is a template; make an instance to tag a file", 422)
         wanted.append((tag, attach))
+    # Activity names tags by id: a file's readers read its activity, and a tag's key is only for those who read the tag.
     added, removed = [], []
     for tag, attach in wanted:
         if attach:
             if c.execute(
                 "INSERT OR IGNORE INTO file_tags(file_id,tag_id) VALUES(?,?)", (row["id"], tag["id"])
             ).rowcount:
-                added.append(tag["key"])
+                added.append(tag["id"])
         elif c.execute("DELETE FROM file_tags WHERE file_id=? AND tag_id=?", (row["id"], tag["id"])).rowcount:
-            removed.append(tag["key"])
+            removed.append(tag["id"])
     if c.execute("SELECT count(*) FROM file_tags WHERE file_id=?", (row["id"],)).fetchone()[0] > TAGS_MAX:
         raise Problem("validation", f"A file carries at most {TAGS_MAX} tags", 422)
     if added or removed:
@@ -183,11 +184,11 @@ def change_metadata(c, auth, files, who, fid, body):
             data[key] = value
     for key in body.remove:
         data.pop(key, None)
-    packed = json.dumps(data, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    packed = pack(data)
     if len(packed.encode()) > META_BYTES:
         raise Problem("validation", f"A file's metadata is at most {META_BYTES // 1024} KB", 422)
     before = metadata_of(c, row["id"])
-    if data == before:
+    if packed == pack(before):
         return {"file": row["id"], "metadata": data}
     now = H.now()
     if data:
@@ -198,10 +199,17 @@ def change_metadata(c, auth, files, who, fid, body):
         )
     else:
         c.execute("DELETE FROM file_metadata WHERE file_id=?", (row["id"],))
-    changed = sorted(k for k in set(data) | set(before) if data.get(k) != before.get(k))
+    changed = sorted(
+        k for k in set(data) | set(before) if k not in data or k not in before or pack(data[k]) != pack(before[k])
+    )
     files.activity(c, row["id"], who.actor, "metadata_changed", detail={"keys": changed}, now=now)
     H.event(c, who.actor, "file.metadata", row["id"], {"keys": changed})
     return {"file": row["id"], "metadata": data}
+
+
+def pack(value):
+    """Canonical JSON: true and 1 differ here, as Python's == does not tell them apart."""
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
 def purge(c, fid):

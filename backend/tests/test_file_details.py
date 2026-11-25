@@ -52,7 +52,6 @@ def test_tags_attach_with_write_rights_and_filter_only_readable_files(api):
     for token, expected in (("cara-test", [shown]), ("ben-test", [shown, hidden])):
         listed = api.get("/api/v2/files", params={"tag": "client:acme"}, headers=headers(token)).json()["files"]
         assert sorted(f["id"] for f in listed) == sorted(expected), token
-        assert all(f["tags"] == [{"id": f["tags"][0]["id"], "key": "client:acme", "label": "Acme"}] for f in listed)
         for params in ({"tag": "client:acme"}, {"tag": "client:acme", "q": "orbitalnote"}):
             found = api.get("/api/v2/files/search", params=params, headers=headers(token)).json()["results"]
             assert sorted(f["id"] for f in found) == sorted(expected), (token, params)
@@ -63,6 +62,8 @@ def test_tags_attach_with_write_rights_and_filter_only_readable_files(api):
     assert info(api, shown, outsider)["may_edit"] is False
     assert info(api, shown, ops)["may_edit"] is True
     assert tag(api, shown, ops, remove=["client:acme"]).json()["tags"] == []
+    activity = api.get(f"/api/v2/files/{shown}/activity", headers=headers(outsider)).text
+    assert '"tagged"' in activity and "client:acme" not in activity  # a tag's key is for its readers alone
     listed = api.get("/api/v2/files", params={"tag": "client:acme"}, headers=headers("cara-test")).json()["files"]
     assert listed == []
 
@@ -83,8 +84,11 @@ def test_metadata_is_one_bounded_object_writers_change_and_versions_keep(api):
     assert info(api, fid, ops)["metadata"] == {"ads": {"meta": "238"}, "angle": "price"}
     r = api.patch(url, json={"set": {"angle": None}, "remove": ["missing"]}, headers=headers(ops))
     assert r.json()["metadata"] == {"ads": {"meta": "238"}}
+    for value in (True, 1):  # true and 1 are two values, each saved
+        assert api.patch(url, json={"set": {"live": value}}, headers=headers(ops)).status_code == 200
+        assert repr(api.get(url, headers=headers(ops)).json()["metadata"]["live"]) == repr(value)
     activity = api.get(f"/api/v2/files/{fid}/activity", headers=headers(ops)).json()["activity"]
-    assert [a["action"] for a in activity].count("metadata_changed") == 2
+    assert [a["action"] for a in activity].count("metadata_changed") == 4
 
 
 def test_made_from_needs_a_readable_parent_never_loops_and_purge_clears_it(api):
@@ -106,10 +110,10 @@ def test_made_from_needs_a_readable_parent_never_loops_and_purge_clears_it(api):
         headers=headers(ops),
     )
     assert missing.status_code == 404, missing.text
-    for parent, shown in (("", None), (source, {"id": source, "title": "source.html"})):
-        r = api.patch(f"/api/v2/files/{child}", json={"parent": parent}, headers=headers(ops))
-        assert r.status_code == 200, r.text
-        assert info(api, child, ops)["parent"] == shown
+    sql = api.post(
+        "/api/v2/sql", json={"sql": "SELECT * FROM bot_files WHERE id='" + child + "'"}, headers=headers("cara-test")
+    )
+    assert sql.status_code == 200 and source not in sql.text, sql.text  # nor as a bare id through SQL
 
     post(api, "tags", {"key": "creative"})
     assert tag(api, source, ops, add=["creative"]).status_code == 200

@@ -229,8 +229,6 @@ class FileEdit(M.Contract):
     task: str | None = Field(default=None, max_length=100)
     archived: bool | None = None
     promote: bool | None = None
-    # The file this one was made from (file_details.set_parent); "" clears it.
-    parent: str | None = Field(default=None, max_length=100)
 
 
 class LinkBody(M.Contract):
@@ -2296,10 +2294,9 @@ class Files:
             else:
                 self.blobs.put(data, mime)
         body = {
-            **{
-                k: fields.get(k, "")
-                for k in ("bot", "path", "title", "task", "scope", "attempt", "commit", "source", "from")
-            },
+            **{k: fields.get(k, "") for k in ("bot", "path", "title", "task", "scope", "attempt", "commit", "source")},
+            # Only when given, so a retry sent before `from` existed still matches its stored request.
+            **({"from": str(fields["from"])} if fields.get("from") else {}),
             "name": name,
             "digest": digest,
             "identity": identity,
@@ -2665,8 +2662,6 @@ class Files:
                 fields["scope"] = "bot"
             if body.archived is not None:
                 fields["archived"] = int(body.archived)
-            if body.parent is not None:
-                file_details.set_parent(c, self.auth, who, row, body.parent or None)
             if not fields:
                 return {"file": self.brief(c, row)}
             fields["last_activity_at"] = now
