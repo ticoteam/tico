@@ -230,6 +230,7 @@ def test_a_view_runs_its_own_page_apps_reads_and_none_of_its_writes(api):
         ("store.set", {"collection": "notes", "id": "n2", "data": 1}),
         ("store.rm", {"collection": "notes", "id": "n1"}),
         ("act", act),
+        ("unknown", {}),
     ):
         r = call(op, **args)
         assert r.status_code == 403, (op, r.text)
@@ -273,8 +274,13 @@ def test_a_view_never_acts_for_the_person_who_asked(api, agent_ops):
 
     api.app.add_api_route("/api/v2/pages/{fid}/app", identity, methods=["POST"])
     api.app.router.routes.insert(0, api.app.router.routes.pop())  # ahead of the real one: whose rights the call has
-    for cite in ({}, {"X-Tico-On-Behalf-Of": "turn"}, {"X-Tico-On-Behalf-Of": "default"}):
-        r = api.post("/api/v2/pages/file-x/app", json={}, headers={**headers(token), **cite})
+    for cite, body in (
+        ({}, {}),
+        ({"X-Tico-On-Behalf-Of": "turn"}, {}),
+        ({"X-Tico-On-Behalf-Of": "default"}, {}),
+        ({}, {"on_behalf_of": "turn"}),
+    ):
+        r = api.post("/api/v2/pages/file-x/app", json=body, headers={**headers(token), **cite})
         assert r.status_code == 200 and r.json()["actor"] == "bot:botops" and r.json()["view"], (cite, r.text)
     # The run's own token is delegated as before, so the view is what keeps it its own.
     lent = api.post(

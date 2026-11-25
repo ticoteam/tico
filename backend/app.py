@@ -854,6 +854,7 @@ def _install_request_guard(
         if (
             caller is not None
             and caller.actor == "bot:" + AGENT_OPS
+            and not caller.view  # a read-only view's refusal is its own, not one to relay to a person
             and exc.status in (403, 409)
             and "fix" not in getattr(exc, "extra", {})
         ):
