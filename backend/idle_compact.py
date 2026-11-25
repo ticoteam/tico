@@ -98,8 +98,8 @@ def _h() -> Any:
 def ours(message: Row | None) -> bool:
     """Whether a message is Tico's idle-compaction notice. Only the keeper's: refs a bot sends are not trusted."""
     message = message or {}
-    refs: Any = message.get("refs")
-    refs = refs if isinstance(refs, dict) else _h()._json(refs, {})
+    raw: Any = message.get("refs")
+    refs: Any = cast("Row", raw) if isinstance(raw, dict) else _h()._json(raw, {})
     return (
         message.get("sender_id") == _core.TICO_ACTOR
         and isinstance(refs, dict)
@@ -148,6 +148,8 @@ def why_not(conn: "sqlite3.Connection", attempt_id: str, at: str, own: str = "",
     compaction's notice and `lease` its run, which are not newer work. Reads only."""
     from . import company_pause, task_wakes, threads
 
+    T: Any = threads
+
     H = _h()
     found = source(conn, attempt_id)
     if not found:
@@ -160,8 +162,8 @@ def why_not(conn: "sqlite3.Connection", attempt_id: str, at: str, own: str = "",
         (lambda: a["billing"] != "subscription" or a["handed_runtime"] != "claude", "not a Claude plan sign-in"),
         (lambda: (a["prompt_tokens"] or 0) < CONTEXT_MIN, "a small context"),
         (lambda: a["stop_requested_at"], "stopped"),
-        (lambda: a["side"] or a["slot"] or threads.note_wake(msg), "a fallback's, side, card slot's or notes session"),
-        (lambda: (H._json(a["wake"], {}) or {}).get("release"), "a routine's or dream's run"),
+        (lambda: a["side"] or a["slot"] or T.note_wake(msg), "a fallback's, side, card slot's or notes session"),
+        (lambda: cast("Row", H._json(a["wake"], {}) or {}).get("release"), "a routine's or dream's run"),
         (lambda: not (key and a["thread_id"] and a["runner_id"]), "no saved session"),
         (lambda: str(a["finished_at"] or "") <= str(H.shift(at, seconds=-LATEST)), "its cache is cold"),
         (lambda: conn.execute(_NEWER, (bot, a["created_at"], key, attempt_id, lease)).fetchone(), "a newer run"),
@@ -198,12 +200,11 @@ def _moved(conn: "sqlite3.Connection", a: Row) -> bool:
 
 def _no_session(conn: "sqlite3.Connection", bot: str) -> bool:
     """A bot that keeps one thread for everything (`session: bot`) or keeps nothing (stateless)."""
-    from . import bot_settings
-    from .shared_bots import follow
+    from . import bot_settings, shared_bots
 
     found = conn.execute(cast("Any", bot_settings).ONE_SQL, (bot,)).fetchone()
     config: Any = _h()._json(found[0], {}) if found else {}
-    config = cast("Any", follow)(conn, bot, config if isinstance(config, dict) else {})
+    config = cast("Any", shared_bots).follow(conn, bot, config if isinstance(config, dict) else {})
     return config.get("session") == "bot" or bool(_h().stateless(config))
 
 

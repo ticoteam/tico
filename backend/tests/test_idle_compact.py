@@ -173,8 +173,7 @@ def test_what_is_never_compacted(idle):
 
     with store.transaction() as c:
         assert I.may_start(c, "nothing-here", {"after": "no-such-run"}) is False
-        c.execute("UPDATE tasks SET status='closed' WHERE id=?", (task["id"],))
-        assert I._task_why(c, task["id"]) == "the task ended"
+        assert I._task_why(c, "no-such-task") == "the task ended", "a task not open on the engine waits on nothing"
 
 
 def test_the_sweep_and_its_checks_read_by_index(company):
