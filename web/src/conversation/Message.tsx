@@ -473,8 +473,9 @@ export function LiveRow({ r, variant, text }: { r: LiveRun; variant: Variant; te
 
 /** Where a reply ends without being one: something stops the agent (`stuck`, what), or its run ended with no reply
     ('none': it finished; 'failed': it stopped). One line, so the person is never left waiting on nothing. */
-export function ReplyLine({ bot, variant, why, detail }: { bot: string; variant: Variant; why: 'none' | 'failed' | 'stuck'; detail?: string }) {
-  const who = whoOf({ sender_id: bot }, variant, undefined, useActor(bot)?.name);
+export function ReplyLine({ bot, name, variant, why, detail }: { bot: string; name?: string; variant: Variant; why: 'none' | 'failed' | 'stuck'; detail?: string }) {
+  // the server's name for it, where this page has not read the agent
+  const who = whoOf({ sender_id: bot }, variant, undefined, useActor(bot)?.name ?? (name || undefined));
   if (why === 'stuck') return <DidLine text={detail ? `${who.name} can't reply. ${detail}` : `${who.name} can't reply`} fault />;
   if (why === 'failed') return <DidLine text={`${who.name} stopped before replying`} fault />;
   return <DidLine text={`${who.name} finished without replying`} face={<Face who={who} size={22} />} />;

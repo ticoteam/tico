@@ -1,8 +1,10 @@
 """Which bots a thread is waiting on, and why (docs/dev/threads-contract.md §4.10): the status rows under a chat.
 
 A bot is listed for a root when a person's message there woke it (an open queue or steer delivery: pending, delivered
-or capped) and the bot has not posted in that root since, or when one of its runs is going in that root. Each row says
-what it is doing in plain words:
+or capped) and the bot has not posted in that root since, or when one of its runs is going in that root; only as far as
+the viewer reads the waking message and the run. A bot has a row for each run of its here (with the message it took,
+if any) and one for its newest wake no run took yet: a queued wake is never paired with another run. Each row says what
+it is doing in plain words:
 
 - `working`: its run here is going; `detail` is the run's current step, as the chat's live reply shows it.
 - `up_next`: its work here waits behind other work: "Finishing <task title>" or "Finishing #<thread>" when the viewer
@@ -10,7 +12,7 @@ what it is doing in plain words:
 - `cant_reply`: something stops it: its computer is offline, its claim is refused (queue_refusals, the claim's own
   rule), it is paused, out of budget, or the loop guard holds it. `fix` links to where a person fixes it.
 
-At most MAX_BOTS rows, oldest wait first. Read for one root at a time: the root's open deliveries and its running
+At most MAX_BOTS bots, oldest wait first. Read for one root at a time: the root's open deliveries and its running
 attempts, then a few reads per listed bot.
 """
 
@@ -37,6 +39,7 @@ CAPPED = "Waiting: too many bot turns this hour"
 BUSY = "Busy with other work"
 STARTING = "Starting"
 THINKING = "Thinking"
+KEYS = ("actor", "name", "state", "detail", "since", "run_id", "fix", "message_id")
 
 # The root's open wakes from a person's message. A bot's post in the root after the message closes it: each bot's
 # latest post in the root is read once (from the oldest open wake's seq on, by messages_thread_seq), never once per
@@ -148,11 +151,15 @@ def _inputs_live(c, message_ids):
     return out
 
 
-def candidates(c, root_id):
-    """{bot actor: {"since", "capped", "run", "message"}} for the bots this root waits on, before they are explained.
-    `message` is the newest person's message that woke it here (None for a run no one's message here started)."""
+def candidates(c, v, root_id):
+    """{bot actor: {"since", "capped", "runs", "wake", "wake_since"}} for the bots this root waits on as far as viewer `v`
+    reads, before they are explained. A wake whose message `v` does not read is left out before anything is counted, and
+    a run `v` may not read is never named. `runs` is {attempt id: (the person's message it took here or None, whether
+    `v` reads the run)}; `wake` is the newest message here no run took yet, `wake_since` the oldest."""
     found = {}
     rows = [dict(r) for r in c.execute(_OPEN_SQL, (root_id, OPEN_PER_BOT))]
+    readable = _readable_wakes(c, v, [r["message_id"] for r in rows])
+    rows = [r for r in rows if r["message_id"] in readable]
     keys = [r["carrier_id"] or r["message_id"] for r in rows]
     jobs = _job_live(c, keys)
     inputs = _inputs_live(c, keys + [r["message_id"] for r in rows])
@@ -168,17 +175,57 @@ def candidates(c, root_id):
         )
         if r["state"] != "capped" and not run and not (job and job[0] in LIVE_JOBS) and not _outside(c, bot, outside):
             continue  # its turn ended without a post here: nothing waits any more
-        at = found.setdefault(r["recipient"], {"since": r["created_at"], "capped": False, "run": None, "message": None})
-        at["capped"] = at["capped"] or r["state"] == "capped"
-        at["message"] = r["message_id"]  # oldest first: the newest wake is kept
+        at = found.setdefault(bot, {"since": r["created_at"], "capped": False, "runs": {}, "wake": None})
         at["since"] = min(at["since"], r["created_at"])
         if run:
-            at["run"] = run
+            at["runs"][run] = r["message_id"]  # oldest first: the newest wake a run took is kept
+            continue
+        # a wake no run took yet is its own: never paired with another run of the bot's
+        at["capped"] = at["capped"] or r["state"] == "capped"
+        at["wake"] = r["message_id"]
+        at.setdefault("wake_since", r["created_at"])
     for r in c.execute(_RUNS_SQL, (root_id,)):
         actor = "bot:" + r["bot_id"]
-        at = found.setdefault(actor, {"since": r["since"], "capped": False, "run": None, "message": None})
-        at["run"] = at["run"] or r["id"]
+        if r["id"] not in found.get(actor, {}).get("runs", {}):
+            found.setdefault(actor, {"since": r["since"], "capped": False, "runs": {}, "wake": None})["runs"][
+                r["id"]
+            ] = None
+    for actor, at in list(found.items()):
+        at["runs"] = {
+            aid: (message, shown)
+            for aid, message in at["runs"].items()
+            if (shown := _run_readable(c, v, actor, aid)) or message
+        }
+        if not at["runs"] and not at["wake"]:
+            del found[actor]
     return found
+
+
+def _readable_wakes(c, v, ids):
+    """The waking messages, of `ids`, that viewer `v` reads: read in one query per 500, each checked as a timeline
+    checks it."""
+    from . import threads
+
+    ids = sorted({i for i in ids if i})
+    out = set()
+    for start in range(0, len(ids), 500):
+        part = ids[start : start + 500]
+        for row in c.execute(f"SELECT * FROM messages WHERE id IN ({','.join('?' * len(part))})", part):
+            message = {**dict(row), "refs": H._json(row["refs"], {}) or {}}
+            if threads.message_readable(c, v, message):
+                out.add(message["id"])
+    return out
+
+
+def _run_readable(c, v, actor, aid):
+    """Whether viewer `v` may read this run, as the `runs` stream decides it (events._runs): the bot's activity, then the
+    run itself."""
+    from . import task_privacy
+
+    auth = getattr(v, "auth", None)
+    if auth is not None and not auth.bot_accesses(c, v.who).get(H.actor_id(actor), auth.FULL)["read"]:
+        return False
+    return task_privacy.attempt_readable(c, task_privacy.actor(v.who), aid)
 
 
 def _outside(c, actor, seen):
@@ -333,13 +380,6 @@ def _elsewhere(c, v, bot_id, root_id):
     return BUSY
 
 
-def _readable_message(c, v, message_id):
-    """The message that woke the bot, when the viewer reads it: a chat draws the bot's status under it."""
-    from . import threads
-
-    return message_id if message_id and threads.readable(c, v, message_id) else None
-
-
 def _fix(href):
     return {"label": "Fix", "href": href} if href else None
 
@@ -433,7 +473,8 @@ def status(c, v, root):
     row = root if isinstance(root, dict) and root.get("id") == root_id else H.conversation(c, root_id)
     if row and threads.legacy_reader_only(c, threads.viewer(None, v), row):
         return []
-    found = candidates(c, root_id)
+    v = threads.viewer(None, v)
+    found = candidates(c, v, root_id)
     if not found:
         return []
     order = sorted(found.items(), key=lambda kv: (kv[1]["since"] or "", kv[0]))[:MAX_BOTS]
@@ -445,31 +486,31 @@ def status(c, v, root):
     out = []
     for actor, at in order:
         bot = H.actor_id(actor)
-        row = {
-            "actor": actor,
-            "name": names.get(actor) or H.actor_name(c, actor),
-            "since": at["since"],
-            "run_id": None,
-            "fix": None,
-            "message_id": _readable_message(c, v, at["message"]),
-        }
-        if at["run"]:
-            started = c.execute(
-                "SELECT COALESCE(started_at, created_at) FROM attempts WHERE id=?", (at["run"],)
-            ).fetchone()
-            row.update(
-                state="working",
-                detail=_step(c, at["run"]),
-                run_id=at["run"],
-                since=started[0] if started else at["since"],
+        base = {"actor": actor, "name": names.get(actor) or H.actor_name(c, actor), "run_id": None, "fix": None}
+        for aid, (message, shown) in at["runs"].items():
+            started = c.execute("SELECT COALESCE(started_at, created_at) FROM attempts WHERE id=?", (aid,)).fetchone()
+            out.append(
+                {
+                    **base,
+                    "state": "working",
+                    # a run the viewer may not read is said as at work, never by its id or step
+                    "detail": _step(c, aid) if shown else THINKING,
+                    "since": started[0] if started else at["since"],
+                    "run_id": aid if shown else None,
+                    "message_id": message,
+                }
             )
-        elif at["capped"]:
+        if not at["wake"]:
+            continue
+        row = {**base, "since": at["wake_since"], "message_id": at["wake"]}
+        if at["capped"]:
             row.update(state="cant_reply", detail=CAPPED)
         else:
             blocked = _blocked(c, bot, _location(c, bot), refusals.get(bot))
             if blocked:
                 row.update(state="cant_reply", detail=blocked[0], fix=blocked[1])
             else:
-                row.update(state="up_next", detail=_elsewhere(c, v, bot, root_id) or STARTING)
-        out.append({k: row[k] for k in ("actor", "name", "state", "detail", "since", "run_id", "fix", "message_id")})
-    return out
+                busy = BUSY if at["runs"] else STARTING
+                row.update(state="up_next", detail=_elsewhere(c, v, bot, root_id) or busy)
+        out.append(row)
+    return [{k: row[k] for k in KEYS} for row in out]

@@ -526,17 +526,20 @@ read nothing; one query, `threads.read_marks`): a client reads each message agai
 
 ### 4.10 Bot status (`backend/thread_bot_status.py`)
 `GET /api/v2/threads/{id}/bot-status` → `{"bots": [...]}` for the thread's root, and the same list as `bot_status` on
-the first timeline page (no `cursor`). One row per bot the root waits on: a person's message gave it an open wake
+the first timeline page (no `cursor`). Rows for each bot the root waits on: a person's message gave it an open wake
 (`queue`/`steer` delivery, `pending`, `delivered` or `capped`, partial index `message_deliveries_open_bots`) and the bot
 has not posted in the root since; a delivery with no live job or running attempt is left out, except an outside
 agent's (it takes work with no job here). Each bot's newest 50 open wakes are read, so one bot's never crowd out
 another's; a running turn's inputs count only for that turn's bot. Someone who reads only a migrated Home's old
-history gets `[]` (REST, timeline and SSE). At most 5, oldest wait
-first:
+history gets `[]` (REST, timeline and SSE). A wake whose message the reader does not read is left out before anything
+is counted; a run the reader may not read (the `runs` stream's check) is `working` with no `run_id` and its step said as
+"Thinking", or left out when no wake the reader reads is its. A bot has one `working` row per run of its here, naming
+the message that run took (`message_id`, else null), and one row for its newest wake no run took yet: a queued wake is
+never paired with another run. At most 5 bots, oldest wait first:
 ```json
 {"actor": "bot:legal", "name": "Legal", "state": "working|up_next|cant_reply", "detail": "...",
  "since": "<wait start>", "run_id": "<attempt id>|null", "fix": {"label": "Fix", "href": "#/settings/computers"}|null,
- "message_id": "<the newest person's message that woke it here, if the reader reads it>|null"}
+ "message_id": "<the person's message here this row answers: its run took it, or it waits for one>|null"}
 ```
 - `working`: its run for this root is running; `detail` is the run's current step (its last tool or progress line,
   "Writing a reply", "Thinking", "Starting").

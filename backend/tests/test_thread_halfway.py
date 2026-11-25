@@ -262,6 +262,69 @@ def test_a_run_whose_wake_was_answered_names_no_message(api):
     assert row["state"] == "working" and row["message_id"] is None
 
 
+def test_a_wake_in_a_sub_thread_the_reader_cannot_open_says_nothing_of_the_bot(api):
+    machine_for(api)
+    thread = new_thread(api)
+    top = say(api, thread["id"], "Topic")
+    side = sub_thread(api, top["id"])  # Ana's own side thread: Ben reads the root, not this
+    say(api, side["id"], "@ops can you check this?")
+    assert [r["actor"] for r in bot_status(api, thread["id"])] == ["bot:ops"]
+    assert bot_status(api, thread["id"], "ben-test") == []
+    assert timeline(api, thread["id"], "ben-test")["bot_status"] == []
+
+
+def test_a_restricted_wake_or_run_is_never_shown_to_a_reader_who_cannot_read_it(api, monkeypatch):
+    from backend import task_privacy
+
+    machine = machine_for(api)
+    thread = new_thread(api)
+    secret = say(api, thread["id"], "@ops the salary numbers, please")
+    real = threads.message_readable
+    monkeypatch.setattr(
+        threads,
+        "message_readable",
+        lambda c, v, m, **kw: (
+            m.get("id") != secret["id"] if getattr(v, "actor", "") == "human:ben" else real(c, v, m, **kw)
+        ),
+    )
+    assert bot_status(api, thread["id"], "ben-test") == []
+    monkeypatch.setattr(threads, "message_readable", real)
+    attempt = claim(api, machine)
+    real_run = task_privacy.attempt_readable
+    monkeypatch.setattr(
+        task_privacy,
+        "attempt_readable",
+        lambda c, actor, aid, *a, **kw: False if "ben" in str(actor) else real_run(c, actor, aid, *a, **kw),
+    )
+    [for_ben] = bot_status(api, thread["id"], "ben-test")
+    assert for_ben["state"] == "working" and for_ben["run_id"] is None
+    assert for_ben["detail"] == thread_bot_status.THINKING and for_ben["message_id"] == secret["id"]
+    [for_ana] = bot_status(api, thread["id"])
+    assert for_ana["run_id"] == attempt["id"]
+
+
+def test_a_deleted_waking_message_says_nothing_of_the_bot(api):
+    machine_for(api)
+    thread = new_thread(api)
+    said = say(api, thread["id"], "@ops can you check this?")
+    assert bot_status(api, thread["id"])
+    # gone while its wake is still open: nobody reads it any more
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE messages SET deleted_at=? WHERE id=?", (H.now(), said["id"]))
+    assert bot_status(api, thread["id"]) == []
+
+
+def test_a_queued_mention_is_its_own_row_beside_the_bots_other_run_here(api):
+    machine = machine_for(api)
+    thread = new_thread(api)
+    say(api, thread["id"], "@ops draft it")
+    attempt = claim(api, machine)
+    later = say(api, thread["id"], "@ops and check the totals")
+    rows = bot_status(api, thread["id"])
+    assert [(r["state"], r["run_id"]) for r in rows] == [("working", attempt["id"]), ("up_next", None)]
+    assert rows[1]["message_id"] == later["id"] and rows[0]["message_id"] != later["id"]
+
+
 def test_a_bot_that_posted_since_is_no_longer_waited_on(api):
     machine_for(api)
     thread = new_thread(api)
@@ -431,14 +494,16 @@ def test_a_thousand_open_wakes_for_one_bot_are_read_in_a_bounded_number_of_state
     thread = new_thread(api)
     first = say(api, thread["id"], "@ops can you check this?")
     store = api.app.state.store
+    ana = who(api, "ana-test")
     with store.transaction() as c:
         clone_wakes(c, first["id"], 1000, "a")
 
     def read():
         seen, steps = [], [0]
+        viewer = threads.viewer(None, ana)  # fresh: its per-read caches start empty each time
         with store.read() as c:
             c.set_trace_callback(seen.append)
-            found = thread_bot_status.candidates(c, thread["id"])
+            found = thread_bot_status.candidates(c, viewer, thread["id"])
             c.set_trace_callback(None)
             c.set_progress_handler(lambda: steps.__setitem__(0, steps[0] + 1), 100)
             c.execute(thread_bot_status._OPEN_SQL, (thread["id"], thread_bot_status.OPEN_PER_BOT)).fetchall()
@@ -447,7 +512,7 @@ def test_a_thousand_open_wakes_for_one_bot_are_read_in_a_bounded_number_of_state
 
     found, statements, steps = read()
     assert set(found) == {"bot:ops"}
-    assert statements <= 10
+    assert statements <= 14  # the wakes, their messages (checked as a timeline checks them), jobs, runs
     with store.transaction() as c:
         clone_wakes(c, first["id"], 1000, "b")
     found, more_statements, more_steps = read()
@@ -456,10 +521,10 @@ def test_a_thousand_open_wakes_for_one_bot_are_read_in_a_bounded_number_of_state
 
     bot_post(api, "bot:ops", thread["id"], "Checked.")
     with store.read() as c:
-        assert thread_bot_status.candidates(c, thread["id"]) == {}
+        assert thread_bot_status.candidates(c, threads.viewer(None, ana), thread["id"]) == {}
     say(api, thread["id"], "@ops and this one?")
     with store.read() as c:
-        assert set(thread_bot_status.candidates(c, thread["id"])) == {"bot:ops"}
+        assert set(thread_bot_status.candidates(c, threads.viewer(None, ana), thread["id"])) == {"bot:ops"}
 
 
 def test_a_thought_after_a_tool_reads_as_thinking():

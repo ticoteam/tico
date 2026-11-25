@@ -270,8 +270,8 @@ SCHEMAS.update(
                 },
                 "message_id": {
                     "type": ["string", "null"],
-                    "description": "The newest message of a person's that woke it here, when the reader reads it; "
-                    "null for a run no one's message here started",
+                    "description": "The person's message here this row answers: the one its run took, or the newest "
+                    "one waiting for a run; null for a run no one's message here started",
                 },
             },
             required=["actor", "name", "state", "detail", "since", "run_id", "fix"],

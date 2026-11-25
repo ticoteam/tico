@@ -271,7 +271,7 @@ export function Conversation({ id, variant, title, actor, session, from, starter
   const own = rowsOf(timeline.data);
   // Every agent answering, the same row in every chat: a session shows its own agent's; the comments, each agent's
   // answer to a comment shown here (its work for anything else is in its session).
-  const answering = useReplying(id, shownIn(view, own));
+  const answering = useReplying(id, own, shownIn(view, own));
   const rows = withExtra(own, extra, !!timeline.hasNextPage);
   const extraIds = new Set(extra?.map((m) => m.id));
 
@@ -469,7 +469,7 @@ export function Conversation({ id, variant, title, actor, session, from, starter
             );
           if (it.k === 'did') return <DidLine text={it.text} fault={it.fault} />;
           if (it.k === 'live') return <LiveRow r={it.r} variant={variant} text={it.text} />;
-          if (it.k === 'stuck') return <ReplyLine bot={it.bot} variant={variant} why="stuck" detail={it.detail} />;
+          if (it.k === 'stuck') return <ReplyLine bot={it.bot} name={it.name} variant={variant} why="stuck" detail={it.detail} />;
           if (it.k === 'quiet') return <ReplyLine bot={it.bot} variant={variant} why={it.why} />;
           if (it.k === 'reply')
             return myId ? (
