@@ -171,10 +171,10 @@ describe('Esc', () => {
     esc(sheet);
     expect(modal()!.classList.contains('is-list-up')).toBe(false);
     expect(open(router)?.task).toBe('12');
-    // Cmd+K's search, a layer of its own over it: its Esc is its own
+    // Cmd+K's search, a dialog of its own in its layer: its Esc is its own
     const search = document.createElement('div');
     search.setAttribute('role', 'dialog');
-    document.body.append(search);
+    sheet.append(search);
     esc(search.appendChild(document.createElement('input')));
     search.remove();
     expect(open(router)?.task).toBe('12');

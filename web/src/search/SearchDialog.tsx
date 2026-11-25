@@ -4,6 +4,7 @@ import { ctxFor, registry, run } from '@/actions';
 import { Avatar } from '@/kit/Avatar';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
+import { useTopLayer } from '@/kit/Toast';
 import { Dot } from '@/tico/dot';
 import * as copy from './copy';
 import { loadProviders, providers, type Lead, type SearchHit } from './providers';
@@ -16,9 +17,11 @@ import { caught, closeSearch, released, useSearchState } from './state';
    that one is a titled modal with a foot of buttons over a scrim that would dim Tico too. */
 export function SearchDialog() {
   const { open, q, n } = useSearchState();
+  // over a task open over the page, in its layer: the task's dialog hides all outside it from a screen reader
+  const over = useTopLayer();
   return (
     <Dialog.Root open={open} onOpenChange={(next) => !next && closeSearch()}>
-      <Dialog.Portal>
+      <Dialog.Portal container={over ?? undefined}>
         {/* clear, over the whole app: a click anywhere off the palette closes it. Base UI closes a modal only on a press
             that lands on its backdrop, and its own unstyled one sits under the shell, which takes every click. */}
         <Dialog.Backdrop className="pal-off" />

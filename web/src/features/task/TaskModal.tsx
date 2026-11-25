@@ -103,7 +103,7 @@ export function TaskModal() {
     if (esc) {
       const layer = box?.closest('.vw');
       const other = esc.target instanceof Element ? esc.target.closest('[role="dialog"],[role="alertdialog"]') : null;
-      if (esc.defaultPrevented || !layer || (other && !layer.contains(other))) return;
+      if (esc.defaultPrevented || !layer || (other && other !== layer)) return;
       if (listUp) return setListUp(false);
     }
     closeTask(router as unknown as Steps);

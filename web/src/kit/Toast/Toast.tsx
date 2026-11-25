@@ -56,7 +56,8 @@ export function closeToast(id: string) {
 }
 
 /* Where the toasts stand: at the page's foot, or in the layer open over it (a Viewer), whose focus trap and dim would
-   leave them, and an Undo, out of reach. The last layer opened holds them. */
+   leave them, and an Undo, out of reach. The last layer opened holds them, and Cmd+K's search opened over it, which
+   its hiding of all else from a screen reader would otherwise reach. */
 const hosts: HTMLElement[] = [];
 const heard = new Set<() => void>();
 const hear = (on: () => void) => {
@@ -76,9 +77,12 @@ export function holdToasts(el: HTMLElement): () => void {
   };
 }
 
+/** The layer open over the page that holds what shows over it (toasts, Cmd+K's search), or null: none open. */
+export const useTopLayer = (): HTMLElement | null => useSyncExternalStore(hear, host, () => null);
+
 /** Where toasts show. The shell mounts this once. */
 export function Toasts() {
-  const over = useSyncExternalStore(hear, host, () => null);
+  const over = useTopLayer();
   const viewport = (
     <Toast.Viewport className="toasts">
       <List />
