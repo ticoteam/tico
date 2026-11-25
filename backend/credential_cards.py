@@ -315,10 +315,12 @@ def card_view(c, vault, row, viewer):
 
 
 def task_card(c, row):
-    """The task a plain key card stands in, by its thread, or None: a card in a private chat, or a Reconnect card (its
-    tool's own rule, reconnect_tasks.may_replace, decides who saves that one)."""
-    task_id = (H.conversation(c, row["conversation_id"]) or {}).get("task_id")
-    return task_id if task_id and reconnect_tasks.card_tool(c, row) is None else None
+    """The task a pending plain key card stands in, by its thread, or None: a card in a private chat, a settled one, or
+    a Reconnect card, which names the key it replaces from the start (its tool's own rule, reconnect_tasks.may_replace,
+    decides who saves that one)."""
+    if row["status"] != "pending" or row["credential_id"]:
+        return None
+    return (H.conversation(c, row["conversation_id"]) or {}).get("task_id") or None
 
 
 def card_row(c, vault, rid, viewer):
@@ -664,13 +666,14 @@ def install_credential_cards(app, store, vault, auth, agent_ops, delegate, manag
                 (H.now(), stored["id"], rid),
             )
             events.needs_moved(c, card_people(c, row), "key")  # it leaves every Needs you, whoever saved it
-            # The asking bot hears it as the saver's own next message: saved, go on. The value is not in it. A card in
-            # a task's thread already woke the task once (backend/reconnects.py).
+            # The asking bot hears it as the person's own next message: saved, go on. The value is not in it. It stays
+            # the requester's even when an admin saved it, since its turn acts for whoever sent it (agent_ops_act). A
+            # card in a task's thread already woke the task once (backend/reconnects.py).
             conversation = H.conversation(c, row["conversation_id"])
             if conversation and H.bot(c, row["asker"]) and not reconnects.card_of(c, row["message_id"]):
                 H._write_message(
                     c,
-                    who.actor,
+                    row["requester"],
                     "bot:" + row["asker"],
                     f"Saved {row['label'] or row['env']}. Test the connection now.",
                     conversation,

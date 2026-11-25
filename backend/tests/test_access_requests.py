@@ -380,6 +380,17 @@ def test_deleting_the_tool_wakes_the_waiting_task_at_once_with_the_tool_removed(
         assert [m["body"] for m in told] == [
             "Access request closed: Update the deal stages\nClose CRM · Read and write: the tool was removed. Continue."
         ]
+    # A request withdrawn before a withdrawal freed its task (an older install) is freed by the hourly sweep.
+    ads = tool(api, "Acme Ads", base_url="https://ads.acme.example")["id"]
+    key(api, ads, SECRET + "-ads")
+    other = task(api, "bot:ops", "Pause the old campaigns")
+    stuck = ask(api, ads, "read_write", task=other)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE access_requests SET state='withdrawn' WHERE id=?", (stuck["id"],))
+        assert reconnects.hold(c, other) is not None
+    AR.sweep(api.app.state.store)
+    with api.app.state.store.read() as c:
+        assert reconnects.hold(c, other) is None
 
 
 def test_who_may_ask_for_whom_and_the_counts_for_the_weekly_review(api):

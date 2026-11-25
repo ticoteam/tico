@@ -1123,6 +1123,12 @@ def sweep(store: Any) -> Any:
         if not _present(c):
             return "No access requests"
         closed = settled(c, via="sweep")
+        # A request withdrawn before its withdrawal ended the wait (its tool deleted) still pauses its task: free it.
+        for (rid,) in c.execute(
+            "SELECT DISTINCT a.id FROM access_requests a JOIN task_reconnects r ON json_extract(r.fix,'$.request')=a.id "
+            "WHERE a.state='withdrawn' AND r.fixed_at IS NULL"
+        ).fetchall():
+            _mod("reconnects").dropped(c, rid, ended="removed")
         tasks = [t for t in reconcile_tasks(c) if t["close"]]
     return f"Closed {len(closed)} requests and {len(tasks)} access tasks"
 
