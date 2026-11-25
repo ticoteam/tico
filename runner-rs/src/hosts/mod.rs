@@ -1160,12 +1160,13 @@ pub enum Host {
 
 impl Host {
     /// Whether the newest turn ran on a harness process already running: one pi's pool or the session keeper
-    /// (crate::keeper, Antigravity's now) held. Every other harness starts a process for each turn.
+    /// (crate::keeper: Antigravity's, Codex's and Claude's) held. Every other harness starts a process for each turn.
     pub fn warm(&self) -> bool {
         match self {
             Host::Pi(h) => h.warm(),
             Host::Antigravity(h) => h.warm(),
             Host::Codex(h) => h.warm(),
+            Host::Claude(h) => h.warm(),
             _ => false,
         }
     }
@@ -1177,6 +1178,7 @@ impl Host {
             Host::Antigravity(h) => h.scopes(),
             Host::Pi(h) => h.scopes(),
             Host::Codex(h) => h.scopes(),
+            Host::Claude(h) => h.scopes(),
             _ => vec![],
         }
     }
@@ -1348,7 +1350,10 @@ impl Host {
         effort: Option<&str>,
     ) -> Result<String, HostError> {
         match self {
-            Host::Claude(h) => h.start_turn(thread_id, text, effort),
+            Host::Claude(h) => {
+                h.reuse(thread_id, effort).await;
+                h.start_turn(thread_id, text, effort)
+            }
             Host::Codex(h) => h.start_turn(thread_id, text, effort).await,
             Host::Gemini(h) => h.start_turn(thread_id, text, effort),
             Host::Antigravity(h) => h.start_turn(thread_id, text, effort).await,

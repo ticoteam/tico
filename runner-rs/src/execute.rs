@@ -2269,7 +2269,13 @@ impl Runner {
             .or_else(|| tests::HOST_COMMAND.with(|command| command.borrow().clone()))
         {
             if runtime == "claude" || tests::HOST_CLAUDE.with(|claude| claude.get()) {
-                return Ok(Host::Claude(ClaudeHost::new(bot, command, tx)));
+                // A fake Claude takes the next turn's prompt as a steer, so tests keep it only when they ask to.
+                let keeper = tests::KEEP_CLAUDE
+                    .with(|keep| keep.get())
+                    .then(|| self.keeper.clone());
+                return Ok(Host::Claude(ClaudeHost::with_keeper(
+                    bot, command, tx, keeper,
+                )));
             }
             if runtime == "antigravity" {
                 let home = self.state.directory.join("agy").join(bot);
@@ -2296,10 +2302,11 @@ impl Runner {
             return Ok(Host::Codex(CodexHost::on_home(own, tx, None)));
         }
         Ok(match runtime {
-            "claude" => Host::Claude(ClaudeHost::new(
+            "claude" => Host::Claude(ClaudeHost::with_keeper(
                 bot,
                 vec![crate::harness_tools::executable_for("claude")],
                 tx,
+                Some(self.keeper.clone()),
             )),
             "codex" => Host::Codex(CodexHost::on_home(
                 env.clone(),
@@ -4110,14 +4117,14 @@ impl Runner {
                 }
             }
             // A host that keeps its process between turns gives it back below, after a turn that completed (Antigravity's
-            // and Codex's after one a person's Stop or a drain cancelled too, which leaves its process running; never
-            // after a timeout, a lost lease or an error); a fresh stateless chat turn, a relationship turn and a one-off
-            // thread (saved nowhere, so never looked up) keep none (crate::continuity::stateless).
-            // A person's own Assistant chat keeps its agy or Codex app-server with a hold on the room's copy, which goes
-            // when the keeper lets it go (crate::sessions::PersonalCopy::hold); pi keeps its sessions in the copy, so it
-            // keeps none.
-            let holds =
-                matches!(h, Host::Antigravity(_)) || matches!(h, Host::Codex(c) if c.keeps());
+            // and Codex's and Claude's after one a person's Stop or a drain cancelled too, which leaves its process
+            // running; never after a timeout, a lost lease or an error); a fresh stateless chat turn, a relationship turn
+            // and a one-off thread (saved nowhere, so never looked up) keep none (crate::continuity::stateless).
+            // A person's own Assistant chat keeps its agy, claude or Codex app-server with a hold on the room's copy,
+            // which goes when the keeper lets it go (crate::sessions::PersonalCopy::hold); pi keeps its sessions in the
+            // copy, so it keeps none.
+            let holds = matches!(h, Host::Antigravity(_) | Host::Claude(_))
+                || matches!(h, Host::Codex(c) if c.keeps());
             let copy = if holds && personal {
                 place.as_ref().and_then(|p| p.hold_copy())
             } else {
@@ -4126,7 +4133,7 @@ impl Runner {
             let keeps = !fresh_chat
                 && match h {
                     Host::Pi(_) => !personal,
-                    Host::Antigravity(_) => {
+                    Host::Antigravity(_) | Host::Claude(_) => {
                         !relationship && !one_off && (!personal || copy.is_some())
                     }
                     Host::Codex(c) => {
@@ -4138,7 +4145,7 @@ impl Runner {
             let ended = !flags.lost.load(Ordering::SeqCst)
                 && (drove.outcome == "completed"
                     || (drove.outcome == "interrupted"
-                        && matches!(h, Host::Antigravity(_) | Host::Codex(_))
+                        && matches!(h, Host::Antigravity(_) | Host::Codex(_) | Host::Claude(_))
                         && ran.is_ok()
                         && !hop_failed));
             let mut hold = copy.map(|c| Box::new(c) as crate::keeper::Held);
@@ -4156,8 +4163,10 @@ impl Runner {
             if !kept {
                 self.stop_host(h, &aid).await;
             }
-            if let Host::Antigravity(agy) = h {
-                agy.release(kept, hold).await;
+            match h {
+                Host::Antigravity(agy) => agy.release(kept, hold).await,
+                Host::Claude(claude) => claude.release(kept, hold).await,
+                _ => {}
             }
             if let Host::Pi(pi) = h {
                 // A primary pi on a leased user is kept with that user and its relay; a fallback's never is.
@@ -4899,6 +4908,7 @@ mod tests {
         pub(super) static SOURCE_CONTINUE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
         pub(super) static CAPACITY_CONTINUE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
         pub(super) static HOST_CLAUDE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        pub(super) static KEEP_CLAUDE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
         pub(super) static RUN_SESSION: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
         pub(super) static HOST_CODEX: RefCell<Option<Env>> = const { RefCell::new(None) };
         /// A turn that went on in a kept Codex app-server kills it once the hub has started the turn.
@@ -4933,6 +4943,7 @@ mod tests {
             CAPACITY_CONTINUE.with(|on| on.set(None));
             SOURCE_CONTINUE.with(|on| on.set(None));
             HOST_CLAUDE.with(|claude| claude.set(false));
+            KEEP_CLAUDE.with(|keep| keep.set(false));
             RUN_SESSION.with(|on| on.set(None));
             HOST_CODEX.with(|env| env.borrow_mut().take());
             KILL_KEPT.with(|at| at.set(false));
@@ -8205,7 +8216,10 @@ for line in sys.stdin:
              IFS= read -r line; echo \"$line\" > '{d}/prompt-'$n\n\
              id=$(echo \"$@\" | tr ' ' '\\n' | grep -A1 -e '^--session-id$' -e '^--resume$' | tail -1)\n\
              if [ -e '{d}/missing-'$n ]; then echo '{{\"type\": \"result\", \"subtype\": \"error_during_execution\", \"is_error\": true, \"num_turns\": 0, \"errors\": [\"No conversation found with session ID: '$id'\"], \"usage\": {{\"input_tokens\": 0, \"output_tokens\": 0}}}}'; exit 1; fi\n\
+             echo '{{\"type\": \"system\", \"subtype\": \"session_state_changed\", \"state\": \"running\"}}'\n\
              echo '{{\"type\": \"system\", \"subtype\": \"init\", \"session_id\": \"'$id'\"}}'\n\
+             first=$(printf '%s' \"$line\" | sed 's/.*\"uuid\": \"\\([^\"]*\\)\".*/\\1/')\n\
+             echo '{{\"type\": \"user\", \"isReplay\": true, \"uuid\": \"'$first'\", \"message\": {{\"role\": \"user\", \"content\": \"prompt\"}}}}'\n\
              for c in $(cat '{d}/compacts-'$n 2>/dev/null); do echo '{{\"type\": \"system\", \"subtype\": \"compact_boundary\", \"compact_metadata\": {{\"trigger\": \"auto\"}}}}'; done\n\
              if [ -e '{d}/edits-'$n ]; then mkdir -p memory && echo 'rewritten' > memory/learnings.md && echo 'stray' > stray.txt && git add -A && git -c user.name=Fixture -c user.email=fixture@example.invalid commit -qm 'a pass commit' && echo 'more' >> memory/learnings.md; fi\n\
              if [ -e '{d}/chat-writes-'$n ]; then pwd > '{d}/cwd-'$n; git remote > '{d}/remotes-'$n; echo 'Ana prefers mornings' >> memory/learnings.md && git add -A && git -c user.name=Fixture -c user.email=fixture@example.invalid commit -qm 'from a chat' && git -c user.name=Fixture -c user.email=fixture@example.invalid revert --no-edit HEAD >/dev/null && echo 'Ana again' >> knowledge/company.md && git add -A && git -c user.name=Fixture -c user.email=fixture@example.invalid commit -qm 'again'; git push -q origin HEAD:main 2>/dev/null; echo 'Ana earns 1' > knowledge/people.md; fi\n\
@@ -8215,6 +8229,8 @@ for line in sys.stdin:
              echo '{{\"type\": \"result\", \"subtype\": \"success\", \"is_error\": false, \"result\": \"Done.\", \"usage\": {{\"input_tokens\": 348, \"output_tokens\": 2}}}}'\n\
              while IFS= read -r more; do printf '%s\\n' \"$more\" >> '{d}/injected-'$n\n\
                mid=$(printf '%s' \"$more\" | sed 's/.*\"uuid\": \"\\([^\"]*\\)\".*/\\1/')\n\
+               echo '{{\"type\": \"system\", \"subtype\": \"session_state_changed\", \"state\": \"running\"}}'\n\
+               echo '{{\"type\": \"system\", \"subtype\": \"init\", \"session_id\": \"'$id'\"}}'\n\
                echo '{{\"type\": \"user\", \"isReplay\": true, \"uuid\": \"'$mid'\", \"message\": {{\"role\": \"user\", \"content\": \"again\"}}}}'\n\
                echo '{{\"type\": \"result\", \"subtype\": \"success\", \"is_error\": false, \"result\": \"Done again.\", \"usage\": {{\"input_tokens\": 348, \"output_tokens\": 2}}}}'\n\
              done\n", d = dir.display());
@@ -8413,6 +8429,23 @@ for line in sys.stdin:
                 assert!(threads[1] != threads[0], "{case}: {threads:?}");
             }
         }
+    }
+
+    #[tokio::test]
+    async fn a_kept_claude_takes_the_conversations_next_turn_as_its_next_message() {
+        KEEP_CLAUDE.with(|keep| keep.set(true));
+        let (threads, prompts, completions, injected) =
+            claude_rig(&[json!({}), json!({})], &[], &[], &[], json!({}), |_| ()).await;
+        for (n, c) in completions.iter().enumerate() {
+            assert_eq!(c["outcome"], "completed", "turn {n}: {c}");
+        }
+        // One process: the second attempt's prompt went in on its stdin.
+        assert_eq!(threads.len(), 1, "{threads:?}");
+        assert_eq!(prompts.len(), 1, "{prompts:?}");
+        assert!(
+            injected[0].contains("Question 1") && !prompts[0].contains("Question 1"),
+            "{injected:?}"
+        );
     }
 
     #[tokio::test]

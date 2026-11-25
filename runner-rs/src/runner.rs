@@ -122,7 +122,7 @@ pub struct Runner {
     shutdown: Mutex<Option<Instant>>,
     /// pi processes kept between a thread's turns (hosts/pi.rs Pool).
     pub pi: Arc<crate::hosts::pi::Pool>,
-    /// Harness sessions kept between a thread's turns (crate::keeper): Antigravity's now.
+    /// Harness sessions kept between a thread's turns (crate::keeper): Antigravity's and Claude's.
     pub keeper: Arc<crate::keeper::Keeper>,
     /// What each bot's bot.yaml adds: tools, MCP servers, watchers, memory history (crate::perbot).
     pub perbot: crate::perbot::PerBot,

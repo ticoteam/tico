@@ -60,6 +60,14 @@ def add_bot(api, computer, tmp_path, slug, bot=None):
     (repo / "bot.yaml").write_text(f"name: {slug}\nruntime: {config['runtime']}\nmodel: {config['model']}\n")
 
 
+def session_named(call):
+    """The Claude session a call went on in: the one its process resumed or began. A kept Claude takes its thread's
+    later turns, with the command line it started with."""
+    argv = call["argv"]
+    option = "--resume" if "--resume" in argv else "--session-id"
+    return argv[argv.index(option) + 1]
+
+
 def codex_turns(computer):
     """Each Codex turn's (start, end) from the fake's log, earliest start first."""
     calls = computer.calls()
@@ -128,7 +136,7 @@ def test_task_model_fallback_runs_in_a_side_session_from_the_checkpoint_and_keep
     completed(4)
     last = [c for c in computer.prompts() if c["harness"] == "claude"][-1]
     side = call["argv"][call["argv"].index("--session-id") + 1]
-    assert last["argv"][last["argv"].index("--resume") + 1] == side, "the next fallback did not resume its side session"
+    assert session_named(last) == side, "the next fallback did not resume its side session"
     assert side != old_thread
     assert (
         f"Where this task stood after its last turn ({latest['checkpoint_at']}):\n{latest['checkpoint']}"
@@ -141,7 +149,7 @@ def test_task_model_fallback_runs_in_a_side_session_from_the_checkpoint_and_keep
     post(api, "chat/ops", {"text": "Continue on the bot's own model.", "refs": {"task": task["id"]}})
     completed(5)
     primary = [c for c in computer.prompts() if c["harness"] == "claude"][-1]
-    assert primary["argv"][primary["argv"].index("--resume") + 1] == old_thread, "the primary thread was not kept"
+    assert session_named(primary) == old_thread, "the primary thread was not kept"
     assert "side session" in primary["prompt"]
 
 
@@ -223,7 +231,13 @@ def test_a_chat_turn_streams_completes_and_resumes_its_own_thread_only(api, comp
         if computer.harness in ("claude", "pi", "cursor", "grok")
         else [c for c in computer.calls() if c["harness"] == computer.harness]
     )
-    if computer.harness in ("claude", "gemini"):
+    if computer.harness == "claude":
+        # The follow-up goes on in the Claude kept for the thread, on its session; another thread begins its own.
+        session = calls[0]["argv"][calls[0]["argv"].index("--session-id") + 1]
+        assert calls[1]["pid"] == calls[0]["pid"] and session_named(calls[1]) == session
+        assert calls[-1]["pid"] != calls[0]["pid"]
+        assert "--resume" not in calls[-1]["argv"] and session not in calls[-1]["argv"]
+    elif computer.harness == "gemini":
         session = calls[0]["argv"][calls[0]["argv"].index("--session-id") + 1]
         assert calls[1]["argv"][calls[1]["argv"].index("--resume") + 1] == session
         assert "--resume" not in calls[-1]["argv"] and session not in calls[-1]["argv"]
@@ -329,7 +343,7 @@ def test_the_first_turn_after_the_update_gets_its_own_threads_history_and_no_oth
     earlier = post(api, f"threads/{public['id']}/messages", {"text": "@ops please read the launch plan"})
     until(lambda: settled_count() == 2, "the old public reply")
     old_session = computer.prompts()[0]["argv"][computer.prompts()[0]["argv"].index("--session-id") + 1]
-    assert computer.prompts()[1]["argv"][computer.prompts()[1]["argv"].index("--resume") + 1] == old_session
+    assert session_named(computer.prompts()[1]) == old_session
     kept = post(api, f"threads/{public['id']}/messages", {"text": "Kept for its old readers"})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE messages SET legacy_audience='shared:finance' WHERE id=?", (kept["id"],))
@@ -350,7 +364,8 @@ def test_the_first_turn_after_the_update_gets_its_own_threads_history_and_no_oth
     post(api, f"threads/{public['id']}/messages", {"text": "@ops and after that?"})
     until(lambda: settled_count() == 4, "the second public turn")
     second_public = computer.prompts()[-1]
-    assert "--resume" in second_public["argv"] and "first turn on a new session" not in second_public["prompt"]
+    assert session_named(second_public) == session_named(first_public)
+    assert "first turn on a new session" not in second_public["prompt"]
     assert "Kept for its old readers" not in second_public["prompt"]
 
     post(api, "chat/ops", {"text": "Back to our chat"})
@@ -363,7 +378,7 @@ def test_the_first_turn_after_the_update_gets_its_own_threads_history_and_no_oth
     task = post(api, "tasks", {"title": "Check the launch date", "body": "Look it up", "owner": "bot:ops"})
     until(lambda: settled_count() == 6, "the task turn")
     task_turn = computer.prompts()[-1]
-    assert task["id"] and task_turn["argv"][task_turn["argv"].index("--resume") + 1] == old_session
+    assert task["id"] and session_named(task_turn) == old_session
     assert "first turn on a new session" not in task_turn["prompt"]
 
 

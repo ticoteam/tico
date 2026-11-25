@@ -17,7 +17,10 @@ impl Host {
     ) -> Result<String, HostError> {
         match self {
             Host::Codex(h) => h.start_goal(thread, action, objective, effort).await,
-            Host::Claude(h) => h.start_goal(thread, action, objective, effort),
+            Host::Claude(h) => {
+                h.reuse(thread, effort).await;
+                h.start_goal(thread, action, objective, effort)
+            }
             #[allow(unreachable_patterns)]
             _ => Err(failed("this harness has no native goals")),
         }
@@ -33,7 +36,10 @@ impl Host {
     ) -> Result<String, HostError> {
         match self {
             Host::Codex(h) => h.start_goal_turn(thread, objective, text, effort).await,
-            Host::Claude(h) => h.start_goal_turn(thread, objective, text, effort),
+            Host::Claude(h) => {
+                h.reuse(thread, effort).await;
+                h.start_goal_turn(thread, objective, text, effort)
+            }
             #[allow(unreachable_patterns)]
             _ => Err(failed("this harness has no native goals")),
         }
@@ -60,7 +66,10 @@ impl Host {
     pub async fn compact(&self, thread: &str, effort: Option<&str>) -> Result<String, HostError> {
         match self {
             Host::Codex(h) => h.compact(thread).await,
-            Host::Claude(h) => h.start_turn(thread, "/compact", effort),
+            Host::Claude(h) => {
+                h.reuse(thread, effort).await;
+                h.start_turn(thread, "/compact", effort)
+            }
             Host::Pi(h) => h.compact(thread, effort).await,
             #[allow(unreachable_patterns)]
             _ => Err(failed("this harness cannot compact a session")),

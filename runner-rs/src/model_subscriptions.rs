@@ -13,7 +13,7 @@
 //! CLI's threads resume there; that process's CODEX_HOME points at it and its conversation key names it, so no thread
 //! begun on another login is resumed on it. A Claude plan's threads stay in the turn's own home, so every Claude plan
 //! shares one conversation key (`Delivered::binding`) and a move between plans resumes the thread. The sign-in file itself is there only while a process of a turn handed
-//! that subscription runs, or an Antigravity plan's process or a Codex app-server is kept after it (`KeptHome`, at most crate::keeper::IDLE
+//! that subscription runs, or an Antigravity or full Claude plan's process or a Codex app-server is kept after it (`KeptHome`, at most crate::keeper::IDLE
 //! unused, two minutes): written 0600 when that runtime starts (`start`), removed when the last turn or kept process holding that
 //! home lets go of it (the turn moves to another runtime, `finish`, the vault's drop for a turn that ends early), and
 //! swept from every home when the runner starts (`sweep`), so taking a subscription off a computer, or deleting it,
@@ -1316,6 +1316,15 @@ pub fn keep_home(home: &Path) -> Option<KeptHome> {
 }
 
 impl KeptHome {
+    /// A digest of the sign-in Claude reads in it now (its `.credentials.json`): a turn may have replaced it. None when
+    /// it cannot be read as a plain file of a subscription's size: the bot can put anything at that path.
+    pub fn sign_in(&self) -> Option<String> {
+        let path = self.0.join(CREDENTIALS);
+        let file = read_bounded(crate::isolation::open_unfollowed(&path, libc::O_NONBLOCK).ok()?)?;
+        let digest = ring::digest::digest(&ring::digest::SHA256, file.as_bytes());
+        Some(digest.as_ref().iter().map(|b| format!("{b:02x}")).collect())
+    }
+
     /// Mask what its sign-in file holds now in every running turn, the one its process goes on in included: a token
     /// the CLI refreshed turns ago may no longer be standing (crate::redact::hide_everywhere), and an unchanged file is
     /// not read again (`notice_refreshes`).
@@ -1373,8 +1382,15 @@ pub fn go_on_in(delivered: &mut [Delivered], runtime: &str, home: &Path) {
 }
 
 /// What names the plan a turn's home (TURN_HOMES) signs in with: its subscription (`plan_of`) and the sign-in it was
-/// handed, so a reconnected plan, or another, is another; None for any other home.
+/// handed, so a reconnected plan, or another, is another; None for any other home. A full Claude login's turn home is
+/// named by its plan and the revision of the sign-in it holds: a plan reconnected to another account keeps its id
+/// while its revision moves on, and a kept home gets the new account only on the next login poll (`rewrite`).
 pub fn turn_plan(home: &Path) -> Option<String> {
+    if is_login_home(home) {
+        let plan = plan_of(home)?;
+        let revision = homes().live.get(home)?.revision;
+        return Some(format!("{plan}:{revision}"));
+    }
     let t = TURN_HOMES
         .iter()
         .find(|t| home.file_name() == Some(OsStr::new(t.runtime)))?;
@@ -1390,7 +1406,14 @@ pub fn turn_only(home: &Path) -> bool {
     turn_dir(home).is_some()
 }
 
-/// `subscriptions/<id>/turns/<turn>` of a full Claude login's home; None for any other home.
+/// A full Claude login's turn home (named for Claude, so never another runtime's) with its sign-in in place.
+fn is_login_home(home: &Path) -> bool {
+    turn_dir(home).is_some()
+        && home.file_name().is_some_and(|n| n == "claude")
+        && home.join(CREDENTIALS).is_file()
+}
+
+/// `subscriptions/<id>/turns/<turn>` of a turn's own home; None for any other home.
 fn turn_dir(home: &Path) -> Option<&Path> {
     let turn = home.parent()?;
     turn.parent()
@@ -1652,6 +1675,52 @@ mod tests {
             state.join("ana/.claude/projects").is_dir() && state.join("bo/.claude/bo").is_dir()
         );
         assert!(!live_logins().iter().any(|(p, _)| *p == id));
+        std::fs::remove_dir_all(&state).unwrap();
+    }
+
+    #[test]
+    fn a_kept_claude_login_home_outlives_its_turn_gets_new_tokens_and_goes_when_let_go() {
+        let state = dir();
+        let id = format!("cl{}", uuid::Uuid::new_v4().simple());
+        let file = |token: &str| json!({"claudeAiOauth": {"accessToken": token}}).to_string();
+        let item = json!([{"id": id, "runtime": "claude", "kind": "claude_login", "file": CREDENTIALS,
+                           "home_env": "CLAUDE_CONFIG_DIR", "value": file("sk-ant-oat01-first-synthetic"),
+                           "revision": 3, "billing": "subscription"}]);
+        let mut env: Env = [("HOME".into(), state.join("ana").display().to_string())].into();
+        let mut got = apply(&state, &item, &mut env, &mut vec![], &mut BTreeSet::new());
+        start(&mut got, "claude", &mut env).unwrap();
+        let home = PathBuf::from(&env["CLAUDE_CONFIG_DIR"]);
+        // Named by its plan and the revision of its sign-in, so a reconnected account never goes on in it.
+        assert_eq!(turn_plan(&home), Some(format!("{id}:3")));
+        let kept = keep_home(&home).expect("a login home can be kept");
+        let signed = kept.sign_in().expect("its sign-in is read");
+        assert_eq!(kept.sign_in().as_ref(), Some(&signed));
+        finish(&mut got);
+        assert!(home.join(CREDENTIALS).is_file());
+        assert!(live_logins().iter().any(|(p, _)| *p == id));
+        assert_eq!(rewrite(&id, 4, &file("sk-ant-oat01-second-synthetic")), 1);
+        assert!(std::fs::read_to_string(home.join(CREDENTIALS))
+            .unwrap()
+            .contains("second"));
+        assert_eq!(turn_plan(&home), Some(format!("{id}:4")));
+        let renewed = kept.sign_in().unwrap();
+        assert_ne!(renewed, signed);
+        // Replaced in place, its revision unchanged, it is another sign-in all the same.
+        std::fs::write(home.join(CREDENTIALS), file("sk-ant-oat01-other-synthetic")).unwrap();
+        assert_ne!(kept.sign_in().unwrap(), renewed);
+        assert_eq!(turn_plan(&home), Some(format!("{id}:4")));
+        std::fs::remove_file(home.join(CREDENTIALS)).unwrap();
+        assert_eq!(kept.sign_in(), None);
+        // A pipe in its place is never read: it would hold the keeper until something wrote to it.
+        let fifo = CString::new(home.join(CREDENTIALS).as_os_str().as_bytes()).unwrap();
+        // SAFETY: a NUL-terminated path.
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        assert_eq!(kept.sign_in(), None);
+        std::fs::remove_file(home.join(CREDENTIALS)).unwrap();
+        drop(kept);
+        assert!(!home.exists());
+        assert!(!live_logins().iter().any(|(p, _)| *p == id));
+        assert!(keep_home(&home).is_none());
         std::fs::remove_dir_all(&state).unwrap();
     }
 

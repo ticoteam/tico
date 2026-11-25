@@ -15,6 +15,19 @@ use crate::util::text_of;
 
 pub type Env = BTreeMap<String, String>;
 
+/// How a credential file's name starts (a grant of kind "file"): the variable it is granted under holds its path.
+pub const CREDENTIAL_FILE: &str = "tico-credential-";
+
+/// Whether a variable of `env` points at a credential file: one written for each attempt and removed when it settles.
+pub fn has_credential_file(env: &Env) -> bool {
+    env.values().any(|v| {
+        Path::new(v)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with(CREDENTIAL_FILE))
+    })
+}
+
 /// The process settings a turn and the runner's own git keep (`runner_support/safe_git.py` _SETTINGS), plus `LC_*`.
 pub const SETTINGS: &[&str] = &[
     "HOME",
@@ -597,7 +610,7 @@ async fn environment_from(
                 } else {
                     uuid::Uuid::new_v4().simple().to_string()
                 };
-                let path = dir.join(format!("tico-credential-{name}"));
+                let path = dir.join(format!("{CREDENTIAL_FILE}{name}"));
                 if vault.turn_user.is_some() {
                     let _ = std::fs::remove_file(&path);
                 }

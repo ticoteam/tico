@@ -71,6 +71,8 @@ compaction = true
 compaction_events = true
 # A message for the running turn is written into it (stream-json input, needs a CLI that echoes it).
 steer = true
+# One `claude -p` per conversation between turns (crate::keeper): the next message is its next stream-json input.
+persistent_session = true
 voice_session = true
 resume_command = "claude --resume"
 model_list = "host"

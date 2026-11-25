@@ -1,11 +1,34 @@
-//! The Claude Code host: one `claude -p` process per turn, one Claude session per
-//! bot thread. The prompt goes in on stdin as a stream-json user message and stdin stays open for steers;
-//! `--replay-user-messages` echoes each message as Claude reads it, so a `result` ends the runner's turn only
-//! when no steer is unread and no background task of the session still runs, and then stdin closes and the process
-//! exits. Claude stays up for its background tasks either way; open stdin lets a follow-up in meanwhile. Steers and
-//! stops go in as the Agent SDK sends them: a user message with priority "now", and an `interrupt` control request.
-//! Once the process is gone, whatever the turn started and left running is stopped (crate::turn_sweep), except the
-//! shells a turn that ended on its wait keeps.
+//! The Claude Code host: one Claude session per bot thread, run by a `claude -p` process. The prompt goes in on stdin as
+//! a stream-json user message and stdin stays open for steers; `--replay-user-messages` echoes each message as Claude
+//! reads it, so a `result` ends the runner's turn only when no steer is unread and no background task of the session
+//! still runs. Claude stays up for its background tasks either way; open stdin lets a follow-up in meanwhile. Steers
+//! and stops go in as the Agent SDK sends them: a user message with priority "now", and an `interrupt` control request.
+//!
+//! With the runner's session keeper (crate::keeper, `with_keeper`) the process outlives the turn, as T3 Code's Claude
+//! adapter keeps its streaming-input query: the thread's next turn is the next user message on the same stdin. Whether
+//! it goes on there is decided once, as the turn takes the process and before its token is lent (`reuse`): the turn
+//! would start Claude the same way (`fingerprint`: its command line with model and effort, environment, whether it has
+//! a hub token, folder by path and inode, background wait, and a plan login's plan at its sign-in's revision), the
+//! process still runs, a plan login's sign-in file is still the one Claude started on, and Claude runs nothing beyond
+//! what it ran at its system init. Any other is stopped then, and the turn starts cold. Once the prompt is queued a
+//! death is a crash: the turn fails, and nothing is sent again. A turn stopped on Claude's interrupt keeps the process
+//! too, once Claude has answered the stop. Between turns it reads HUB_TOKEN from a blanked token file (crate::warm),
+//! blanked or removed whenever it is stopped, and nothing reads what it says. A full Claude login's turn home stays
+//! while it runs (model_subscriptions::keep_home), and gets each new token as every home of that plan does. Without a
+//! keeper, or once a turn cannot keep it, stdin closes when the turn is over and the process exits.
+//!
+//! Not kept: a turn with a credential file (each attempt's own), one that leaves any process under Claude beyond what
+//! it ran at its system init (its MCP servers and what they ran) or whose process table cannot be read whole, one whose
+//! Claude did not echo the prompt by the id it was written with, and one whose Claude said something before that echo
+//! (work of its own, which no turn may take for its answer). Claude naming another session than the thread's before
+//! or in that echo fails the turn. Nor is one kept that ends with background work running: it ends only once that work
+//! has, or on its wait with Claude killed, so T3 Code's pin of a kept process for its background work is not here. A
+//! turn with a granted tool reached through the hub's tool proxy starts cold each time: the proxy token is each
+//! attempt's own. The process-tree check is best effort: a job one of Claude's helpers starts after it reads the lease
+//! Claude holds then, which is that same bot's on that same thread.
+//!
+//! Whatever the turn started and left running is stopped (crate::turn_sweep) once the turn is over, except the kept
+//! Claude with all it runs, and the shells a turn that ended on its wait keeps.
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
@@ -14,15 +37,16 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::Child;
-use tokio::sync::mpsc;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
+use tokio::process::{Child, ChildStdin, ChildStdout};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::Instant;
 
 use super::{
     event, failed, hub_mcp_server_by_name, is_auth_retryable, is_limit, shell_outside_actions,
     shell_reads_only, tool_summary, Events, HostError, Settings,
 };
+use crate::keeper::{Held, Inputs, Keeper, Session};
 use crate::util::{iso, log, py_dumps, text_of};
 
 mod process;
@@ -46,6 +70,13 @@ const INTERRUPT_GRACE: Duration = if cfg!(test) {
     Duration::from_secs(2)
 } else {
     Duration::from_secs(10)
+};
+/// How long a kept Claude has to echo a turn's prompt before it is stopped and the turn fails: no output before the
+/// echo is the turn's, so without one the turn would wait on nothing.
+const ECHO_WAIT: Duration = if cfg!(test) {
+    Duration::from_secs(2)
+} else {
+    Duration::from_secs(120)
 };
 /// How long a turn waits, after a `result`, with a steer unread and nothing at all on stdout.
 pub const STEER_READ_TIMEOUT_S: u64 = 120;
@@ -237,10 +268,20 @@ struct Pipe {
     pid: Option<u32>,
     /// The id of the interrupt request a stop sent: the turn's `result`, or Claude's answer to it, closes stdin.
     interrupting: Option<String>,
+    /// Claude answered that request.
+    acked: bool,
+    /// The token file the process reads HUB_TOKEN from, when it may be kept.
+    lease: Option<std::path::PathBuf>,
     /// The turn ended on its wait: Claude was killed so its shells run on, and these are the ones kept.
     kept: Option<Vec<Value>>,
     /// Claude runs under a reaping parent that writes its shells' exit codes here.
     reaping: Option<std::path::PathBuf>,
+    /// The process may be kept for the thread's next turn: the turn's end leaves stdin open.
+    keep: bool,
+    /// The turn is over and its process is kept (`end`).
+    done: bool,
+    /// Stdin was closed.
+    shut: bool,
 }
 
 impl Pipe {
@@ -254,17 +295,45 @@ impl Pipe {
         let _ = self.lines.send(Some(user_line(&mid, text, priority)));
     }
 
+    /// Closes stdin: a process whose stdin is closed is never kept, whenever it is closed.
     fn close(&mut self) {
-        if self.open {
-            self.open = false;
+        self.open = false;
+        self.keep = false;
+        self.done = false;
+        if !self.shut {
+            self.shut = true;
             let _ = self.lines.send(None);
         }
     }
 
-    /// Closes stdin when the turn is over: every message read and answered, and no background task left.
+    /// Stops the process now: its token revoked first, so nothing it still runs reads it, then its stdin closed and it
+    /// signalled; killed with its group at once when the token could not be blanked.
+    fn kill(&mut self) {
+        let revoked = self.lease.as_deref().is_none_or(revoke);
+        self.close();
+        self.stopper.terminate(if revoked {
+            STOP_TIMEOUT
+        } else {
+            Duration::ZERO
+        });
+    }
+
+    /// The turn is over with nothing of it left unread: a process that may be kept takes no more input and stays up
+    /// with its stdin open; any other has its stdin closed and exits. So does one sent a stop it has not answered: the
+    /// request may still be unread on its stdin, where it would stop the next turn.
+    fn end(&mut self) {
+        if self.keep && (self.interrupting.is_none() || self.acked) {
+            self.open = false;
+            self.done = true;
+        } else {
+            self.close();
+        }
+    }
+
+    /// Ends the turn once it is over: every message read and answered, and no background task left.
     fn close_if_done(&mut self) {
         if self.answered && self.background == 0 && self.unread.is_empty() {
-            self.close();
+            self.end();
         }
     }
 
@@ -285,6 +354,260 @@ impl Pipe {
             .zip(self.wait)
             .map(|(since, wait)| since + wait)
     }
+}
+
+/// Blanks the token file `lease`, or removes it when it cannot be blanked: false then, and what reads it must be killed
+/// now.
+fn revoke(lease: &std::path::Path) -> bool {
+    crate::warm::write_token_for(lease, "", None) || {
+        let _ = std::fs::remove_file(lease);
+        false
+    }
+}
+
+/// Claude's stdin, which each turn's writer shares while the process lasts.
+type Stdin = Arc<tokio::sync::Mutex<Option<ChildStdin>>>;
+
+/// Where a process's stderr goes: the events of the host holding it, none while it is kept between turns.
+type Sink = Arc<Mutex<Option<Events>>>;
+
+/// How long a kept Claude has to exit once its stdin closed before it is stopped.
+const CLOSE_WAIT: Duration = Duration::from_secs(5);
+
+/// A running Claude: its stream, its stderr, and what a later turn of its thread needs to go on in it.
+struct Live {
+    stdin: Stdin,
+    stdout: Lines<BufReader<ChildStdout>>,
+    stopper: super::Stopper,
+    exited: watch::Receiver<Option<i32>>,
+    stderr: crate::run_diagnostics::Stderr,
+    sink: Sink,
+    /// What its stderr is masked of: each turn's secrets are added as it goes on in it.
+    scrub: Arc<crate::redact::Redactor>,
+    /// The process the runner started: Claude, or the reaping parent it runs under (`reaping`).
+    pid: Option<u32>,
+    reaping: Option<std::path::PathBuf>,
+    /// The turn mark it and all it starts carry (crate::turn_sweep), and the scope stem it was launched under.
+    mark: String,
+    stem: Option<String>,
+    thread: String,
+    /// What it was started with (`fingerprint`); None when it is not to be kept.
+    key: Option<Inputs>,
+    /// The session it runs, once Claude said (its system init).
+    session: Option<String>,
+    /// Claude's own count of the session's spend after its last `result` (Pipe::cost).
+    cost: Option<Spent>,
+    /// The folder of the token file it reads HUB_TOKEN from (crate::warm), when it may be kept.
+    tokens: Option<std::path::PathBuf>,
+    /// The scope it was launched in where turns are limited (crate::turn_limits::launch_unit).
+    unit: Option<String>,
+    /// A plan login's turn home, held while it runs, and the digest of the sign-in it held when Claude started.
+    plan: Option<crate::model_subscriptions::KeptHome>,
+    signed: Option<String>,
+    /// Its output ended, or it began work no turn reads.
+    closed: bool,
+    /// Everything Claude ran, at any depth, when it said it was up (its system init): its MCP servers and what they
+    /// run. A process under Claude at a turn's end beyond these is the turn's own work. None when it could not be read.
+    helpers: Option<HashSet<u32>>,
+    /// Left running on purpose when dropped: the reaping parent of the shells a turn kept.
+    spare: bool,
+}
+
+impl Live {
+    fn attach(&self, tx: Option<Events>) {
+        *self.sink.lock().unwrap_or_else(|p| p.into_inner()) = tx;
+    }
+
+    fn running(&self) -> bool {
+        self.exited.borrow().is_none()
+    }
+
+    /// Its exit code, once it has exited.
+    async fn exit_code(&self) -> i32 {
+        let mut exited = self.exited.clone();
+        let code = exited.wait_for(|e| e.is_some()).await.ok().and_then(|e| *e);
+        code.unwrap_or(-1)
+    }
+
+    /// What its turns may have left running, it and all it runs aside when `spare` names it (crate::turn_sweep).
+    fn leftovers(&self, spare: bool) -> crate::turn_sweep::Turn {
+        let (keep, keep_trees) = match (spare, self.pid) {
+            (true, Some(pid)) => match self.reaping.as_deref().and_then(crate::reap::claude) {
+                Some(claude) => (vec![pid], vec![claude]),
+                None => (vec![], vec![pid]),
+            },
+            _ => (vec![], vec![]),
+        };
+        crate::turn_sweep::Turn {
+            mark: self.mark.clone(),
+            groups: self.pid.into_iter().collect(),
+            cgroups: self
+                .pid
+                .and_then(|pid| crate::turn_limits::scope_dir(self.stem.as_deref(), pid))
+                .into_iter()
+                .collect(),
+            keep,
+            keep_trees,
+            tracking: None,
+        }
+    }
+}
+
+/// Claude's adapter for the session keeper (crate::keeper): kept with its token blanked and its stderr going nowhere,
+/// what it says meanwhile read by `between`. It reports no background work: a turn ends only once the session's
+/// background tasks have, or ends on its wait with Claude killed, so a kept Claude has none left.
+impl Session for Live {
+    /// Up, with nothing said that no turn reads, a plan login's home still holding the sign-in Claude started on (a
+    /// turn may have replaced it, and a process that may run on another account takes no other turn), and nothing
+    /// running under Claude beyond what it ran at its init. Asked once as a turn takes it, before its token is lent.
+    fn alive(&self) -> bool {
+        !self.closed
+            && self.running()
+            && self
+                .plan
+                .as_ref()
+                .is_none_or(|plan| plan.sign_in().is_some_and(|s| Some(s) == self.signed))
+            && self.helpers.as_ref().is_some_and(|h| {
+                descendants(self.pid, self.reaping.as_deref()).is_some_and(|now| now.is_subset(h))
+            })
+    }
+
+    /// Its stderr is masked of the token before Claude can read it.
+    fn lend(&self, token: &str) -> bool {
+        if !token.is_empty() {
+            self.scrub.add(&[token.to_string()]);
+        }
+        self.tokens
+            .as_ref()
+            .is_some_and(|t| crate::warm::write_token_for(&t.join("lease-token"), token, None))
+    }
+
+    fn park(self: Box<Self>, wanted: oneshot::Receiver<()>) -> crate::keeper::Parked {
+        self.attach(None);
+        Box::pin(async move { Box::new(between(*self, wanted).await) as Box<dyn Session> })
+    }
+
+    /// Its token blanked and its stdin closed, so Claude ends as it does after a turn and saves the session's spend;
+    /// stopped if it does not exit in time, or killed with its group at once when its token could not be blanked (the
+    /// token file is removed then). Then what its turns left running is stopped.
+    fn stop(&self) -> crate::keeper::Stopping<'_> {
+        Box::pin(async move {
+            if self
+                .tokens
+                .as_ref()
+                .is_some_and(|t| !revoke(&t.join("lease-token")))
+            {
+                self.stopper.terminate(Duration::ZERO);
+            }
+            if let Ok(mut stdin) = tokio::time::timeout(CLOSE_WAIT, self.stdin.lock()).await {
+                drop(stdin.take());
+            }
+            let mut exited = self.exited.clone();
+            let closed = matches!(
+                tokio::time::timeout(CLOSE_WAIT, exited.wait_for(|e| e.is_some())).await,
+                Ok(Ok(_))
+            );
+            if !closed {
+                self.stopper.terminate(CLOSE_WAIT);
+                let _ = exited.wait_for(|e| e.is_some()).await;
+            }
+            let _ = crate::turn_sweep::finish(self.leftovers(false), "claude", None).await;
+        })
+    }
+
+    /// SIGKILL to its group now (no grace), then until it has gone.
+    fn kill(&self) -> crate::keeper::Kill {
+        let (stopper, exited) = (self.stopper.clone(), self.exited.clone());
+        Arc::new(move || {
+            stopper.terminate(Duration::ZERO);
+            let mut exited = exited.clone();
+            Box::pin(async move {
+                let _ = exited.wait_for(|e| e.is_some()).await;
+            })
+        })
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+        self
+    }
+}
+
+/// The cleanup no cancellation skips: a reader task aborted, or a turn dropped, mid-way drops the process it holds.
+impl Drop for Live {
+    fn drop(&mut self) {
+        // Its token goes before it is signalled: what it runs may outlive it.
+        if let Some(tokens) = &self.tokens {
+            self.lend("");
+            let _ = std::fs::remove_dir_all(tokens);
+        }
+        if !self.spare && self.running() {
+            self.stopper.terminate(Duration::ZERO);
+        }
+    }
+}
+
+/// What a kept Claude says between turns, until it is wanted back or its output ends. Claude says nothing then unless it
+/// starts work of its own (a wakeup it scheduled): no turn would read that, so the process is not handed to another.
+async fn between(mut live: Live, mut wanted: oneshot::Receiver<()>) -> Live {
+    loop {
+        // What it said goes first: a process handed back with a line unread would give it to the next turn.
+        let line = tokio::select! {
+            biased;
+            line = live.stdout.next_line() => line,
+            _ = &mut wanted => return live,
+        };
+        let Ok(Some(line)) = line else {
+            live.closed = true;
+            return live;
+        };
+        let Ok(msg) = serde_json::from_str::<Value>(line.trim()) else {
+            continue;
+        };
+        if matches!(
+            msg["type"].as_str(),
+            Some("assistant" | "stream_event" | "user" | "result")
+        ) {
+            live.closed = true;
+            return live;
+        }
+    }
+}
+
+/// Everything Claude runs now, at any depth: `pid` is the process the runner started, Claude's reaping parent when
+/// `reaping`. None when Claude is not found among the running processes, or they cannot all be read.
+fn descendants(pid: Option<u32>, reaping: Option<&std::path::Path>) -> Option<HashSet<u32>> {
+    let claude = match reaping {
+        Some(path) => crate::reap::claude(path),
+        None => pid,
+    }?;
+    let parents = process_table()?;
+    if !parents.contains_key(&claude) {
+        return None;
+    }
+    let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+    for (pid, parent) in parents {
+        children.entry(parent).or_default().push(pid);
+    }
+    let (mut tree, mut next) = (HashSet::new(), vec![claude]);
+    while let Some(pid) = next.pop() {
+        for child in children.get(&pid).into_iter().flatten() {
+            if tree.insert(*child) {
+                next.push(*child);
+            }
+        }
+    }
+    Some(tree)
+}
+
+/// Whether `l` may take a turn of `thread_id` started with `key`: it runs that thread's session, started the same way.
+/// Whether it is still fit to (`Live::alive`) is asked apart, once.
+fn fits(l: &Live, thread_id: &str, t: &Thread, key: Option<&Inputs>) -> bool {
+    l.thread == thread_id
+        && key.is_some()
+        && l.key.as_ref() == key
+        && t.started
+        && t.fork_from.is_none()
+        && l.session.as_deref() == Some(session_of(thread_id, t).as_str())
 }
 
 /// The reaping parent's program and arguments up to the command it runs.
@@ -340,44 +663,88 @@ fn is_shell(task: &Value) -> bool {
 
 /// Every process's parent, by pid.
 pub(crate) fn parents() -> HashMap<u32, u32> {
+    read_parents().0
+}
+
+/// Every running process's parent, or None when any could not be read (one that exits meanwhile aside).
+fn process_table() -> Option<HashMap<u32, u32>> {
+    let (parents, whole) = read_parents();
+    whole.then_some(parents)
+}
+
+/// Each running process's parent, and whether all were read.
+fn read_parents() -> (HashMap<u32, u32>, bool) {
     let mut parent: HashMap<u32, u32> = HashMap::new();
     #[cfg(target_os = "linux")]
-    for entry in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
-        let Some(pid) = entry
-            .file_name()
-            .to_str()
-            .and_then(|n| n.parse::<u32>().ok())
-        else {
-            continue;
+    let whole = {
+        let Ok(entries) = std::fs::read_dir("/proc") else {
+            return (parent, false);
         };
-        let Ok(stat) = std::fs::read_to_string(entry.path().join("stat")) else {
-            continue;
-        };
-        // After the command's closing paren: state, then ppid.
-        if let Some(ppid) = stat
-            .rsplit_once(')')
-            .and_then(|(_, rest)| rest.split_whitespace().nth(1))
-            .and_then(|p| p.parse().ok())
-        {
-            parent.insert(pid, ppid);
+        let mut whole = true;
+        for entry in entries {
+            let Ok(entry) = entry else {
+                whole = false;
+                continue;
+            };
+            let Some(pid) = entry
+                .file_name()
+                .to_str()
+                .and_then(|n| n.parse::<u32>().ok())
+            else {
+                continue;
+            };
+            let stat = match std::fs::read_to_string(entry.path().join("stat")) {
+                Ok(stat) => stat,
+                // It exited since the folder was listed.
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::NotFound
+                        || e.raw_os_error() == Some(libc::ESRCH) =>
+                {
+                    continue
+                }
+                Err(_) => {
+                    whole = false;
+                    continue;
+                }
+            };
+            // After the command's closing paren: state, then ppid.
+            match stat
+                .rsplit_once(')')
+                .and_then(|(_, rest)| rest.split_whitespace().nth(1))
+                .and_then(|p| p.parse().ok())
+            {
+                Some(ppid) => {
+                    parent.insert(pid, ppid);
+                }
+                None => whole = false,
+            }
         }
-    }
+        whole
+    };
     #[cfg(not(target_os = "linux"))]
-    if let Ok(out) = std::process::Command::new("ps")
+    let whole = match std::process::Command::new("ps")
         .args(["-A", "-o", "pid=,ppid="])
         .stderr(Stdio::null())
         .output()
     {
-        for line in String::from_utf8_lossy(&out.stdout).lines() {
-            let mut cols = line
-                .split_whitespace()
-                .filter_map(|c| c.parse::<u32>().ok());
-            if let (Some(pid), Some(ppid)) = (cols.next(), cols.next()) {
-                parent.insert(pid, ppid);
+        Ok(out) => {
+            let mut whole = out.status.success();
+            for line in String::from_utf8_lossy(&out.stdout).lines() {
+                let mut cols = line
+                    .split_whitespace()
+                    .filter_map(|c| c.parse::<u32>().ok());
+                match (cols.next(), cols.next()) {
+                    (Some(pid), Some(ppid)) => {
+                        parent.insert(pid, ppid);
+                    }
+                    _ => whole &= line.trim().is_empty(),
+                }
             }
+            whole
         }
-    }
-    parent
+        Err(_) => false,
+    };
+    (parent, whole)
 }
 
 /// The file a process's standard output goes to.
@@ -729,6 +1096,8 @@ struct Inner {
     reaping: Option<std::path::PathBuf>,
     /// What the session the last launched Claude starts from had spent (Pipe::cost).
     start_spent: Option<Spent>,
+    /// The turn mark of the process the running turn reads (Live::mark).
+    mark: Option<String>,
     /// How far each thread's transcript has been read for goal records.
     goal_offsets: HashMap<String, u64>,
     /// This turn's tool calls by `tool_use` id, the bot's own and its subagents'.
@@ -741,6 +1110,14 @@ struct Inner {
     refresh: HashMap<String, String>,
     /// Each thread's context size after its last turn (Host::context_tokens).
     context: HashMap<String, i64>,
+    /// The process the last turn ended in and kept running, or the one the keeper gave back for the next turn
+    /// (`pooled`).
+    live: Option<Live>,
+    pooled: bool,
+    /// Whether this attempt's first turn went on in a process already running.
+    warm: Option<bool>,
+    /// The launch scopes of the kept processes this attempt went on in (Host::kept_scopes).
+    units: Vec<String>,
     /// Called each time a turn's pipe has just been published (ordering tests).
     #[cfg(test)]
     pipe_opened: Option<Arc<dyn Fn(&ClaudeHost) + Send + Sync>>,
@@ -774,6 +1151,8 @@ struct Shared {
     capture: Mutex<Option<Arc<crate::capture::Capture>>>,
     /// The run this host's turn belongs to, for its timing marks (flight.rs); empty until the runner names it.
     attempt: Mutex<String>,
+    /// The runner's session keeper: with one, a turn's process may outlive it.
+    keeper: Option<Arc<Keeper>>,
 }
 
 #[derive(Clone)]
@@ -824,7 +1203,19 @@ pub async fn note_version(cmd: &[String], version: &str) {
 }
 
 impl ClaudeHost {
+    /// A host with no keeper, its turns' processes never kept (tests; the runner always passes its keeper).
+    #[cfg(test)]
     pub fn new(bot: &str, cmd: Vec<String>, tx: Events) -> ClaudeHost {
+        ClaudeHost::with_keeper(bot, cmd, tx, None)
+    }
+
+    /// A host whose turns' processes may be kept for their thread's next turn by `keeper`.
+    pub fn with_keeper(
+        bot: &str,
+        cmd: Vec<String>,
+        tx: Events,
+        keeper: Option<Arc<Keeper>>,
+    ) -> ClaudeHost {
         ClaudeHost(Arc::new(Shared {
             allocation: super::Allocation::default(),
             bot: bot.into(),
@@ -835,6 +1226,7 @@ impl ClaudeHost {
             inner: Mutex::new(Inner::default()),
             capture: Mutex::new(None),
             attempt: Mutex::new(String::new()),
+            keeper,
         }))
     }
 
@@ -917,13 +1309,187 @@ impl ClaudeHost {
             }
             // A turn that ended on its wait left its reaping parent for the shells it kept: they outlive the runner.
             if let Some(p) = inner.pipe.as_mut().filter(|p| p.kept.is_none()) {
-                p.close();
-                p.stopper.terminate(STOP_TIMEOUT);
+                p.kill();
             }
             inner.reader.take()
         };
         if let Some(r) = reader {
-            let _ = tokio::time::timeout(STOP_TIMEOUT + Duration::from_secs(1), r).await;
+            self.end_reader(r, STOP_TIMEOUT + Duration::from_secs(1))
+                .await;
+        }
+        let live = self.inner().live.take();
+        if let Some(live) = live {
+            live.stop().await;
+        }
+    }
+
+    /// Whether this attempt's first turn went on in a process already running.
+    pub fn warm(&self) -> bool {
+        self.inner().warm.unwrap_or(false)
+    }
+
+    /// The launch scopes of the processes this attempt went on in (Host::kept_scopes): a kept one is still in the
+    /// scope of the attempt that started it.
+    pub fn scopes(&self) -> Vec<String> {
+        self.inner().units.clone()
+    }
+
+    /// What a process for a turn of `thread_id` would be started with, the turn's own token, scope and plan home
+    /// aside: its command line (model and effort among it, the session it resumes not), environment, whether it has
+    /// a hub token, folder (by path, device and inode: a copy made again at the same path is another), background
+    /// wait, and a plan login's plan with its sign-in's revision. None when it is not to be kept: Claude routed
+    /// through a plan exit (its settings are the turn's own), a credential file (each attempt's own, removed when it
+    /// settles), a folder that cannot be read, or a plan whose home cannot be held.
+    fn fingerprint(&self, thread_id: &str, t: &Thread, effort: Option<&str>) -> Option<Inputs> {
+        if self.0.keeper.is_none() || t.settings.model_exit {
+            return None;
+        }
+        let env = turn_env(&t.settings);
+        if crate::env::has_credential_file(&env) {
+            return None;
+        }
+        let fresh = Thread {
+            started: false,
+            fork_from: None,
+            session_id: None,
+            ..t.clone()
+        };
+        let mut argv = self.argv(thread_id, &fresh, effort).ok()?;
+        // `--session-id <thread>`: the keeper holds one process per thread already.
+        argv.truncate(argv.len().saturating_sub(2));
+        let mut inputs = Inputs::default();
+        inputs.add("argv", &json!(argv).to_string());
+        inputs.env(&env, &["CLAUDE_CONFIG_DIR"]);
+        // The token itself is each attempt's own (crate::warm::PER_ATTEMPT); a Claude started without one has no
+        // HUB_TOKEN at all to read it from.
+        let hub = env.get("HUB_TOKEN").is_some_and(|t| !t.is_empty());
+        inputs.add("hub_token", if hub { "yes" } else { "no" });
+        let folder = std::fs::metadata(&t.settings.cwd).ok()?;
+        inputs.add(
+            "folder",
+            &format!(
+                "{} {}:{}",
+                t.settings.cwd,
+                std::os::unix::fs::MetadataExt::dev(&folder),
+                std::os::unix::fs::MetadataExt::ino(&folder)
+            ),
+        );
+        inputs.add(
+            "background_wait",
+            &format!("{:?}", t.settings.background_wait),
+        );
+        if let Some(home) = env.get("CLAUDE_CONFIG_DIR") {
+            let plan = crate::model_subscriptions::turn_plan(std::path::Path::new(home))?;
+            inputs.add("plan", &plan);
+        }
+        Some(inputs)
+    }
+
+    /// Before a turn of `thread_id`, the one place it is decided whether the turn goes on in a running process: one the
+    /// host or the keeper holds for the thread does when the turn would start it the same way, on the session it runs
+    /// (`fits`), and it is still fit to (`Live::alive`); then the turn's token is lent to it. Any other is stopped now,
+    /// before a new one starts on that session, and `start_turn` starts one. A thread whose turn would not be kept lets
+    /// go of any.
+    pub async fn reuse(&self, thread_id: &str, effort: Option<&str>) {
+        let (key, token, started, stale, have) = {
+            let mut inner = self.inner();
+            if inner.turn.is_some() {
+                return;
+            }
+            let Some(t) = inner.threads.get(thread_id).cloned() else {
+                return;
+            };
+            let key = self.fingerprint(thread_id, &t, effort);
+            let token = t.settings.env.get("HUB_TOKEN").cloned().unwrap_or_default();
+            let stale = inner.live.take_if(|l| {
+                !(fits(l, thread_id, &t, key.as_ref()) && l.alive() && l.lend(&token))
+            });
+            if stale.is_some() {
+                inner.pooled = false;
+            }
+            (key, token, t.started, stale, inner.live.is_some())
+        };
+        if let Some(stale) = stale {
+            stale.stop().await;
+        }
+        let Some(keeper) = self.0.keeper.clone() else {
+            return;
+        };
+        if have || !started {
+            return;
+        }
+        let Some(key) = key else {
+            keeper.release(thread_id).await;
+            return;
+        };
+        let Some(live) = keeper.take::<Live>(thread_id, &key, &token).await else {
+            return;
+        };
+        // The keeper asked `alive` and lent the token; what it cannot tell is the session, and whether the host was
+        // stopped or given another turn meanwhile.
+        let extra = {
+            let mut inner = self.inner();
+            let fit = inner
+                .threads
+                .get(thread_id)
+                .is_some_and(|t| fits(&live, thread_id, t, Some(&key)));
+            if fit && inner.up && inner.live.is_none() && inner.turn.is_none() {
+                inner.live = Some(live);
+                inner.pooled = true;
+                None
+            } else {
+                Some(live)
+            }
+        };
+        if let Some(live) = extra {
+            live.stop().await;
+        }
+    }
+
+    /// The attempt is over: with `keep`, the process its last turn kept goes to the keeper with its token blanked, for
+    /// the thread's next turn, with `held` (what its folder needs while it is kept, crate::keeper::Held); else it stops.
+    pub async fn release(&self, keep: bool, held: Option<Held>) {
+        // A stopped turn ends on Claude's interrupt, or is killed once out of time (`interrupt`): its process is given
+        // back only once it has.
+        let reader = self.inner().reader.take();
+        if let Some(r) = reader {
+            self.end_reader(r, INTERRUPT_GRACE + STOP_TIMEOUT).await;
+        }
+        let live = self.inner().live.take();
+        let Some(live) = live else { return };
+        match (&self.0.keeper, live.key.clone()) {
+            (Some(keeper), Some(key)) if keep && live.alive() => {
+                let thread = live.thread.clone();
+                keeper.put(&thread, key, live, held).await
+            }
+            _ => live.stop().await,
+        }
+    }
+
+    /// Waits up to `wait` for a turn's reader to end, then ends it and waits until it has: the process it holds is
+    /// stopped as it drops, its token revoked first and its plan home let go. What the turn left running is stopped
+    /// then too, unless it kept shells on its wait: those outlive it.
+    async fn end_reader(&self, mut reader: tokio::task::JoinHandle<()>, wait: Duration) {
+        if tokio::time::timeout(wait, &mut reader).await.is_ok() {
+            return;
+        }
+        reader.abort();
+        let _ = reader.await;
+        let mark = {
+            let inner = self.inner();
+            let kept = inner.pipe.as_ref().is_some_and(|p| p.kept.is_some());
+            inner.mark.clone().filter(|_| !kept)
+        };
+        if let Some(mark) = mark {
+            let left = crate::turn_sweep::Turn {
+                mark,
+                groups: vec![],
+                cgroups: vec![],
+                tracking: None,
+                keep: vec![],
+                keep_trees: vec![],
+            };
+            let _ = crate::turn_sweep::finish(left, &format!("claude[{}]", self.0.bot), None).await;
         }
     }
 
@@ -1163,6 +1729,129 @@ impl ClaudeHost {
         crate::run_diagnostics::Stderr,
         Option<std::path::PathBuf>,
     )> {
+        let (mut command, reaping) = self.command(thread_id, t, effort, mark)?;
+        let mut child = command.spawn()?;
+        self.0.allocation.mark();
+        let stderr = crate::run_diagnostics::Stderr::capture(
+            &mut child,
+            self.0.tx.clone(),
+            &turn_env(&t.settings),
+        );
+        Ok((child, stderr, reaping))
+    }
+
+    /// Starts Claude for a turn as a process that may be kept for the thread's next turn (`Live`): with a `key`, it
+    /// reads HUB_TOKEN from a token file of its own, and a plan login's home is held while it runs, with what its
+    /// sign-in held then (`Live::alive`).
+    fn spawn(
+        &self,
+        thread_id: &str,
+        t: &Thread,
+        effort: Option<&str>,
+        mark: &str,
+        key: Option<Inputs>,
+    ) -> std::io::Result<Live> {
+        let env = turn_env(&t.settings);
+        let plan = env
+            .get("CLAUDE_CONFIG_DIR")
+            .filter(|_| key.is_some())
+            .and_then(|home| crate::model_subscriptions::keep_home(std::path::Path::new(home)));
+        let signed = plan.as_ref().and_then(|p| p.sign_in());
+        let key = key.filter(|_| signed.is_some() || !env.contains_key("CLAUDE_CONFIG_DIR"));
+        let token = env.get("HUB_TOKEN").filter(|t| !t.is_empty());
+        let (mut command, reaping) = self.command(thread_id, t, effort, mark)?;
+        // The keeper's storage serves only a later turn: without a written token file Claude starts as one that is not
+        // kept, with the turn's token in its environment.
+        let tokens = match (&self.0.keeper, &key) {
+            (Some(keeper), Some(_)) => keeper.folder().ok().filter(|dir| {
+                let file = dir.join("lease-token");
+                crate::warm::write_token_for(&file, token.map_or("", String::as_str), None) || {
+                    let _ = std::fs::remove_dir_all(dir);
+                    false
+                }
+            }),
+            _ => None,
+        };
+        let key = key.filter(|_| tokens.is_some());
+        if let Some(dir) = tokens.as_ref().filter(|_| token.is_some()) {
+            command.env(
+                "HUB_TOKEN",
+                format!("tico-file:{}", dir.join("lease-token").display()),
+            );
+        }
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(e) => {
+                if let Some(dir) = &tokens {
+                    let _ = std::fs::remove_dir_all(dir);
+                }
+                return Err(e);
+            }
+        };
+        self.0.allocation.mark();
+        let sink: Sink = Arc::new(Mutex::new(Some(self.0.tx.clone())));
+        let to = sink.clone();
+        let scrub = Arc::new(crate::redact::Redactor::new(&crate::redact::env_secrets(
+            &env,
+        )));
+        let stderr = crate::run_diagnostics::Stderr::capture_scrubbed(
+            &mut child,
+            move |value| {
+                if let Some(tx) = to.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
+                    let _ = tx.send(value);
+                }
+            },
+            scrub.clone(),
+        );
+        let pid = child.id();
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| std::io::Error::other("claude has no stdout"))?;
+        let stdin = child.stdin.take();
+        let (stopper, status) = super::own(child);
+        let (done, exited) = watch::channel(None);
+        tokio::spawn(async move {
+            let code = match status.await {
+                Ok(status) => super::return_code(&status),
+                Err(_) => -1,
+            };
+            let _ = done.send(Some(code));
+        });
+        Ok(Live {
+            stdin: Arc::new(tokio::sync::Mutex::new(stdin)),
+            stdout: BufReader::new(stdout).lines(),
+            stopper,
+            exited,
+            stderr,
+            sink,
+            scrub,
+            pid,
+            reaping,
+            mark: mark.to_string(),
+            stem: env.get(crate::turn_limits::SCOPE_ENV).cloned(),
+            thread: thread_id.to_string(),
+            unit: crate::turn_limits::launch_unit(&env, pid),
+            key,
+            session: None,
+            cost: None,
+            tokens,
+            plan,
+            signed,
+            closed: false,
+            helpers: None,
+            spare: false,
+        })
+    }
+
+    /// The command that starts Claude for a turn, and its reaping parent's status file if it runs under one.
+    fn command(
+        &self,
+        thread_id: &str,
+        t: &Thread,
+        effort: Option<&str>,
+        mark: &str,
+    ) -> std::io::Result<(tokio::process::Command, Option<std::path::PathBuf>)> {
         let argv = self.argv(thread_id, t, effort)?;
         // Drain stderr independently; only the bounded, scrubbed tail is kept.
         // A turn that may end on its background wait runs under a reaping parent, which learns its shells' exit codes.
@@ -1221,14 +1910,7 @@ impl ClaudeHost {
             args.extend(argv.iter().map(|a| json!(a)));
             command.env(crate::reap::tests::ARGS, Value::Array(args).to_string());
         }
-        let mut child = command.spawn()?;
-        self.0.allocation.mark();
-        let stderr = crate::run_diagnostics::Stderr::capture(
-            &mut child,
-            self.0.tx.clone(),
-            &turn_env(&t.settings),
-        );
-        Ok((child, stderr, reaping))
+        Ok((command, reaping))
     }
 
     pub fn start_turn(
@@ -1238,10 +1920,17 @@ impl ClaudeHost {
         effort: Option<&str>,
     ) -> Result<String, HostError> {
         let turn = uuid::Uuid::new_v4().to_string();
-        // Read before the turn takes the lock: a long transcript is read back a chunk at a time.
-        let thread = self.inner().threads.get(thread_id).cloned();
-        let spent = thread.as_ref().and_then(|t| start_spent(t, thread_id));
-        let (child, stderr, transcript_bytes) = {
+        // Read before the turn takes the lock: a long transcript is read back a chunk at a time. A kept process
+        // counts its own spend.
+        let (thread, kept) = {
+            let inner = self.inner();
+            (inner.threads.get(thread_id).cloned(), inner.live.is_some())
+        };
+        let spent = thread
+            .as_ref()
+            .filter(|_| !kept)
+            .and_then(|t| start_spent(t, thread_id));
+        let (live, warm, transcript_bytes) = {
             let mut inner = self.inner();
             if !inner.up {
                 return Err(failed("claude host is not running"));
@@ -1260,19 +1949,47 @@ impl ClaudeHost {
             if let Some(size) = size {
                 inner.goal_offsets.insert(thread_id.into(), size);
             }
-            inner.start_spent = spent;
-            let (child, stderr, reaping) = self
-                .launch(thread_id, &t, effort, &turn)
-                .map_err(|e| failed(format!("could not start claude: {e}")))?;
-            inner.reaping = reaping;
+            // A process `reuse` left goes on, its token lent; with none, Claude starts.
+            let pooled = std::mem::take(&mut inner.pooled);
+            let reused = inner.live.take();
+            let warm = reused.is_some();
+            let live = match reused {
+                Some(l) => {
+                    l.scrub
+                        .add(&crate::redact::env_secrets(&turn_env(&t.settings)));
+                    l.stderr.clear();
+                    l.attach(Some(self.0.tx.clone()));
+                    self.0.allocation.mark();
+                    inner.start_spent = l.cost.clone();
+                    inner.warm.get_or_insert(pooled);
+                    if let Some(unit) = l.unit.clone().filter(|u| !inner.units.contains(u)) {
+                        inner.units.push(unit);
+                    }
+                    if let Some(th) = inner.threads.get_mut(thread_id) {
+                        th.session_id = l.session.clone();
+                    }
+                    l
+                }
+                None => {
+                    inner.start_spent = spent;
+                    inner.warm.get_or_insert(false);
+                    let key = self.fingerprint(thread_id, &t, effort);
+                    self.spawn(thread_id, &t, effort, &turn, key)
+                        .map_err(|e| failed(format!("could not start claude: {e}")))?
+                }
+            };
+            inner.reaping = live.reaping.clone();
+            inner.mark = Some(live.mark.clone());
             inner.turn = Some((thread_id.into(), turn.clone()));
             inner.reply.insert(turn.clone(), String::new());
             inner.tools.clear();
             inner.context.remove(thread_id);
-            (child, stderr, size.unwrap_or(0))
+            (live, warm, size.unwrap_or(0))
         };
         // Spawned now: whatever the runner holds the turn for after this (a cold sign-in) is not Claude's boot.
-        self.mark("claude_spawned");
+        if !warm {
+            self.mark("claude_spawned");
+        }
         // The session Claude resumes, by size: whether resuming takes longer as a thread grows.
         crate::flight::fact(
             &self.attempt(),
@@ -1280,9 +1997,10 @@ impl ClaudeHost {
             serde_json::json!(transcript_bytes),
         );
         log(&format!(
-            "claude[{}]: turn started pid {}",
+            "claude[{}]: turn started {}pid {}",
             self.0.bot,
-            child.id().map_or("?".into(), |p| p.to_string())
+            if warm { "in kept " } else { "" },
+            live.pid.map_or("?".into(), |p| p.to_string())
         ));
         // `tool_events`: this run reports every tool call, so a run with none provably called none.
         self.emit(event(
@@ -1299,39 +2017,39 @@ impl ClaudeHost {
             effort.map(String::from),
         );
         let reader =
-            tokio::spawn(async move { host.read_loop(child, stderr, tid, t2, text, effort).await });
+            tokio::spawn(async move { host.read_loop(live, warm, tid, t2, text, effort).await });
         self.inner().reader = Some(reader);
         Ok(turn)
     }
 
     /// Publishes the turn's pipe with the prompt and any carried follow-ups already queued, under one lock: a
-    /// steer is let in only once the pipe is open, so it always lands after them.
-    fn open_pipe(
-        &self,
-        tid: &str,
-        stdin: Option<tokio::process::ChildStdin>,
-        stopper: super::Stopper,
-        pid: Option<u32>,
-        text: &str,
-        carried: Vec<String>,
-    ) {
+    /// steer is let in only once the pipe is open, so it always lands after them. A turn stopped, or a host stopped,
+    /// before then queues nothing: its process is stopped, and the turn ends.
+    fn open_pipe(&self, tid: &str, live: &Live, text: &str, carried: Vec<String>) {
         let (tx, mut rx) = mpsc::unbounded_channel::<Option<String>>();
         let first = uuid::Uuid::new_v4().to_string();
-        let _ = tx.send(Some(user_line(&first, text, None)));
-        let mut stdin = stdin;
+        let stdin = live.stdin.clone();
         let capture = self.capture();
-        // Its own task: a prompt can be larger than the pipe's buffer, and nothing else waits on it.
+        // Its own task: a prompt can be larger than the pipe's buffer, and nothing else waits on it. Stdin closes on
+        // `close` or a failed write; a pipe the turn let go of leaves it open for the next turn of a kept process.
         tokio::spawn(async move {
-            while let Some(Some(line)) = rx.recv().await {
-                let Some(s) = stdin.as_mut() else { break };
+            while let Some(line) = rx.recv().await {
+                let mut input = stdin.lock().await;
+                let Some(line) = line else {
+                    drop(input.take());
+                    break;
+                };
+                let Some(s) = input.as_mut() else {
+                    break;
+                };
                 if let Some(c) = &capture {
                     c.sent(&line);
                 }
                 if s.write_all(line.as_bytes()).await.is_err() || s.flush().await.is_err() {
+                    drop(input.take());
                     break;
                 }
             }
-            drop(stdin.take());
         });
         let mut inner = self.inner();
         let wait = inner
@@ -1339,6 +2057,8 @@ impl ClaudeHost {
             .get(tid)
             .and_then(|t| t.settings.background_wait);
         let reaping = inner.reaping.take();
+        let keep = live.key.is_some() && live.tokens.is_some();
+        let lease = live.tokens.as_ref().map(|t| t.join("lease-token"));
         let mut pipe = Pipe {
             lines: tx,
             open: true,
@@ -1353,27 +2073,43 @@ impl ClaudeHost {
             limit_text: None,
             background: 0,
             answered: false,
-            stopper,
+            stopper: live.stopper.clone(),
             held: vec![],
             task_calls: HashMap::new(),
             idle_since: None,
             wait,
-            pid,
+            pid: live.pid,
             kept: None,
             reaping,
             interrupting: None,
+            acked: false,
+            lease,
+            keep,
+            done: false,
+            shut: false,
         };
-        // Written right behind the prompt, they steer no running step.
-        for text in carried {
-            pipe.follow_up(&text, None);
+        let stopped = !inner.up
+            || inner
+                .turn
+                .as_ref()
+                .is_some_and(|(_, turn)| inner.interrupted.contains(turn));
+        if stopped {
+            pipe.kill();
+        } else {
+            let _ = pipe.lines.send(Some(user_line(&pipe.first, text, None)));
+            // Written right behind the prompt, they steer no running step.
+            for text in carried {
+                pipe.follow_up(&text, None);
+            }
         }
         inner.pipe = Some(pipe);
     }
 
+    /// Reads the turn's stream from `live`, a process kept from an earlier turn when `warm`, until the turn is over.
     async fn read_loop(
         &self,
-        mut child: Child,
-        mut stderr: crate::run_diagnostics::Stderr,
+        mut live: Live,
+        mut warm: bool,
         tid: String,
         turn: String,
         mut text: String,
@@ -1383,21 +2119,12 @@ impl ClaudeHost {
         // What a restarted session is told after its prompt: the follow-ups the missing one never read.
         let mut requeued: Vec<String> = vec![];
         // Each Claude process of the turn (a restored session has two): the groups and scopes it left.
-        let mut launched: Vec<u32> = vec![];
+        let mut launched: Vec<(u32, Option<String>)> = vec![];
+        // A kept process's turns all carry the mark it was started with.
+        let mark = live.mark.clone();
         loop {
-            let stdout = child.stdout.take();
-            let stdin = child.stdin.take();
-            let pid = child.id();
-            launched.extend(pid);
-            let (stopper, exited) = super::own(child);
-            self.open_pipe(
-                &tid,
-                stdin,
-                stopper,
-                pid,
-                &text,
-                std::mem::take(&mut requeued),
-            );
+            launched.extend(live.pid.map(|pid| (pid, live.stem.clone())));
+            self.open_pipe(&tid, &live, &text, std::mem::take(&mut requeued));
             #[cfg(test)]
             let opened = self.inner().pipe_opened.clone();
             #[cfg(test)]
@@ -1406,44 +2133,76 @@ impl ClaudeHost {
             }
             let mut result: Option<Value> = None;
             let mut saw_event = false;
-            if let Some(stdout) = stdout {
-                let mut lines = BufReader::new(stdout).lines();
+            // A kept process's output counts for this turn only from Claude's echo of its prompt, by the id it was
+            // written with: whatever it says before is no turn's, and it is not kept again. Nor is one that does not
+            // echo that id, as no later turn could tell its output from what came before.
+            let first = self.inner().pipe.as_ref().map(|p| p.first.clone());
+            let mut read = !warm;
+            let (mut unattributed, mut echoed) = (false, false);
+            // A kept Claude that names another session than the thread's, before or in its echo, is answering there.
+            let mut elsewhere: Option<String> = None;
+            let mut echo_by = (!read).then(|| Instant::now() + ECHO_WAIT);
+            let mut unechoed = false;
+            // What Claude runs is read once per process, when it says it is up.
+            let mut init = warm;
+            // Once Claude has exited, a job of its turn may still hold its output open: what is left is read for a
+            // short while, then the turn is over.
+            let mut exited = live.exited.clone();
+            let mut gone_at: Option<Instant> = None;
+            let (pid, reaping) = (live.pid, live.reaping.clone());
+            {
+                let lines = &mut live.stdout;
                 loop {
+                    if self.inner().pipe.as_ref().is_some_and(|p| p.done) {
+                        break;
+                    }
                     let deadline = self.inner().pipe.as_ref().and_then(|p| {
                         p.awaiting
                             .into_iter()
                             .chain(p.limit_at)
                             .chain(p.wait_deadline())
+                            .chain(gone_at)
+                            .chain(echo_by.filter(|_| !read))
                             .min()
                     });
-                    let next = match deadline {
-                        Some(d) => tokio::select! {
-                            l = lines.next_line() => Some(l),
-                            _ = tokio::time::sleep_until(d) => None,
-                        },
-                        None => Some(lines.next_line().await),
+                    let next = tokio::select! {
+                        l = lines.next_line() => Some(l),
+                        _ = tokio::time::sleep_until(deadline.unwrap_or_else(Instant::now)), if deadline.is_some() => None,
+                        _ = exited.wait_for(|e| e.is_some()), if gone_at.is_none() => {
+                            gone_at = Some(Instant::now() + CLOSE_WAIT);
+                            continue;
+                        }
                     };
                     let line = match next {
                         None => {
+                            if gone_at.is_some_and(|at| at <= Instant::now()) {
+                                break;
+                            }
                             if self.end_waiting() {
                                 continue;
                             }
                             let mut inner = self.inner();
+                            if !read && echo_by.is_some_and(|at| at <= Instant::now()) {
+                                echo_by = None;
+                                unechoed = true;
+                                if let Some(p) = inner.pipe.as_mut() {
+                                    p.kill(); // the reader sees EOF and fails the turn
+                                }
+                                continue;
+                            }
                             if let Some(p) = inner.pipe.as_mut() {
                                 if p.limit_at.is_some_and(|at| at <= Instant::now()) {
                                     // A limit with no `result` behind it: stdin stays open for steers, so Claude
                                     // can wait there with no model work at all. End the turn as limited.
                                     p.limit_at = None;
                                     p.awaiting = None;
-                                    p.close();
-                                    p.stopper.terminate(STOP_TIMEOUT);
+                                    p.kill();
                                     continue;
                                 }
                                 if p.awaiting.is_some() && p.open && !p.unread.is_empty() {
                                     p.awaiting = None;
                                     p.timed_out = true;
-                                    p.close();
-                                    p.stopper.terminate(STOP_TIMEOUT); // the reader sees EOF and fails the turn
+                                    p.kill(); // the reader sees EOF and fails the turn
                                 } else {
                                     p.awaiting = None;
                                 }
@@ -1470,10 +2229,54 @@ impl ClaudeHost {
                     let Ok(msg) = serde_json::from_str::<Value>(line) else {
                         continue;
                     };
-                    if msg["type"] == "user"
+                    let replay = msg["type"] == "user"
                         && crate::util::truthy(msg.get("isReplay"))
-                        && !crate::util::truthy(msg.get("parent_tool_use_id"))
-                    {
+                        && !crate::util::truthy(msg.get("parent_tool_use_id"));
+                    let own = replay && msg["uuid"].as_str() == first.as_deref();
+                    let kind = (msg["type"].as_str(), msg["subtype"].as_str());
+                    if !read && (own || kind == (Some("system"), Some("init"))) {
+                        if let Some(other) = msg["session_id"]
+                            .as_str()
+                            .filter(|s| Some(*s) != live.session.as_deref())
+                        {
+                            elsewhere = Some(other.to_string());
+                            if let Some(p) = self.inner().pipe.as_mut() {
+                                p.kill();
+                            }
+                            break;
+                        }
+                    }
+                    echoed |= own;
+                    read |= own;
+                    if !read {
+                        // Before the echo Claude says how it stands, which is no turn's output: its init, state
+                        // changes, hooks, command lifecycle and rate limits. Only its init and rate limits are acted
+                        // on. Anything else is work of its own, or not known: a compaction, background tasks, output,
+                        // another echo.
+                        let standing = match kind {
+                            (
+                                Some("system"),
+                                Some("compact_boundary" | "background_tasks_changed"),
+                            ) => false,
+                            (Some("system" | "command_lifecycle" | "rate_limit_event"), _) => true,
+                            _ => false,
+                        };
+                        if !standing {
+                            unattributed = true;
+                            continue;
+                        }
+                        if !matches!(
+                            kind,
+                            (Some("system"), Some("init")) | (Some("rate_limit_event"), _)
+                        ) {
+                            continue;
+                        }
+                    }
+                    if !init && msg["type"] == "system" && msg["subtype"] == "init" {
+                        init = true;
+                        live.helpers = descendants(pid, reaping.as_deref());
+                    }
+                    if replay {
                         self.replayed(msg.get("uuid").and_then(|u| u.as_str()));
                     } else if self.on_message(&msg, &tid, &turn) {
                         if self.before_prompt(&msg) {
@@ -1490,11 +2293,13 @@ impl ClaudeHost {
                     self.track_wait(&msg);
                 }
             }
-            let (unread, followups, timed_out, limit_text) = {
+            let (unread, followups, timed_out, limit_text, held) = {
                 let mut inner = self.inner();
                 match inner.pipe.as_mut() {
                     Some(p) => {
-                        p.close();
+                        if !p.done {
+                            p.close();
+                        }
                         p.awaiting = None;
                         p.limit_at = None;
                         (
@@ -1502,9 +2307,10 @@ impl ClaudeHost {
                             std::mem::take(&mut p.followups),
                             p.timed_out,
                             p.limit_text.take(),
+                            p.done,
                         )
                     }
-                    None => (false, vec![], false, None),
+                    None => (false, vec![], false, None, false),
                 }
             };
             let (kept, reaping) = self
@@ -1512,17 +2318,15 @@ impl ClaudeHost {
                 .pipe
                 .as_ref()
                 .map_or((false, false), |p| (p.kept.is_some(), p.reaping.is_some()));
-            let rc = if kept && reaping {
+            let rc = if held {
+                // Kept running for the thread's next turn.
+                0
+            } else if kept && reaping {
                 // Its parent stays for the shells it kept; the turn is over now.
-                tokio::spawn(async move {
-                    let _ = exited.await;
-                });
+                live.spare = true;
                 0
             } else {
-                match exited.await {
-                    Ok(status) => super::return_code(&status),
-                    Err(_) => -1,
-                }
+                live.exit_code().await
             };
             // Killed on its wait, after its answer: the turn completed.
             let rc = if kept && rc == -libc::SIGKILL { 0 } else { rc };
@@ -1533,7 +2337,17 @@ impl ClaudeHost {
             if timed_out {
                 self.emit(event("diagnostic", Some(&tid), Some(&turn), json!({"end_reason": format!("Timeout: follow-up read limit ({STEER_READ_TIMEOUT_S} seconds)")})));
             }
-            let failure = if timed_out {
+            let failure = if let Some(other) = &elsewhere {
+                live.key = None;
+                Some(format!(
+                    "Claude's kept process went on in another session ({other}); it was stopped"
+                ))
+            } else if unechoed {
+                Some(format!(
+                    "Claude's kept process did not take the message within {} s; it was stopped",
+                    ECHO_WAIT.as_secs()
+                ))
+            } else if timed_out {
                 Some(format!("Claude did not read a follow-up message within {STEER_READ_TIMEOUT_S} s; it was not applied"))
             } else if let Some(text) = limit_text.filter(|_| result.is_none()) {
                 Some(text)
@@ -1545,8 +2359,10 @@ impl ClaudeHost {
             } else {
                 None
             };
-            stderr.drained().await;
-            let tail = stderr_tail(&mut stderr);
+            if !held {
+                live.stderr.drained().await;
+            }
+            let tail = stderr_tail(&mut live.stderr);
             // Claude answers only with an error result when the session file is not on this computer: restart once
             // as a new session under the same id. Never after an event. A follow-up that went in meanwhile did nothing
             // there either, so the new session is given it again after its prompt.
@@ -1570,19 +2386,17 @@ impl ClaudeHost {
                             let t = t.clone();
                             // A new session: Claude restores no earlier spend.
                             inner.start_spent = Some(Spent::default());
-                            self.launch(&tid, &t, effort.as_deref(), &turn)
+                            let key = self.fingerprint(&tid, &t, effort.as_deref());
+                            self.spawn(&tid, &t, effort.as_deref(), &mark, key)
                                 .ok()
-                                .map(|(c, s, r)| {
-                                    inner.reaping = r;
-                                    (c, s)
-                                })
+                                .inspect(|l| inner.reaping = l.reaping.clone())
                         }
                         _ => None,
                     }
                 };
-                if let Some((c, s)) = retry {
-                    child = c;
-                    stderr = s;
+                if let Some(l) = retry {
+                    live = l;
+                    warm = false;
                     recovered = true;
                     requeued = followups;
                     // The new session holds none of what the short prompt left out.
@@ -1603,22 +2417,55 @@ impl ClaudeHost {
                     continue;
                 }
             }
-            self.sweep(&tid, &turn, &launched).await;
+            // A process under Claude beyond what it ran when it said it was up is the turn's own work, which would read
+            // the next attempt's token; what Claude said before echoing the prompt was no turn's. Either way, or when
+            // either cannot be told, the process is not kept again, and goes with all it runs when the attempt lets go
+            // of it.
+            if held
+                && (unattributed
+                    || !echoed
+                    || live.helpers.as_ref().is_none_or(|h| {
+                        descendants(live.pid, live.reaping.as_deref())
+                            .is_none_or(|now| !now.is_subset(h))
+                    }))
+            {
+                live.key = None;
+            }
+            self.sweep(&tid, &turn, &mark, &launched, held.then_some(&live))
+                .await;
+            if held {
+                // Given back before the turn is reported over, so the attempt's release finds it.
+                let mut inner = self.inner();
+                live.session = inner.threads.get(&tid).and_then(|t| t.session_id.clone());
+                // A result with no count (a stop's) leaves the last one standing.
+                if let Some(cost) = inner.pipe.as_ref().and_then(|p| p.cost.clone()) {
+                    live.cost = Some(cost);
+                }
+                if let Some(old) = inner.live.replace(live) {
+                    drop(inner);
+                    tokio::spawn(async move { old.stop().await });
+                }
+            }
             self.finish(&tid, &turn, result, rc, &tail, failure);
             return;
         }
     }
 
-    /// Stops what the ended turn left running (crate::turn_sweep) and says so on the turn. Claude has exited, or was
-    /// killed on its wait: then the shells it kept stay with what they run, and their reaping parent stays for them.
-    async fn sweep(&self, tid: &str, turn: &str, launched: &[u32]) {
-        let target = {
+    /// Stops what the ended turn left running (crate::turn_sweep) and says so on the turn. Claude has exited, was
+    /// killed on its wait (then the shells it kept stay with what they run, and their reaping parent stays for them),
+    /// or is kept for the thread's next turn (`held`: then it stays with all it runs).
+    async fn sweep(
+        &self,
+        tid: &str,
+        turn: &str,
+        mark: &str,
+        launched: &[(u32, Option<String>)],
+        held: Option<&Live>,
+    ) {
+        let target = if let Some(live) = held {
+            live.leftovers(true)
+        } else {
             let inner = self.inner();
-            let stem = inner.threads.get(tid).and_then(|t| {
-                turn_env(&t.settings)
-                    .get(crate::turn_limits::SCOPE_ENV)
-                    .cloned()
-            });
             let (keep, keep_trees) = match inner
                 .pipe
                 .as_ref()
@@ -1634,11 +2481,11 @@ impl ClaudeHost {
                 None => (vec![], vec![]),
             };
             crate::turn_sweep::Turn {
-                mark: turn.to_string(),
-                groups: launched.to_vec(),
+                mark: mark.to_string(),
+                groups: launched.iter().map(|(pid, _)| *pid).collect(),
                 cgroups: launched
                     .iter()
-                    .filter_map(|&pid| crate::turn_limits::scope_dir(stem.as_deref(), pid))
+                    .filter_map(|(pid, stem)| crate::turn_limits::scope_dir(stem.as_deref(), *pid))
                     .collect(),
                 keep,
                 keep_trees,
@@ -1856,7 +2703,12 @@ impl ClaudeHost {
             let first = p.first.clone();
             p.unread.remove(&first);
             if crate::util::truthy(result.get("is_error")) {
-                p.close();
+                // A stopped turn's process stays up as Claude leaves it, with nothing left to read.
+                if p.interrupting.is_some() && p.unread.is_empty() && p.background == 0 {
+                    p.end();
+                } else {
+                    p.close();
+                }
             } else if p.unread.is_empty() {
                 // With background work running Claude stays up and wakes itself when it ends; stdin stays open
                 // so a follow-up meanwhile is read at once instead of waiting for that work.
@@ -2006,11 +2858,17 @@ impl ClaudeHost {
             "control_response" => {
                 let mut inner = self.inner();
                 if let Some(p) = inner.pipe.as_mut() {
-                    // Claude took the stop: the turn is over, so nothing more goes in.
+                    // Claude took the stop: the turn is over, so nothing more goes in. A process that may be kept
+                    // keeps its stdin until the turn's `result`.
                     if p.interrupting.is_some()
                         && msg["response"]["request_id"].as_str() == p.interrupting.as_deref()
                     {
-                        p.close();
+                        p.acked = true;
+                        if p.keep {
+                            p.open = false;
+                        } else {
+                            p.close();
+                        }
                     }
                 }
             }
@@ -2021,7 +2879,11 @@ impl ClaudeHost {
                     .as_mut()
                     .filter(|p| p.interrupting.is_some())
                 {
-                    p.close();
+                    if p.keep {
+                        p.open = false;
+                    } else {
+                        p.close();
+                    }
                 }
                 return true;
             }
@@ -2474,7 +3336,7 @@ impl ClaudeHost {
         let Some(p) = inner.pipe.as_mut() else { return };
         if !p.open || p.interrupting.is_some() {
             if p.interrupting.is_none() {
-                p.stopper.terminate(STOP_TIMEOUT);
+                p.kill();
             }
             return;
         }
@@ -2495,8 +3357,7 @@ impl ClaudeHost {
                         "claude[{}]: the turn did not end on its interrupt; stopping Claude",
                         host.0.bot
                     ));
-                    p.close();
-                    p.stopper.terminate(STOP_TIMEOUT);
+                    p.kill();
                 }
             }
         });
@@ -5167,5 +6028,874 @@ mod feature_tests {
             "a changed version runs no process either"
         );
         std::fs::remove_dir_all(root).ok();
+    }
+}
+
+#[cfg(test)]
+mod warm_tests {
+    use super::*;
+    use crate::hosts::Host;
+
+    /// A `claude -p` that answers each user message on its stdin until stdin closes, as Claude does with streaming
+    /// input. It notes each start (`starts`: its pid, HUB_TOKEN and arguments), each message it reads (`prompts`: its
+    /// pid, the hub token it could read then, and the text), and its start, the children it starts and its end with the
+    /// token it could read then (`events`). "stall" is answered with no `result`, so the turn waits for a stop; an
+    /// interrupt is answered and the turn's `result` follows. "race" ends on its own as the stop comes, which goes
+    /// unanswered. "late" comes as work of Claude's own ends: its answer is out before the message's replay. "orphan"
+    /// leaves a job holding its output and dies. "spawn" leaves a child running, and "leak" writes the token it reads to
+    /// stderr. "stale" echoes an old message and answers it before echoing its own; "bare" echoes it with no id. "other"
+    /// says it is up on another session, and "elsewhere" echoes it from another session; "mute" is never echoed. "eat" makes the next message
+    /// the last it reads: it dies on it unanswered. With WARM_HELPER set it runs a helper from the start, and "deep" has
+    /// that helper start a job of its own.
+    const FAKE: &str = r#"#!/usr/bin/env python3
+import json, os, subprocess, sys, time
+args = sys.argv[1:]
+if args[:1] in (["--version"], ["--help"]):
+    print("2.1.330 (Claude Code)")
+    sys.exit(0)
+folder = os.environ["WARM_DIR"]
+hub = os.environ.get("HUB_TOKEN", "")
+def note(name, value):
+    with open(os.path.join(folder, name), "a") as f:
+        f.write(json.dumps(value) + "\n")
+def send(m):
+    print(json.dumps(m), flush=True)
+def token():
+    return open(hub[len("tico-file:"):]).read() if hub.startswith("tico-file:") else hub
+def said(mid, text):
+    send({"type": "assistant", "message": {"id": "m-" + mid, "role": "assistant", "content": [{"type": "text", "text": text}], "usage": {"input_tokens": 2, "output_tokens": 1}}})
+def result(text, cost=None):
+    r = {"type": "result", "subtype": "success", "is_error": False, "num_turns": 1, "result": text, "usage": {"input_tokens": 2, "output_tokens": 1}}
+    if cost is not None:
+        r["total_cost_usd"] = cost
+    send(r)
+note("starts", {"pid": os.getpid(), "hub": hub, "args": args})
+note("events", ["start", os.getpid()])
+sid = args[args.index("--resume") + 1] if "--resume" in args else args[args.index("--session-id") + 1]
+helper = None
+if os.environ.get("WARM_HELPER"):
+    helper = subprocess.Popen(["sh", "-c", 'read go; sleep 30 & echo $! > "$WARM_DIR/deep"; wait'], stdin=subprocess.PIPE)
+cost, init, racing, eat = 0.0, False, False, False
+for line in sys.stdin:
+    m = json.loads(line)
+    if m.get("type") == "control_request":
+        if racing:
+            racing = False
+            cost += 0.25
+            result("Said: race", cost)
+            continue
+        send({"type": "control_response", "response": {"subtype": "success", "request_id": m["request_id"]}})
+        send({"type": "result", "subtype": "error_during_execution", "is_error": True, "num_turns": 1, "result": "", "usage": {"input_tokens": 1, "output_tokens": 1}})
+        continue
+    if m.get("type") != "user":
+        continue
+    # What Claude says before it echoes each message, in its order; hooks and a rate limit before the first.
+    send({"type": "command_lifecycle", "state": "started"})
+    send({"type": "system", "subtype": "session_state_changed", "state": "running"})
+    send({"type": "system", "subtype": "session_state_changed", "state": "running"})
+    send({"type": "command_lifecycle", "state": "running"})
+    send({"type": "command_lifecycle", "state": "running"})
+    if not init:
+        init = True
+        send({"type": "system", "subtype": "hook_started", "hook_name": "SessionStart"})
+        send({"type": "system", "subtype": "hook_response", "hook_name": "SessionStart"})
+        send({"type": "rate_limit_event", "rate_limit_info": {"status": "allowed"}})
+    text = m["message"]["content"][0]["text"]
+    send({"type": "system", "subtype": "init", "session_id": "another" if text == "other" else sid})
+    if eat:
+        note("prompts", [os.getpid(), token(), text])
+        os._exit(1)
+    if text == "late":
+        said("wake", "Woke up")
+        result("Woke up")
+    if text == "mute":
+        continue
+    if text == "stale":
+        send({"type": "user", "isReplay": True, "uuid": "old", "message": m["message"]})
+        result("Old")
+    echo = {"type": "user", "isReplay": True, "message": m["message"], "session_id": "another" if text == "elsewhere" else sid}
+    if text != "bare":
+        echo["uuid"] = m["uuid"]
+    send(echo)
+    note("prompts", [os.getpid(), token(), text])
+    if text == "eat":
+        eat = True
+    if text == "deep":
+        # As a tool's call reaches a helper, well after Claude said it was up.
+        time.sleep(1)
+        helper.stdin.write(b"go\n")
+        helper.stdin.flush()
+        deep = os.path.join(folder, "deep")
+        while not (os.path.exists(deep) and open(deep).read().strip()):
+            time.sleep(0.05)
+        note("events", ["child", int(open(deep).read())])
+    if text == "orphan":
+        job = subprocess.Popen(["sleep", "20"], start_new_session=True)
+        note("events", ["child", job.pid])
+        os._exit(3)
+    if text == "spawn":
+        # As a tool's command comes, well after Claude said it was up.
+        time.sleep(1)
+        job = subprocess.Popen(["sleep", "30"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        note("events", ["child", job.pid])
+    if text == "leak":
+        sys.stderr.write("leaked " + token() + "\n")
+        sys.stderr.flush()
+        time.sleep(1.5)
+    said(m["uuid"], "Said: " + text)
+    if text == "stall":
+        continue
+    if text == "race":
+        racing = True
+        continue
+    cost += 0.25
+    result("Said: " + text, cost)
+time.sleep(0.5)
+note("events", ["exit", os.getpid(), token()])
+"#;
+
+    struct Rig {
+        dir: std::path::PathBuf,
+        keeper: Arc<Keeper>,
+        cmd: Vec<String>,
+    }
+
+    /// One attempt: its thread, events, and whether its turn went on in a process already running.
+    struct Ran {
+        thread: String,
+        events: Vec<Value>,
+        warm: bool,
+    }
+
+    impl Ran {
+        fn status(&self) -> String {
+            self.events
+                .iter()
+                .find(|e| e["kind"] == "turn_completed" || e["kind"] == "turn_failed")
+                .map(|e| text_of(&e["status"]))
+                .unwrap_or_default()
+        }
+    }
+
+    fn running(pid: u64) -> bool {
+        // SAFETY: signal 0 only checks the pid.
+        unsafe { libc::kill(pid as i32, 0) == 0 }
+    }
+
+    async fn gone(pid: u64) -> bool {
+        for _ in 0..200 {
+            if !running(pid) {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        false
+    }
+
+    /// One turn of `thread` on `host` saying `text`, stopped once Claude answers when `stop`: its events, to idle.
+    async fn turn(
+        host: &ClaudeHost,
+        rx: &mut mpsc::UnboundedReceiver<Value>,
+        thread: &str,
+        text: &str,
+        effort: Option<&str>,
+        stop: bool,
+    ) -> Vec<Value> {
+        let turn = Host::Claude(host.clone())
+            .start_turn(thread, text, effort)
+            .await
+            .unwrap();
+        let (mut events, mut stopped) = (vec![], false);
+        while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await {
+            if stop && !stopped && ev["kind"] == "message" {
+                host.interrupt(thread, &turn);
+                stopped = true;
+            }
+            let idle = ev["kind"] == "status" && ev["state"] == "idle";
+            events.push(ev);
+            if idle {
+                break;
+            }
+        }
+        events
+    }
+
+    impl Rig {
+        fn new() -> Rig {
+            let dir =
+                std::env::temp_dir().join(format!("claude-warm-{}", uuid::Uuid::new_v4().simple()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let exe = dir.join("claude");
+            crate::util::write_script(&exe, FAKE);
+            Rig {
+                keeper: Arc::new(Keeper::new(dir.join("warm"), 4)),
+                cmd: vec![exe.display().to_string()],
+                dir,
+            }
+        }
+
+        /// A turn's settings on `model`, with a hub token of its own, as each attempt has.
+        fn settings(&self, model: &str) -> Settings {
+            let mut settings = Settings {
+                cwd: self.dir.display().to_string(),
+                model: Some(model.into()),
+                ..Default::default()
+            };
+            settings
+                .env
+                .insert("PATH".into(), std::env::var("PATH").unwrap_or_default());
+            settings
+                .env
+                .insert("WARM_DIR".into(), self.dir.display().to_string());
+            settings.env.insert(
+                "HUB_TOKEN".into(),
+                format!("token-{}", uuid::Uuid::new_v4().simple()),
+            );
+            settings
+        }
+
+        /// One attempt on a host of its own: a turn of `thread` (a new one when None) saying `text`, stopped once Claude
+        /// answers when `stop`, then its process given back to the keeper.
+        async fn attempt(
+            &self,
+            thread: Option<&str>,
+            settings: &Settings,
+            text: &str,
+            stop: bool,
+        ) -> Ran {
+            self.attempt_with(thread, settings, text, stop, true).await
+        }
+
+        /// `attempt`, its process kept only when `keep`.
+        async fn attempt_with(
+            &self,
+            thread: Option<&str>,
+            settings: &Settings,
+            text: &str,
+            stop: bool,
+            keep: bool,
+        ) -> Ran {
+            let (host, mut rx) = self.host().await;
+            let thread = match thread {
+                Some(t) => host.resume_thread(t, settings),
+                None => host.start_thread(settings),
+            };
+            let events = turn(&host, &mut rx, &thread, text, None, stop).await;
+            let warm = host.warm();
+            host.release(keep, None).await;
+            Ran {
+                thread,
+                events,
+                warm,
+            }
+        }
+
+        async fn host(&self) -> (ClaudeHost, mpsc::UnboundedReceiver<Value>) {
+            let (tx, rx) = mpsc::unbounded_channel();
+            let host =
+                ClaudeHost::with_keeper("acme", self.cmd.clone(), tx, Some(self.keeper.clone()));
+            host.start().await.unwrap();
+            (host, rx)
+        }
+
+        /// The fake's notes of `what` ("start", "child" or "exit"), in order: `[what, pid, ...]`.
+        fn events(&self, what: &str) -> Vec<Value> {
+            self.lines("events")
+                .into_iter()
+                .filter(|e| e[0] == what)
+                .collect()
+        }
+
+        fn lines(&self, name: &str) -> Vec<Value> {
+            std::fs::read_to_string(self.dir.join(name))
+                .unwrap_or_default()
+                .lines()
+                .map(|l| serde_json::from_str(l).unwrap())
+                .collect()
+        }
+
+        fn starts(&self) -> Vec<Value> {
+            self.lines("starts")
+        }
+
+        /// The texts the process `pid` read.
+        fn read_by(&self, pid: &Value) -> Vec<String> {
+            self.lines("prompts")
+                .iter()
+                .filter(|p| p[0] == *pid)
+                .map(|p| text_of(&p[2]))
+                .collect()
+        }
+
+        async fn done(self) {
+            self.keeper.prune(true).await;
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    #[tokio::test]
+    async fn the_next_message_goes_into_the_kept_claude_which_holds_no_token_between_turns() {
+        let rig = Rig::new();
+        let (first, second) = (rig.settings("opus"), rig.settings("opus"));
+        let one = rig.attempt(None, &first, "first", false).await;
+        assert_eq!(one.status(), "completed", "{:?}", one.events);
+        assert!(!one.warm);
+        let start = rig.starts()[0].clone();
+        let file = text_of(&start["hub"]);
+        let file = file.strip_prefix("tico-file:").expect("a token file");
+        assert_eq!(std::fs::read_to_string(file).unwrap(), "");
+        let two = rig
+            .attempt(Some(&one.thread), &second, "second", false)
+            .await;
+        assert_eq!(two.status(), "completed", "{:?}", two.events);
+        assert!(two.warm);
+        assert_eq!(rig.starts().len(), 1, "{:?}", rig.starts());
+        let prompts = rig.lines("prompts");
+        assert_eq!(
+            prompts,
+            vec![
+                json!([start["pid"], first.env["HUB_TOKEN"], "first"]),
+                json!([start["pid"], second.env["HUB_TOKEN"], "second"])
+            ]
+        );
+        assert!(two
+            .events
+            .iter()
+            .any(|e| e["kind"] == "message" && e["final"] == true && e["text"] == "Said: second"));
+        // Charged what the session's count grew by in the kept process, not the whole session's.
+        let tokens = two.events.iter().find(|e| e["kind"] == "tokens").unwrap();
+        assert_eq!(tokens["cost_usd"], json!(0.25), "{tokens}");
+        assert_eq!(std::fs::read_to_string(file).unwrap(), "");
+        let pid = start["pid"].as_u64().unwrap();
+        rig.done().await;
+        assert!(gone(pid).await);
+    }
+
+    #[tokio::test]
+    async fn a_claude_kept_past_its_idle_time_goes_and_the_next_turn_resumes_with_only_its_message()
+    {
+        let rig = Rig::new();
+        let one = rig
+            .attempt(None, &rig.settings("opus"), "first", false)
+            .await;
+        let pid = rig.starts()[0]["pid"].as_u64().unwrap();
+        rig.keeper
+            .prune_at(std::time::Instant::now() + crate::keeper::IDLE, false)
+            .await;
+        assert!(gone(pid).await);
+        let two = rig
+            .attempt(Some(&one.thread), &rig.settings("opus"), "second", false)
+            .await;
+        assert_eq!(two.status(), "completed", "{:?}", two.events);
+        assert!(!two.warm);
+        let starts = rig.starts();
+        assert_eq!(starts.len(), 2);
+        let args: Vec<String> = starts[1]["args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(text_of)
+            .collect();
+        assert_eq!(
+            &args[args.len() - 2..],
+            ["--resume".to_string(), one.thread.clone()]
+        );
+        assert_eq!(rig.read_by(&starts[1]["pid"]), ["second"]);
+        rig.done().await;
+    }
+
+    #[tokio::test]
+    async fn a_turn_that_would_start_claude_differently_gets_a_new_one() {
+        let rig = Rig::new();
+        let one = rig
+            .attempt(None, &rig.settings("opus"), "first", false)
+            .await;
+        let two = rig
+            .attempt(Some(&one.thread), &rig.settings("sonnet"), "second", false)
+            .await;
+        assert_eq!(two.status(), "completed", "{:?}", two.events);
+        assert!(!two.warm);
+        let starts = rig.starts();
+        assert_eq!(starts.len(), 2);
+        assert!(gone(starts[0]["pid"].as_u64().unwrap()).await);
+        assert!(starts[1]["args"].to_string().contains("\"sonnet\""));
+        assert_eq!(rig.read_by(&starts[1]["pid"]), ["second"]);
+        rig.done().await;
+    }
+
+    #[tokio::test]
+    async fn a_kept_claude_that_died_gives_a_cold_resume_without_the_earlier_prompt() {
+        let rig = Rig::new();
+        let one = rig
+            .attempt(None, &rig.settings("opus"), "first", false)
+            .await;
+        let pid = rig.starts()[0]["pid"].as_u64().unwrap();
+        // SAFETY: the fake Claude this test started.
+        unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+        assert!(gone(pid).await);
+        let two = rig
+            .attempt(Some(&one.thread), &rig.settings("opus"), "second", false)
+            .await;
+        assert_eq!(two.status(), "completed", "{:?}", two.events);
+        assert!(!two.warm);
+        let starts = rig.starts();
+        assert_eq!(starts.len(), 2);
+        assert!(starts[1]["args"].to_string().contains("--resume"));
+        assert_eq!(rig.read_by(&starts[1]["pid"]), ["second"]);
+        rig.done().await;
+    }
+
+    #[tokio::test]
+    async fn a_turn_stopped_on_claudes_interrupt_keeps_its_process() {
+        let rig = Rig::new();
+        let one = rig
+            .attempt(None, &rig.settings("opus"), "stall", true)
+            .await;
+        assert_eq!(one.status(), "interrupted", "{:?}", one.events);
+        let two = rig
+            .attempt(Some(&one.thread), &rig.settings("opus"), "second", false)
+            .await;
+        assert_eq!(two.status(), "completed", "{:?}", two.events);
+        assert!(two.warm);
+        let starts = rig.starts();
+        assert_eq!(starts.len(), 1, "{starts:?}");
+        assert_eq!(rig.read_by(&starts[0]["pid"]), ["stall", "second"]);
+        rig.done().await;
+    }
+
+    fn finals(ran: &Ran) -> Vec<Value> {
+        ran.events
+            .iter()
+            .filter(|e| e["kind"] == "message" && e["final"] == true)
+            .map(|e| e["text"].clone())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn what_a_kept_claude_says_before_it_reads_the_message_is_not_the_turns_and_it_goes() {
+        let rig = Rig::new();
+        let one = rig
+            .attempt(None, &rig.settings("opus"), "first", false)
+            .await;
+        let two = rig
+            .attempt(Some(&one.thread), &rig.settings("opus"), "late", false)
+            .await;
+        assert_eq!(two.status(), "completed", "{:?}", two.events);
+        assert!(two.warm);
+        assert_eq!(finals(&two), [json!("Said: late")], "{:?}", two.events);
+        let three = rig
+            .attempt(Some(&one.thread), &rig.settings("opus"), "third", false)
+            .await;
+        assert_eq!(three.status(), "completed", "{:?}", three.events);
+        assert!(!three.warm);
+        assert_eq!(rig.starts().len(), 2);
+        rig.done().await;
+    }
+
+    #[tokio::test]
+    async fn a_turn_that_leaves_a_child_of_claude_running_does_not_keep_it() {
+        let rig = Rig::new();
+        let one = rig
+            .attempt(None, &rig.settings("opus"), "spawn", false)
+            .await;
+        assert_eq!(one.status(), "completed", "{:?}", one.events);
+        let two = rig
+            .attempt(Some(&one.thread), &rig.settings("opus"), "second", false)
+            .await;
+        assert_eq!(two.status(), "completed", "{:?}", two.events);
+        assert!(!two.warm);
+        assert_eq!(rig.starts().len(), 2);
+        let child = rig.events("child")[0][1].as_u64().unwrap();
+        assert!(gone(child).await);
+        rig.done().await;
+    }
+
+    #[tokio::test]
+    async fn a_claude_that_dies_with_its_output_held_open_ends_the_turn_and_its_job_is_stopped() {
+        let rig = Rig::new();
+        let started = Instant::now();
+        let one = rig
+            .attempt(None, &rig.settings("opus"), "orphan", false)
+            .await;
+        assert!(
+            one.events.iter().any(|e| e["kind"] == "turn_failed"),
+            "{:?}",
+            one.events
+        );
+        assert!(started.elapsed() < Duration::from_secs(15));
+        let job = rig.events("child")[0][1].as_u64().unwrap();
+        assert!(gone(job).await);
+        rig.done().await;
+    }
+
+    #[tokio::test]
+    async fn a_turn_with_a_credential_file_is_not_kept() {
+        let rig = Rig::new();
+        let mut settings = rig.settings("opus");
+        let file = rig.dir.join("tico-credential-x");
+        std::fs::write(&file, "secret").unwrap();
+        settings
+            .env
+            .insert("KEY_FILE".into(), file.display().to_string());
+        let one = rig.attempt(None, &settings, "first", false).await;
+        assert!(gone(rig.starts()[0]["pid"].as_u64().unwrap()).await);
+        let two = rig
+            .attempt(Some(&one.thread), &settings, "second", false)
+            .await;
+        assert_eq!(two.status(), "completed", "{:?}", two.events);
+        assert!(!two.warm);
+        assert_eq!(rig.starts().len(), 2);
+        rig.done().await;
+    }
+
+    #[tokio::test]
+    async fn a_kept_claude_another_turn_cannot_use_has_gone_before_the_next_starts() {
+        let rig = Rig::new();
+        let (host, mut rx) = rig.host().await;
+        let thread = host.start_thread(&rig.settings("opus"));
+        let one = turn(&host, &mut rx, &thread, "first", None, false).await;
+        assert!(one.iter().any(|e| e["kind"] == "turn_completed"), "{one:?}");
+        let two = turn(&host, &mut rx, &thread, "second", Some("high"), false).await;
+        assert!(two.iter().any(|e| e["kind"] == "turn_completed"), "{two:?}");
+        host.release(true, None).await;
+        let starts = rig.starts();
+        assert_eq!(starts.len(), 2);
+        let notes = rig.lines("events");
+        let at = |what: &str, pid: &Value| {
+            notes
+                .iter()
+                .position(|e| e[0] == what && e[1] == *pid)
+                .unwrap()
+        };
+        assert!(
+            at("exit", &starts[0]["pid"]) < at("start", &starts[1]["pid"]),
+            "{notes:?}"
+        );
+        // Its token was blanked before it was let go.
+        assert_eq!(rig.events("exit")[0][2], "");
+        rig.done().await;
+    }
+
+    #[tokio::test]
+    async fn a_claude_let_go_holds_no_token_while_it_stops() {
+        let rig = Rig::new();
+        let one = rig
+            .attempt_with(None, &rig.settings("opus"), "first", false, false)
+            .await;
+        assert_eq!(one.status(), "completed", "{:?}", one.events);
+        let exits = rig.events("exit");
+        assert_eq!(exits.len(), 1, "{exits:?}");
+        assert_eq!(exits[0][2], "");
+        rig.done().await;
+    }
+
+    #[tokio::test]
+    async fn a_kept_claudes_stderr_is_scrubbed_of_each_turns_token() {
+        let rig = Rig::new();
+        let one = rig
+            .attempt(None, &rig.settings("opus"), "first", false)
+            .await;
+        let mut second = rig.settings("opus");
+        // Not shaped like a secret, so only the turn's own scrub masks it.
+        let token = format!(
+            "hub.{}.tok",
+            &uuid::Uuid::new_v4().simple().to_string()[..8]
+        );
+        second.env.insert("HUB_TOKEN".into(), token.clone());
+        let two = rig.attempt(Some(&one.thread), &second, "leak", false).await;
+        assert!(two.warm);
+        assert!(
+            two.events.iter().any(|e| e["stderr_tail"].is_string()),
+            "{:?}",
+            two.events
+        );
+        assert!(
+            !two.events.iter().any(|e| e.to_string().contains(&token)),
+            "{:?}",
+            two.events
+        );
+        rig.done().await;
+    }
+
+    #[tokio::test]
+    async fn a_stopped_turn_with_no_count_leaves_the_kept_claudes_count_for_the_next() {
+        let rig = Rig::new();
+        let one = rig
+            .attempt(None, &rig.settings("opus"), "first", false)
+            .await;
+        let two = rig
+            .attempt(Some(&one.thread), &rig.settings("opus"), "stall", true)
+            .await;
+        assert_eq!(two.status(), "interrupted", "{:?}", two.events);
+        let three = rig
+            .attempt(Some(&one.thread), &rig.settings("opus"), "third", false)
+            .await;
+        assert!(three.warm);
+        let tokens = three.events.iter().find(|e| e["kind"] == "tokens").unwrap();
+        assert_eq!(tokens["cost_usd"], json!(0.25), "{tokens}");
+        rig.done().await;
+    }
+
+    #[tokio::test]
+    async fn a_turn_with_a_hub_token_never_goes_on_in_a_claude_started_without_one() {
+        let rig = Rig::new();
+        let mut first = rig.settings("opus");
+        first.env.remove("HUB_TOKEN");
+        let one = rig.attempt(None, &first, "first", false).await;
+        let two = rig
+            .attempt(Some(&one.thread), &rig.settings("opus"), "second", false)
+            .await;
+        assert_eq!(two.status(), "completed", "{:?}", two.events);
+        assert!(!two.warm);
+        let starts = rig.starts();
+        assert_eq!(starts.len(), 2);
+        assert!(text_of(&starts[1]["hub"]).starts_with("tico-file:"));
+        rig.done().await;
+    }
+
+    #[tokio::test]
+    async fn a_turn_that_ends_as_its_stop_goes_in_does_not_keep_claude() {
+        let rig = Rig::new();
+        let one = rig.attempt(None, &rig.settings("opus"), "race", true).await;
+        let two = rig
+            .attempt(Some(&one.thread), &rig.settings("opus"), "second", false)
+            .await;
+        assert_eq!(two.status(), "completed", "{:?}", two.events);
+        assert!(!two.warm);
+        assert_eq!(rig.starts().len(), 2);
+        rig.done().await;
+    }
+
+    #[tokio::test]
+    async fn what_a_kept_claude_says_before_it_echoes_the_messages_own_id_is_not_the_turns() {
+        let rig = Rig::new();
+        let one = rig
+            .attempt(None, &rig.settings("opus"), "first", false)
+            .await;
+        let two = rig
+            .attempt(Some(&one.thread), &rig.settings("opus"), "stale", false)
+            .await;
+        assert_eq!(two.status(), "completed", "{:?}", two.events);
+        assert!(two.warm);
+        assert_eq!(finals(&two), [json!("Said: stale")], "{:?}", two.events);
+        let three = rig
+            .attempt(Some(&one.thread), &rig.settings("opus"), "third", false)
+            .await;
+        assert_eq!(three.status(), "completed", "{:?}", three.events);
+        assert!(!three.warm);
+        assert_eq!(rig.starts().len(), 2);
+        rig.done().await;
+    }
+
+    #[tokio::test]
+    async fn what_claude_says_of_its_state_before_each_echo_keeps_it_for_every_turn() {
+        let rig = Rig::new();
+        let one = rig
+            .attempt(None, &rig.settings("opus"), "first", false)
+            .await;
+        let mut thread = one.thread.clone();
+        for text in ["second", "third"] {
+            let ran = rig
+                .attempt(Some(&one.thread), &rig.settings("opus"), text, false)
+                .await;
+            assert_eq!(ran.status(), "completed", "{:?}", ran.events);
+            assert!(ran.warm, "{text}: {:?}", ran.events);
+            assert_eq!(finals(&ran), [json!(format!("Said: {text}"))]);
+            thread = ran.thread;
+        }
+        assert_eq!(thread, one.thread);
+        assert_eq!(rig.starts().len(), 1, "{:?}", rig.starts());
+        rig.done().await;
+    }
+
+    #[tokio::test]
+    async fn a_claude_that_echoes_a_message_without_its_id_is_not_kept() {
+        let rig = Rig::new();
+        let one = rig
+            .attempt(None, &rig.settings("opus"), "bare", false)
+            .await;
+        assert_eq!(one.status(), "completed", "{:?}", one.events);
+        let two = rig
+            .attempt(Some(&one.thread), &rig.settings("opus"), "second", false)
+            .await;
+        assert_eq!(two.status(), "completed", "{:?}", two.events);
+        assert!(!two.warm);
+        assert_eq!(rig.starts().len(), 2);
+        rig.done().await;
+    }
+
+    #[tokio::test]
+    async fn a_turn_that_leaves_a_job_under_one_of_claudes_helpers_does_not_keep_it() {
+        let rig = Rig::new();
+        let settings = || {
+            let mut s = rig.settings("opus");
+            s.env.insert("WARM_HELPER".into(), "1".into());
+            s
+        };
+        let one = rig.attempt(None, &settings(), "deep", false).await;
+        assert_eq!(one.status(), "completed", "{:?}", one.events);
+        let two = rig
+            .attempt(Some(&one.thread), &settings(), "second", false)
+            .await;
+        assert_eq!(two.status(), "completed", "{:?}", two.events);
+        assert!(!two.warm);
+        assert_eq!(rig.starts().len(), 2);
+        let job = rig.events("child")[0][1].as_u64().unwrap();
+        assert!(gone(job).await);
+        rig.done().await;
+    }
+
+    #[tokio::test]
+    async fn a_message_a_kept_claude_took_before_dying_is_never_sent_again() {
+        let rig = Rig::new();
+        let one = rig.attempt(None, &rig.settings("opus"), "eat", false).await;
+        assert_eq!(one.status(), "completed", "{:?}", one.events);
+        let two = rig
+            .attempt(Some(&one.thread), &rig.settings("opus"), "second", false)
+            .await;
+        assert!(two.warm);
+        assert!(
+            two.events.iter().any(|e| e["kind"] == "turn_failed"),
+            "{:?}",
+            two.events
+        );
+        assert_eq!(rig.starts().len(), 1, "{:?}", rig.starts());
+        let took: Vec<_> = rig
+            .lines("prompts")
+            .into_iter()
+            .filter(|p| p[2] == "second")
+            .collect();
+        assert_eq!(took.len(), 1, "{took:?}");
+        rig.done().await;
+    }
+
+    #[tokio::test]
+    async fn a_folder_replaced_at_the_same_path_gets_a_new_claude() {
+        let rig = Rig::new();
+        let copy = rig.dir.join("copy");
+        std::fs::create_dir(&copy).unwrap();
+        let settings = || {
+            let mut s = rig.settings("opus");
+            s.cwd = copy.display().to_string();
+            s
+        };
+        let one = rig.attempt(None, &settings(), "first", false).await;
+        assert_eq!(one.status(), "completed", "{:?}", one.events);
+        std::fs::rename(&copy, rig.dir.join("old")).unwrap();
+        std::fs::create_dir(&copy).unwrap();
+        let two = rig
+            .attempt(Some(&one.thread), &settings(), "second", false)
+            .await;
+        assert_eq!(two.status(), "completed", "{:?}", two.events);
+        assert!(!two.warm);
+        assert_eq!(rig.starts().len(), 2);
+        rig.done().await;
+    }
+
+    #[tokio::test]
+    async fn a_kept_claude_whose_sign_in_changed_under_it_is_not_used() {
+        use crate::model_subscriptions as subs;
+        let rig = Rig::new();
+        let state = rig.dir.join("state");
+        std::fs::create_dir(&state).unwrap();
+        let id = format!("cl{}", uuid::Uuid::new_v4().simple());
+        let file = |token: &str| json!({"claudeAiOauth": {"accessToken": token}}).to_string();
+        let item = json!([{"id": id, "runtime": "claude", "kind": "claude_login", "file": subs::CREDENTIALS,
+                           "home_env": "CLAUDE_CONFIG_DIR", "value": file("sk-ant-oat01-first-synthetic"),
+                           "revision": 3, "billing": "subscription"}]);
+        let mut env: crate::env::Env =
+            [("HOME".into(), state.join("ana").display().to_string())].into();
+        let mut got = subs::apply(
+            &state,
+            &item,
+            &mut env,
+            &mut vec![],
+            &mut std::collections::BTreeSet::new(),
+        );
+        subs::start(&mut got, "claude", &mut env).unwrap();
+        let home = env["CLAUDE_CONFIG_DIR"].clone();
+        let settings = || {
+            let mut s = rig.settings("opus");
+            s.env.insert("CLAUDE_CONFIG_DIR".into(), home.clone());
+            s
+        };
+        let one = rig.attempt(None, &settings(), "first", false).await;
+        assert_eq!(one.status(), "completed", "{:?}", one.events);
+        let two = rig
+            .attempt(Some(&one.thread), &settings(), "second", false)
+            .await;
+        assert!(two.warm, "{:?}", two.events);
+        std::fs::write(
+            std::path::Path::new(&home).join(subs::CREDENTIALS),
+            file("sk-ant-oat01-other-synthetic"),
+        )
+        .unwrap();
+        let three = rig
+            .attempt(Some(&one.thread), &settings(), "third", false)
+            .await;
+        assert_eq!(three.status(), "completed", "{:?}", three.events);
+        assert!(!three.warm);
+        assert_eq!(rig.starts().len(), 2);
+        rig.done().await;
+        subs::finish(&mut got);
+    }
+
+    #[tokio::test]
+    async fn a_kept_claude_that_never_echoes_the_message_fails_the_turn_in_time_and_goes() {
+        let rig = Rig::new();
+        let one = rig
+            .attempt(None, &rig.settings("opus"), "first", false)
+            .await;
+        let started = Instant::now();
+        let two = rig
+            .attempt(Some(&one.thread), &rig.settings("opus"), "mute", false)
+            .await;
+        assert!(two.warm);
+        assert!(started.elapsed() < ECHO_WAIT + STOP_TIMEOUT);
+        let failed = two.events.iter().find(|e| e["kind"] == "turn_failed");
+        assert!(
+            failed.is_some_and(|e| text_of(&e["error"]).contains("did not take the message")),
+            "{:?}",
+            two.events
+        );
+        assert!(gone(rig.starts()[0]["pid"].as_u64().unwrap()).await);
+        let three = rig
+            .attempt(Some(&one.thread), &rig.settings("opus"), "third", false)
+            .await;
+        assert_eq!(three.status(), "completed", "{:?}", three.events);
+        assert!(!three.warm);
+        rig.done().await;
+    }
+
+    #[tokio::test]
+    async fn a_kept_claude_that_names_another_session_fails_the_turn_and_goes() {
+        for text in ["other", "elsewhere"] {
+            let rig = Rig::new();
+            let one = rig
+                .attempt(None, &rig.settings("opus"), "first", false)
+                .await;
+            let two = rig
+                .attempt(Some(&one.thread), &rig.settings("opus"), text, false)
+                .await;
+            assert!(two.warm, "{text}");
+            let failed = two.events.iter().find(|e| e["kind"] == "turn_failed");
+            assert!(
+                failed.is_some_and(|e| text_of(&e["error"]).contains("another session (another)")),
+                "{text}: {:?}",
+                two.events
+            );
+            assert!(finals(&two).is_empty(), "{text}: {:?}", two.events);
+            assert!(
+                gone(rig.starts()[0]["pid"].as_u64().unwrap()).await,
+                "{text}"
+            );
+            let three = rig
+                .attempt(Some(&one.thread), &rig.settings("opus"), "third", false)
+                .await;
+            assert_eq!(three.status(), "completed", "{text}: {:?}", three.events);
+            assert!(!three.warm, "{text}");
+            assert_eq!(rig.starts().len(), 2, "{text}");
+            rig.done().await;
+        }
     }
 }

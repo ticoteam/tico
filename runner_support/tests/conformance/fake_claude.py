@@ -2,7 +2,7 @@
 
 `--version`, `--help` and `auth status --json` answer as Claude Code 2.1.296 does; `-p` speaks stream-json the way
 runner-rs/src/hosts/claude.rs reads it: each user message is replayed, then a text delta, the assistant message and a
-`result`. Every call is appended to $FAKE_LOG as one JSON line (argv, the prompt, cwd, the granted variables and
+`result`. Every call is appended to $FAKE_LOG as one JSON line (its pid, argv, the prompt, cwd, the granted variables and
 homes, when it started and finished); a prompt containing REMEMBER leaves a file in memory/. Each turn reports its
 usage windows as Claude Code 2.1.301 does (`rate_limit_event` with `unifiedWindows`, 53% of five hours, 17% of the week). A prompt containing HANG
 streams one delta and then waits, once per $FAKE_LOG, until its parent goes away; SLOW streams one delta and answers
@@ -82,6 +82,7 @@ def main():
         record(
             {
                 "harness": "claude",
+                "pid": os.getpid(),
                 "argv": args,
                 "prompt": text,
                 "cwd": os.getcwd(),
