@@ -19,6 +19,11 @@ export function sendTasksOf(t: Pick<TaskData, 'id' | 'children' | 'relations'>):
   return [...ids];
 }
 
+/** Whether an answer to `task` is one this task's page hears: its own, or a sub-task's or related task's it shows (a
+    Send sub-task's OK of the email). Another task's, its card still drawn under this one, is not. */
+export const answersHere = (t: Pick<TaskData, 'id' | 'children' | 'relations'>, task: string): boolean =>
+  task === t.id || t.children.some((c) => c.id === task) || Object.values(t.relations ?? {}).some((list) => list.some((r) => r.id === task));
+
 /** A send still to go out: one sent, canceled or failed is no longer asked about, whatever its OK task says. */
 export const stillToGo = (state: string | null | undefined): boolean => !state || state === 'pending' || state === 'waiting_approval';
 

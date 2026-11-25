@@ -38,7 +38,7 @@ import { approvalCard, useApprovalCards } from './ThreadCards';
 import { QuestionCard } from './QuestionCard';
 import { PageView, useVersions, VersionBar } from './Versions';
 import { Brief, EmailPointers, MatterBrief, MatterDates, MatterDatesOf, WaitingOnYou } from './Waiting';
-import { questionsFor, waitsNow } from './waits';
+import { answersHere, questionsFor, waitsNow } from './waits';
 import { ChatNotRead, COMMENTS, SessionRun, useTaskLive, useTaskReadMark, useThreadRead } from './sessions';
 import './task.css';
 
@@ -258,8 +258,7 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
   useEffect(
     () =>
       onAnswered((given) => {
-        // an answer to another task (its card still drawn under this one) moves nothing here
-        if (given?.task !== t.id || !stillOpen()) return;
+        if (!given || !answersHere(t, given.task) || !stillOpen()) return;
         const waits = waitsNow(client, t.id, me);
         if (waits === 'ask') return setSeek((n) => n + 1);
         if (waits) return;
@@ -270,7 +269,7 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
         leaving.current = true;
         void navigate({ to: '/task/$task', params: { task: next } });
       }),
-    [t.id, me, client, close, navigate, list, stillOpen],
+    [t, me, client, close, navigate, list, stillOpen],
   );
   const asks = tabs.find((x) => x.mark === 'ask')?.slug;
   useEffect(() => {
