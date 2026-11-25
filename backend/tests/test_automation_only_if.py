@@ -49,6 +49,7 @@ def task(api, title, token="ana-test", **extra):
         {"read": "https://acme.example/api/v2/tasks", "at_least": 1},  # a host
         {"read": "tasks/../events", "at_least": 1},
         {"read": "tasks/%2e%2e/events", "at_least": 1},
+        {"read": "agents/./setup-script", "none": True},  # the client drops the dot: a refused path
         {"read": "events", "at_least": 1},  # a stream
         {"read": "oauth/google/start", "at_least": 1},  # a sign-in door
         {"read": "tasks#x", "at_least": 1},
@@ -177,6 +178,8 @@ def test_tasks_take_a_stage_by_its_name_in_any_pipeline(api):
     by_name = get(api, "tasks?stage=to do&status=open")["tasks"]
     by_id = get(api, "tasks?stage=general-todo&status=open")["tasks"]
     assert filed["id"] in [t["id"] for t in by_name] and filed["id"] in [t["id"] for t in by_id]
+    by_priority = get(api, "tasks?stage=to do&status=open&sort=priority")["tasks"]
+    assert filed["id"] in [t["id"] for t in by_priority]
     get(api, "tasks?stage=No such stage", expected=422)
 
 

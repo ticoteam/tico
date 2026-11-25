@@ -22,6 +22,7 @@ own read connections, and a write held open across it would stall every other wr
 import asyncio
 import json
 import logging
+import time
 from collections.abc import Awaitable, Callable, MutableMapping
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, cast
@@ -147,8 +148,12 @@ async def _pages(app: Any, who: Any, base: str, only_if: Json) -> list[Any]:
     return rows
 
 
-def _read(app: Any, who: Any, base: str, only_if: Json) -> list[Any]:
-    return asyncio.run(asyncio.wait_for(_pages(app, who, base, only_if), TIMEOUT_S))
+def _read(app: Any, who: Any, base: str, only_if: Json, deadline: float) -> list[Any]:
+    """The read, within what is left of the check's TIMEOUT_S: time spent waiting for a thread counts too."""
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise TimeoutError
+    return asyncio.run(asyncio.wait_for(_pages(app, who, base, only_if), left))
 
 
 def _items(rows: list[Any]) -> list[Any]:
@@ -180,7 +185,13 @@ def evaluate(app: Any, owner: str, only_if: Json) -> Json:
         with store.read() as c:
             who = owner_identity(c, app.state.auth, owner)
         base = str(store.settings.public_url or "http://127.0.0.1")
-        rows = _POOL.submit(_read, app, who, base, only_if).result(TIMEOUT_S)
+        deadline = time.monotonic() + TIMEOUT_S
+        pending = _POOL.submit(_read, app, who, base, only_if, deadline)
+        try:
+            rows = pending.result(TIMEOUT_S)
+        except TimeoutError:
+            pending.cancel()  # one still queued never starts; one running ends at its deadline
+            raise
     except TimeoutError:  # concurrent.futures' timeout is this one
         out["reason"] = f"Only if check failed: {read} did not answer in {TIMEOUT_S:g} s"
         return out

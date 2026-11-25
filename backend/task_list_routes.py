@@ -379,7 +379,16 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                     filters["ids"] = [t for t in filters["ids"] if t in set(kept)] if "ids" in filters else kept
                 sorting = None
                 if sort == "priority":
-                    stage_id = stage_row(c, pipeline, stage)["id"]
+                    named = stages_named(c, stage) if pipeline is None and stage is not None else []
+                    if len(named) > 1:
+                        raise Problem(
+                            "stage", "That stage name is in more than one pipeline: give its pipeline or its id", 422
+                        )
+                    stage_id = (
+                        c.execute("SELECT id FROM stages WHERE rowid=?", (named[0],)).fetchone()[0]
+                        if named
+                        else stage_row(c, pipeline, stage)["id"]
+                    )
                     rows, sorting = priority_list(c, who, owner, requester, stage_id, filters, limit)
                     last = next_offset = None
                 else:

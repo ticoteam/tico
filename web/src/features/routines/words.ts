@@ -245,7 +245,7 @@ export type OnlyIfSource = { kind: 'tasks'; stage: string } | { kind: 'prs'; rep
 /** A query value as the server reads it (parse_qsl): only what would split or end it is escaped, so it stays legible. */
 const qv = (v: string) => encodeURIComponent(v).replace(/%20/g, ' ').replace(/%2F/g, '/');
 
-/** A read back into the pickers when it is one of their shapes: `tasks?stage=<s>[&status=open]` or
+/** A read back into the pickers when it is one of their shapes: `tasks?stage=<s>&status=open` or
    `prs?repo=<r>[&idle_hours=<h>]`. Anything else is a Query. */
 export function onlyIfSource(read: string): OnlyIfSource {
   const at = read.indexOf('?');
@@ -254,7 +254,8 @@ export function onlyIfSource(read: string): OnlyIfSource {
   const keys = [...params.keys()];
   const only = (allowed: string[]) => keys.every((k) => allowed.includes(k)) && new Set(keys).size === keys.length;
   const stage = params.get('stage');
-  if (path === 'tasks' && stage && only(['stage', 'status']) && (params.get('status') ?? 'open') === 'open') return { kind: 'tasks', stage };
+  // Without status=open the read counts closed tasks too, which the stage picker does not say: it stays a Query.
+  if (path === 'tasks' && stage && only(['stage', 'status']) && params.get('status') === 'open') return { kind: 'tasks', stage };
   const repo = params.get('repo');
   const idle = params.get('idle_hours');
   if (path === 'prs' && repo && only(['repo', 'idle_hours']) && (idle === null || /^\d+$/.test(idle))) {

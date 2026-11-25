@@ -422,7 +422,7 @@ function Runs({ id }: { id: string }) {
       )}
       {list.map((run) => {
         const at = run.started_at ?? run.finished_at;
-        // A run its Only if skipped: one dim word, its reason on hover, no cost.
+        // A skipped run (its Only if, or dropped mid-run): one dim word, its reason on hover; a cost only when work was done.
         const skipped = run.status === 'skipped';
         const what = skipped ? runWords(run.status) : run.error || run.summary || runWords(run.status);
         const href = runLink(run);
@@ -430,7 +430,7 @@ function Runs({ id }: { id: string }) {
           <Row key={run.id} className={skipped ? 'prun is-skipped' : 'prun'} title={skipped ? run.reason || what : what} href={href} target={`run:${run.id}`}>
             <span className="run-at">{at ? fmtDate(at) : ''}</span>
             <span className="row-sub">{what}</span>
-            {run.status === 'failed' ? <Word>Failed</Word> : <span className="row-age">{!skipped && run.cost ? fmtMoney(run.cost, { cents: true }) : ''}</span>}
+            {run.status === 'failed' ? <Word>Failed</Word> : <span className="row-age">{run.cost ? fmtMoney(run.cost, { cents: true }) : ''}</span>}
           </Row>
         );
       })}

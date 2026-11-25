@@ -346,9 +346,13 @@ def check_only_if(only_if, where="trigger only_if"):
         raise Invalid(f"{where}: read is a path under /api/v2/ of at most {MAX_READ} characters")
     path, _, query = read.partition("?")
     _need(
-        bool(READ_PATH.fullmatch(path)) and ".." not in path.split("/") and not any(ch in read for ch in "#\\\t\r\n"),
+        # No . or .. segment: the client drops them as it builds the URL, so agents/./setup-script would reach a
+        # refused path.
+        bool(READ_PATH.fullmatch(path))
+        and not {".", ".."} & set(path.split("/"))
+        and not any(ch in read for ch in "#\\\t\r\n"),
         where,
-        "read is a relative path under /api/v2/ such as tasks?status=open (no host, no leading slash, no ..)",
+        "read is a relative path under /api/v2/ such as tasks?status=open (no host, no leading slash, no . or ..)",
     )
     _need(
         not any(path == p or path.startswith(p + "/") for p in ONLY_IF_REFUSED),

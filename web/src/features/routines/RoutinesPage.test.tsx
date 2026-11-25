@@ -919,6 +919,8 @@ describe('Only if', () => {
     for (const read of ['tasks?stage=Release ready&status=open', 'prs?repo=acme/gotidy&idle_hours=48', 'prs?repo=gotidy']) expect(onlyIfRead(onlyIfSource(read))).toBe(read);
     expect(onlyIfSource('prs?repo=acme/gotidy&idle_hours=48')).toEqual({ kind: 'prs', repo: 'acme/gotidy', idle: 48 });
     expect(onlyIfSource('tasks?stage=Release ready&label=x')).toEqual({ kind: 'query', read: 'tasks?stage=Release ready&label=x' });
+    // Closed tasks count too without status=open: the picker would change what it counts, so it stays a Query.
+    expect(onlyIfSource('tasks?stage=Release ready')).toEqual({ kind: 'query', read: 'tasks?stage=Release ready' });
   });
 
   it('shows the Only if fact on the panel, by the stage’s name', async () => {
@@ -970,12 +972,15 @@ describe('Only if', () => {
     expect((sent[0]!.body as { trigger: unknown }).trigger).toEqual({ type: 'event', name: 'task.created' });
   });
 
-  it('a skipped run in Runs is dim, says Skipped with no cost, and names its reason on hover', async () => {
+  it('a skipped run in Runs is dim, says Skipped, names its reason on hover, and shows a cost only when work was done', async () => {
     const reason = 'Only if: prs?repo=gotidy has 0, needs at least 1';
     const runs = {
       next: null,
       since: '2026-11-18T07:00:00Z',
-      runs: [{ id: 'run1', automation_id: 'r1', automation_name: 'Morning numbers', started_at: '2026-11-19T07:00:00Z', status: 'skipped', trigger: 'event', owner_id: 'bot:growth', outcome: 'Skipped', cost: 0.5, reason }],
+      runs: [
+        { id: 'run1', automation_id: 'r1', automation_name: 'Morning numbers', started_at: '2026-11-19T07:00:00Z', status: 'skipped', trigger: 'event', owner_id: 'bot:growth', outcome: 'Skipped', cost: 0, reason },
+        { id: 'run2', automation_id: 'r2', automation_name: 'Weekly digest', started_at: '2026-11-19T06:00:00Z', status: 'skipped', trigger: 'event', owner_id: 'bot:growth', outcome: 'Skipped', cost: 0.5 },
+      ],
     };
     record((url) => (url.includes('/automations/runs?') ? ok(runs) : nothing()));
     show('/company/routines?tab=runs');
@@ -983,5 +988,7 @@ describe('Only if', () => {
     expect(row.className).toContain('is-skipped');
     expect(within(row).getByText('Skipped')).toBeTruthy();
     expect(row.textContent).not.toContain('$');
+    // Dropped after a step ran: the spend stays on its row.
+    expect((await screen.findByTitle('Weekly digest')).textContent).toContain('$0.5');
   });
 });
