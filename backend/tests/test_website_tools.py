@@ -15,6 +15,7 @@ from backend import question_marks
 from backend import totp as T
 from backend import website_tools as W
 from backend.auth import Identity
+from backend.fair_share import Budget, FairShare
 from backend.store import H, Problem
 from backend.tests.helpers.api import get, headers, post, put, setup_attempt
 from backend.tests.helpers.agent_ops_parity import act
@@ -616,6 +617,10 @@ def test_a_canary_login_is_in_no_get_answer_and_no_table_and_the_password_only_i
         }
     )
     assert any("website-tools" in p for p in paths) and len(paths) > 100
+    # The walk sends one request per route for each caller, over 600 in a minute for the run's bot: past its fair
+    # share (backend/fair_share.py) every answer would be a 429 refused before the route reads anything, which proves
+    # nothing about the login. The walk turns the budgets off; backend/tests/test_fair_share.py covers them.
+    api.app.state.fair_share = FairShare({"token": Budget(0, 0), "bot": Budget(0, 0)})
     secrets = (PASSWORD, CANARY_KEY, CANARY_KEY.lower())
     walked, answered = 0, set()
     for path in paths:
