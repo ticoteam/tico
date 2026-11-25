@@ -512,7 +512,7 @@ test("a read that failed says why in the page's one line; a restart has no Try a
   const page = await open(browser, hub, '/tasks');
   await expect(page.locator('.pk-head h1')).toHaveText('Tasks');
   // Tico restarting: Usage's reads answer 503 starting (said not to wait, so the page shows it at once)
-  const starting = JSON.stringify({ code: 'starting', detail: 'Tico is starting', retryable: false });
+  const starting = JSON.stringify({ error: { code: 'starting', detail: 'Tico is starting', retryable: false } });
   await page.route('**/api/v2/usage?**', (r) => r.fulfill({ status: 503, contentType: 'application/problem+json', body: starting }));
   await page.goto(`${hub.url}/company/usage`);
   await expect(page.locator('.pk-head h1')).toHaveText('Usage');
