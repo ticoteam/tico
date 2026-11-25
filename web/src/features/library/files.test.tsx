@@ -6,10 +6,11 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { run } from '@/actions';
 // eslint-disable-next-line no-restricted-imports -- the test lends its router to dispatch, as the shell's ActionsRoot does
 import { bind } from '@/actions/bind';
+import { ApiError } from '@/api/client';
 import { queryClient } from '@/data';
 import { FilePreview, FileViewerHost } from './FileViewer';
 import { FilesPage } from './FilesPage';
-import { fileQuery, filesQuery, fileVersionsQuery } from './queries';
+import { fileQuery, filesQuery, fileVersionsQuery, heldFileQuery } from './queries';
 import { viewing } from './viewing';
 
 /* Files: the list, one file and its versions, and a file opened from a task or a chat. What a person sees and presses,
@@ -357,5 +358,24 @@ describe('a file from a task or a chat', () => {
     expect(router.state.location.pathname).toBe('/tasks');
     await act(async () => void (await run('files.view', { file: null }, { via: 'click' })));
     await waitFor(() => expect(screen.queryByAltText('Shelf photo')).toBeNull());
+  });
+});
+
+describe('bytes sent only as a download, that did not read', () => {
+  const read = () => queryClient.fetchQuery({ ...heldFileQuery('/api/v2/mail/m1/attachments/a1', 'application/pdf', false), retry: false });
+
+  it('of a stopped company is stopped, not a server error read again by itself', async () => {
+    vi.stubGlobal('fetch', async () => new Response('This Tico company is stopped. Start it from Tico HQ.', { status: 503 }));
+    const err = await read().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).code).toBe('stopped');
+  });
+
+  it('with no answer is no answer, read again by itself', async () => {
+    vi.stubGlobal('fetch', async () => {
+      throw new TypeError('Failed to fetch');
+    });
+    const err = await read().catch((e: unknown) => e);
+    expect([(err as ApiError).status, (err as ApiError).code]).toEqual([0, 'network']);
   });
 });

@@ -146,6 +146,28 @@ describe('Updates: search, weeks and an opened update @s972 @s985 @s992', () => 
     }
   });
 
+  it('an older page that fails is not asked for again as the list draws: Load more reads it again', async () => {
+    const height = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(35);
+    serve((url) => {
+      if (!url.startsWith('/api/v2/updates?')) return;
+      if (new URL(url, location.origin).searchParams.get('before') === 'first') return { status: 500, body: { error: { code: 'internal', detail: 'Down' } } };
+      return feed([update('recent', 'daily', '2026-01-07', 'Recent note')], { next_before: 'first' });
+    });
+    try {
+      show({}, '/updates');
+      expect(await screen.findByRole('feed', { name: 'Updates' })).toBeTruthy();
+      const more = await screen.findByRole('button', { name: 'Load more' }, { timeout: 4000 });
+      const older = () => calls.filter((c) => c.url.includes('before=first')).length;
+      const asked = older();
+      await new Promise((r) => setTimeout(r, 300));
+      expect(older()).toBe(asked);
+      fireEvent.click(more);
+      await waitFor(() => expect(older()).toBeGreaterThan(asked));
+    } finally {
+      height.mockRestore();
+    }
+  });
+
   it('an older page that fails while searching keeps its Try again, even for a server error: paging is never by itself', async () => {
     const height = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(35);
     serve((url) => {

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { ApiError } from '@/api/client';
+import { queryClient } from '@/data/query-client';
 import { liveStatus, onLiveAgain } from './stream';
 
 // A read that failed with nothing to show: one plain line saying why, the cause logged once, and, when trying again
@@ -36,6 +37,30 @@ export const passing = (err: unknown) => err instanceof ApiError && (err.status 
  */
 export const faultHides = (q: { isError: boolean; error: unknown; data?: unknown }) => q.isError && (q.data === undefined || !passing(q.error));
 
+/** `fn` each time the stream is live again, and every BACKSTOP_MS meanwhile while it is live and the page in view.
+    Returns the stop. */
+function whenItMayPass(fn: () => void): () => void {
+  const off = onLiveAgain(fn);
+  const timer = setInterval(() => {
+    if (liveStatus() === 'live' && document.visibilityState !== 'hidden') fn();
+  }, BACKSTOP_MS);
+  return () => {
+    off();
+    clearInterval(timer);
+  };
+}
+
+/**
+ * Every read on screen that failed and may pass, read again when it may (joining a read already on its way), whether
+ * a fault says so or not: one whose rows stay on screen (faultHides) has none to read it again. Once, for the app;
+ * returns the stop.
+ */
+export function readAgainFailed(): () => void {
+  return whenItMayPass(
+    () => void queryClient.refetchQueries({ type: 'active', predicate: (q) => q.state.status === 'error' && passing(q.state.error) }, { cancelRefetch: false }),
+  );
+}
+
 /** A read that failed: its error, and how to read it again (a query's own result fits). */
 export interface FailedRead {
   error: unknown;
@@ -60,17 +85,9 @@ export function useReadFault(what: string, failed: readonly FailedRead[], ok: bo
   const auto = failed.some((r) => passing(r.error));
   useEffect(() => {
     if (!auto) return;
-    const again = () => {
+    return whenItMayPass(() => {
       for (const r of reads.current) if (passing(r.error)) void r.refetch({ cancelRefetch: false });
-    };
-    const off = onLiveAgain(again);
-    const timer = setInterval(() => {
-      if (liveStatus() === 'live' && document.visibilityState !== 'hidden') again();
-    }, BACKSTOP_MS);
-    return () => {
-      off();
-      clearInterval(timer);
-    };
+    });
   }, [auto]);
   const first = firstFault(failed);
   const reason = first ? faultReason(first.error) : null;

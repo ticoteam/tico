@@ -666,7 +666,7 @@ describe('one open task', () => {
     }
   });
 
-  it('a task on screen whose read turns refused is not read again every few minutes', async () => {
+  it('a task on screen whose read turns refused hides, says so, and is not read again every few minutes', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       let refuse = false;
@@ -679,6 +679,9 @@ describe('one open task', () => {
       // the backstop reads it once, and is refused
       await act(() => vi.advanceTimersByTimeAsync(5 * 60_000 + 1_000));
       await waitFor(() => expect(reads()).toBe(before + 1));
+      // the refusal takes the task's place
+      expect(await screen.findByRole('heading', { name: "You don't have access to this page" })).toBeTruthy();
+      expect(screen.queryByRole('heading', { name: 'Fix the sign-in page' })).toBeNull();
       await act(() => vi.advanceTimersByTimeAsync(15 * 60_000));
       expect(reads()).toBe(before + 1);
     } finally {

@@ -17,7 +17,7 @@ import { VirtualList, type VirtualListHandle } from '@/kit/VirtualList';
 import { useFollow } from '@/live/follow';
 import { HITS } from '@/search/helpers';
 import { boardSearch, hearPlaces, holdRow, keptRows, NEEDS_YOU, noteList, type ListRow } from '@/lib';
-import { ReadFault, type FailedRead } from '@/pagekinds';
+import { faultHides, ReadFault, type FailedRead } from '@/pagekinds';
 
 /* The list beside a task open over a page (plan: the task modal): the list it was opened from. A board's stage (its
    pipeline's id), Needs you (none), an agent's or a person's open tasks (their id), search hits (`search:<words>`), or
@@ -174,7 +174,8 @@ function PipelineList({ pipeline, open, stage, end }: { pipeline: string; open: 
   const search = useSyncExternalStore(hearPlaces, () => boardSearch(pipeline));
   const filters = useMemo(() => ({ ...filtersOf(validateTasksSearch(search)), sort: sortOf(search) }), [search]);
   const list = useQuery({ ...pipelineTasksQuery(pipeline, filters), enabled: !!p });
-  const page = list.data;
+  // a refusal hides rows read before too (faultHides)
+  const page = faultHides(list) ? undefined : list.data;
   const rows = useMemo(() => inOrder(page?.tasks ?? [], filters.sort), [page, filters.sort]);
   const read = useMemo(
     () =>
@@ -194,7 +195,7 @@ function PipelineList({ pipeline, open, stage, end }: { pipeline: string; open: 
   // Priority: the stage shown is read on its own, in Tico's order for the person, whole (no More)
   const ranks = !filters.sort && !!showing;
   const byPriority = useQuery({ ...stagePriorityQuery(pipeline, showing ?? '', filters), enabled: !!p && ranks });
-  const ranked = byPriority.data;
+  const ranked = faultHides(byPriority) ? undefined : byPriority.data;
   // failed: unless the stage shown is read on its own by priority, the pipeline's read is the list
   const listFailed = list.isError && !page && (!showing || !ranks);
   const failed = listFailed || (ranks && byPriority.isError && !ranked);
@@ -371,10 +372,13 @@ function SearchList({ words, list, open, current, end }: { words: string; list: 
   );
 }
 
-function Rows({ read, tasks, open, needs, empty }: { read: FailedRead & { isError: boolean }; tasks: readonly Shown[] | undefined; open: string; needs: ReadonlySet<string> | undefined; empty: string }) {
+function Rows({ read, tasks: drawn, open, needs, empty }: { read: FailedRead & { isError: boolean }; tasks: readonly Shown[] | undefined; open: string; needs: ReadonlySet<string> | undefined; empty: string }) {
+  // a refusal hides rows read before too (faultHides)
+  const hide = faultHides({ isError: read.isError, error: read.error, data: drawn });
+  const tasks = hide ? undefined : drawn;
   return (
     <div className="nav-scroll li-body">
-      {read.isError && !tasks ? (
+      {hide ? (
         <ReadFault what="These tasks" reads={[read]} />
       ) : tasks && !tasks.length ? (
         <Empty title={empty} />

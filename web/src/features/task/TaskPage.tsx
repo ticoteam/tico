@@ -69,7 +69,8 @@ function useTask(param: string, opens = false) {
   });
   useFollow(ref.data ? { task: ref.data } : null);
   const error = ref.error ?? detail.error;
-  return { t: detail.data, error, reads: ref.isError ? [ref] : [detail] };
+  // a refusal hides the task read before too (faultHides): the page then says why
+  return { t: faultHides(detail) ? undefined : detail.data, error, reads: ref.isError ? [ref] : [detail] };
 }
 
 function stateOf(error: unknown): PageState {

@@ -272,11 +272,12 @@ function LettersOut({ letters }: { letters: LetterOut[] }) {
 
 function OlderLetters({ before, onDetails }: { before: string; onDetails: (l: LetterOutContents) => void }) {
   const q = useInfiniteQuery(olderLettersQuery(before));
-  // a later page that failed and may pass keeps Load more to press again; a refusal hides the letters (faultHides)
+  // a later page that failed and may pass keeps the letters and Load more beside why; a refusal hides them (faultHides)
   if (faultHides(q)) return <ReadFault name="Older letters" reads={[q]} />;
   return (
     <>
       {q.data?.pages.flatMap((p) => p.items).map((l) => <LetterRow key={l.id} l={l} onDetails={onDetails} />)}
+      {q.isError && <ReadFault name="Older letters" reads={[q]} />}
       {q.hasNextPage && !q.isFetchingNextPage && <More onClick={() => q.fetchNextPage()}>Load more</More>}
     </>
   );

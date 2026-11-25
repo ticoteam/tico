@@ -368,7 +368,7 @@ describe("An agent's Tools", () => {
     await waitFor(() => expect(reads).toContain('/api/v2/bots/ana/tool-guides/stripe'));
   });
 
-  it('Add tool: more tools that fail to load and may pass keep the ones found and More to press again', async () => {
+  it('Add tool: more tools that fail to load and may pass keep the ones found and More to press again, beside why', async () => {
     open([w('tools')], (u) =>
       u.endsWith('/bots/ana/tool-guides')
         ? { body: { bot: '0190-ana', tool_guides: rows, next: null } }
@@ -386,6 +386,6 @@ describe("An agent's Tools", () => {
     await waitFor(() => expect(reads.some((u) => u.includes('cursor=c2'))).toBe(true));
     await waitFor(() => expect((within(dialog).getByRole('button', { name: 'More' }) as HTMLButtonElement).disabled).toBe(false));
     expect(within(dialog).getByRole('option', { name: /^Stripe/ })).toBeTruthy();
-    expect(within(dialog).queryByText(/didn't load/)).toBeNull();
+    expect(within(dialog).getByText("Search didn't load · server error")).toBeTruthy();
   });
 });

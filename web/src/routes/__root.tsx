@@ -36,7 +36,7 @@ import { OfflineBar } from '@/kit/OfflineBar';
 import { Placeholder } from '@/kit/placeholder/Placeholder';
 import { Segmented } from '@/kit/Segmented';
 import { Toasts } from '@/kit/Toast';
-import { startLive, useLiveStatus } from '@/live';
+import { readAgainFailed, startLive, useLiveStatus } from '@/live';
 import { useMotionRoot } from '@/motion';
 import { PanelHost, usePagePanelOpen } from '@/pagekinds';
 import { THEME_KEY, usePref, useTheme, type Theme } from '@/prefs';
@@ -247,6 +247,8 @@ function App() {
   useEffect(() => {
     if (ready) startLive();
   }, [ready]);
+  // a failed read that may pass is read again once the stream is back, rows on screen or not (live/fault.ts)
+  useEffect(() => readAgainFailed(), []);
 
   // Each page the person opens goes to their page history (dev pages do not), named as its head names it.
   useEffect(() => {

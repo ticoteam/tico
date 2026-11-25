@@ -132,8 +132,8 @@ export function AddToolDialog({ slug, name, onClose }: { slug: string; name: str
           </button>
         ))}
         {found.isSuccess && !rows.length && !found.hasNextPage && <p className="now-step">Nothing matches</p>}
-        {/* a later page that failed and may pass keeps More to press again */}
-        {faultHides(found) && (
+        {/* a later page that failed and may pass keeps the tools found and More beside why */}
+        {found.isError && (
           <p className="now-step">
             <ReadFault what="Search" reads={[found]} inline />
           </p>

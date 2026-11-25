@@ -751,7 +751,7 @@ describe('letters out', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/tasks'));
   });
 
-  it('an older page of letters that fails and may pass keeps the letters shown and Load more to press again', async () => {
+  it('an older page of letters that fails and may pass keeps the letters shown and Load more to press again, beside why', async () => {
     const old = { id: 'O1', redacted: false, status: 'delivered', can_cancel: false, created_at: '2026-10-01T00:00:00Z', recipient: { name: 'Old Friend' }, page_count: 1, proof: null, tracking: [] };
     const sent = serve((url) =>
       url === '/api/v2/letters?limit=20&before=R18' ? { items: [old], next_before: 'O1' } : url === '/api/v2/letters?limit=20&before=O1' ? refused(500, 'internal') : undefined,
@@ -764,7 +764,7 @@ describe('letters out', () => {
     await waitFor(() => expect(reads(sent)()).toContain('/api/v2/letters?limit=20&before=O1'));
     expect(await screen.findByRole('button', { name: 'Load more' })).toBeTruthy();
     expect(screen.getByText('Old Friend')).toBeTruthy();
-    expect(screen.queryByText(/didn't load/)).toBeNull();
+    expect(screen.getByText("Older letters didn't load · server error")).toBeTruthy();
   });
 });
 

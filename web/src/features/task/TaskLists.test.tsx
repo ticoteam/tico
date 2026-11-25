@@ -145,7 +145,23 @@ describe("a teammate's list", () => {
     expect(nextInList('t12', 'bot:qa')).toBe('7');
   });
 
-  it('one the roster does not know is Needs you, never every task, and their list is never read', async () => {
+  it('rows on screen whose read is then refused hide and say why', async () => {
+    let refuse = false;
+    tasks = () => ({ tasks: [row(7, 'Bulk edit stock', 'qa')] });
+    vi.stubGlobal('fetch', async (url: string) => {
+      const u = new URL(String(url), 'http://x');
+      if (refuse && u.searchParams.get('owner')) return Response.json({ error: { code: 'forbidden', detail: 'No.' } }, { status: 403 });
+      return Response.json(u.pathname === '/api/v2/tasks' ? tasks(u.searchParams) : {});
+    });
+    show({ list: 'bot:qa', open: '12' });
+    await waitFor(() => expect(titles()).toEqual(['Bulk edit stock']));
+    refuse = true;
+    await act(() => queryClient.refetchQueries({ predicate: (q) => JSON.stringify(q.queryKey).includes('bot:qa') }));
+    expect(await screen.findByText("These tasks didn't load · no access")).toBeTruthy();
+    expect(titles()).toEqual([]);
+  });
+
+    it('one the roster does not know is Needs you, never every task, and their list is never read', async () => {
     queryClient.setQueryData(['flow'], { count: 0, items: [] });
     show({ list: 'bot:gone', open: '12' });
     await waitFor(() => expect(head().textContent).toBe('Needs you'));

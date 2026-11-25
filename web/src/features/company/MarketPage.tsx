@@ -9,7 +9,7 @@ import { MenuItem } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { Table, Td, Th, Tr } from '@/kit/Table';
 import { fmtAge, fmtDate } from '@/lib';
-import { Dashboard, type Figure, FiguresStrip, PageMore, type PageTab, ReadFault, Section, SidePanel } from '@/pagekinds';
+import { Dashboard, faultHides, type Figure, FiguresStrip, PageMore, type PageTab, ReadFault, Section, SidePanel } from '@/pagekinds';
 import { Go, PanelLink, useDo, usdShort } from './parts';
 import {
   listeningStatsQuery,
@@ -504,7 +504,8 @@ function BriefingPanel({ briefing, onClose }: { briefing: NonNullable<MarketBrie
     (market-page.ts renderEntity). A relation opens the other organization's note; nothing opens the map. */
 function NotePanel({ id, onClose }: { id: string; onClose: () => void }) {
   const q = useQuery(marketNoteQuery(id));
-  const n = q.data;
+  // a refusal hides the note read before too (faultHides)
+  const n = faultHides(q) ? undefined : q.data;
   const e = n?.entity;
   const names = new Map((n?.neighbors ?? []).map((x) => [x.id, x.name]));
   const rels = Object.entries(n?.edges ?? {}).flatMap(([rel, b]) =>

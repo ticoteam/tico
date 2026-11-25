@@ -1,9 +1,10 @@
+import { QueryObserver } from '@tanstack/react-query';
 import { act, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { ApiError } from '@/api/client';
 import { queryClient } from '@/data/query-client';
 import { FakeEventSource, opening } from './fake-stream';
-import { faultReason, useReadFault } from './fault';
+import { faultReason, readAgainFailed, useReadFault } from './fault';
 import { liveStatus, restartLive, startLive, stopLive } from './stream';
 
 const FIVE_MIN = 5 * 60_000;
@@ -171,5 +172,43 @@ describe('a read that failed', () => {
     act(() => FakeEventSource.last.feed(opening(900)));
     vi.advanceTimersByTime(FIVE_MIN * 2);
     expect(retry).not.toHaveBeenCalled();
+  });
+});
+
+describe('a read whose rows stay on screen through a failure', () => {
+  /** A read on screen with rows, whose refresh then failed with `error`; its reads counted. */
+  async function shown(key: string, error: unknown) {
+    const read = vi.fn(async () => {
+      throw error;
+    });
+    queryClient.setQueryData([key], 'rows');
+    const watch = new QueryObserver(queryClient, { queryKey: [key], queryFn: read, retry: false });
+    const stop = watch.subscribe(() => undefined);
+    await watch.refetch();
+    expect(watch.getCurrentResult()).toMatchObject({ isError: true, data: 'rows' });
+    read.mockClear();
+    return { read, stop };
+  }
+
+  it('is read again once the stream is back and on the backstop, with no fault on screen; a refusal never is', async () => {
+    const restart = await shown('restart', starting());
+    const refused = await shown('refused', new ApiError(403, 'forbidden', 'No.'));
+    const stop = readAgainFailed();
+    try {
+      startLive();
+      FakeEventSource.last.feed(opening(900));
+      await vi.waitFor(() => expect(restart.read).toHaveBeenCalledTimes(1));
+      vi.advanceTimersByTime(FIVE_MIN);
+      await vi.waitFor(() => expect(restart.read).toHaveBeenCalledTimes(2));
+      expect(refused.read).not.toHaveBeenCalled();
+      // one no longer on screen is not read
+      restart.stop();
+      vi.advanceTimersByTime(FIVE_MIN);
+      await Promise.resolve();
+      expect(restart.read).toHaveBeenCalledTimes(2);
+    } finally {
+      stop();
+      refused.stop();
+    }
   });
 });
