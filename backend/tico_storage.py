@@ -580,8 +580,9 @@ def visual_kind(mime, size):
     return kind if kind in VISUAL_TYPES else None
 
 
-def _visual(digest, kind, ancestors):
-    """(path below the company's folder, metadata) of the hosted copy of `digest` for these frame ancestors."""
+def _visual(digest, kind, ancestors, kit=None):
+    """(path below the company's folder, metadata) of the hosted copy of `digest` for these frame ancestors. A page
+    version pinned to a page kit (visuals.KIT) has a copy of its own per kit; a version from before kits keeps its name."""
     meta = {
         "tico-visual-policy-version": POLICY_VERSION[kind],
         "tico-visual-ancestors": " ".join([a for a in dict.fromkeys(ancestors) if ANCESTOR.fullmatch(a)][:8]),
@@ -596,6 +597,7 @@ def _visual(digest, kind, ancestors):
                 meta["tico-visual-ancestors"],
                 # The script slot a page's copy once named, always empty for an SVG: its copies keep their names.
                 *([""] if kind == "svg" else []),
+                *([f"kit {kit}"] if kind == "page" and kit else []),
             ]
         ).encode()
     ).hexdigest()
@@ -609,14 +611,16 @@ OLD_PAGE_SCRIPT = "'sha256-CGsvWZjIPhztoFjn2PxxlX/LGUIoZ4mKDQcJ16au+Aw='"
 
 def visual_paths(digest, kind, ancestors):
     """Every path a copy of `digest` may be held at for these ancestors: its own, and for a page the one its copy had
-    before pages ran as written (Blobs.purge removes both)."""
+    before pages ran as written and one per page kit (Blobs.purge removes them all)."""
+    from .visuals import KITS
+
     path, meta = _visual(digest, kind, ancestors)
     if kind != "page":
         return [path]
     old = hashlib.sha256(
         "\n".join(["tico-visual", "2", kind, digest, meta["tico-visual-ancestors"], OLD_PAGE_SCRIPT]).encode()
     ).hexdigest()
-    return [path, f"/visuals/{old[:2]}/{old}"]
+    return [path, f"/visuals/{old[:2]}/{old}", *(_visual(digest, kind, ancestors, kit)[0] for kit in KITS)]
 
 
 def _visual_ok(head, kind, meta, sha=None, size=None):
@@ -675,10 +679,10 @@ def _writable(blobs, found):
     return at if at.settings.blob_bucket and location_of(at.settings) == found["location"] else None
 
 
-def make_visual(blobs, digest, kind, data, ancestors):
+def make_visual(blobs, digest, kind, data, ancestors, kit=None):
     """Write the copy of the page or SVG `data` (the bytes of `digest`) beside it in Tico's bucket and check it there
-    without reading it back: a page as written with the height reporter added, an SVG cleaned. Whether it is held as
-    made; never raises."""
+    without reading it back: a page as written with the height reporter (and its page `kit`) added, an SVG cleaned.
+    Whether it is held as made; never raises."""
     from .visuals import clean, with_reporter
     from .live_blocks import has_live
 
@@ -688,9 +692,9 @@ def make_visual(blobs, digest, kind, data, ancestors):
     at = _writable(blobs, found) if found else None
     if at is None:
         return False
-    path, meta = _visual(digest, kind, ancestors)
+    path, meta = _visual(digest, kind, ancestors, kit)
     try:
-        body = with_reporter(data) if kind == "page" else clean(data, kind)[0]
+        body = with_reporter(data, kit) if kind == "page" else clean(data, kind)[0]
         sha = hashlib.sha256(body).hexdigest()
         key = _visual_key(at.settings, path)
         s3 = at.s3 if at.s3 is not None else at.sources.client_for(at.sources.kind)
@@ -723,18 +727,18 @@ def make_visual(blobs, digest, kind, data, ancestors):
     return held
 
 
-def visual_ready(blobs, digest, size, mime, ancestors):
+def visual_ready(blobs, digest, size, mime, ancestors, kit=None):
     """Whether a page or SVG version shows inline from the company's address: its file is held in Tico's bucket, and
     its hosted copy is there or can be made now. A card (visuals.decorate) otherwise."""
     found = getattr(blobs, "edge", None)
     kind = visual_kind(mime, size) if found else None
     if not kind or not _held(blobs, found["location"], digest, size, mime):
         return False
-    path, meta = _visual(digest, kind, ancestors)
+    path, meta = _visual(digest, kind, ancestors, kit)
     return _writable(blobs, found) is not None or _visual_held(blobs, found, path, kind, meta)
 
 
-def visual_link(blobs, digest, size, mime, ancestors, now=None):
+def visual_link(blobs, digest, size, mime, ancestors, now=None, kit=None):
     """A four-minute link to the hosted copy of a page or SVG version on the company's address, making the copy first
     when it is missing (`make_visual`, from the file read through that address), or None: then it can't show inline
     from there. The caller has checked access already."""
@@ -742,7 +746,7 @@ def visual_link(blobs, digest, size, mime, ancestors, now=None):
     kind = visual_kind(mime, size) if found else None
     if not kind or not _held(blobs, found["location"], digest, size, mime):
         return None
-    path, meta = _visual(digest, kind, ancestors)
+    path, meta = _visual(digest, kind, ancestors, kit)
     if not _visual_held(blobs, found, path, kind, meta):
         if _writable(blobs, found) is None:
             return None
@@ -750,16 +754,19 @@ def visual_link(blobs, digest, size, mime, ancestors, now=None):
             data = blobs.get(digest)
         except Exception:
             return None
-        if hashlib.sha256(data).hexdigest() != digest or not make_visual(blobs, digest, kind, data, ancestors):
+        if hashlib.sha256(data).hexdigest() != digest or not make_visual(blobs, digest, kind, data, ancestors, kit):
             return None
     return _signed(found, path, now)
 
 
 def landed(blobs, digest, size, mime, data):
-    """A page or SVG just uploaded to Tico's bucket (Blobs._landing) or moved there (`copy_one`): its copy, now."""
+    """A page or SVG just uploaded to Tico's bucket (Blobs._landing) or moved there (`copy_one`): its copy, now, for the
+    page kit a version stored now is pinned to."""
+    from .visuals import KIT
+
     kind = visual_kind(mime, size)
     if kind and getattr(blobs, "visual_ancestors", None) is not None:
-        make_visual(blobs, digest, kind, data, blobs.visual_ancestors)
+        make_visual(blobs, digest, kind, data, blobs.visual_ancestors, KIT if kind == "page" else None)
 
 
 # ---------------------------------------------------------------------------------------------- move

@@ -18,7 +18,7 @@ import { Document, type PageState, type PageTab } from '@/pagekinds';
 import { FilePreview } from '@/features/library/exports';
 import { flowQuery, flowSnoozedAsksQuery } from '@/features/tasks/routing';
 import { whoHref } from '@/features/team/routing';
-import { changeWords, closeTask, NEEDS_YOU, nextInList, openOf } from '@/lib';
+import { changeWords, closeTask, NEEDS_YOU, nextInList, openOf, type TaskWords } from '@/lib';
 import { onAnswered } from './answered';
 import { Decision } from './Answer';
 import { AddMenu, Details, type Adding } from './Details';
@@ -26,6 +26,7 @@ import { EmailSource, Email as EmailView } from './Email';
 import { BlockedOn } from './Facts';
 import { ArchiveMenu } from './Files';
 import { FileTab, FileView, PageBones } from './FileView';
+import { TaskMedia } from './Media';
 import { MoreMenu, QuietLine, WhereLine } from './Head';
 import { askOf, CHAT, changesAskedOf, decisionOf, defaultTab, DETAILS, emailOf, failedToast, requirementOf, sendTitle, tabAddress, tabsOf, targetOf, type TaskTab } from './model';
 import { FlowMark } from '@/kit/FlowMark';
@@ -210,7 +211,7 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
   // Its tab and pin hold while its answer is being sent (that clears `may`) or was refused: whether it can be answered
   // decides only the action.
   const named = ask ? requirementOf(t, ask) : null;
-  const { tabs, files, waiting } = useTabs(t, named ?? undefined);
+  const { tabs, videos, files, waiting } = useTabs(t, named ?? undefined);
   const own = tabs.filter((x) => !x.wait);
   // The chat's address (`…/chat`, an old link to the chat as the page) is the chat beside it: on a phone it raises the
   // chat (TaskModal) and stays the address, so a reload comes back to it; on a computer the page shows a tab of its own.
@@ -236,13 +237,19 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
     const open = openOf(router.latestLocation.search as Record<string, unknown>)?.task;
     return !leaving.current && (open === String(t.number) || open === t.id);
   }, [router, t.id, t.number]);
+  // A video had a tab of its own before the pictures and videos led the task: an old link to it (`…/beach-cut-mp4?v=2`)
+  // opens that video over the page that opens, at the version it named. Its slug is the one it had then (layoutOf),
+  // never a picture's, never another file's that has its name.
+  const video = tab ? videos.get(tab) : undefined;
   useEffect(() => {
     if (known || chatCard || unresolved || first === null || leaving.current) return;
     const open = openOf(router.latestLocation.search as Record<string, unknown>)?.task;
     if (open !== String(t.number) && open !== t.id) return;
-    // The address's other words (a version, `v`) stay while the tab is named.
-    void navigate({ to: tabAddress(t, opened) as never, search: ((prev: Record<string, unknown>) => prev) as never, replace: true });
-  }, [known, chatCard, unresolved, first, opened, t, navigate, router]);
+    // The address's other words (a version, `v`) stay while the tab is named, in place: never read again as an old
+    // address, whose `v` with a file open was the file's. Only an old video link's `v` becomes the video's (`fv`).
+    const words = video ? ({ v, vs: _vs, ...rest }: TaskWords) => ({ ...rest, tab: opened, file: video.id, ...(v ? { fv: v } : {}) }) : (prev: TaskWords) => ({ ...prev, tab: opened });
+    void navigate({ to: router.latestLocation.pathname, search: changeWords(words) as never, replace: true });
+  }, [known, chatCard, unresolved, first, opened, t, navigate, router, video]);
   /* Answered: while another ask on this task waits on the person, its page opens; while only a question to them does,
      the task stays as it is; once nothing does, the task below it in the list it was opened from opens (in its place:
      one Back still closes it); at the list's end it closes, back to the page under it. An answer that lands once the
@@ -374,14 +381,14 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
       <EmailView task={t.id} send={current.email} part={search.part} at={address} lead={quiet ? <MatterBrief t={t} send={current.email} /> : <MatterDatesOf t={t} send={current.email} />} />
     ) : null;
 
-  // a file from Details opens one layer up; Esc or its Close takes it away, back to Details
+  // a file from Details or the pictures at the top opens one layer up; Esc or its Close takes it away, back to the tab
   const fileName = file ? files.data?.find((x) => x.id === file) : undefined;
   const closeFile = () =>
-    void navigate({ to: '.', search: changeWords(({ file: _f, full: _p, v: _v, vs: _vs, ...rest }) => rest) as never, replace: true });
-  const layer = file && details && (
+    void navigate({ to: '.', search: changeWords(({ file: _f, full: _p, fv: _v, fvs: _vs, ...rest }) => rest) as never, replace: true });
+  const layer = file && !unresolved && (
     <Viewer open onClose={closeFile} title={fileName?.title || fileName?.name || 'File'}>
       <div className="tv tv-layer">
-        <FileView t={t} file={file} full={search.full} />
+        <FileView t={t} file={file} full={search.full} back={current?.label ?? 'Details'} onClose={closeFile} />
       </div>
     </Viewer>
   );
@@ -412,6 +419,8 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
       framed
       body={
         <div className="tv-view">
+          {/* What the task made comes first: its pictures and videos, over whichever tab is open. */}
+          {!unresolved && <TaskMedia files={files.data} />}
           {/* An email's OK filed apart from the matter it answers waits on the person here too, at the top. */}
           {!quiet && !current?.wait && <WaitingOnYou items={tabs.flatMap((x) => (x.wait && x.email ? [{ sub: x.wait, send: x.email, to: tabAddress(t, x.slug) }] : []))} />}
           {/* An email's OK on the task itself waits on the person too: off its tab, a pointer to it, never Approve. */}

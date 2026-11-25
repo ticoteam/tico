@@ -2,6 +2,7 @@
 S3 imports and link rules. See docs/files.md."""
 
 import base64
+from contextlib import contextmanager
 import os
 
 import pytest
@@ -180,6 +181,190 @@ def test_a_files_page_reads_a_fixed_number_of_statements_and_counts_only_what_ea
         again = api.get("/api/v2/bots/ops/files?limit=100", headers=headers(who)).json()
         assert again == response, who
         assert again["total"] == len(again["files"]), who
+
+
+def _media(api, attempt, names, task, kind="image", start=0):
+    """Published files made pictures (or videos) on `task`, each newer than the last: {name: id}."""
+    store, made = api.app.state.store, {}
+    for i, name in enumerate(names, start):
+        r = publish(api, attempt, f"{name}.md", f"# {name}")
+        assert r.status_code == 200, r.text
+        made[name] = r.json()["file"]["id"]
+        assert (
+            api.patch("/api/v2/files/" + made[name], json={"promote": True}, headers=headers("ben-test")).status_code
+            == 200
+        )
+        with store.transaction() as c:
+            c.execute(
+                "UPDATE bot_files SET kind=?,task_id=?,last_activity_at=? WHERE id=?",
+                (kind, task, f"2030-01-01T00:{i // 60:02d}:{i % 60:02d}Z", made[name]),
+            )
+    return made
+
+
+def _made(api, who, limit=6):
+    r = api.get(f"/api/v2/bots/ops/files?media=1&limit={limit}", headers=headers(who))
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_made_recently_is_its_stored_pictures_and_videos_of_tasks_the_reader_may_read(api):
+    """The agent page's Made recently (`media=1`): only a bot's stored images and videos on a task, newest first,
+    through the same checks as its whole list, so a private task's video stays hidden from someone who can't read the
+    task. A page, a linked Google Drawing, a picture whose bytes never arrived and a bot-wide picture with no task are
+    not previews."""
+    store = api.app.state.store
+    _, attempt = turn(api)
+    with store.transaction() as c:
+        open_ = H.task_create(c, "human:ben", "Launch", "Plan it", "bot:ops", lint=False)["id"]
+        hidden = H.task_create(c, "human:ben", "Private launch", "Secret", "bot:ops", private=True, lint=False)["id"]
+    made = _media(api, attempt, ["notes"], open_, kind="document")
+    made |= _media(api, attempt, ["still", "drawing", "unsynced", "loose"], open_, start=1)
+    made |= _media(api, attempt, ["hush-cut"], hidden, kind="video", start=5)
+    made |= _media(api, attempt, ["cut"], open_, kind="video", start=6)
+    with store.transaction() as c:
+        c.execute("UPDATE bot_files SET locator='remote_link' WHERE id=?", (made["drawing"],))
+        c.execute("UPDATE bot_files SET state='not_synced',current_version=0 WHERE id=?", (made["unsynced"],))
+        c.execute("UPDATE bot_files SET task_id=NULL WHERE id=?", (made["loose"],))
+
+    ben = _made(api, "ben-test")
+    assert [f["id"] for f in ben["files"]] == [made["cut"], made["hush-cut"], made["still"]], ben
+    assert ben["total"] is None and ben["has_more"] is False
+    assert all("poster_blob_id" in f and f["task_id"] for f in ben["files"])
+    cara = _made(api, "cara-test")
+    assert [f["id"] for f in cara["files"]] == [made["cut"], made["still"]]
+    # The whole list still has every file the reader sees; only Made recently leaves the rest out.
+    assert {made["notes"], made["loose"]} <= {f["id"] for f in listing(api, who="cara-test")["files"]}
+
+
+def test_made_recently_reads_newest_first_and_stops_once_it_has_enough(api, monkeypatch):
+    """Made recently reads the bot's media newest first and stops at `limit`: a bot with forty more pictures costs the
+    same statements, it decides only the files it shows, and none is counted."""
+    from backend import files as F
+
+    store = api.app.state.store
+    api.app.state.file_metadata.stop.set()  # previews write in the background: count only the read's statements
+    api.app.state.file_metadata.wake.set()
+    _, attempt = turn(api)
+    with store.transaction() as c:
+        task = H.task_create(c, "human:ben", "Launch", "Plan it", "bot:ops", lint=False)["id"]
+
+    def read():
+        return api.get("/api/v2/bots/ops/files?media=1&limit=3", headers=headers("ben-test"))
+
+    _media(api, attempt, [f"few-{i}" for i in range(4)], task)
+    read()
+    few = traced(api, read)
+    newest = _media(api, attempt, [f"many-{i}" for i in range(40)], task, start=4)
+    read()
+    decided, decide = [], F.file_visible
+    monkeypatch.setattr(
+        F,
+        "file_visible",
+        lambda c, auth, who, row, cache: decided.append(row["id"]) or decide(c, auth, who, row, cache),
+    )
+    many = traced(api, read)
+    assert len(decided) == 3, len(decided)
+    assert [f["id"] for f in many[0].json()["files"]] == [newest[f"many-{i}"] for i in (39, 38, 37)]
+    assert many[0].json()["has_more"] is False and many[0].json()["total"] is None
+    assert len(many[1]) == len(few[1]), (len(few[1]), len(many[1]))
+
+
+def test_made_recently_stops_at_its_sixth_readable_file_before_the_private_ones_under_it(api, monkeypatch):
+    """Six pictures the reader may see, then thirty on a private task they may not: Made recently stops at the sixth,
+    deciding none of the private ones (no look ahead for a seventh, which would read every one of them)."""
+    from backend import files as F
+
+    store = api.app.state.store
+    api.app.state.file_metadata.stop.set()  # previews write in the background: count only the read's statements
+    api.app.state.file_metadata.wake.set()
+    _, attempt = turn(api)
+    with store.transaction() as c:
+        open_ = H.task_create(c, "human:ben", "Launch", "Plan it", "bot:ops", lint=False)["id"]
+        hidden = H.task_create(c, "human:ben", "Private launch", "Secret", "bot:ops", private=True, lint=False)["id"]
+    _media(api, attempt, [f"hush-{i}" for i in range(30)], hidden)
+    shown = _media(api, attempt, [f"seen-{i}" for i in range(6)], open_, start=30)
+    decided, decide = [], F.file_visible
+    monkeypatch.setattr(
+        F,
+        "file_visible",
+        lambda c, auth, who, row, cache: decided.append(row["id"]) or decide(c, auth, who, row, cache),
+    )
+    cara = _made(api, "cara-test")
+    assert [f["id"] for f in cara["files"]] == [shown[f"seen-{i}"] for i in range(5, -1, -1)], cara
+    assert cara["has_more"] is False and cara["total"] is None
+    assert decided == [shown[f"seen-{i}"] for i in range(5, -1, -1)], len(decided)
+
+
+def test_made_recently_checks_at_most_its_newest_few_and_shows_fewer_past_them(api, monkeypatch):
+    """A bot's newest pictures all on a task the reader may not read, the ones they may see older: Made recently checks
+    only the newest MEDIA_SCAN and shows what it found among them (here none), never every file the bot made."""
+    from backend import files as F
+
+    store = api.app.state.store
+    _, attempt = turn(api)
+    with store.transaction() as c:
+        open_ = H.task_create(c, "human:ben", "Launch", "Plan it", "bot:ops", lint=False)["id"]
+        hidden = H.task_create(c, "human:ben", "Private launch", "Secret", "bot:ops", private=True, lint=False)["id"]
+    seen = _media(api, attempt, [f"seen-{i}" for i in range(2)], open_)
+    _media(api, attempt, [f"hush-{i}" for i in range(12)], hidden, start=2)
+    monkeypatch.setattr(F, "MEDIA_SCAN", 10)
+    decided, decide = [], F.file_visible
+    monkeypatch.setattr(
+        F,
+        "file_visible",
+        lambda c, auth, who, row, cache: decided.append(row["id"]) or decide(c, auth, who, row, cache),
+    )
+    assert _made(api, "cara-test")["files"] == []
+    assert len(decided) == 10, len(decided)
+    monkeypatch.setattr(F, "MEDIA_SCAN", 14)
+    assert [f["id"] for f in _made(api, "cara-test")["files"]] == [seen["seen-1"], seen["seen-0"]]
+
+
+def test_made_recently_reads_its_rows_and_their_activity_in_one_snapshot(api, monkeypatch):
+    """A file someone acts on while Made recently checks it shows as it was when the check began: the rows it checks
+    and the versions and last activity it shows them with are one snapshot, never a row of one moment beside the
+    activity of the next. Its one readable picture sits past fifty private ones, in the last chunk of the scan, which
+    ends the candidates' read before its activity is read."""
+    from backend import files as F
+
+    store = api.app.state.store
+    _, attempt = turn(api)
+    with store.transaction() as c:
+        open_ = H.task_create(c, "human:ben", "Launch", "Plan it", "bot:ops", lint=False)["id"]
+        hidden = H.task_create(c, "human:ben", "Private launch", "Secret", "bot:ops", private=True, lint=False)["id"]
+    made = _media(api, attempt, ["still"], open_)
+    _media(api, attempt, [f"hush-{i}" for i in range(50)], hidden, start=1)
+    before = [(f["id"], f["actor"], f["action"]) for f in _made(api, "cara-test")["files"]]
+    assert [x[0] for x in before] == [made["still"]] and before[0][2] != "renamed", before
+    acted, decide = [], F.file_visible
+
+    def act_then_decide(c, auth, who, row, cache):
+        if row["id"] == made["still"] and not acted:  # another request acts on it while this one reads
+            with store.transaction() as w:
+                w.execute(
+                    "INSERT INTO bot_file_activity(file_id,actor,action,created_at) VALUES (?,?,?,?)",
+                    (made["still"], "human:cara", "renamed", "2031-01-01T00:00:00Z"),
+                )
+            acted.append(row["id"])
+        return decide(c, auth, who, row, cache)
+
+    # SQLite may hold a plain read's statements open across the scan, so the race does not always show without the
+    # snapshot: the read is also seen to run in one (store.read_transaction).
+    snapshots, real = [], store.read_transaction
+
+    @contextmanager
+    def snapshot():
+        with real() as c:
+            snapshots.append(c)
+            yield c
+
+    monkeypatch.setattr(F, "file_visible", act_then_decide)
+    monkeypatch.setattr(store, "read_transaction", snapshot)
+    files = _made(api, "cara-test")["files"]
+    assert acted == [made["still"]]
+    assert [(f["id"], f["actor"], f["action"]) for f in files] == before, files
+    assert snapshots, "Made recently read outside one snapshot"
 
 
 def test_refusals_and_a_bot_writes_only_its_own_files(api):

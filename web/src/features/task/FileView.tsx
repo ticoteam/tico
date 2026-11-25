@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { run } from '@/actions';
 import type { TaskDocument, TaskFileView } from '@/api/schema';
 import { meQuery } from '@/data';
+import { changeWords } from '@/lib';
 import { FileFrame, FilePreview, signedLine } from '@/features/library/exports';
 import { Ago } from '@/kit/Ago';
 import { Empty } from '@/kit/Empty';
@@ -14,8 +15,8 @@ import { PictureViewer, type Picture } from '@/kit/PictureViewer';
 import { Skeleton, useDelayed } from '@/kit/Skeleton';
 import { toast } from '@/kit/Toast';
 import { download } from './Files';
-import { DETAILS, failedToast, isPage, tabAddress } from './model';
-import { Face, Go } from './parts';
+import { failedToast, isPage } from './model';
+import { Face } from './parts';
 import { frameDoc, parsePage } from './changes';
 import { useTaskWords } from './routing';
 import { fileMetaQuery, pageShownQuery, pageVersionQuery, taskFilesQuery, type TaskData } from './queries';
@@ -99,7 +100,7 @@ export function FileTab({ task, f, version }: { task: string; f: TaskFileView; v
       </>
     );
   // At its current version a person may sign it here as in its file view; an older version pinned by an ask is read only.
-  const file = <FileFrame id={f.id} version={v.n} mime={v.mime} title={name} url={v.url} name={stored} size={v.size} signable={isPerson && v === now} />;
+  const file = <FileFrame id={f.id} version={v.n} mime={v.mime} title={name} url={v.url} name={stored} size={v.size} poster={v.poster_url} signable={isPerson && v === now} />;
   return <PageOrFile task={task} id={f.id} title={name} page={v.mime.startsWith('text/html')} pin={version} file={file} />;
 }
 
@@ -131,12 +132,14 @@ function Body({ f, v, onPicture, signable = false }: { f: TaskFileView; v: FileV
   // Each version keeps the name it was stored under: an older draft opens and saves as it was named then.
   const stored = v.name || f.name;
   if (isWord(stored, v.mime)) return <WordPages url={v.url} name={`${name}, v${v.n}`} />;
-  return <FileFrame id={f.id} version={v.n} mime={v.mime} title={`${name}, v${v.n}`} url={v.url} name={stored} size={v.size} signable={signable} />;
+  return <FileFrame id={f.id} version={v.n} mime={v.mime} title={`${name}, v${v.n}`} url={v.url} name={stored} size={v.size} poster={v.poster_url} signable={signable} />;
 }
 
-/** A file open in the page sheet (more.js fileBar): back to Details, its name, which of the task's files it is, and its
-    ⋯ (Download, its versions, Compare, Remove). The address keeps the version (`v`) and the one compared with (`vs`). */
-export function FileView({ t, file, full }: { t: TaskData; file: string; full?: string }) {
+/** A file open one layer over the task (more.js fileBar): back to the tab under it, its name, which of the task's files
+    it is, and its ⋯ (Download, its versions, Compare, Remove). The address keeps its version (`fv`) and the one compared
+    with (`fvs`), apart from the tab's own (`v`, `vs`): closing it leaves the tab as it was read. `back` names that tab;
+    `onClose` takes the file away, back to it. */
+export function FileView({ t, file, full, back, onClose }: { t: TaskData; file: string; full?: string; back: string; onClose: () => void }) {
   const files = useQuery(taskFilesQuery(t.id));
   const me = useQuery(meQuery);
   const search = useTaskWords();
@@ -145,11 +148,32 @@ export function FileView({ t, file, full }: { t: TaskData; file: string; full?: 
   const list = (files.data ?? []).filter((f) => !f.archived);
   const i = list.findIndex((f) => f.id === file);
   const f = (files.data ?? []).find((x) => x.id === file);
-  const details = tabAddress(t, DETAILS);
   const current = f && currentOf(f);
-  const v = (search.v && f?.versions.find((x) => x.n === search.v)) || current;
+  // The version the address names (`fv`), else its current one. The listing keeps only a file's newest versions: one
+  // past them is read by the file's id, its own name and type, and says so when it cannot be read; never the current.
+  const listed = search.fv ? f?.versions.find((x) => x.n === search.fv) : current;
+  const meta = useQuery({ ...fileMetaQuery(file, search.fv ?? 0), enabled: !!f && !!search.fv && !listed });
+  const unlisted: FileVersion | undefined =
+    !listed && search.fv && current && meta.data
+      ? {
+          ...current,
+          n: search.fv,
+          url: `/api/v2/files/${encodeURIComponent(file)}?v=${search.fv}`,
+          mime: meta.data.content_type,
+          name: meta.data.name,
+          size: meta.data.size ?? 0,
+          width: null,
+          height: null,
+          poster_url: null,
+          thumb_url: null,
+          signed: null,
+          answers: [],
+          ask: null,
+        }
+      : undefined;
+  const v = listed ?? unlisted;
   const versions = [...(f?.versions ?? [])].sort((a, b) => b.n - a.n);
-  const other = search.vs && search.vs !== v?.n ? f?.versions.find((x) => x.n === search.vs) : undefined;
+  const other = search.fvs && search.fvs !== v?.n ? f?.versions.find((x) => x.n === search.fvs) : undefined;
   // Compare puts the one before the shown version beside it; the oldest is compared with the one after.
   const pair = versions.find((x) => v && x.n < v.n) ?? versions.find((x) => v && x.n > v.n);
   // The server's rule (ui/app/task-files.ts tfCanRemove): its owner, its requester, or someone who may move tasks.
@@ -164,12 +188,10 @@ export function FileView({ t, file, full }: { t: TaskData; file: string; full?: 
   const showPicture = (id: string | null) => void run('task.showPicture', { task: t.id, file: id }, { via: 'click' });
   const step = (d: number, label: string, flip: boolean) => {
     const to = list[i + d];
-    return to ? (
-      <Go to={details} search={{ file: to.id }} className="ib ib-sm" aria-label={label} title={label}>
-        <Icon name="chevdown" className={flip ? 'flip' : undefined} />
-      </Go>
-    ) : (
-      <button className="ib ib-sm" type="button" aria-label={label} title={label} disabled>
+    // the next file in its place, over the same tab: no step in the history, the tab under it untouched
+    const go = to && (() => void navigate({ to: '.', search: changeWords(({ fv: _v, fvs: _vs, full: _p, ...rest }) => ({ ...rest, file: to.id })) as never, replace: true }));
+    return (
+      <button className="ib ib-sm" type="button" aria-label={label} title={label} disabled={!go} onClick={go || undefined}>
         <Icon name="chevdown" className={flip ? 'flip' : undefined} />
       </button>
     );
@@ -179,7 +201,7 @@ export function FileView({ t, file, full }: { t: TaskData; file: string; full?: 
     const r = await run('task.archiveFile', { task: t.id, file: x.id, archived: true }, { via: 'click' });
     if (!r.ok) return void toast(failedToast(r));
     toast({ text: 'Removed', name: x.title || x.name, action: { label: 'Undo', run: () => void run('task.archiveFile', { task: t.id, file: x.id, archived: false }, { via: 'click' }).then((u) => u.ok || toast(failedToast(u))) } });
-    void navigate({ to: details as never });
+    onClose();
   };
   // Restore clears each flag that archived it, a page's own and its file's; the server says who may.
   const mayRestore = !!f?.can_restore;
@@ -222,9 +244,9 @@ export function FileView({ t, file, full }: { t: TaskData; file: string; full?: 
   return (
     <>
       <div className="fv-bar">
-        <Go to={details} className="ib ib-sm" aria-label="Back to Details" title="Back to Details">
+        <button className="ib ib-sm" type="button" aria-label={`Back to ${back}`} title={`Back to ${back}`} onClick={onClose}>
           <Icon name="chevron" className="flip" />
-        </Go>
+        </button>
         <b>{f ? f.title || f.name : 'File'}</b>
         {versions.length > 1 && v && <small>v{v.n}</small>}
         {v?.width && v.height ? (
@@ -232,8 +254,8 @@ export function FileView({ t, file, full }: { t: TaskData; file: string; full?: 
             {v.width} by {v.height}
           </small>
         ) : null}
-        {v && <Face id={v.by} decorative />}
-        {v && <Ago at={v.created_at} />}
+        {listed && <Face id={listed.by} decorative />}
+        {listed && <Ago at={listed.created_at} />}
         {v?.signed && <small className="fv-signed">{signedLine(v.signed)}</small>}
         <span className="grow" />
         {list.length > 1 && i >= 0 && (
@@ -245,7 +267,7 @@ export function FileView({ t, file, full }: { t: TaskData; file: string; full?: 
         {list.length > 1 && i >= 0 && step(1, 'Next', false)}
         {menu}
       </div>
-      {files.isError ? (
+      {files.isError || (f && !listed && meta.isError) ? (
         <Empty icon="alert" title="This file did not load" />
       ) : files.isSuccess && !f ? (
         <Empty title="This file is gone" />

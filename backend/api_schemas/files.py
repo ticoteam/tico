@@ -41,6 +41,10 @@ SCHEMAS.update(
                     "type": ["string", "null"],
                     "description": "set when an image has a small preview at /api/v2/files/{id}/thumb",
                 },
+                "poster_blob_id": {
+                    "type": ["string", "null"],
+                    "description": "set when a video has a frame to show at /api/v2/files/{id}/poster",
+                },
                 "open": {
                     "type": ["object", "null"],
                     "description": "{type: tico|external, url}: "
@@ -59,6 +63,13 @@ SCHEMAS.update(
                 "first_activity_at": "s",
                 "last_activity_at": "s",
                 "archived": "b",
+                "tags": {**items(ref("FileTag")), "description": "the file's details only (getBotFile)"},
+                "metadata": {"type": "object", "description": "the file's details only: a team's own fields"},
+                "parent": {
+                    "oneOf": [obj({"id": "s", "title": "s"}), {"type": "null"}],
+                    "description": "the file's details only: the file it was made from, when the caller may read it",
+                },
+                "may_edit": {"type": "boolean", "description": "the file's details only: may change tags and metadata"},
             },
             required=[
                 "id",
@@ -80,7 +91,10 @@ SCHEMAS.update(
             {
                 "bot": "s",
                 "files": items(ref("BotFile")),
-                "total": "i",
+                "total": {
+                    "type": ["integer", "null"],
+                    "description": "the files the caller sees; null for media=1, which counts nothing",
+                },
                 "next_cursor": "n",
                 "has_more": "b",
                 "can_manage": "b",
@@ -101,6 +115,9 @@ SCHEMAS.update(
             required=["bot", "files"],
         ),
         "BotFileResult": obj({"file": "o", "created": "b"}, required=["file"]),
+        "FileTag": obj({"id": "s", "key": "s", "label": "s"}),
+        "FileTags": obj({"file": "s", "tags": items(ref("FileTag"))}),
+        "FileMetadata": obj({"file": "s", "metadata": {"type": "object"}}),
         "FileActivity": obj({"file": "s", "activity": "a"}, actors=ACTORS),
         "FileVersions": obj({"file": "s", "versions": "a"}),
         "FileSigning": obj(

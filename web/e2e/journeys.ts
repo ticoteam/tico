@@ -3,7 +3,7 @@
 // and clicks through the app's build as a person does. A journey fails on any page error, console error or API refusal
 // it did not expect. What a click wrote is read back from the server (/_e2e/sql, /_e2e/sent: only that test server has
 // them). Run: `npm run e2e` (builds first), `npm run e2e:repeat` (each journey three times).
-import { expect, test as base, type Browser, type BrowserContextOptions, type Page } from '@playwright/test';
+import { expect, test as base, type Browser, type BrowserContextOptions, type Locator, type Page } from '@playwright/test';
 import { startSeeded, type Seeded } from './hub/seeded.ts';
 
 const DESKTOP: BrowserContextOptions = { viewport: { width: 1440, height: 900 } };
@@ -81,6 +81,15 @@ const layers = (page: Page) => page.locator('.vw');
 /** The address's search, as the app wrote it. */
 const searchOf = (page: Page) => Object.fromEntries(new URL(page.url()).searchParams);
 const sql = <T = Record<string, unknown>>(hub: Seeded, query: string) => call<T[]>(hub, `/_e2e/sql?q=${encodeURIComponent(query)}`);
+
+/** Each of a list's `n` previews drawn: its picture or poster read and decoded, never a grey tile. The list is
+    scrolled to first, so a lazy one (a task's) reads what it shows. */
+const shown = async (list: Locator, n: number) => {
+  await list.scrollIntoViewIfNeeded();
+  await expect
+    .poll(() => list.locator('img').evaluateAll((imgs) => imgs.map((i) => (i as HTMLImageElement).complete && (i as HTMLImageElement).naturalWidth > 0)))
+    .toEqual(Array(n).fill(true));
+};
 
 /** Whether the page head's title shows every letter (its words fit its box). */
 const titleWhole = (page: Page) =>
@@ -221,6 +230,53 @@ test("a task on an agent's page opens over it; Close leaves the page as it was",
   await expect(over).toHaveCount(0);
   await expect(page).toHaveURL(before);
   await expect(row).toBeVisible();
+  clean(page);
+});
+
+test("an agent's newest pictures and videos lead its sidebar and its task; each opens in the viewer", async ({ browser, hub }) => {
+  const made = await call<{ id: string; number: number; title: string; video: string }>(hub, `/_e2e/made?title=${encodeURIComponent('Beach clean promo')}`, 'POST');
+  const page = await open(browser, hub, '/team/engineering-manager');
+  // the sidebar's Made recently: the video and the two pictures as tiles, each captioned with its task
+  const recent = page.getByRole('region', { name: 'Made recently' }).getByRole('list', { name: 'Pictures and videos' });
+  await expect(recent.getByRole('button')).toHaveCount(3);
+  await expect(recent.locator('.thumb.is-video img')).toHaveAttribute('src', /\/poster\?v=1$/);
+  await expect(recent.getByRole('link', { name: made.title })).toHaveCount(3);
+  await expect(recent.locator('img[loading]')).toHaveCount(0);
+  await shown(recent, 3);
+  await page.screenshot({ path: test.info().outputPath('made-recently-1440.png') });
+  // a picture opens in the viewer over the page
+  await recent.getByRole('button', { name: /beach.close/i }).click();
+  await expect(page.locator('.pv-img')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.pv-img')).toHaveCount(0);
+
+  // its task is a click away: it opens over the page, its pictures and videos first, above the page it opens on
+  await recent.getByRole('link', { name: made.title }).first().click();
+  const over = modal(page, made.title);
+  await expect(over).toBeVisible();
+  const strip = over.locator('[data-target="task-media"]').getByRole('list', { name: 'Pictures and videos' });
+  await expect(strip.getByRole('button')).toHaveCount(3);
+  await expect(over.locator('.tv-view > *').first()).toHaveAttribute('data-target', 'task-media');
+  // a task's strip reads each picture as it nears the screen; the sidebar's six at most read at once
+  await expect(strip.locator('img[loading="lazy"]')).toHaveCount(3);
+  await shown(strip, 3);
+  await page.screenshot({ path: test.info().outputPath('made-task-1440.png') });
+  // the video opens one layer up, on the tab the task was on
+  const tab = searchOf(page)['task.tab'];
+  await strip.getByRole('button', { name: /beach.cut/i }).click();
+  await expect(layers(page)).toHaveCount(2);
+  expect(searchOf(page)).toMatchObject({ 'task.file': made.video });
+  expect(searchOf(page)['task.tab']).toBe(tab);
+  // one title over the dim, the video's: the task's bar stays under the layer over it
+  await expect(page.locator('.vw-title:visible')).toHaveCount(1);
+  await expect(page.locator('.vw-title:visible')).not.toHaveText(made.title);
+  // the video shows its still until it plays
+  await expect(page.locator('video.fv-img')).toHaveAttribute('poster', /\/poster\?v=1$/);
+  // the layer's way in finished (its title no longer crossing the task's)
+  await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running' || a.effect?.getComputedTiming().endTime === Infinity));
+  await page.screenshot({ path: test.info().outputPath('made-video-1440.png') });
+  await page.keyboard.press('Escape');
+  await expect(layers(page)).toHaveCount(1);
   clean(page);
 });
 

@@ -95,15 +95,26 @@ export function reviewOf(t: Pick<TaskData, 'children'>): string | null {
 /** The email a requirement shows (`email:<id>`): its send's id. */
 export const emailOf = (r: TaskRequirement | null | undefined): string | null => r?.shows?.find((x) => x.startsWith('email:'))?.slice(6) || null;
 
+/** A task's file as it stands now: its current version. */
+const currentOf = (f: TaskFileView) => f.versions.find((v) => v.n === f.current_version) ?? f.versions.at(-1);
+
 /** What waits on the person comes first, marked with the Dot (plan/approvals.html): the page, the file or the email it
     asks about, the one it is about (`targetOf`, at the version it pinned) before the others it shows; one that is not
     this task's opens as a tab of its own once the files are read (`files` given), never the review page beside it. Then the stage's other pages and Markdown files, each with its state (more.js taskflow); the task's
-    other files but its pictures (Details walks those), so a PDF, a Word file or a sound opens as a tab too; the other
+    other files but its pictures and videos (the top of the task shows those), so a PDF, a Word file or a sound opens
+    as a tab too; the other
     emails its requirements show; the chat; then Details. A page linked in two roles is one tab.
     `decision`: what the tabs are marked for and pinned at: the task's first ask that is not an email's (an email's OK
     has its own tab), unless a caller names another (a card for one ask). When an email's OK comes first, its tab still
     comes first. */
 export function tabsOf(t: TaskData, files?: TaskFileView[], chosen?: TaskRequirement | null): TaskTab[] {
+  return layoutOf(t, files, chosen).tabs;
+}
+
+/** `tabs` (tabsOf), and the task's videos that had a tab of their own before its pictures and videos led the task, by
+    the slug that tab had (`videos`): an old link to one (`…/beach-cut-mp4?v=2`) opens that video, never another file
+    that took a similar name since. A picture never had a tab, so none is there. */
+export function layoutOf(t: TaskData, files?: TaskFileView[], chosen?: TaskRequirement | null): { tabs: TaskTab[]; videos: Map<string, TaskFileView> } {
   // A caller's own ask (an address's `ask`, a card's) leads; else an email's OK that comes first keeps its tab first.
   const decision = chosen === undefined ? decisionOf(t, null) : chosen;
   const emailFirst = chosen === undefined && !!emailOf(decisionOf(t));
@@ -125,9 +136,17 @@ export function tabsOf(t: TaskData, files?: TaskFileView[], chosen?: TaskRequire
     const ok = doc.approved_version !== undefined && doc.approved_version === doc.version && !doc.changed_since_ok;
     return [{ slug, label: tabLabel(doc.title || doc.name), mark: asked.has(doc.file_id) ? 'ask' : ok ? 'ok' : 'none', doc, ...pinned(doc.file_id) }];
   });
+  // Every slug is given out over the same files, in the same order, as when a video had a tab of its own, so a link
+  // made then still names the same file: a video takes its slug, then leaves the row (the top of the task shows it).
+  const videos = new Map<string, TaskFileView>();
   const others = (files ?? [])
-    .filter((f) => !f.archived && !seen.has(f.id) && (asked.has(f.id) || !(f.versions.find((v) => v.n === f.current_version) ?? f.versions.at(-1))?.mime.startsWith('image/')))
-    .map((f): TaskTab => ({ slug: free(f.title || f.name), label: tabLabel(f.title || f.name), file: f, ...pinned(f.id), ...(asked.has(f.id) && { mark: 'ask' as const }) }));
+    .filter((f) => !f.archived && !seen.has(f.id) && (asked.has(f.id) || !currentOf(f)?.mime.startsWith('image/')))
+    .map((f): TaskTab => ({ slug: free(f.title || f.name), label: tabLabel(f.title || f.name), file: f, ...pinned(f.id), ...(asked.has(f.id) && { mark: 'ask' as const }) }))
+    .filter((x) => {
+      const video = !!x.file && !asked.has(x.file.id) && !!currentOf(x.file)?.mime.startsWith('video/');
+      if (video) videos.set(x.slug, x.file as TaskFileView);
+      return !video;
+    });
   const here = [...docs, ...others].some((x) => (x.doc?.file_id ?? x.file?.id) === target?.id);
   const away: TaskTab[] = target && files && !here ? [{ slug: free('File'), label: 'File', mark: 'ask', other: target.id, ...pinned(target.id) }] : [];
   const emails: TaskTab[] = [];
@@ -140,7 +159,7 @@ export function tabsOf(t: TaskData, files?: TaskFileView[], chosen?: TaskRequire
   // What the ask is about opens first, before any other page it shows (a review page).
   const isTarget = (x: TaskTab) => !!target && (x.doc?.file_id ?? x.file?.id ?? x.other) === target.id;
   const asks = all.filter((x) => x.mark === 'ask');
-  return [
+  const tabs: TaskTab[] = [
     ...(emailFirst ? asks.filter((x) => x.email) : []),
     ...asks.filter((x) => isTarget(x)),
     ...asks.filter((x) => !isTarget(x) && !(emailFirst && x.email)),
@@ -148,6 +167,27 @@ export function tabsOf(t: TaskData, files?: TaskFileView[], chosen?: TaskRequire
     ...(t.conversation_id ? [{ slug: CHAT, label: 'Chat', chat: true }] : []),
     { slug: DETAILS, label: 'Details' },
   ];
+  return { tabs, videos };
+}
+
+/** A picture or a video of the task, at its current version. */
+export interface Media {
+  file: TaskFileView;
+  version: TaskFileView['versions'][number];
+  video: boolean;
+}
+
+/** The task's pictures and videos, newest first: what the top of the task shows before anything else. An archived file
+    and every other kind (a page, a PDF, a text) stay where they were. */
+export function mediaOf(files: TaskFileView[] | undefined): Media[] {
+  return (files ?? [])
+    .flatMap((file): Media[] => {
+      const version = currentOf(file);
+      const mime = version?.mime ?? file.mime;
+      if (file.archived || !version || !/^(image|video)\//.test(mime)) return [];
+      return [{ file, version, video: mime.startsWith('video/') }];
+    })
+    .sort((a, b) => b.version.created_at.localeCompare(a.version.created_at));
 }
 
 /** A document the server keeps as a page (its pages read answers for it); a Markdown file is a plain file. */

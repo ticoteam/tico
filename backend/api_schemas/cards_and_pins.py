@@ -75,6 +75,10 @@ SCHEMAS['Place'] = obj(
                             'updated_at': 's',
                             'archived': 'b',
                             'version': {'type': 'integer', 'description': 'Its current version, when the page is read'},
+                            'src': {
+                                'type': ['string', 'null'],
+                                'description': 'The address its current version shows live from, when the page is read',
+                            },
                         },
                         required=['file_id', 'title', 'bot', 'updated_at', 'archived'],
                     ),

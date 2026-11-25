@@ -37,7 +37,8 @@ export interface RequestOptions {
 // A restart (an update, a deploy) answers 503 "Tico is starting" from the proxy for about 30 s, and a dropped
 // connection answers nothing. A read, and a write whose caller passed its Idempotency-Key (the server keeps the first
 // answer under it, so a resend lands once), are sent again until RETRY_FOR_MS has passed; a write without one is not,
-// since it may have landed. Waits grow from RETRY_FIRST_MS to RETRY_MAX_MS, or follow the answer's Retry-After.
+// since it may have landed. Reads also retry gateway errors (502 and 504). Waits grow from RETRY_FIRST_MS to RETRY_MAX_MS,
+// or follow the answer's Retry-After.
 export const RETRY_FOR_MS = 60_000;
 const RETRY_FIRST_MS = 500;
 const RETRY_MAX_MS = 5_000;
@@ -74,7 +75,8 @@ async function request<T>(method: Method, path: ApiPath, body?: unknown, opts: R
     // Offline by the browser's word: the write's own holding (data/held.ts) takes over at once.
     // A missing file needs storage to be restored. Let the viewer show the failure while other reads keep retrying through a restart.
     const storageRead = method === 'GET' && failed.code === 'blob_storage';
-    const again = failed.status === 0 ? navigator.onLine !== false : failed.status === 503 && failed.retryable && !storageRead;
+    const gatewayRead = method === 'GET' && (failed.status === 502 || failed.status === 504);
+    const again = failed.status === 0 ? navigator.onLine !== false : (failed.status === 503 || gatewayRead) && failed.retryable && !storageRead;
     const pause = Math.min((res && retryAfter(res)) ?? wait, RETRY_MAX_MS * 2);
     if (!resend || !again || Date.now() + pause > until) throw gaveUp(failed, resend && again);
     await sleep(pause, opts.signal);

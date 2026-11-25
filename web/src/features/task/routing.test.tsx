@@ -52,7 +52,8 @@ describe("a task's old address", () => {
     ['/flow/12?tab=details&ask=r1&v=2&chat=thread%3Ax', '/tasks', { task: 12, 'task.tab': 'details', 'task.ask': 'r1', 'task.v': 2, chat: 'thread:x' }],
     ['/tasks/p1/12', '/tasks/p1', { task: 12, list: 'p1' }],
     ['/tasks/p1/12?tab=chat', '/tasks/p1', { task: 12, list: 'p1', 'task.tab': 'chat' }],
-    ['/tasks/p1/12/details?file=f3&v=2&vs=1', '/tasks/p1', { task: 12, list: 'p1', 'task.tab': 'details', 'task.file': 'f3', 'task.v': 2, 'task.vs': 1 }],
+    ['/tasks/p1/12/details?file=f3&v=2&vs=1', '/tasks/p1', { task: 12, list: 'p1', 'task.tab': 'details', 'task.file': 'f3', 'task.fv': 2, 'task.fvs': 1 }],
+    ['/tasks/p1/12/qa-report?v=3', '/tasks/p1', { task: 12, list: 'p1', 'task.tab': 'qa-report', 'task.v': 3 }],
     ['/tasks/gone/12', '/tasks', { task: 12 }],
     ['/tasks/all/12/chat?session=bot%3Aqa', '/tasks', { task: 12, 'task.tab': 'chat', 'task.session': 'bot:qa' }],
   ])('%s opens the task over its page, its words kept', async (href, path, search) => {

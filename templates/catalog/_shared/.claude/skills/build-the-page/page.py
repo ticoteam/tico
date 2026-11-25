@@ -5,6 +5,7 @@
     python3 page.py check  PAGE.html --kind KIND              the page's rules; exit 1 names each one it breaks (a
                                                               long spec or a long bullet is a warning that does not fail)
     python3 page.py render FILE_ID --kind KIND [--out DIR]    the published page, checked again and drawn at 390 and 1280 px
+    python3 page.py kit    PAGE.html                          hints on its page kit tags (any page, a widget too); never fails
 
 KIND is bug-spec, screen-spec, change-spec, validation, review, qa or release. Standard library only.
 """
@@ -88,6 +89,20 @@ LITERAL_COLOUR = re.compile(
     r"|olive|lime|aqua|fuchsia|cyan|magenta)\b",
     re.I,
 )
+# The page kit's tags and their attributes (SKILL.md, "The page kit"). A slip is a hint, never a failure: the page still
+# reads without the kit. Tico's live blocks are tags of their own, filled in by Tico, not the kit.
+KIT_TAGS = {
+    "tico-stat": ("label", "value", "sub", "trend"),
+    "tico-chart": ("kind", "data", "label"),
+    "tico-table": (),
+    "tico-list": (),
+    "tico-badge": ("tone",),
+}
+KIT_VALUES = {("tico-chart", "kind"): ("bars", "line"), ("tico-badge", "tone"): ("warn", "strong")}
+LIVE_TAGS = ("tico-tasks", "tico-task", "tico-files", "tico-kpi")
+ANY_ATTR = re.compile(r"^(id|class|style|title|hidden|lang|dir|role|slot|data-[\w-]+|aria-[\w-]+)$")
+KIT_TAG = re.compile(r"<(tico-[\w-]+)\b((?:[^>\"']|\"[^\"]*\"|'[^']*')*)>", re.I)
+TAG_ATTR = re.compile(r"""([\w:-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?""")
 CHROMES = (
     "google-chrome",
     "google-chrome-stable",
@@ -391,11 +406,47 @@ def section(text, name):
     return text[at:]
 
 
+def kit_hints(text):
+    """What the page kit would not draw as the page means: an unknown kit tag, an attribute or value it does not take,
+    or a chart with no rows."""
+    out = []
+    for m in KIT_TAG.finditer(text):
+        tag, attrs = m.group(1).lower(), m.group(2)
+        if tag in LIVE_TAGS:
+            continue
+        if tag not in KIT_TAGS:
+            out.append(f"<{tag}> is not a kit tag; the kit has " + ", ".join(f"<{t}>" for t in KIT_TAGS))
+            continue
+        given = {a.lower(): b or c or d or "" for a, b, c, d in TAG_ATTR.findall(attrs.rstrip("/"))}
+        for name, value in given.items():
+            if name not in KIT_TAGS[tag] and not ANY_ATTR.match(name):
+                takes = ", ".join(KIT_TAGS[tag]) or "no attributes of its own"
+                out.append(f'<{tag}> has no "{name}" attribute; it takes {takes}')
+            allowed = KIT_VALUES.get((tag, name))
+            if allowed and value not in allowed:
+                out.append(f'<{tag} {name}="{value}">: {name} is ' + " or ".join(allowed))
+        if tag != "tico-chart" or "data" in given:
+            continue
+        end = text.lower().find("</tico-chart", m.end())
+        if not re.search(r"<li\b", text[m.end() : end if end >= 0 else len(text)], re.I):
+            out.append('<tico-chart> has no rows: data="Label 10, Label 20" or a list of "Label 10" items inside it')
+    return out
+
+
+def kit(path):
+    hints = kit_hints(Path(path).read_text())
+    for line in hints:
+        print("kit: hint:", line)
+    print("kit: ok" if not hints else f"kit: {len(hints)} hint(s); the page still reads without the kit")
+
+
 def check(path, kind):
     text = Path(path).read_text()
     found = problems_in(text, kind)
     for line in warnings_in(text, kind):
         print("check: warning:", line)
+    for line in kit_hints(text):
+        print("check: hint:", line)
     for line in found:
         print("check:", line)
     if found:
@@ -469,11 +520,15 @@ def main():
     r.add_argument("file_id")
     r.add_argument("--kind", choices=KINDS, required=True)
     r.add_argument("--out")
+    k = sub.add_parser("kit")
+    k.add_argument("page")
     a = p.parse_args()
     if a.cmd == "build":
         build(a.draft, a.out)
     elif a.cmd == "check":
         check(a.page, a.kind)
+    elif a.cmd == "kit":
+        kit(a.page)
     else:
         render(a.file_id, a.kind, a.out)
 

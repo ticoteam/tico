@@ -2,10 +2,12 @@
 import '@/actions';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider, type AnyRouter } from '@tanstack/react-router';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { directoryQuery, queryClient, type Actor } from '@/data';
+// eslint-disable-next-line no-restricted-imports -- the test hands the page a stream event, as the shell's startLive does
+import { dispatch, installPatchers, resetPatchState } from '@/live/patch';
 import { needed } from './LastRun';
 import { fileName, fileOpen, lineOf, rowOf } from './model';
 import { agentsQuery, groupsQuery, type AgentFile, type AgentRow, type Group, type LastStop, type TaskTab } from './queries';
@@ -247,12 +249,12 @@ describe('Files @s614', () => {
     expect(fileOpen(file({ open: null }))).toBeNull();
   });
 
-  it('shows no Files section when it has none', async () => {
+  it('shows no Made recently section when it has none', async () => {
     serve((url) => (url.includes('/bots/ana/files') ? { status: 200, body: { bot: '0190-ana', files: [], total: 0, has_more: false, next_cursor: null, can_manage: true } } : undefined));
     show(<TeamWho who="ana" />, '/team/ana');
     await waitFor(() => expect(queryClient.getQueryData(['team', 'files', 'ana'])).toBeTruthy());
     expect(await screen.findByRole('heading', { name: 'Nothing yet' })).toBeTruthy();
-    expect(screen.queryByRole('region', { name: 'Files' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Made recently' })).toBeNull();
   });
 
   it('shows the three newest, then all of them; a plain click opens a stored file over the page', async () => {
@@ -260,7 +262,7 @@ describe('Files @s614', () => {
     files[4] = file({ id: 'f4', locator: 'remote_link', title: 'Brief', name: null, open: { type: 'external', url: 'https://example.com/brief' } });
     serve((url) => (url.includes('/bots/ana/files') ? { status: 200, body: { bot: '0190-ana', files, total: 5, has_more: false, next_cursor: null, can_manage: true } } : undefined));
     show(<TeamWho who="ana" />, '/team/ana');
-    const section = await screen.findByRole('region', { name: 'Files' });
+    const section = await screen.findByRole('region', { name: 'Made recently' });
     expect(section.querySelectorAll('.row')).toHaveLength(3);
     const first = within(section).getByTitle('a.md');
     expect(first.getAttribute('href')).toBe('/api/v2/files/f0');
@@ -275,6 +277,32 @@ describe('Files @s614', () => {
     expect(section.querySelectorAll('.row')).toHaveLength(3);
   });
 
+  it('shows its newest pictures and videos first, each a click from its task, the rest behind All files', async () => {
+    const notes = file({ id: 'f1', title: 'plan.md' });
+    const still = file({ id: 'i1', kind: 'image', title: 'Frame 2', name: 'frame-2.png', version: 3, thumb_blob_id: 'b1', task_id: 't7', task_title: 'Beach clean' });
+    const cut = file({ id: 'v1', kind: 'video', title: 'Host intro', name: 'intro.mp4', version: 1, poster_blob_id: 'b2', task_id: 't7', task_title: 'Beach clean' });
+    serve((url) => {
+      if (!url.includes('/bots/ana/files')) return undefined;
+      const media = url.includes('media=1');
+      const list = media ? [cut, still] : [notes, cut, still];
+      // Made recently is not counted
+      return ok({ bot: '0190-ana', files: list, total: media ? null : list.length, has_more: false, next_cursor: null });
+    });
+    show(<TeamWho who="ana" />, '/team/ana');
+    const section = await screen.findByRole('region', { name: 'Made recently' });
+    const tiles = within(await within(section).findByRole('list', { name: 'Pictures and videos' })).getAllByRole('button');
+    expect(tiles.map((b) => [b.getAttribute('aria-label'), b.querySelector('img')?.getAttribute('src')])).toEqual([
+      ['Host intro', '/api/v2/files/v1/poster?v=1'],
+      ['Frame 2', '/api/v2/files/i1/thumb?v=3'],
+    ]);
+    // at most six, so each loads now, never deferred until scrolled to
+    expect(tiles.every((b) => !b.querySelector('img')?.hasAttribute('loading'))).toBe(true);
+    expect(within(section).getAllByRole('link', { name: 'Beach clean' }).map((a) => a.getAttribute('href'))).toEqual(['/task/t7', '/task/t7']);
+    expect(section.querySelectorAll('.row')).toHaveLength(0);
+    fireEvent.click(within(section).getByRole('button', { name: 'All files' }));
+    expect(section.querySelectorAll('.row')).toHaveLength(3);
+  });
+
   it('searches its files on the server', async () => {
     serve((url) => {
       if (!url.includes('/bots/ana/files')) return undefined;
@@ -282,11 +310,50 @@ describe('Files @s614', () => {
       return ok({ bot: '0190-ana', files: list, total: list.length, has_more: false, next_cursor: null });
     });
     show(<TeamWho who="ana" />, '/team/ana');
-    const section = await screen.findByRole('region', { name: 'Files' });
+    const section = await screen.findByRole('region', { name: 'Made recently' });
     fireEvent.click(within(section).getByRole('button', { name: 'Search files' }));
     fireEvent.change(within(section).getByRole('textbox', { name: 'Search files' }), { target: { value: 'notes' } });
     expect(await within(section).findByTitle('note-9.md')).toBeTruthy();
     expect(reads.some((u) => u.includes('/bots/ana/files') && u.includes('q=notes'))).toBe(true);
+  });
+
+  it('draws its pictures and videos without waiting on its whole file list', async () => {
+    const still = file({ id: 'i1', kind: 'image', title: 'Frame 2', name: 'frame-2.png', thumb_blob_id: 'b1', task_id: 't7', task_title: 'Beach clean' });
+    const media = ok({ bot: '0190-ana', files: [still], total: null, has_more: false, next_cursor: null });
+    // its whole list never answers
+    vi.stubGlobal('fetch', (url: string, init?: RequestInit) => {
+      const u = String(url);
+      if (u.includes('/bots/ana/files') && !u.includes('media=1'))
+        return new Promise((_, fail) => init?.signal?.addEventListener('abort', () => fail(new DOMException('aborted', 'AbortError'))));
+      const r = u.includes('/bots/ana/files') ? media : fallback(u);
+      return Promise.resolve(new Response(JSON.stringify(r.body), { status: r.status, headers: { 'Content-Type': 'application/json' } }));
+    });
+    show(<TeamWho who="ana" />, '/team/ana');
+    const section = await screen.findByRole('region', { name: 'Made recently' });
+    expect(within(within(section).getByRole('list', { name: 'Pictures and videos' })).getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual(['Frame 2']);
+    expect(queryClient.getQueryState(['team', 'files', 'ana'])?.status).toBe('pending');
+  });
+
+  it('shows its first picture as it is made, and drops the section when its last one goes', async () => {
+    const still = file({ id: 'i1', kind: 'image', title: 'Frame 2', name: 'frame-2.png', thumb_blob_id: 'b1', task_id: 't7', task_title: 'Beach clean' });
+    let now: AgentFile[] = [];
+    serve((url) => (url.includes('/bots/ana/files') ? ok({ bot: '0190-ana', files: now, total: url.includes('media=1') ? null : now.length, has_more: false, next_cursor: null }) : undefined));
+    installPatchers();
+    resetPatchState();
+    show(<TeamWho who="ana" />, '/team/ana');
+    expect(await screen.findByRole('heading', { name: 'Nothing yet' })).toBeTruthy();
+    const changed = () => act(() => dispatch('tasks', [{ seq: 2, id: 't7', kind: 'files', kinds: ['files'] }]));
+    now = [still];
+    changed();
+    const section = await screen.findByRole('region', { name: 'Made recently' });
+    expect(await within(section).findByRole('button', { name: 'Frame 2' })).toBeTruthy();
+    // its whole list read again too: All files holds it
+    fireEvent.click(within(section).getByRole('button', { name: 'All files' }));
+    await waitFor(() => expect(section.querySelectorAll('.row')).toHaveLength(1));
+    resetPatchState(); // past the gap between two reads of one key
+    now = [];
+    changed();
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Made recently' })).toBeNull());
   });
 });
 

@@ -738,6 +738,7 @@ def install_pages(app, store, auth, files):
                             "path": {"type": "string"},
                             "scope": {"enum": ["task", "bot"]},
                             "spec": {"type": "boolean"},
+                            "from": {"type": "string", "description": "The file this page was made from"},
                             "audience": {"anyOf": [{"$ref": "#/components/schemas/AccessAudience"}, {"type": "null"}]},
                         },
                     }

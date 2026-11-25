@@ -13,16 +13,17 @@ import './livepage.css';
 
 export const LIVE_SANDBOX = 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals';
 const ALLOW = 'fullscreen; clipboard-write';
-const CARD = '#tico-view=card&tico-size=medium';
 export const MIN_HEIGHT = 120;
 export const MAX_HEIGHT = 480;
+/** A sidebar widget's card: the small size, as tall as docs/pages.md says a small card is. */
+const SMALL_HEIGHT = 180;
 /** Before the page reports its height. */
 const LOADING_HEIGHT = 240;
 /** No height this long after the card comes into view: the address did not serve a page (an edge that does not know
     the page's policy yet answers 404), so the plain card shows instead of an empty box. */
 export const WAIT_MS = 8000;
 
-export const clampHeight = (h: number) => Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, Math.ceil(h)));
+export const clampHeight = (h: number, max = MAX_HEIGHT) => Math.min(max, Math.max(MIN_HEIGHT, Math.ceil(h)));
 
 /** The last height each file version reported, so a card drawn again opens at its size. Only a size: whether this
     frame has answered is its own (a card drawn again still waits for its page, and still falls back if none comes). */
@@ -79,15 +80,16 @@ export function liveSrc(src: unknown, config: Visuals | undefined): string | nul
 const stop = (e: SyntheticEvent) => e.stopPropagation();
 
 /** A page from its signed address when it is one of the install's own, else `fallback` (the plain page card). */
-export function LivePage({ src, title, id, fallback }: { src: string | null | undefined; title: string; id: string; fallback: ReactNode }) {
+export function LivePage({ src, title, id, fallback, size = 'medium' }: { src: string | null | undefined; title: string; id: string; fallback: ReactNode; size?: 'small' | 'medium' }) {
   const config = useQuery(configQuery).data;
   const live = liveSrc(src, config);
   if (!live) return fallback;
   // A new file version is a new frame; a renewed address for the same version is not.
-  return <LiveFrame key={id} src={live} title={title} id={id} fallback={fallback} />;
+  return <LiveFrame key={id} src={live} title={title} id={id} fallback={fallback} size={size} />;
 }
 
-function LiveFrame({ src, title, id, fallback }: { src: string; title: string; id: string; fallback: ReactNode }) {
+function LiveFrame({ src, title, id, fallback, size }: { src: string; title: string; id: string; fallback: ReactNode; size: 'small' | 'medium' }) {
+  const max = size === 'small' ? SMALL_HEIGHT : MAX_HEIGHT;
   // The first address stays while the card is drawn: a renewed token in a later read never reloads the page.
   const [first] = useState(src);
   const [height, setHeight] = useState<number | null>(() => heights.get(id) ?? null);
@@ -138,7 +140,7 @@ function LiveFrame({ src, title, id, fallback }: { src: string; title: string; i
     };
   }, [heard, failed]);
 
-  const cut = height !== null && height > MAX_HEIGHT;
+  const cut = height !== null && height > max;
   // An open large view stays when the card falls back: a page whose own policy blocks the height reporter still runs
   // there. The card is the fragment's first child either way, so the large view is never drawn again.
   return (
@@ -147,8 +149,8 @@ function LiveFrame({ src, title, id, fallback }: { src: string; title: string; i
         fallback
       ) : (
         <div ref={box} className={heard ? 'pcard lpage' : 'pcard lpage is-loading'}>
-          <div className="lpage-view" style={{ height: height === null ? LOADING_HEIGHT : clampHeight(height) }}>
-            <iframe ref={frame} src={first + CARD} title={title} sandbox={LIVE_SANDBOX} allow={ALLOW} loading="lazy" referrerPolicy="no-referrer" />
+          <div className="lpage-view" style={{ height: height === null ? Math.min(LOADING_HEIGHT, max) : clampHeight(height, max) }}>
+            <iframe ref={frame} src={`${first}#tico-view=card&tico-size=${size}`} title={title} sandbox={LIVE_SANDBOX} allow={ALLOW} loading="lazy" referrerPolicy="no-referrer" />
             {cut && <span className="lpage-fade" aria-hidden="true" />}
           </div>
           <span className="pcard-foot">

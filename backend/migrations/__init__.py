@@ -58,6 +58,8 @@ CUTOVER_PREREQUISITES = {
     "20261123191939_messages_session_agent": ("20261122133157_outside_intake.sql",),
     # An index on question_marks: on a company at the floor, run newest first, the table is made first.
     "20261124054917_question_marks_cleared_message": ("20261117033356_question_marks.sql",),
+    # `bot_file_versions` columns in one order whichever runs first: preview_html_blob_ids adds its column before this.
+    "20261125055503_page_kit": ("20261124213459_preview_html_blob_ids.sql",),
 }
 RETIRED_LIST = "retired.txt"
 # Older releases recorded their pre-file history as `legacy_user_version_<N>` and `legacy_cloud_<N>` rows with this

@@ -31,6 +31,20 @@ describe('the client through a restart', () => {
     expect(keys).toHaveLength(3);
   });
 
+  it.each([502, 504])('sends a read again after a %i gateway error', async (status) => {
+    answers = [() => new Response('Gateway error', { status }), () => ok({ id: 't1' })];
+    const read = api.get<{ id: string }>('/api/v2/tasks/t1');
+    await Promise.all([expect(read).resolves.toEqual({ id: 't1' }), vi.advanceTimersByTimeAsync(500)]);
+    expect(keys).toHaveLength(2);
+  });
+
+  it('reports a 502 gateway error after the first keyed write', async () => {
+    answers = [() => new Response('Bad Gateway', { status: 502 }), () => ok({})];
+    const sent = api.post('/api/v2/tasks', { title: 'New' }, { idempotencyKey: 'k1' });
+    await Promise.all([expect(sent).rejects.toMatchObject({ status: 502 }), vi.advanceTimersByTimeAsync(500)]);
+    expect(keys).toEqual(['k1']);
+  });
+
   it('sends a keyed write again under the same Idempotency-Key, also after a dropped connection', async () => {
     answers = [
       () => {

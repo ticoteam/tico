@@ -454,6 +454,23 @@ describe('read-again topics', () => {
     expect(held.map((key) => !!queryClient.getQueryState(key)?.isInvalidated)).toEqual([false, true]);
   });
 
+  it("reads an agent's Made recently again, its pictures and its whole file list, when a task's file changes or a task leaves the reader", () => {
+    const made = ['team', 'files', 'ops', { media: true }];
+    const all = ['team', 'files', 'ops'];
+    const found = ['team', 'files', 'ops', { q: 'cut' }];
+    const keys = [made, all, found];
+    const stale = () => keys.map((key) => !!queryClient.getQueryState(key)?.isInvalidated);
+    for (const key of keys) queryClient.setQueryData(key, {});
+    FakeEventSource.last.feed(frame(951, 'tasks', { seq: 951, actor: 'bot:ops', at: AT, task_id: 't1', kinds: ['files'] }));
+    flushFrame();
+    expect(stale()).toEqual([true, true, true]);
+    vi.advanceTimersByTime(1000); // past the gap between two reads of one key
+    for (const key of keys) queryClient.setQueryData(key, {});
+    FakeEventSource.last.feed(frame(null, 'tasks', { task_id: 't1', gone: true }));
+    flushFrame();
+    expect(stale()).toEqual([true, true, true]);
+  });
+
   it("reads an agent's pins again after a read already in flight when a task leaves the reader", async () => {
     const key = ['team', 'pins', 'ops'];
     const reads: (() => void)[] = [];

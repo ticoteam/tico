@@ -38,7 +38,7 @@ have a Spec, a QA report and any number of other pages.
 ## Publishing
 
     tico page publish reports/weekly-review.html --title "Engineering weekly" --cadence weekly [--as-of 2026-10-27]
-        [--task ID [--as ROLE]] [--page ID] [--replaces PAGE]
+        [--task ID [--as ROLE]] [--page ID] [--replaces PAGE] [--from PAGE]
 
 - **`--title`** names the page. Without it, the page takes its own `<title>`, unless someone has named it since.
 - **The same path again** adds a version of the same page. **`--page ID`** adds a version of that page, whatever its
@@ -55,6 +55,8 @@ have a Spec, a QA report and any number of other pages.
 - **`--replaces`** names an older page of the same bot that this one takes over. The older page then says
   **Replaced by** and links here. An Assistant turn must be able to read and manage the older page as its person,
   and both pages must be filed on the request's task.
+- **`--from`** names the page or file this one was made from: a duplicate or a variant. Both stay; the new page's
+  details link back to it ([made from](files.md#tags-metadata-and-made-from)). You must be able to read it.
 
 Anyone who may write a page publishes its versions: a person, or a bot as itself. Over MCP the same tools are
 `tico_page_publish`, `tico_page_link`, `tico_page_unlink`, `tico_page_list`, `tico_page_show` and `tico_page_archive`.
@@ -155,6 +157,22 @@ shows a zero for a missing value.
 Needs you, the task page and the Library, so a viewer never sees a title, a count or a name they could not open.
 A page with live blocks is shown only through its visual address, never the shared hosted copy, since each viewer
 gets a different page.
+
+## The page kit
+
+Display tags that draw a page in Tico's look, dark and light. A page needs none of them; plain HTML still works.
+
+- `<tico-stat label value sub trend>`: one figure. `trend="+12%"` draws ▲ 12%.
+- `<tico-chart kind="bars|line" label data="Mon 10, Tue 20">`: bars or a line. Rows can also be `<li>Mon 10</li>`
+  inside it; a row's value is its last figure (`$1,200`, `4.5%`).
+- `<tico-table>` around a normal `<table>`: Tico's rows, figures aligned right.
+- `<tico-list>` around a `<ul>`: one title per row, marks (`<tico-badge>`, `<small>`, `<time>`) on the right.
+- `<tico-badge tone="warn|strong">`: a small mark.
+
+When a page uses a kit tag, Tico adds the kit's script when it serves the page, after the height script. Each page
+version keeps the kit it was published with, so a later kit never changes a published page. Without the kit (the still
+preview in the file viewer) a tag shows what is inside it. The tags draw only what the page holds; live data is the
+live blocks' job.
 
 ## Where pages show
 

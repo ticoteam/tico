@@ -63,6 +63,7 @@ import {
   skillsQuery,
   startSignIn,
   toolsQuery,
+  tagFile,
   uploadFile,
   websiteToolQuery,
   type SkillRow,
@@ -327,9 +328,20 @@ export const filesList = defineAction({
   id: 'files.list',
   title: 'Open Files',
   kind: 'view',
-  input: z.strictObject({ kind: z.optional(text(40)), q: z.optional(text(200)) }),
-  run: ({ router }, i) => go(router, '/library/files', { kind: i.kind, q: i.q }, true),
+  input: z.strictObject({ kind: z.optional(text(40)), tag: z.optional(text(200)), q: z.optional(text(200)) }),
+  run: ({ router }, i) => go(router, '/library/files', { kind: i.kind, tag: i.tag, q: i.q }, true),
   target: () => ({ kind: 'page', id: '/library/files' }),
+});
+
+/** One of the company's tags on a file, or off it: whoever may write the file (the server checks). */
+export const filesTag = defineAction({
+  id: 'files.tag',
+  title: 'Tag a file',
+  kind: 'change',
+  input: z.strictObject({ file: id, tag: text(200), on: z.boolean() }),
+  run: (_ctx, i) => tagFile(i.file, i.tag, i.on),
+  did: (i) => (i.on ? `Tagged ${i.tag}` : `Removed ${i.tag}`),
+  target: (i) => ({ kind: 'file', id: i.file }),
 });
 
 export const filesOpen = defineAction({

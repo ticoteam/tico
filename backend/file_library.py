@@ -27,6 +27,7 @@ import sqlite3
 
 from fastapi import Request
 
+from . import file_details
 from . import html_convert
 from . import manual
 from . import page_links
@@ -404,6 +405,7 @@ class Library:
         linked="",
         role="",
         writer="",
+        tag="",
         since="",
         until="",
         pinned=False,
@@ -435,6 +437,9 @@ class Library:
             where.append("f.last_activity_at<?")
             params.append(until)
         with self.store.read_transaction() as c:
+            if tag:
+                where.append(TAG_SQL)
+                params.append(file_details.tag_id(c, who, tag) or "")
             if team:
                 sql, args = self._team_where(c, who, team)
                 where.append(sql)
@@ -476,18 +481,27 @@ class Library:
                 f["actor_name"] = known.get(f.get("actor") or "", "")
         return {"files": files, "has_more": nxt is not None, "next_cursor": nxt}
 
-    def search(self, who, q, limit=20, *, kind="", linked="", role="", writer=""):
+    def search(self, who, q, limit=20, *, kind="", linked="", role="", writer="", tag=""):
         """Files `who` may read whose title or text matches, best first, each with an excerpt. Archived and deleted
-        files are left out, as Docs leaves out archived docs."""
+        files are left out, as Docs leaves out archived docs. With `tag`, only files carrying it; a tag alone lists
+        them, newest first."""
         if who.role not in ("owner", "human", "bot"):
             raise Problem("forbidden", "People and bots search files", 403)
         kind_sql, kind_args = kind_filter(kind)
         tokens = manual.query_words(q)
-        if not tokens:
+        if not tokens and not tag:
             raise Problem("query", "Search needs at least one word", 422)
         with self.store.read_transaction() as c:
+            if tag:
+                kind_sql, kind_args = (
+                    f"({kind_sql}) AND {TAG_SQL}",
+                    [*kind_args, file_details.tag_id(c, who, tag) or ""],
+                )
             with page_links.visible_filters(c, self.auth, who, linked, role, writer) as (sql, args):
-                candidates = self._candidates(c, tokens, " AND ".join([f"({kind_sql})", *sql]), [*kind_args, *args])
+                where, where_args = " AND ".join([f"({kind_sql})", *sql]), [*kind_args, *args]
+                candidates = (
+                    self._candidates(c, tokens, where, where_args) if tokens else self.tagged(c, where, where_args)
+                )
             from .files import prime_visible
 
             cache, out = {}, []
@@ -501,7 +515,7 @@ class Library:
                     text = r["text"] or ""
                     title_words, body = set(manual._words(r["title"] or "")), text.casefold()
                     have = [t for t in tokens if manual._hits(title_words, t) or manual._stem(t) in body]
-                    if not have:
+                    if tokens and not have:
                         continue
                     score = sum(
                         weights[t] * (10 + 15 * manual._hits(title_words, t) + min(body.count(manual._stem(t)), 5))
@@ -512,7 +526,8 @@ class Library:
                     out.append((score, r))
                 if len(out) >= limit * 4:
                     break
-            out.sort(key=lambda pair: (-pair[0], pair[1]["title"].casefold()))
+            if tokens:  # a tag alone keeps the newest first
+                out.sort(key=lambda pair: (-pair[0], pair[1]["title"].casefold()))
             out = out[:limit]
             page_links.prime(c, [r for _, r in out])
             known = names.lookup(c, {"bot:" + r["bot_id"] for _, r in out})
@@ -539,6 +554,16 @@ class Library:
 
     def _candidates(self, c, tokens, kind_sql="1", kind_args=()):
         return self.candidates(c, tokens, kind_sql, kind_args)
+
+    @staticmethod
+    def tagged(c, where, args):
+        """The files a tag filter (in `where`) keeps when no words are asked for, newest first, at most SCAN_MAX."""
+        return c.execute(
+            "SELECT f.*,p.cadence AS page_cadence,'' AS text FROM bot_files f LEFT JOIN pages p ON p.file_id=f.id "
+            "WHERE f.state<>'deleted' AND f.archived=0 AND COALESCE(p.archived,0)=0 AND (" + where + ") "
+            "ORDER BY f.last_activity_at DESC, f.id DESC LIMIT ?",
+            (*args, SCAN_MAX),
+        ).fetchall()
 
     @staticmethod
     def candidates(c, tokens, kind_sql="1", kind_args=(), *, bot="", every=False):
@@ -603,6 +628,10 @@ class Library:
         result = self.files.write(request, who, {"id": fid, "delete": True}, work)
         drain(self.store, self.files.blobs)
         return result
+
+
+# The Library's `tag=` filter: files carrying one tag (its id; an unknown tag's '' keeps none).
+TAG_SQL = "f.id IN (SELECT file_id FROM file_tags WHERE tag_id=?)"
 
 
 def library_kind(stored, page=False):
@@ -677,6 +706,7 @@ def purge_rows(c, actor, row):
     )
     release_blobs(c, blob_ids, now)
     unindex(c, fid)
+    file_details.purge(c, fid)
     c.execute("UPDATE pages SET replaced_by_id=NULL WHERE replaced_by_id=?", (fid,))
     # Its links to Contacts entities go, so an entity's one memory slot is free for another page.
     c.execute("DELETE FROM page_links WHERE page_id=? AND target LIKE 'entity:%'", (fid,))
@@ -841,7 +871,7 @@ def install_library(app, store, auth, files):
         **api_v2(
             "Files",
             "listFiles",
-            "Library › Files: every file the caller may see, newest activity first, filtered by kind, bot, team, task, date, pinned or archived; paged and byte-capped, no totals",
+            "Library › Files: every file the caller may see, newest activity first, filtered by kind, bot, team, task, tag, date, pinned or archived; paged and byte-capped, no totals",
             "FileLibrary",
         ),
     )
@@ -854,6 +884,7 @@ def install_library(app, store, auth, files):
         linked: str = "",
         role: str = "",
         writer: str = "",
+        tag: str = "",
         since: str = "",
         until: str = "",
         pinned: bool = False,
@@ -871,6 +902,7 @@ def install_library(app, store, auth, files):
             linked=linked,
             role=role,
             writer=writer,
+            tag=tag[:200],
             since=since,
             until=until,
             pinned=pinned,
@@ -884,7 +916,7 @@ def install_library(app, store, auth, files):
         **api_v2(
             "Files",
             "searchFiles",
-            "Search the files the caller may read by title and text, filtered by kind, best first with an excerpt",
+            "Search the files the caller may read by title and text, filtered by kind or tag, best first with an excerpt; a tag alone lists its files",
             "FileSearch",
         ),
     )
@@ -896,8 +928,10 @@ def install_library(app, store, auth, files):
         linked: str = "",
         role: str = "",
         writer: str = "",
+        tag: str = "",
     ):
-        """Search the files the caller may read by title and text, filtered by kind, best first with an excerpt."""
+        """Search the files the caller may read by title and text, filtered by kind or tag, best first with an excerpt;
+        a tag alone lists its files, newest first."""
         return library.search(
             request.state.identity,
             q[:500],
@@ -906,6 +940,7 @@ def install_library(app, store, auth, files):
             linked=linked,
             role=role,
             writer=writer,
+            tag=tag[:200],
         )
 
     @app.delete(

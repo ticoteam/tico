@@ -31,6 +31,7 @@ import { ListEditor, ListSections, useLists } from './Lists';
 import { AllTasks, EditDialog, Foot, Fold, OwnRow, OwnRows, PickLine, waitsOn } from './parts';
 import {
   agentFilesQuery,
+  agentMediaQuery,
   agentQuery,
   agentsQuery,
   agentToolsQuery,
@@ -210,8 +211,10 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
   const detail = useQuery(agentQuery(slug));
   const dream = useQuery(dreamQuery(slug));
   const { lists } = useLists(slug);
+  // Made recently shows once either read has something: its pictures and videos (a short read) never wait on its files.
   const files = useInfiniteQuery(agentFilesQuery(slug));
-  const fileN = files.data?.pages[0]?.files?.length ?? 0;
+  const made = useQuery(agentMediaQuery(slug));
+  const fileN = (files.data?.pages[0]?.files?.length ?? 0) + (made.data?.files?.length ?? 0);
   const toolN = toolRows(readable(useInfiniteQuery(agentToolsQuery(slug)))).length;
   const manage = useQuery(agentsQuery).data?.find((r) => r.slug === slug)?.can_manage !== false;
   // Its sidebar in the order it keeps (the loader reads it with its tasks); its pages and cards only when it has some.
@@ -273,7 +276,7 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
           <ListSections slug={slug} needs={needs} />
         </>
       );
-    if (id === 'files') return fileN > 0 ? <FilesSection slug={slug} /> : null;
+    if (id === 'files') return fileN > 0 ? <FilesSection slug={slug} list={actor.id} /> : null;
     if (id === 'tools') return toolN > 0 ? <ToolsSection slug={slug} name={actor.name} manage={manage} /> : null;
     const pin = pinOf.get(id);
     return pinShows(pin) ? <PinnedItem pin={pin} live={livePages.has(id)} /> : null;

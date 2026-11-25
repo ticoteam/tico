@@ -10,13 +10,14 @@ import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { Link } from '@/kit/Link';
-import { Menu, MenuItem } from '@/kit/Menu';
+import { Menu, MenuItem, MenuSub } from '@/kit/Menu';
 import { useCards } from '@/kit/Popover';
 import { Row } from '@/kit/Row';
+import { tagsQuery } from '@/features/tasks/exports';
 import { Document, FilterRow, List, Section } from '@/pagekinds';
 import { SectionHead } from '@/kit/SectionHead';
 import { VirtualList } from '@/kit/VirtualList';
-import { FileGet, linkOf, Preview } from './FileViewer';
+import { FileGet, linkOf, posterOf, Preview } from './FileViewer';
 import { Face, Find, KindGlyph, press, size, when, Who } from './parts';
 import { fileQuery, fileSearchQuery, filesQuery, fileUrl, fileVersionsQuery, type FileRow } from './queries';
 import type { FilesSearch } from './search';
@@ -47,6 +48,7 @@ function bucket(at: string, now: number): 'Today' | 'This week' | 'Earlier' {
 const fileHref = (search: FilesSearch, id: string, v?: number) => {
   const p = new URLSearchParams();
   if (search.kind) p.set('kind', search.kind);
+  if (search.tag) p.set('tag', search.tag);
   if (search.q) p.set('q', search.q);
   p.set('file', id);
   if (v) p.set('v', String(v));
@@ -60,9 +62,11 @@ export function FilesPage({ search }: { search: FilesSearch }) {
 
 function FilesList({ search }: { search: FilesSearch }) {
   const kind = search.kind ?? '';
+  const tag = search.tag ?? '';
   const searching = (search.q?.trim().length ?? 0) > 1;
-  const files = useInfiniteQuery({ ...filesQuery(kind), enabled: !searching });
-  const found = useQuery(fileSearchQuery(search.q ?? '', kind));
+  const files = useInfiniteQuery({ ...filesQuery(kind, tag), enabled: !searching });
+  const found = useQuery(fileSearchQuery(search.q ?? '', kind, tag));
+  const tags = useQuery(tagsQuery).data ?? [];
   const [chosen, setChosen] = useState<File[] | null>(null);
   const input = useRef<HTMLInputElement>(null);
 
@@ -117,7 +121,8 @@ function FilesList({ search }: { search: FilesSearch }) {
   });
   const kindName = KINDS.find(([k]) => k === kind)?.[1];
   // With no files at all, the head keeps only the owner and ⋯: the empty state holds the one button (files.js empty).
-  const none = !rows.length && !kind && !searching && files.isSuccess;
+  const none = !rows.length && !kind && !tag && !searching && files.isSuccess;
+  const list = (change: { kind?: string; tag?: string }) => void press('files.list', { kind: search.kind, tag: search.tag, q: search.q, ...change });
   const add = (
     <Button variant="primary" onClick={() => input.current?.click()} data-target="files:add">
       Add
@@ -130,23 +135,39 @@ function FilesList({ search }: { search: FilesSearch }) {
         title="Files"
         path="/library/files"
         className="lib"
-        search={!none && <Find label="Search files" value={search.q} onFind={(q) => void press('files.list', { kind: search.kind, q })} />}
+        search={!none && <Find label="Search files" value={search.q} onFind={(q) => void press('files.list', { kind: search.kind, tag: search.tag, q })} />}
         actions={
           <>
             {!none && (
-              <Menu trigger={<IconButton icon="filter" label="Filter by kind" on={!!kind} data-phone />}>
-              <MenuItem label="All files" on={!kind} onSelect={() => void press('files.list', { q: search.q })} />
+              <Menu trigger={<IconButton icon="filter" label="Filter" on={!!kind || !!tag} data-phone />}>
+              <MenuItem label="All files" on={!kind} onSelect={() => list({ kind: undefined })} />
               {KINDS.map(([k, label]) => (
-                <MenuItem key={k} label={label} on={k === kind} onSelect={() => void press('files.list', { kind: k, q: search.q })} />
+                <MenuItem key={k} label={label} on={k === kind} onSelect={() => list({ kind: k })} />
               ))}
+              {tags.length > 0 && (
+                <MenuSub label="Tag">
+                  {tags.map((t) => (
+                    <MenuItem key={t.key} label={t.key} on={t.key === tag} onSelect={() => list({ tag: t.key === tag ? undefined : t.key })} />
+                  ))}
+                </MenuSub>
+              )}
               </Menu>
             )}
             {!none && add}
             <input ref={input} type="file" multiple hidden aria-label="Choose files" onChange={(e) => take(e.target.files)} />
           </>
         }
-        filter={kindName && <FilterRow filters={[{ label: kindName, onClear: () => void press('files.list', { q: search.q }) }]} />}
-        state={searching || rows.length ? 'ready' : files.isPending ? 'loading' : files.isError ? 'fault' : kind ? 'ready' : 'empty'}
+        filter={
+          (kindName || tag) && (
+            <FilterRow
+              filters={[
+                ...(kindName ? [{ label: kindName, onClear: () => list({ kind: undefined }) }] : []),
+                ...(tag ? [{ label: tag, onClear: () => list({ tag: undefined }) }] : []),
+              ]}
+            />
+          )
+        }
+        state={searching || rows.length ? 'ready' : files.isPending ? 'loading' : files.isError ? 'fault' : kind || tag ? 'ready' : 'empty'}
         onRetry={() => void files.refetch()}
         empty={{ title: 'No files yet', action: <Button variant="primary" onClick={() => input.current?.click()}>Add file</Button> }}
         sections={
@@ -188,7 +209,7 @@ function FilesList({ search }: { search: FilesSearch }) {
               }
             />
           ) : (
-            <Empty title={`No ${kindName?.toLowerCase() ?? 'files'}`} />
+            <Empty title={tag ? `No files tagged ${tag}` : `No ${kindName?.toLowerCase() ?? 'files'}`} />
           )
         }
       />
@@ -301,6 +322,7 @@ function FilePage({ id, search }: { id: string; search: FilesSearch }) {
       actions={
         <>
           {!unavailable && <FileGet url={url} link={linkOf(file)} />}
+          {file.may_edit && <FileMore id={id} on={file.tags ?? []} />}
         </>
       }
       framed
@@ -316,6 +338,7 @@ function FilePage({ id, search }: { id: string; search: FilesSearch }) {
           size={shown?.size ?? (older ? undefined : file.size)}
           link={linkOf(file)}
           signable={signable}
+          poster={posterOf(file, id, n ?? 1, older)}
         />
       }
       sideFacts
@@ -330,7 +353,32 @@ function FilePage({ id, search }: { id: string; search: FilesSearch }) {
               </LabelValue>
               {file.task_title && <LabelValue label="Task">{file.task_title}</LabelValue>}
               <LabelValue label="Changed">{when(file.last_activity_at)}</LabelValue>
+              {file.parent && (
+                <LabelValue label="Made from">
+                  <Link href={fileHref({}, file.parent.id)}>{file.parent.title}</Link>
+                </LabelValue>
+              )}
+              {(file.tags?.length ?? 0) > 0 && (
+                <LabelValue label="Tags">
+                  <span className="row-tags">
+                    {file.tags?.map((t) => (
+                      <Link key={t.id} className="tag" href={`/library/files?tag=${encodeURIComponent(t.key)}`}>
+                        {t.key}
+                      </Link>
+                    ))}
+                  </span>
+                </LabelValue>
+              )}
             </Facts>
+            {Object.keys(file.metadata ?? {}).length > 0 && (
+              <Facts label="Metadata">
+                {Object.entries(file.metadata ?? {}).map(([k, v]) => (
+                  <LabelValue key={k} label={k}>
+                    {typeof v === 'string' ? v : JSON.stringify(v)}
+                  </LabelValue>
+                ))}
+              </Facts>
+            )}
             {(versions.data?.length ?? 0) > 0 && (
               <>
                 <div className="fv-h">
@@ -353,5 +401,26 @@ function FilePage({ id, search }: { id: string; search: FilesSearch }) {
         )
       }
     />
+  );
+}
+
+/** ⋯ on a file its viewer may write: the company's tags, each ticked when the file carries it. */
+function FileMore({ id, on }: { id: string; on: ReadonlyArray<{ key: string }> }) {
+  const tags = useQuery(tagsQuery).data ?? [];
+  const has = new Set(on.map((t) => t.key));
+  if (!tags.length) return null;
+  return (
+    <Menu trigger={<IconButton icon="more" label="More" />}>
+      <MenuSub label="Tags">
+        {tags.map((t) => (
+          <MenuItem
+            key={t.key}
+            label={t.key}
+            on={has.has(t.key)}
+            onSelect={() => void press('files.tag', { file: id, tag: t.key, on: !has.has(t.key) }, `${t.key} was not changed`)}
+          />
+        ))}
+      </MenuSub>
+    </Menu>
   );
 }

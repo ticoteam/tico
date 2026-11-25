@@ -1,37 +1,68 @@
-import { keepPreviousData, useInfiniteQuery } from '@tanstack/react-query';
+import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useState, type MouseEvent } from 'react';
 import { run } from '@/actions';
 import { Ago } from '@/kit/Ago';
 import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
+import { Link } from '@/kit/Link';
+import { Thumbs, type Thumb } from '@/kit/Thumbs';
 import { Section } from '@/pagekinds';
 import { fileName, fileOpen } from './model';
 import { Foot } from './parts';
-import { agentFilesQuery, type AgentFile } from './queries';
+import { agentFilesQuery, agentMediaQuery, type AgentFile } from './queries';
 
 const SHORT = 3;
 
+const fileAt = (f: AgentFile, part = '') => `/api/v2/files/${encodeURIComponent(f.id)}${part}?v=${f.version}`;
+
+/** A picture or a video it made, as a preview: its small copy (a picture's thumb, a video's frame), the task it is for
+    under it, a link that opens that task over the page (its list this agent's tasks). */
+const thumbOf = (f: AgentFile): Thumb => {
+  const video = f.kind === 'video';
+  return {
+    id: f.id,
+    name: fileName(f),
+    video,
+    src: video ? f.poster_blob_id && fileAt(f, '/poster') : f.thumb_blob_id && fileAt(f, '/thumb'),
+    full: video ? null : fileAt(f),
+    sub: f.task_id ? (
+      <Link href={`/task/${encodeURIComponent(f.task_id)}`} title={f.task_title ?? undefined}>
+        {f.task_title || 'Its task'}
+      </Link>
+    ) : undefined,
+  };
+};
+
 /**
- * The files it made or keeps (ui bot-files.ts): the three newest, then all of them a page at a time. A stored file and
- * a Google file open over the page; any other link opens at its provider. No files, no section.
+ * Made recently (ui bot-files.ts, then its pictures first): its newest pictures and videos as previews, each opening in
+ * the viewer over the page with the task it is for a click away; then all its files a page at a time, behind All files.
+ * With no pictures or videos, the three newest files, as before. A stored file and a Google file open over the page;
+ * any other link opens at its provider. Its pictures and videos are a read of their own, drawn without waiting on its
+ * files. No pictures, videos or files, no section.
  */
-export function FilesSection({ slug }: { slug: string }) {
+export function FilesSection({ slug, list }: { slug: string; /** Its tasks' list, which a task opened from here has beside it. */ list?: string }) {
   const [find, setFind] = useState('');
   const [searching, setSearching] = useState(false);
   const words = find.trim();
   const narrowed = !!words;
   const q = useInfiniteQuery({ ...agentFilesQuery(slug, words), placeholderData: keepPreviousData });
+  const made = useQuery(agentMediaQuery(slug));
   const [all, setAll] = useState(false);
   const files = q.data?.pages.flatMap((p) => p.files ?? []) ?? [];
-  const total = q.data?.pages[0]?.total ?? files.length;
+  // its count once its files are read: its pictures and videos show before that, never waiting on the longer read
+  const total = q.data ? (q.data.pages[0]?.total ?? files.length) : undefined;
+  const media = (made.data?.files ?? []).filter((f) => f.kind === 'image' || f.kind === 'video').map(thumbOf);
   // Nothing to list is no section; a search that finds nothing keeps its box (ui bot-files).
-  if (!files.length && !narrowed) return null;
+  if (!files.length && !media.length && !narrowed) return null;
+  // its pictures stand for its newest files; the rows wait behind All files, unless a search asks for them
+  const pictures = media.length > 0 && !narrowed;
+  const rows = !pictures || all;
   const shown = all ? files : files.slice(0, SHORT);
-  const tools = total > SHORT || narrowed || searching;
+  const tools = (total ?? 0) > SHORT || narrowed || searching;
   return (
     <Section
-      name="Files"
+      name="Made recently"
       count={total}
       target={`files:${slug}`}
       actions={
@@ -43,15 +74,22 @@ export function FilesSection({ slug }: { slug: string }) {
         ))
       }
     >
-      {shown.map((f) => (
-        <FileRow key={f.id} file={f} />
-      ))}
-      {!files.length && <p className="now-step">Nothing matches</p>}
-      {(total > SHORT || all) && (
+      {pictures && (
+        <div className="side-made" data-list={list}>
+          <Thumbs
+            label="Pictures and videos"
+            items={media}
+            onOpen={(t) => void run('files.preview', { file: t.id }, { via: 'click' })}
+          />
+        </div>
+      )}
+      {rows && shown.map((f) => <FileRow key={f.id} file={f} />)}
+      {rows && q.isSuccess && !files.length && <p className="now-step">Nothing matches</p>}
+      {(pictures || (total ?? 0) > SHORT || all) && (
         <Foot>
           {!all && (
             <button className="verb" type="button" onClick={() => setAll(true)}>
-              {total - SHORT} more
+              {pictures ? 'All files' : `${(total ?? 0) - SHORT} more`}
             </button>
           )}
           {all && q.hasNextPage && (
