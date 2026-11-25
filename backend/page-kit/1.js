@@ -62,15 +62,17 @@
   style.textContent = CSS;
   (document.head || d).appendChild(style);
 
-  // Dark unless the page chose a light background (the reporter darkens a page that chose none).
+  // Light on a light background. With none (the reporter darkens a page that chose none, unless it chose its own dark
+  // text, which then sits on the white canvas), light under dark text.
   function theme() {
     var bg = '';
     [document.body, d].some(function (e) {
       var c = e && getComputedStyle(e).backgroundColor;
       if (c && c !== 'transparent' && c !== 'rgba(0, 0, 0, 0)') return (bg = c);
     });
-    var n = (bg.match(/[0-9.]+/g) || [0, 0, 0]).map(Number);
-    d.setAttribute('data-tico-kit', bg && 0.299 * n[0] + 0.587 * n[1] + 0.114 * n[2] >= 128 ? 'light' : 'dark');
+    var n = ((bg || getComputedStyle(document.body || d).color || '').match(/[0-9.]+/g) || [0, 0, 0]).map(Number),
+      bright = 0.299 * n[0] + 0.587 * n[1] + 0.114 * n[2] >= 128;
+    d.setAttribute('data-tico-kit', bg ? (bright ? 'light' : 'dark') : bright ? 'dark' : 'light');
   }
   theme();
   if (window.matchMedia) {
@@ -94,11 +96,14 @@
   }
 
   // "Label 10" -> {label, text: "10", value: 10}. The value is the last figure: "$1,200", "4.5%", "12k".
-  var POINT = /^(.*?)\s*([-+]?[$€£]?\d[\d,]*(?:\.\d+)?\s*[%kKmM]?)\s*$/;
+  // "1.2k" is 1200 and "3M" 3,000,000; "−50" (a typeset minus) is -50.
+  var POINT = /^(.*?)\s*([-+\u2212]?[$€£]?\d[\d,]*(?:\.\d+)?\s*[%kKmM]?)\s*$/;
+  var SCALE = { k: 1e3, m: 1e6 };
   function point(s) {
     var m = POINT.exec(String(s).replace(/\s+/g, ' ').trim());
     if (!m) return null;
-    var v = parseFloat(m[2].replace(/[^\d.+-]/g, ''));
+    var t = m[2].replace('\u2212', '-'),
+      v = parseFloat(t.replace(/[^\d.+-]/g, '')) * (SCALE[t.slice(-1).toLowerCase()] || 1);
     return isFinite(v) ? { label: m[1], text: m[2], value: v } : null;
   }
 
@@ -203,7 +208,7 @@
       svg('line', { class: 'base', x1: 0, x2: w, y1: h - foot + 4, y2: h - foot + 4 }, s);
       svg('path', { class: 'ln', d: 'M' + xy.map(function (q) { return q[0].toFixed(1) + ' ' + q[1].toFixed(1); }).join('L') }, s);
       svg('circle', { class: 'pt', cx: at[0], cy: at[1], r: 3 }, s);
-      svg('text', { class: 'now', x: at[0], y: at[1] - 8, 'text-anchor': 'end' }, s).textContent = end.text;
+      svg('text', { class: 'now', x: at[0], y: at[1] - 8, 'text-anchor': pts.length > 1 ? 'end' : 'start' }, s).textContent = end.text;
       svg('text', { x: 0, y: h - 2 }, s).textContent = first.label;
       if (pts.length > 1) {
         svg('text', { x: xy[0][0], y: xy[0][1] - 8 }, s).textContent = first.text;
