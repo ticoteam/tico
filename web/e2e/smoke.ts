@@ -294,7 +294,7 @@ async function phone(browser: Browser, name: string) {
     await settle(page, 2500);
     await noBarOnFields(page, 'a thread');
   }
-  // a task: Agent and Task come out, Agent is its chat, Company goes back to the list and they leave
+  // a task: it opens full screen over its board, the task and its chat as tabs; Close goes back to the board
   await page.goto(`${APP}/tasks`);
   await settle(page, 2500);
   // Tasks lists the pipelines under Needs you: the first one's board
@@ -310,20 +310,19 @@ async function phone(browser: Browser, name: string) {
   if (href) {
     await page.locator(`a[href="${href}"]`).first().tap();
     await settle(page, 2500);
-    const on = await icons();
-    check(on.includes('Task') && on.length >= 4, `the bar on a task: ${on.join(', ')}`, `the bar on a task: ${on.join(', ')}`);
+    const over = page.locator('.vw:has(.tmd)');
+    check((await over.count()) === 1, 'a task opens over its board', `a task: ${await over.count()} dialogs at ${page.url()}`);
     await shot(page, `phone-${name}-task`);
-    if (on.length === 5) {
-      await page.locator('.phone>.tabbar .tab-agent').tap();
+    const chat = over.locator('.tmd-panes').getByRole('button', { name: 'Chat', exact: true });
+    if (await chat.count()) {
+      await chat.tap();
       await settle(page, 1200);
-      check((await card()) === 'chat', "Agent raises the task's chat", `Agent: card ${await card()}`);
-      check((await page.locator('.phone textarea:visible').count()) <= 1, 'one message box on screen', 'two message boxes on screen');
-      await noBarOnFields(page, "a task's chat, raised");
-      await shot(page, `phone-${name}-task-agent`);
+      check((await page.locator('.phone textarea:visible, .vw textarea:visible').count()) <= 1, 'one message box on screen', 'two message boxes on screen');
+      await shot(page, `phone-${name}-task-chat`);
     }
-    await tab('Company').tap();
+    await over.getByRole('button', { name: 'Close', exact: true }).tap();
     await settle(page, 1500);
-    check(new URL(page.url()).pathname === list && !(await icons()).includes('Task'), 'Company on a task goes back to the list', `Company on a task: ${page.url()} (from ${list})`);
+    check(new URL(page.url()).pathname === list && !new URL(page.url()).searchParams.has('task'), 'Close on a task goes back to the board', `Close on a task: ${page.url()} (from ${list})`);
   }
   await ctx.close();
 }
@@ -371,13 +370,13 @@ async function responsive(browser: Browser) {
   const mobile = await open(browser, true, '/needs-you', true);
   try {
     await mobile.page.locator('main a[href^="/task/"]').first().click();
-    const back = mobile.page.locator('main .pk-head').getByRole('button', { name: 'Back' });
+    const back = mobile.page.locator('.vw:has(.tmd)').getByRole('button', { name: 'Close', exact: true });
     await back.waitFor();
     const fits = await back.evaluate((el) => {
       const rect = el.getBoundingClientRect();
       return rect.left >= 0 && rect.right <= innerWidth;
     });
-    assert(fits, 'the task back button is clipped at 390');
+    assert(fits, "the task's Close is clipped at 390");
 
     // an agent's Model dialog, a sheet at 390: nothing runs off its side, the radios are 16px rings in full-width rows
     await mobile.page.goto(`${APP}/settings/agents`);

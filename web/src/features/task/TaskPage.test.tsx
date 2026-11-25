@@ -5,10 +5,12 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionsRoot, run } from '@/actions';
 import { keys, queryClient } from '@/data';
+import { coldOf, coldPage, forgetPlaces, NEEDS_YOU, noteList, openOf, openTasksOver } from '@/lib';
 import { useFollow } from '@/live/follow';
+import { answered, answering } from './answered';
 import { pageVersionQuery, taskFilesQuery, type TaskData } from './queries';
-import { loadTask, useLoadedTask } from './routing';
-import { TaskPage } from './TaskPage';
+import { loadTask } from './routing';
+import { TaskChat, TaskPage } from './TaskPage';
 
 vi.mock('@/live/follow', () => ({ useFollow: vi.fn() }));
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
@@ -34,6 +36,16 @@ function serve(reply: (url: string, method: string, body: Record<string, unknown
   });
 }
 
+/** The task over its board as a cold link opens it (lib taskAddress), with the app's router opening tasks over it. */
+function over(at: string): string {
+  const [path = '', query = ''] = at.split('?');
+  const words = Object.fromEntries(new URLSearchParams(query));
+  const cold = coldOf(path, words);
+  if (!cold) return at;
+  const to = coldPage(cold, words);
+  return `${to.to}?${new URLSearchParams(Object.entries(to.search).map(([k, v]) => [k, String(v)]))}`;
+}
+
 function show(node: ReactNode, at = '/tasks/p1/12') {
   // The shell's ActionsRoot lends the router to the action layer: a control's press runs through it.
   const root = createRootRoute({
@@ -44,7 +56,8 @@ function show(node: ReactNode, at = '/tasks/p1/12') {
       </>
     ),
   });
-  const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: [at] }) });
+  const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: [over(at)] }) });
+  openTasksOver(router);
   render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
@@ -121,7 +134,7 @@ function base(url: string): Reply {
 
 const people = (actors: { id: string; kind: string; name: string }[]) =>
   queryClient.setQueryData(['directory'], { actors, byId: Object.fromEntries(actors.map((a) => [a.id, a])) });
-const details = () => show(<TaskPage task="12" pipeline="p1" tab="details" />, '/tasks/p1/12/details');
+const details = () => show(<TaskPage task="12" tab="details" />, '/tasks/p1/12/details');
 const more = async () => fireEvent.click((await screen.findAllByRole('button', { name: 'More' }))[0] as HTMLElement);
 const lastMore = async () => fireEvent.click((await screen.findAllByRole('button', { name: 'More' })).at(-1) as HTMLElement);
 const addDialog = async () => {
@@ -145,44 +158,11 @@ afterEach(() => {
   vi.mocked(useFollow).mockClear();
 });
 
-describe('task route loading', () => {
-  it('a ❓ for the person in its chat opens on its page, on a phone too, and the shell reads it from what loaded to raise the chat', async () => {
-    // the turn shows an approval the person shares (it goes first, backend/waiting_on.py); their ❓ is in the waits
-    const turn = { state: 'person', who: 'human:me', line: 'Approve the plan?', requirement_id: 'r1', ask: true };
-    const waits = [turn, { state: 'person', who: 'human:me', line: 'Keep it?', requirement_id: 'qmark:q1', ask: true }];
-    const asked = task({ conversation_id: 'room', documents: [], to_leave: [], turn, waits } as unknown as Partial<TaskData>);
-    serve((url) => (url.endsWith('/tasks/%2312') || url.endsWith('/tasks/t1') ? { status: 200, body: detail(asked) } : url.endsWith('/files?all=1') ? { status: 200, body: { files: [] } } : base(url)));
-    queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'person', slug: null });
-    document.documentElement.dataset.layout = 'cards';
-    try {
-      expect((await loadTask(queryClient, '12'))?.tab).toBe('details');
-    } finally {
-      delete document.documentElement.dataset.layout;
-    }
-    const seen: boolean[] = [];
-    const Shell = ({ task: n }: { task: string }) => {
-      seen.push(useLoadedTask(n).asked.length > 0);
-      return null;
-    };
-    const { rerender } = render(
-      <QueryClientProvider client={queryClient}>
-        <Shell task="12" />
-      </QueryClientProvider>,
-    );
-    expect(seen.at(-1)).toBe(true);
-    queryClient.setQueryData(['me'], { id: 'human:ana', email: '', role: 'person', slug: null });
-    rerender(
-      <QueryClientProvider client={queryClient}>
-        <Shell task="12" />
-      </QueryClientProvider>,
-    );
-    await waitFor(() => expect(seen.at(-1)).toBe(false));
-  });
-
-  it('reuses a task read from an older id link when redirecting to its numbered address', async () => {
+describe('warming an opening task', () => {
+  it('reuses a task read from an older id link for its number', async () => {
     serve(base);
-    expect(await loadTask(queryClient, 't1')).toMatchObject({ task: { id: 't1', number: 12 } });
-    expect(await loadTask(queryClient, '12', 'qa-report')).toMatchObject({ task: { id: 't1' } });
+    await loadTask(queryClient, 't1');
+    await loadTask(queryClient, '12', 'qa-report');
     expect(calls.filter((call) => /^GET \/api\/v2\/tasks\/(t1|%2312)$/.test(call))).toEqual(['GET /api/v2/tasks/t1']);
   });
 
@@ -193,7 +173,7 @@ describe('task route loading', () => {
       if (url.endsWith('/tasks/t1/files?all=1')) return manifest.promise;
       return base(url);
     });
-    const loaded = loadTask(queryClient, '12', 'details', true);
+    const loaded = loadTask(queryClient, '12', 'details');
     try {
       await waitFor(() => expect(calls).toContain('GET /api/v2/threads/room/timeline?flat=1&limit=50'));
       expect(calls).toContain('GET /api/v2/threads/room');
@@ -210,79 +190,75 @@ describe('task route loading', () => {
       if (url.endsWith('/api/v2/threads/room')) return { status: 200, body: { id: 'room', task_id: 't1' } };
       return base(url);
     });
-    await loadTask(queryClient, '12', 'details', true);
+    await loadTask(queryClient, '12', 'details');
     // the warm read is not waited for: it goes once the thread is read
     await waitFor(() => expect(calls.filter((c) => c.startsWith('GET /api/v2/threads/room/timeline'))).toHaveLength(1));
     expect(calls.find((c) => c.startsWith('GET /api/v2/threads/room/timeline'))).toContain('comments=true');
   });
 
-  it.each([['spec', 'f1'], [undefined, 'f2']] as const)('starts the selected page read while files are pending for tab %s', async (tab, file) => {
-    const manifest = holdReply();
-    serve((url) => (url.endsWith('/tasks/t1/files?all=1') ? manifest.promise : base(url)));
-    const loaded = loadTask(queryClient, '12', tab);
-    const finished = vi.fn();
-    void loaded.then(finished);
-    try {
-      await waitFor(() => expect(finished).toHaveBeenCalledWith({ task: expect.objectContaining({ id: 't1' }), tab: tab ?? 'qa-report' }));
-      expect(calls).toContain('GET /api/v2/tasks/t1/files?all=1');
-      expect(calls).toContain(`GET /api/v2/pages/${file}`);
-      expect(queryClient.getQueryState(taskFilesQuery('t1').queryKey)?.fetchStatus).toBe('fetching');
-    } finally {
-      manifest.resolve({ status: 200, body: { files: [] } });
-      await loaded;
-      await queryClient.prefetchQuery(taskFilesQuery('t1'));
-    }
-  });
-
-  it.each(['attachment-pdf', 'details', undefined])('waits for the files when the route needs them for tab %s', async (tab) => {
-    const manifest = holdReply();
-    const t = task();
-    t.to_leave = [{ ...t.to_leave![0]!, approval: undefined, shows: ['file:f6'] }];
-    serve((url) => {
-      if (url.includes('/api/v2/tasks/%2312')) return { status: 200, body: detail(t) };
-      if (url.endsWith('/tasks/t1/files?all=1')) return manifest.promise;
-      return base(url);
-    });
-    const loaded = loadTask(queryClient, '12', tab);
-    const finished = vi.fn();
-    void loaded.then(finished);
-    try {
-      await waitFor(() => expect(calls).toContain('GET /api/v2/tasks/t1/files?all=1'));
-      expect(finished).not.toHaveBeenCalled();
-      expect(calls.some((url) => url.startsWith('GET /api/v2/pages/'))).toBe(false);
-    } finally {
-      manifest.resolve({ status: 200, body: { files: [{ id: 'f6', name: 'attachment.pdf', versions: [] }] } });
-    }
-    await expect(loaded).resolves.toMatchObject({ tab: tab ?? 'attachment-pdf' });
-  });
-
-  it('keeps what the ask is about when the files do not load: its own tab, read by its id, not the page beside it @approvals', async () => {
-    const t = task();
-    t.to_leave = [{ ...t.to_leave![0]!, approval: undefined, shows: ['file:f6@1', 'page:f2@1'] }];
-    serve((url) => {
-      if (url.includes('/api/v2/tasks/%2312')) return { status: 200, body: detail(t) };
-      if (url.endsWith('/tasks/t1/files?all=1')) return { status: 500, body: { error: { code: 'oops', detail: 'down' } } };
-      return base(url);
-    });
-    await expect(loadTask(queryClient, '12')).resolves.toMatchObject({ tab: 'file' });
-  });
-
-  it('waits for the files when the ask is about a file and also shows a page @approvals', async () => {
-    const t = task();
-    t.to_leave = [{ ...t.to_leave![0]!, approval: undefined, shows: ['file:f6@1', 'page:f2@1'] }];
-    serve((url) => {
-      if (url.includes('/api/v2/tasks/%2312')) return { status: 200, body: detail(t) };
-      if (url.endsWith('/tasks/t1/files?all=1')) return { status: 200, body: { files: [{ id: 'f6', name: 'declaration.pdf', versions: [] }] } };
-      return base(url);
-    });
-    await expect(loadTask(queryClient, '12')).resolves.toMatchObject({ tab: 'declaration-pdf' });
-  });
+  it.each([['spec', 'f1'], [undefined, 'f2'], ['attachment-pdf', null], ['details', null]] as const)(
+    'starts the page tab %s shows and never waits for the files',
+    async (tab, file) => {
+      const manifest = holdReply();
+      serve((url) => (url.endsWith('/tasks/t1/files?all=1') ? manifest.promise : base(url)));
+      try {
+        // done while the manifest is still on its way: nothing reads what the warm-up finds
+        await loadTask(queryClient, '12', tab);
+        expect(calls).toContain('GET /api/v2/tasks/t1/files?all=1');
+        if (file) expect(calls).toContain(`GET /api/v2/pages/${file}`);
+        else expect(calls.some((url) => url.startsWith('GET /api/v2/pages/'))).toBe(false);
+        expect(queryClient.getQueryState(taskFilesQuery('t1').queryKey)?.fetchStatus).toBe('fetching');
+      } finally {
+        manifest.resolve({ status: 200, body: { files: [] } });
+        await queryClient.prefetchQuery(taskFilesQuery('t1'));
+      }
+    },
+  );
 });
 
 describe('one open task', () => {
+  it('closed before its files are read, never opens itself again as they arrive', async () => {
+    const manifest = holdReply();
+    serve((url) => (url.endsWith('/tasks/t1/files?all=1') ? manifest.promise : undefined));
+    // the modal draws the task while its layer fades out: here it stays drawn after the address closes it
+    const router = show(<TaskPage task="12" />, '/tasks/p1/12');
+    await waitFor(() => expect(calls).toContain('GET /api/v2/tasks/t1/files?all=1'));
+    await act(() => router.navigate({ to: '/tasks/p1', search: {}, replace: true } as never));
+    manifest.resolve({ status: 200, body: { files: [] } });
+    await waitFor(() => expect(queryClient.getQueryState(taskFilesQuery('t1').queryKey)?.status).toBe('success'));
+    await act(() => new Promise((done) => setTimeout(done, 20)));
+    expect(router.state.location.search).toEqual({});
+  });
+
+  it('answered as it closes (the answer landing once Back took it away): opens no next task over the page', async () => {
+    serve(reads(task({ to_leave: [] })));
+    const router = show(<TaskPage task="12" />, '/task/12');
+    await screen.findByRole('heading', { name: 'Fix the sign-in page' });
+    // Needs you, the list it was opened from, has a task below it
+    noteList({ pipeline: NEEDS_YOU, open: '12', rows: [{ id: 't1', n: '12' }, { id: 't2', n: '13' }] });
+    answering('t1', null);
+    await act(() => router.navigate({ to: '/tasks', search: {}, replace: true } as never));
+    act(() => answered());
+    await act(() => new Promise((done) => setTimeout(done, 20)));
+    expect(router.state.location.search).toEqual({});
+    forgetPlaces();
+  });
+
+  it('an answer to another task (its card still drawn under this one): this one stays open', async () => {
+    serve(reads(task({ to_leave: [] })));
+    const router = show(<TaskPage task="12" />, '/task/12');
+    await screen.findByRole('heading', { name: 'Fix the sign-in page' });
+    noteList({ pipeline: NEEDS_YOU, open: '12', rows: [{ id: 't1', n: '12' }, { id: 't2', n: '13' }] });
+    answering('t9', null);
+    act(() => answered());
+    await act(() => new Promise((done) => setTimeout(done, 20)));
+    expect(String(openOf(router.state.location.search as Record<string, unknown>)?.task)).toBe('12');
+    forgetPlaces();
+  });
+
   it('has no name while it loads, so the tab title and a thread’s page chip never read a placeholder', async () => {
     serve(() => new Promise<Reply>(() => {}));
-    show(<TaskPage task="12" pipeline="p1" />);
+    show(<TaskPage task="12" />);
     await screen.findByRole('status', { name: 'Loading' });
     expect(screen.queryByRole('heading', { level: 1, name: 'Task' })).toBeNull();
     // what Tico's page name reads (tico/pageName: the page's h1)
@@ -291,7 +267,7 @@ describe('one open task', () => {
 
   it('opens on the page that waits on the person, with every tab a link, and follows the task @s51 @s54 @s74 @s780 @s789', async () => {
     serve(base);
-    show(<TaskPage task="12" pipeline="p1" />);
+    show(<TaskPage task="12" />);
     expect(await screen.findByRole('heading', { level: 1, name: 'Fix the sign-in page' })).toBeTruthy();
     const tabs = screen.getByRole('navigation', { name: 'Fix the sign-in page pages' });
     // the tab that opens is picked once the task's files are read (a file is a tab too)
@@ -317,7 +293,7 @@ describe('one open task', () => {
   it('names who has it beside their face in the head, on a page tab too', async () => {
     people([{ id: 'bot:a1', kind: 'agent', name: 'Builder' }]);
     serve(reads(task({ to_leave: [] })));
-    show(<TaskPage task="12" pipeline="p1" />);
+    show(<TaskPage task="12" />);
     expect(await screen.findByRole('heading', { level: 1, name: 'Fix the sign-in page' })).toBeTruthy();
     const who = await waitFor(() => document.querySelector('[data-target="task-owner:t1"]') as HTMLElement);
     expect(await screen.findByRole('button', { name: 'Who has it: Builder' })).toBe(who);
@@ -329,7 +305,7 @@ describe('one open task', () => {
     const blocker = { id, number: 130, title: 'Matches cause check', status: 'open', direction: 'out', owner_id: 'bot:a1' };
     const turn = { state: 'tasks', who: id, line: 'Blocked by Matches cause check, in To do', requirement_id: 'dep:x', since: null, until: null, ask: false };
     serve(reads(task({ to_leave: [], relations: { depends_on: [blocker] }, turn } as Partial<TaskData>)));
-    show(<TaskPage task="12" pipeline="p1" />);
+    show(<TaskPage task="12" />);
     expect(await screen.findByRole('heading', { level: 1, name: 'Fix the sign-in page' })).toBeTruthy();
     const link = within(document.querySelector('.pk-where') as HTMLElement).getByRole('link', { name: 'Blocked by Matches cause check, in To do' });
     const head = link.closest('header') as HTMLElement;
@@ -344,7 +320,7 @@ describe('one open task', () => {
     // the server names a private blocker to its readers only (task_calls.task_view); this is what any other line reads
     const turn = { state: 'tasks', who: 'private-1', line: 'Blocked by Salary numbers, in Build', requirement_id: 'dep:x', since: null, until: null, ask: false };
     serve(reads(task({ to_leave: [], turn } as Partial<TaskData>)));
-    show(<TaskPage task="12" pipeline="p1" />);
+    show(<TaskPage task="12" />);
     expect(await screen.findByRole('heading', { level: 1, name: 'Fix the sign-in page' })).toBeTruthy();
     const head = document.querySelector('header') as HTMLElement;
     expect(head.textContent).not.toContain('Salary');
@@ -356,7 +332,7 @@ describe('one open task', () => {
     const blocker = { id, number: 130, title: 'Matches cause check', status: 'open', direction: 'out', owner_id: 'bot:a1' };
     const turn = { state: 'tasks', who: id, line: 'Blocked by Matches cause check, in To do', requirement_id: 'dep:x', since: null, until: null, ask: false };
     serve(reads(task({ relations: { depends_on: [blocker] }, turn } as Partial<TaskData>)));
-    show(<TaskPage task="12" pipeline="p1" />);
+    show(<TaskPage task="12" />);
     await waitFor(() => expect(document.querySelector('.tv.is-quiet')).toBeTruthy());
     const where = document.querySelector('.pk-where') as HTMLElement;
     expect(within(where).getByRole('link', { name: 'Blocked by Matches cause check, in To do' }).getAttribute('href')).toBe(`/task/${id}`);
@@ -377,7 +353,7 @@ describe('one open task', () => {
       const turn = { state: 'tasks', who: id, line: 'Blocked by Matches cause check, in To do', requirement_id: 'dep:x', since: null, until: null, ask: false };
       people([{ id: 'bot:a1', kind: 'agent', name: 'Engineering Manager' }]);
       serve(reads(task({ ...(!quiet && { to_leave: [] }), relations: { depends_on: [blocker] }, turn } as Partial<TaskData>)));
-      show(<TaskPage task="12" pipeline="p1" />);
+      show(<TaskPage task="12" />);
       await waitFor(() => expect(document.querySelector(quiet ? '.tv.is-quiet .pk-where' : '.tv:not(.is-quiet) .pk-where')).toBeTruthy());
       const where = document.querySelector('.tv .pk-where') as HTMLElement;
       expect([getComputedStyle(where).flexWrap, getComputedStyle(where).height]).toEqual(['wrap', 'auto']);
@@ -416,10 +392,10 @@ describe('one open task', () => {
     expect(screen.queryByText('Spec approved')).toBeNull();
   });
 
-  it('ends the tab row with Expand; the due date is a Details fact even before one is set', async () => {
+  it('the due date is a Details fact even before one is set', async () => {
     serve(base);
     details();
-    expect(await screen.findByRole('button', { name: 'Expand' })).toBeTruthy();
+    await waitFor(() => expect(document.querySelector('[data-target="task-due:t1"]')).toBeTruthy());
     const due = document.querySelector('[data-target="task-due:t1"]') as HTMLElement;
     expect(within(due).getByRole('button', { name: 'None' })).toBeTruthy();
   });
@@ -455,7 +431,7 @@ describe('one open task', () => {
         );
       return base(url);
     });
-    show(<TaskPage task="12" pipeline="p1" />);
+    show(<TaskPage task="12" />);
     const card = await screen.findByRole('region', { name: 'The decision' });
     const approve = within(card).getByRole('button', { name: 'Approve' });
     await waitFor(() => expect(approve).toHaveProperty('disabled', false));
@@ -482,14 +458,14 @@ describe('one open task', () => {
       if (url.endsWith('/api/v2/threads/room')) return { status: 200, body: { id: 'room', task_id: 't1' } };
       return base(url);
     });
-    await loadTask(queryClient, '12', 'details', true, 'bot:r2');
+    await loadTask(queryClient, '12', 'details', 'bot:r2');
     await waitFor(() => expect(calls.filter((c) => c.startsWith('GET /api/v2/threads/room/timeline'))).toHaveLength(1));
     const read = calls.find((c) => c.startsWith('GET /api/v2/threads/room/timeline'))!;
     expect(read).toContain('session=bot%3Ar2');
     expect(read).not.toContain('comments=true');
   });
 
-  it('heads an agent’s session on the chat page with its name and a way back, and keeps the decision over its box', async () => {
+  it('an old link to an agent’s session as the page: the one chat beside the task heads it, a way back, the decision over its box; the page a tab of its own', async () => {
     people([{ id: 'bot:r2', kind: 'agent', name: 'Rowan Reviewer' }]);
     serve((url) => {
       if (url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1'))
@@ -498,13 +474,26 @@ describe('one open task', () => {
       if (url.includes('/threads/room/timeline')) return { status: 200, body: { messages: [], next_cursor: null, read_marks: {} } };
       return base(url);
     });
-    const router = show(<TaskPage task="12" pipeline="p1" tab="chat" />, '/tasks/p1/12/chat?session=bot%3Ar2');
+    const router = show(
+      <>
+        <TaskChat task="12" />
+        <TaskPage task="12" tab="chat" />
+      </>,
+      '/tasks/p1/12/chat?session=bot%3Ar2',
+    );
     expect(await screen.findByRole('link', { name: 'Rowan Reviewer' })).toBeTruthy();
     expect(await screen.findByRole('textbox', { name: 'Message Rowan Reviewer' })).toBeTruthy();
-    expect(within(await screen.findByRole('region', { name: 'The decision' })).getByRole('button', { name: 'Approve' })).toBeTruthy();
+    // never two conversations: the page names a tab of its own, the session kept for the chat beside it
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ task: 12, 'task.tab': 'qa-report', 'task.session': 'bot:r2' }));
+    expect(screen.getAllByRole('textbox', { name: 'Message Rowan Reviewer' })).toHaveLength(1);
+    // the decision over the chat's box, once (the page's dock is a phone's)
+    await screen.findAllByRole('region', { name: 'The decision' });
+    const boxes = screen.getAllByRole('region', { name: 'The decision' }).filter((b) => !b.closest('.dock'));
+    expect(boxes).toHaveLength(1);
+    expect(within(boxes[0]!).getByRole('button', { name: 'Approve' })).toBeTruthy();
     expect(calls.some((c) => c.includes('/threads/room/timeline') && c.includes('session=bot%3Ar2'))).toBe(true);
     fireEvent.click(screen.getByRole('button', { name: 'Back to comments' }));
-    await waitFor(() => expect(router.state.location.search).toEqual({}));
+    await waitFor(() => expect(router.state.location.search).toEqual({ task: 12, list: 'p1', 'task.tab': 'qa-report' }));
     expect(await screen.findByRole('textbox', { name: 'Add a comment' })).toBeTruthy();
   });
 
@@ -633,27 +622,27 @@ describe('one open task', () => {
       if (url.endsWith('/api/v2/files/f6/versions/2')) return { status: 200, body: 'Ship on Friday after the review.' };
       return base(url);
     });
-    show(<TaskPage task="12" pipeline="p1" tab="details" file="f6" />, '/tasks/p1/12/details?file=f6');
+    show(<TaskPage task="12" tab="details" file="f6" />, '/tasks/p1/12/details?file=f6');
     expect(await screen.findByText('Ship on Friday after the review.')).toBeTruthy();
     expect(document.querySelector('.frame.fv iframe')).toBeNull();
   });
 
-  it('says when there is no such task', async () => {
+  it('says when the task is gone', async () => {
     serve(() => ({ status: 404, body: { error: { code: 'not_found', detail: 'No such task' } } }));
-    show(<TaskPage task="99" pipeline="p1" />, '/tasks/p1/99');
-    expect(await screen.findByRole('heading', { name: 'No such task' })).toBeTruthy();
+    show(<TaskPage task="99" />, '/tasks/p1/99');
+    expect(await screen.findByRole('heading', { name: 'This task is gone' })).toBeTruthy();
   });
 
   it('shows nothing of a task the person may not see', async () => {
     serve(() => ({ status: 403, body: { error: { code: 'forbidden', detail: 'no' } } }));
-    show(<TaskPage task="12" pipeline="p1" />);
+    show(<TaskPage task="12" />);
     expect(await screen.findByRole('heading', { name: "You don't have access to this page" })).toBeTruthy();
     expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
   });
 
   it('offers Try again when the read fails', async () => {
     serve(() => ({ status: 500, body: { error: { code: 'oops', detail: 'down' } } }));
-    show(<TaskPage task="12" pipeline="p1" />);
+    show(<TaskPage task="12" />);
     // The read is tried once more (after a second) before the fault shows.
     expect(await screen.findByRole('heading', { name: 'Task did not load' }, { timeout: 4000 })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
@@ -687,7 +676,7 @@ describe('a page’s versions, a new page and a picture', () => {
     (t.documents![0] as { versions: unknown }).versions = listed;
     t.to_leave = [{ requirement_id: 'r1', line: 'Spec approved', met: false, may: ['ok', 'no'], approval: { document: 'Spec', file_id: 'f1', version: 1 } } as never];
     serve((url) => (url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1') ? { status: 200, body: detail(t) } : (html(url) ?? base(url))));
-    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    show(<TaskPage task="12" />, '/tasks/p1/12');
     expect((await frame('Spec, v1')).getAttribute('srcdoc')).toContain('Sign in with your email.');
   });
 
@@ -705,7 +694,7 @@ describe('a page’s versions, a new page and a picture', () => {
 
   it('shows the live page only while it is the version pinned; else that version’s own text @approvals', async () => {
     pinnedAt(2, { src: 'about:blank', version: 3 });
-    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    show(<TaskPage task="12" />, '/tasks/p1/12');
     expect((await frame('Spec')).getAttribute('srcdoc')).toContain('Sign in with your email or phone.');
   });
 
@@ -713,7 +702,7 @@ describe('a page’s versions, a new page and a picture', () => {
     const t = withVersions();
     (t.documents![0] as { versions: unknown }).versions = versions.slice(1);
     serve((url) => (url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1') ? { status: 200, body: detail(t) } : (html(url) ?? base(url))));
-    show(<TaskPage task="12" pipeline="p1" tab="spec" />, '/tasks/p1/12/spec?v=1');
+    show(<TaskPage task="12" tab="spec" />, '/tasks/p1/12/spec?v=1');
     expect((await frame('Spec, v1')).getAttribute('srcdoc')).toContain('Sign in with your email.');
   });
 
@@ -732,13 +721,13 @@ describe('a page’s versions, a new page and a picture', () => {
               ? { status: 200, body: '<p>The plan as it was.</p>' }
               : base(url),
     );
-    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    show(<TaskPage task="12" />, '/tasks/p1/12');
     expect((await frame('Plan')).getAttribute('srcdoc')).toContain('The plan as it was.');
   });
 
   it('with a version pinned, picking the newest names it, so it does not snap back to the pin @approvals', async () => {
     pinnedAt(1, { src: 'about:blank', version: 2 });
-    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    show(<TaskPage task="12" />, '/tasks/p1/12');
     fireEvent.click(await screen.findByRole('button', { name: 'Version 1' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: /v2/ }));
     expect(await screen.findByRole('button', { name: 'Version 2' })).toBeTruthy();
@@ -747,7 +736,7 @@ describe('a page’s versions, a new page and a picture', () => {
 
   it('opens an older version and marks what changed since the one before @s55', async () => {
     serve((url) => (url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1') ? { status: 200, body: detail(withVersions()) } : (html(url) ?? base(url))));
-    show(<TaskPage task="12" pipeline="p1" tab="spec" />, '/tasks/p1/12/spec');
+    show(<TaskPage task="12" tab="spec" />, '/tasks/p1/12/spec');
     fireEvent.click(await screen.findByRole('button', { name: 'Version 2' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: /v1/ }));
     expect((await frame('Spec, v1')).getAttribute('srcdoc')).toContain('Sign in with your email.');
@@ -774,7 +763,7 @@ describe('a page’s versions, a new page and a picture', () => {
       if (url.endsWith('/api/v2/files/f1?v=2')) return selected.promise;
       return base(url);
     });
-    show(<TaskPage task="12" pipeline="p1" tab="spec" />, '/tasks/p1/12/spec?v=2');
+    show(<TaskPage task="12" tab="spec" />, '/tasks/p1/12/spec?v=2');
     try {
       await waitFor(() => expect(queryClient.getQueryState(pageVersionQuery('f1', 1).queryKey)?.status).toBe('error'));
     } finally {
@@ -791,11 +780,11 @@ describe('a page’s versions, a new page and a picture', () => {
       if (/\/api\/v2\/files\/f1\?v=[12]$/.test(url)) return { status: 200, body: '<p>Review the draft.</p>' };
       return base(url);
     });
-    const router = show(<TaskPage task="12" pipeline="p1" tab="spec" />, '/tasks/p1/12/spec?vs=1');
+    const router = show(<TaskPage task="12" tab="spec" />, '/tasks/p1/12/spec?vs=1');
     const changes = await screen.findByRole('button', { name: 'No changes' });
     expect(changes.getAttribute('aria-pressed')).toBe('true');
     fireEvent.click(changes);
-    await waitFor(() => expect(router.state.location.search).not.toHaveProperty('vs'));
+    await waitFor(() => expect(Object.keys(router.state.location.search)).not.toContain('task.vs'));
   });
 
   it('writes a new page from Add and opens it @s79', async () => {
@@ -832,7 +821,7 @@ describe('a page’s versions, a new page and a picture', () => {
       versions: [{ n: 1, by: 'bot:a1', created_at: '2026-11-02T10:00:00Z', mime: 'image/png', url: '/api/v2/files/f5?v=1', answers: [], ask: null }],
     };
     serve((url) => (url.endsWith('/api/v2/tasks/t1/files?all=1') ? { status: 200, body: { files: [pic] } } : base(url)));
-    show(<TaskPage task="12" pipeline="p1" tab="details" file="f5" />, '/tasks/p1/12/details?file=f5');
+    show(<TaskPage task="12" tab="details" file="f5" />, '/tasks/p1/12/details?file=f5');
     fireEvent.click(await screen.findByRole('button', { name: 'Sign-in screen, full size' }));
     expect(await screen.findByRole('dialog', { name: 'Sign-in screen' })).toBeTruthy();
   });
@@ -863,6 +852,21 @@ describe('the task’s More menu', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1'));
   });
 
+  it('deleted once another task is open in its place: that one stays open', async () => {
+    const reply = holdReply();
+    serve((url) => (url.endsWith('/delete') ? reply.promise : undefined));
+    const router = details();
+    await more();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(sent.at(-1)?.url).toBe('/api/v2/tasks/t1/delete'));
+    // closed, and another opened, while the delete is sent
+    await act(() => router.navigate({ to: '/tasks/p1', search: { task: 13, list: 'p1' } } as never));
+    reply.resolve({ status: 200, body: { deleted: true } });
+    await act(() => new Promise((done) => setTimeout(done, 20)));
+    expect(router.state.location.search).toMatchObject({ task: 13 });
+  });
+
   it('reopens a finished task only with a reason @s58', async () => {
     serve(reads(task({ status: 'done' } as Partial<TaskData>)));
     details();
@@ -888,7 +892,7 @@ describe('the task’s More menu', () => {
     await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/tasks/t1/move', body: { to: 'reopen', why: 'Still broken' } }));
   });
 
-  it('moves the task to another pipeline and copies its link @s58', async () => {
+  it('moves the task to another pipeline and copies its link, staying on it @s58', async () => {
     const writeText = vi.fn(async () => undefined);
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
     serve((url) => (url.endsWith('/move') ? { status: 200, body: { task: task({ pipeline_id: 'p2', stage_id: 'o1' }) } } : undefined));
@@ -903,7 +907,8 @@ describe('the task’s More menu', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Move to Ops' });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Move' }));
     await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/tasks/t1/move', body: { to_pipeline: 'p2' } }));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p2/12'));
+    // the task stays open where it is: its new pipeline is its own business
+    expect(router.state.location.search).toMatchObject({ task: 12 });
   });
 });
 
@@ -1165,7 +1170,7 @@ describe('a task’s files and pages @s56 @s76 @s780', () => {
     await screen.findByRole('dialog', { name: 'Upload a file' });
     fireEvent.change(screen.getByLabelText('Files to add'), { target: { files: [new File(['hi'], 'notes.txt', { type: 'text/plain' })] } });
     await waitFor(() => expect(calls).toContain('POST /api/v2/tasks/t1/files'));
-    await waitFor(() => expect((router.state.location.search as { file?: string }).file).toBe('f9'));
+    await waitFor(() => expect((router.state.location.search as Record<string, unknown>)['task.file']).toBe('f9'));
   });
 
   it('links a page from elsewhere to the task', async () => {
@@ -1183,7 +1188,7 @@ describe('a task’s files and pages @s56 @s76 @s780', () => {
 
   it('shows an older version of an open file, compares two, and removes the file', async () => {
     serve(files);
-    const router = show(<TaskPage task="12" pipeline="p1" tab="details" file="f9" />, '/tasks/p1/12/details?file=f9');
+    const router = show(<TaskPage task="12" tab="details" file="f9" />, '/tasks/p1/12/details?file=f9');
     expect(await screen.findByRole('button', { name: 'Sign-in screen, full size' })).toBeTruthy();
     await lastMore();
     expect(screen.getByRole('menuitem', { name: 'Download' })).toBeTruthy();
@@ -1199,7 +1204,7 @@ describe('a task’s files and pages @s56 @s76 @s780', () => {
     await lastMore();
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Remove file' }));
     await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/files/f9', method: 'PATCH', body: { archived: true } }));
-    await waitFor(() => expect((router.state.location.search as { file?: string }).file).toBeUndefined());
+    await waitFor(() => expect((router.state.location.search as Record<string, unknown>)['task.file']).toBeUndefined());
   });
 
   describe('archived files', () => {
@@ -1224,18 +1229,17 @@ describe('a task’s files and pages @s56 @s76 @s780', () => {
 
     it('leave the tabs for the Archive menu at the row’s end, where each opens', async () => {
       serve(withDraft);
-      const router = show(<TaskPage task="12" pipeline="p1" />);
+      const router = show(<TaskPage task="12" />);
       expect(await screen.findByRole('link', { name: 'Letter' })).toBeTruthy();
       expect(screen.queryByRole('link', { name: 'Letter draft' })).toBeNull();
       fireEvent.click(screen.getByRole('button', { name: 'Archive (1)' }));
       fireEvent.click(await screen.findByRole('menuitem', { name: 'Letter draft' }));
-      await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/details'));
-      expect((router.state.location.search as { file?: string }).file).toBe('f7');
+      await waitFor(() => expect(router.state.location.search).toMatchObject({ task: 12, 'task.tab': 'details', 'task.file': 'f7' }));
     });
 
     it('open and restore from their own ⋯', async () => {
       serve(withDraft);
-      show(<TaskPage task="12" pipeline="p1" tab="details" file="f7" />, '/tasks/p1/12/details?file=f7');
+      show(<TaskPage task="12" tab="details" file="f7" />, '/tasks/p1/12/details?file=f7');
       expect(await screen.findByText('Dear Dana,')).toBeTruthy();
       await lastMore();
       expect(screen.queryByRole('menuitem', { name: 'Remove file' })).toBeNull();
@@ -1250,7 +1254,7 @@ describe('a task’s files and pages @s56 @s76 @s780', () => {
         if (method === 'PATCH' && url.endsWith('/api/v2/pages/f5')) return { status: 200, body: { page: { file_id: 'f5', archived: false } } };
         return reads(task({ mover: false, owner_id: 'bot:a1', requester_id: 'human:other', documents: [], to_leave: [] } as unknown as Partial<TaskData>))(url);
       });
-      show(<TaskPage task="12" pipeline="p1" tab="details" file="f5" />, '/tasks/p1/12/details?file=f5');
+      show(<TaskPage task="12" tab="details" file="f5" />, '/tasks/p1/12/details?file=f5');
       await waitFor(() => expect(calls).toContain('GET /api/v2/files/f5/versions/1'));
       await lastMore();
       fireEvent.click(await screen.findByRole('menuitem', { name: 'Restore' }));
@@ -1264,7 +1268,7 @@ describe('a task’s files and pages @s56 @s76 @s780', () => {
         if (method === 'PATCH' && url.endsWith('/api/v2/files/f5')) return ok;
         return files(url);
       });
-      show(<TaskPage task="12" pipeline="p1" tab="details" file="f5" />, '/tasks/p1/12/details?file=f5');
+      show(<TaskPage task="12" tab="details" file="f5" />, '/tasks/p1/12/details?file=f5');
       await waitFor(() => expect(calls).toContain('GET /api/v2/files/f5/versions/1'));
       await lastMore();
       fireEvent.click(await screen.findByRole('menuitem', { name: 'Restore' }));
@@ -1279,7 +1283,7 @@ describe('a task’s files and pages @s56 @s76 @s780', () => {
         if (method === 'PATCH' && url.endsWith('/api/v2/files/f5')) return ok;
         return files(url);
       });
-      show(<TaskPage task="12" pipeline="p1" tab="details" file="f5" />, '/tasks/p1/12/details?file=f5');
+      show(<TaskPage task="12" tab="details" file="f5" />, '/tasks/p1/12/details?file=f5');
       await waitFor(() => expect(calls).toContain('GET /api/v2/files/f5/versions/1'));
       await lastMore();
       fireEvent.click(await screen.findByRole('menuitem', { name: 'Restore' }));
@@ -1289,7 +1293,7 @@ describe('a task’s files and pages @s56 @s76 @s780', () => {
 
     it('open an archived picture without a full size view, and offer Restore only to whoever may', async () => {
       serve((url) => (url.endsWith('/api/v2/tasks/t1/files?all=1') ? { status: 200, body: { files: [{ ...shot, archived: true, can_restore: false }] } } : files(url)));
-      show(<TaskPage task="12" pipeline="p1" tab="details" file="f9" />, '/tasks/p1/12/details?file=f9');
+      show(<TaskPage task="12" tab="details" file="f9" />, '/tasks/p1/12/details?file=f9');
       expect(await screen.findByAltText('Sign-in screen, v2')).toBeTruthy();
       expect(screen.queryByRole('button', { name: 'Sign-in screen, full size' })).toBeNull();
       await lastMore();
@@ -1300,17 +1304,31 @@ describe('a task’s files and pages @s56 @s76 @s780', () => {
 
   it('a page’s ⋯ archives the page and goes back to Details', async () => {
     serve((url, method) => (method === 'PATCH' && url.endsWith('/api/v2/pages/f2') ? { status: 200, body: { page: { ...page, archived: true } } } : files(url)));
-    const router = show(<TaskPage task="12" pipeline="p1" />);
+    const router = show(<TaskPage task="12" />);
     await screen.findByTitle('QA report');
     await lastMore();
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Archive' }));
     await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/pages/f2', method: 'PATCH', body: { archived: true } }));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/details'));
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ task: 12, 'task.tab': 'details' }));
+  });
+
+  it('a page’s ⋯ archive answered once another task is open in its place: that one keeps its tab', async () => {
+    const reply = holdReply();
+    serve((url, method) => (method === 'PATCH' && url.endsWith('/api/v2/pages/f2') ? reply.promise : files(url)));
+    const router = show(<TaskPage task="12" />);
+    await screen.findByTitle('QA report');
+    await lastMore();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Archive' }));
+    await waitFor(() => expect(sent.at(-1)?.url).toBe('/api/v2/pages/f2'));
+    await act(() => router.navigate({ to: '/tasks/p1', search: { task: 13, 'task.tab': 'chat' } } as never));
+    reply.resolve({ status: 200, body: { page: { ...page, archived: true } } });
+    await act(() => new Promise((done) => setTimeout(done, 20)));
+    expect(router.state.location.search).toMatchObject({ task: 13, 'task.tab': 'chat' });
   });
 
   it('a page’s ⋯ deletes the page for good only after asking', async () => {
     serve(files);
-    show(<TaskPage task="12" pipeline="p1" />);
+    show(<TaskPage task="12" />);
     await screen.findByTitle('QA report');
     await lastMore();
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Delete page' }));
@@ -1322,7 +1340,7 @@ describe('a task’s files and pages @s56 @s76 @s780', () => {
 
   it('adding a file from disk, deleting a page and showing the task to the team are closed to Tico', async () => {
     serve(files);
-    show(<TaskPage task="12" pipeline="p1" />);
+    show(<TaskPage task="12" />);
     await screen.findByTitle('QA report');
     const tico = { via: 'tico' } as const;
     expect((await run('task.upload', { task: 't1', file: new File(['hi'], 'a.txt') }, tico)).ok).toBe(false);

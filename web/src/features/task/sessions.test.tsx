@@ -80,7 +80,7 @@ afterEach(() => vi.unstubAllGlobals());
 describe('Sessions', () => {
   it('lists one row per agent, each opening its session with the address’s other words kept, new past the mark the page opened with', async () => {
     queryClient.setQueryData(comments, page(5));
-    show(<Page t={t} />, '/tasks/p1/12/details?ask=qmark%3Ak1');
+    show(<Page t={t} />, '/tasks/p1?task=12&list=p1&task.tab=details&task.ask=qmark%3Ak1');
     const list = await screen.findByRole('region', { name: 'Sessions' });
     const builder = within(list).getByRole('link', { name: 'Birch Builder' });
     const reviewer = within(list).getByRole('link', { name: 'Rowan Reviewer' });

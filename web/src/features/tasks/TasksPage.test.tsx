@@ -9,7 +9,7 @@ import { Toasts } from '@/kit/Toast';
 // eslint-disable-next-line no-restricted-imports -- the test hands the page a stream event, as the shell's startLive does
 import { dispatch, installPatchers, resetPatchState } from '@/live/patch';
 import { follow, resetFollows } from '@/live/follow';
-import { forgetPlaces, nextInList, noteList, notePlace } from '@/lib';
+import { forgetPlaces, hearListClicks, openTasksOver } from '@/lib';
 import { dragTo } from '@/test/drag';
 import type * as VirtualListModule from '@/kit/VirtualList';
 import { ArchivedSections } from './Archived';
@@ -215,31 +215,19 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
     expect(screen.getByRole('heading', { level: 1, name: 'Tasks' })).toBeTruthy();
   });
 
-  it('a plain press on a board card opens its task from the board, so an answer on it can go on down the list beside it', async () => {
+  it('a plain press on a board card opens its task over the board, with the board as its list', async () => {
     serve(() => ({ status: 200, body: {} }));
     seed([task('a1', 7, 'Fix the export', 's1'), task('a2', 8, 'Write the notes', 's1')]);
-    forgetPlaces();
     const router = show(<TasksPage pipeline="eng" search={{}} />, '/tasks/eng');
-    // as the shell does: each address shown is noted
-    const note = (l: typeof router.state.location) => notePlace(l.pathname, l.searchStr, l.search as Record<string, unknown>, l.state);
-    note(router.state.location);
-    router.subscribe('onResolved', (e) => note(e.toLocation));
-    const rows = [
-      { id: 'a1', n: '7' },
-      { id: 'a2', n: '8' },
-    ];
-    // pressed with Cmd it opens elsewhere: the task opened here next is not from the board
+    // as the app's router does (lib openOver)
+    openTasksOver(router);
+    hearListClicks(document);
+    // pressed with Cmd it opens elsewhere: nothing opens here
     fireEvent.click(await screen.findByTitle('Fix the export'), { metaKey: true });
-    await act(() => router.navigate({ href: '/tasks/eng/7' }));
-    noteList({ pipeline: 'eng', open: '7', rows });
-    expect(nextInList('a1')).toBeNull();
-    act(() => router.history.back());
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/eng'));
+    expect(router.state.location.search).toEqual({});
     fireEvent.click(screen.getByTitle('Fix the export'));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/eng/7'));
-    noteList({ pipeline: 'eng', open: '7', rows });
-    expect(nextInList('a1')).toEqual({ pipeline: 'eng', task: '8' });
-    forgetPlaces();
+    await waitFor(() => expect(router.state.location.search).toEqual({ task: 7, list: 'eng' }));
+    expect(router.state.location.pathname).toBe('/tasks/eng');
   });
 
   it('a list row opens its task under the pipeline', async () => {
@@ -250,32 +238,12 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
     expect(row.closest('a')?.getAttribute('href')).toBe('/tasks/eng/7');
   });
 
-  it('a plain press on a list row opens its task from the board too, so an answer on it can go on down the list beside it', async () => {
+  it('a list row sits in the board’s list, so a press on it opens its task with that list', async () => {
     serve(() => ({ status: 200, body: {} }));
-    seed([task('a1', 7, 'Fix the export', 's1'), task('a2', 8, 'Write the notes', 's1')]);
-    forgetPlaces();
-    const router = show(<TasksPage pipeline="eng" search={{ view: 'list' }} />, '/tasks/eng?view=list');
-    // as the shell does: each address shown is noted
-    const note = (l: typeof router.state.location) => notePlace(l.pathname, l.searchStr, l.search as Record<string, unknown>, l.state);
-    note(router.state.location);
-    router.subscribe('onResolved', (e) => note(e.toLocation));
-    const rows = [
-      { id: 'a1', n: '7' },
-      { id: 'a2', n: '8' },
-    ];
-    // pressed with Ctrl it opens elsewhere: the task opened here next is not from the board
-    fireEvent.click((await screen.findByTitle('Fix the export')).closest('a')!, { ctrlKey: true });
-    await act(() => router.navigate({ href: '/tasks/eng/7' }));
-    noteList({ pipeline: 'eng', open: '7', rows });
-    expect(nextInList('a1')).toBeNull();
-    act(() => router.history.back());
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/eng'));
-    // a plain press: here the kit's link is a plain anchor, so the address moves as the app's router link moves it
-    fireEvent.click(screen.getByTitle('Fix the export').closest('a')!);
-    await act(() => router.navigate({ href: '/tasks/eng/7' }));
-    noteList({ pipeline: 'eng', open: '7', rows });
-    expect(nextInList('a1')).toEqual({ pipeline: 'eng', task: '8' });
-    forgetPlaces();
+    seed([task('a1', 7, 'Fix the export', 's1')]);
+    show(<TasksPage pipeline="eng" search={{ view: 'list' }} />, '/tasks/eng?view=list');
+    const row = await screen.findByTitle('Fix the export');
+    expect(row.closest('[data-list]')?.getAttribute('data-list')).toBe('eng');
   });
 
   it('puts the stage paging buttons outside the scrolling board', async () => {

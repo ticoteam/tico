@@ -1,7 +1,8 @@
 import { Link, useLocation, useRouter, type LinkProps } from '@tanstack/react-router';
-import { useEffect, useState } from 'react';
+import { use, useEffect, useState } from 'react';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
+import { InViewer } from '@/kit/Viewer';
 import { stepBackIs, watchSteps } from '@/lib';
 import { upOf, useSheet, useTrail } from '@/shell';
 import { showPageName } from '@/tico/pageName';
@@ -33,15 +34,17 @@ function closeArtifact(router: AppRouter, up: string | undefined) {
 export function PageHead({ title, path, lead, after, actions, search, more, onRename, sub, size, onBack, close }: PageHeadProps) {
   const sheet = useSheet();
   const router = useRouter();
+  // a page over another (a task open over it) leaves that page's name, and its ✕: the layer's Close is the way out
+  const over = use(InViewer);
   const opened = useLocation({ select: (l) => (l.search as Record<string, unknown>).via === 'thread' });
-  const closes = close ?? opened;
+  const closes = close ?? (opened && !over);
   const big = size === 'large' ? 't-figure' : undefined;
   const back = upOf(useTrail());
   // the page's own way back (an open task's) also closes it when it was opened from a thread
   const leave = onBack ?? (() => closeArtifact(router, back?.to));
   const [renaming, setRenaming] = useState(false);
   // a name that arrives after the route drew (its data came later, a rename) reaches the tab title and the page a message to Tico names
-  useEffect(() => showPageName(title), [title]);
+  useEffect(() => (over ? undefined : showPageName(title)), [title, over]);
   useEffect(() => watchSteps(router), [router]);
   return (
     <header className="page-head pk-head">

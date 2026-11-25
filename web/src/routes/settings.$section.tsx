@@ -1,6 +1,7 @@
 import { createFileRoute, redirect } from '@tanstack/react-router';
 import { SettingsPage } from '@/features/settings/exports';
 import { isSection, loadSection, subscriptionsQuery } from '@/features/settings/routing';
+import { pageSearch } from '@/lib';
 
 // Older migrated subscriptions used UUIDs without hyphens.
 const SUBSCRIPTION_ID = /^(?:[0-9a-f]{32}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i;
@@ -32,6 +33,6 @@ export const Route = createFileRoute('/settings/$section')({
 
 function SettingsSectionRoute() {
   const { section } = Route.useParams();
-  const { open, who } = Route.useSearch();
+  const { open, who } = Route.useSearch({ select: (s) => pageSearch(s), structuralSharing: true });
   return isSection(section) ? <SettingsPage section={section} open={open} who={who} /> : null;
 }

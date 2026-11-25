@@ -1,4 +1,6 @@
 import { Toast } from '@base-ui/react/toast';
+import { useSyncExternalStore } from 'react';
+import { createPortal } from 'react-dom';
 import { Icon } from '@/kit/Icon';
 import './Toast.css';
 
@@ -53,13 +55,46 @@ export function closeToast(id: string) {
   manager.close(id);
 }
 
+/* Where the toasts stand: at the page's foot, or in the layer open over it (a Viewer), whose focus trap and dim would
+   leave them, and an Undo, out of reach. The top layer holds them, and Cmd+K's search opened over it, which its hiding
+   of all else from a screen reader would otherwise reach: the deepest (a file opened from a task's layer is inside it),
+   and of the same depth the last opened. */
+const hosts: { el: HTMLElement; depth: number }[] = [];
+const heard = new Set<() => void>();
+const hear = (on: () => void) => {
+  heard.add(on);
+  return () => void heard.delete(on);
+};
+const host = () => hosts.at(-1)?.el ?? null;
+
+/** A layer over the page holds the toasts while it is open (`depth`: 1 over the page, 2 opened from a layer, and so on);
+    the returned function gives them back. */
+export function holdToasts(el: HTMLElement, depth = 1): () => void {
+  let at = hosts.length;
+  while (at > 0 && hosts[at - 1]!.depth > depth) at--;
+  hosts.splice(at, 0, { el, depth });
+  heard.forEach((on) => on());
+  return () => {
+    const i = hosts.findIndex((h) => h.el === el);
+    if (i >= 0) hosts.splice(i, 1);
+    heard.forEach((on) => on());
+  };
+}
+
+/** The layer open over the page that holds what shows over it (toasts, Cmd+K's search), or null: none open. */
+export const useTopLayer = (): HTMLElement | null => useSyncExternalStore(hear, host, () => null);
+
 /** Where toasts show. The shell mounts this once. */
 export function Toasts() {
+  const over = useTopLayer();
+  const viewport = (
+    <Toast.Viewport className="toasts">
+      <List />
+    </Toast.Viewport>
+  );
   return (
     <Toast.Provider toastManager={manager} timeout={5000} limit={3}>
-      <Toast.Viewport className="toasts">
-        <List />
-      </Toast.Viewport>
+      {over ? createPortal(viewport, over) : viewport}
     </Toast.Provider>
   );
 }

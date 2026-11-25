@@ -1,5 +1,4 @@
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useRouterState } from '@tanstack/react-router';
 import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { activityQuery, agentWords, dropRun, liveQuery, markRead, rowsOf, seedRun, timelineQuery, type LiveRun, type TimelineView } from '@/conversation';
 import { keys, useActor } from '@/data';
@@ -11,6 +10,7 @@ import { Section } from '@/pagekinds';
 import { threadQuery } from '@/features/threads/exports';
 import { CHAT, tabAddress } from './model';
 import { Face } from './parts';
+import { useTaskWords } from './routing';
 import { sessionRunQuery, type SessionRun as RunSnapshot, type TaskData, type TaskSession } from './queries';
 
 /* Each agent on a task has its own session view on the task's one thread (its stamped messages and those that
@@ -162,11 +162,10 @@ export function Sessions({ t }: { t: TaskData }) {
   const old = useOpenedMark(thread);
   const { data: runs = [] } = useQuery({ ...liveQuery(thread ?? ''), enabled: !!thread });
   const cards = useCards();
-  const location = useRouterState({ select: (s) => s.location });
-  const search = location.search as Record<string, unknown>;
+  const { tab, list: _, ...search } = useTaskWords();
   const rows = thread ? sessionsOf(t, runs) : [];
   if (!rows.length) return null;
-  const to = cards ? tabAddress(t, CHAT) : location.pathname;
+  const to = tabAddress(t, cards ? CHAT : tab);
   return (
     <Section name="Sessions" count={rows.length} target={`task-sessions:${t.id}`}>
       {rows.map((s) => (

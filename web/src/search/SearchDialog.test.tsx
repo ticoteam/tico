@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { bind } from '@/actions/bind';
 import { queryClient } from '@/data';
+import { holdToasts } from '@/kit/Toast';
 import { loadProviders } from './providers';
 import * as results from './results';
 import type { Group } from './results';
@@ -50,6 +51,30 @@ describe('Search @s1209', () => {
     const popup = await screen.findByRole('dialog', { name: 'Search' });
     expect(popup.style.left).toBe('320px');
     expect(popup.style.top).toBe('12px');
+  });
+
+  it('opened over a layer (a task open over the page), shows in that layer, not under its hiding of the rest', async () => {
+    const layer = document.body.appendChild(document.createElement('div'));
+    const letGo = holdToasts(layer);
+    render(<SearchDialog />);
+    act(() => openSearch());
+    const popup = await screen.findByRole('dialog', { name: 'Search' });
+    expect(layer.contains(popup)).toBe(true);
+    act(() => closeSearch());
+    letGo();
+    layer.remove();
+  });
+
+  it('keeps what was typed when the layer under it closes (Back closes the task) and it moves out of it', async () => {
+    const layer = document.body.appendChild(document.createElement('div'));
+    const letGo = holdToasts(layer);
+    render(<SearchDialog />);
+    act(() => openSearch());
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Search' }), { target: { value: 'invoice' } });
+    act(() => letGo());
+    layer.remove();
+    await waitFor(() => expect(layer.contains(document.querySelector('.pal-off'))).toBe(false));
+    expect((screen.getByRole('combobox', { name: 'Search' }) as HTMLInputElement).value).toBe('invoice');
   });
 
   it('closes on a click off the palette, even with the shell drawn over it', async () => {

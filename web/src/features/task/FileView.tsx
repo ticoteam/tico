@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { useNavigate, useSearch } from '@tanstack/react-router';
+import { useNavigate } from '@tanstack/react-router';
 import type { ReactNode } from 'react';
 import { run } from '@/actions';
 import type { TaskDocument, TaskFileView } from '@/api/schema';
@@ -13,11 +13,11 @@ import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { PictureViewer, type Picture } from '@/kit/PictureViewer';
 import { Skeleton, useDelayed } from '@/kit/Skeleton';
 import { toast } from '@/kit/Toast';
-import type { TaskSearch } from './exports';
 import { download } from './Files';
 import { DETAILS, failedToast, isPage, tabAddress } from './model';
 import { Face, Go } from './parts';
 import { frameDoc, parsePage } from './changes';
+import { useTaskWords } from './routing';
 import { fileMetaQuery, pageShownQuery, pageVersionQuery, taskFilesQuery, type TaskData } from './queries';
 import { isWord, WordPages } from './Word';
 
@@ -139,7 +139,7 @@ function Body({ f, v, onPicture, signable = false }: { f: TaskFileView; v: FileV
 export function FileView({ t, file, full }: { t: TaskData; file: string; full?: string }) {
   const files = useQuery(taskFilesQuery(t.id));
   const me = useQuery(meQuery);
-  const search = useSearch({ strict: false }) as TaskSearch;
+  const search = useTaskWords();
   const navigate = useNavigate();
   // An archived file opens from the Archive menu too; it is not one of the task's files to step through.
   const list = (files.data ?? []).filter((f) => !f.archived);

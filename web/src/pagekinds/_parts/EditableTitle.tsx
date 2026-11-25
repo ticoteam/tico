@@ -30,7 +30,12 @@ export function EditableTitle({ title, label, onDone }: EditableTitleProps) {
       onBlur={() => end(value.trim())}
       onKeyDown={(e) => {
         if (e.key === 'Enter') end(value.trim());
-        else if (e.key === 'Escape') end(null);
+        else if (e.key === 'Escape') {
+          // the edit's own way out: the layer it sits on stays open
+          e.preventDefault();
+          e.stopPropagation();
+          end(null);
+        }
       }}
       autoFocus
     />

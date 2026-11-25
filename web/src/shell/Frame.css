@@ -45,10 +45,6 @@
 :root:not([data-motion="off"]) :is(.shell-place,.shell-edge){transition:top var(--dur) var(--ease),bottom var(--dur) var(--ease),background var(--dur-fast) var(--ease)}
 .shell-place.is-moving{will-change:transform}
 
-/* an open task's list: a section head a pipeline and stage (pages/1-tasks/more.css) */
-.li-sec{height:34px;display:flex;align-items:center;margin-top:var(--s-2h);padding:0 var(--s-2)}
-.li-sec:first-child{margin-top:0}
-
 /* the folded menu's company mark takes focus (layout.md 10) */
 .nav.is-rail button.co-mark{border:0;padding:0;font:inherit;cursor:pointer}
 

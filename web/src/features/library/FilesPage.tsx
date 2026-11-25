@@ -87,7 +87,7 @@ function FilesList({ search }: { search: FilesSearch }) {
   const take = (list: FileList | null | undefined) => {
     const picked = list ? Array.from(list) : [];
     if (!picked.length) return;
-    if (search.task) void upload(search.task, picked);
+    if (search.upload) void upload(search.upload, picked);
     else setChosen(picked);
   };
   // The page sheet itself takes dropped files: the kinds take no DOM props, and a wrapper around the sheet would break

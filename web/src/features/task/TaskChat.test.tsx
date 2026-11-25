@@ -7,7 +7,7 @@ import { ActionsRoot } from '@/actions';
 import { queryClient } from '@/data';
 // eslint-disable-next-line no-restricted-imports -- the test hands the chat a stream event, as the shell's startLive does
 import { dispatch, installPatchers } from '@/live/patch';
-import { TaskById, TaskChat } from './TaskPage';
+import { TaskChat } from './TaskPage';
 
 vi.mock('@/live/follow', () => ({ useFollow: vi.fn() }));
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
@@ -112,7 +112,7 @@ function serveRoom(room: Record<string, unknown>) {
 
 describe('a task’s chat', () => {
   it('names who has the task and opens their conversation on it @s53', async () => {
-    show(<TaskChat task="12" />, '/tasks/p1/12');
+    show(<TaskChat task="12" />, '/tasks/p1?task=12');
     const chat = await screen.findByRole('region', { name: 'Chat with Birch Builder' });
     expect(chat.getAttribute('data-conversation')).toBe('c7');
     // The name goes to the owner's page.
@@ -121,19 +121,19 @@ describe('a task’s chat', () => {
 
   it('lists who asked, who it is for, who has it and its roles’ people first after an @, each once', async () => {
     detail = { ...task, requester_id: 'human:ana', assignee_id: 'bot:r2', roles: { reviewer: ['human:ben', 'bot:a1'] } };
-    show(<TaskChat task="12" />, '/tasks/p1/12');
+    show(<TaskChat task="12" />, '/tasks/p1?task=12');
     const chat = await screen.findByRole('region', { name: 'Chat with Birch Builder' });
     expect(chat.getAttribute('data-mention-first')).toBe('human:ana bot:r2 bot:a1 human:ben');
   });
 
   it('says under the name that this is the task’s own chat, or its owner’s main chat', async () => {
-    show(<TaskChat task="12" />, '/tasks/p1/12');
+    show(<TaskChat task="12" />, '/tasks/p1?task=12');
     expect((await screen.findByRole('link', { name: 'Fix the sign-in page' })).getAttribute('href')).toBe('/task/t1');
     expect(screen.queryByText('Main chat')).toBeNull();
   });
 
   it('says its one status line over the message box, and the next one when the stream sends the task again', async () => {
-    show(<TaskChat task="12" />, '/tasks/p1/12');
+    show(<TaskChat task="12" />, '/tasks/p1?task=12');
     const chat = await screen.findByRole('region', { name: 'Chat with Birch Builder' });
     expect(await within(chat).findByText('Up next')).toBeTruthy();
     act(() => dispatch('tasks', [{ seq: 2, id: 't1', kind: 'run', kinds: ['run'], task: { ...task, version: 2, status_line: 'working' } }]));
@@ -142,7 +142,7 @@ describe('a task’s chat', () => {
 
   it('says "Main chat" when the task was filed in its owner’s main chat', async () => {
     serveRoom({ id: 'c7', task_id: null, title: 'Chat with Birch Builder' });
-    show(<TaskChat task="12" />, '/tasks/p1/12');
+    show(<TaskChat task="12" />, '/tasks/p1?task=12');
     await screen.findByText('Main chat');
     expect(screen.queryByRole('link', { name: 'Fix the sign-in page' })).toBeNull();
   });
@@ -159,7 +159,7 @@ describe('a question for the person, pinned over the message box', () => {
     };
     // m1 a reviewer asked, as Needs you has it (the server's own record of the ❓); m3 it does not list: the owner's.
     needs = [{ kind: 'question', id: 'qmark:m1', mark_id: 'm1', message_id: 'msg1', conversation_id: 'c7', task_id: 't1', from_id: 'bot:r2', line: 'Ship the fix on Friday?', since: null }];
-    show(<TaskChat task="12" />, '/tasks/p1/12');
+    show(<TaskChat task="12" />, '/tasks/p1?task=12');
     const chat = await screen.findByRole('region', { name: 'Chat with Birch Builder' });
     await waitFor(() => expect(within(chat).getAllByRole('region', { name: 'Question' })).toHaveLength(2));
     const [first, second] = within(chat).getAllByRole('region', { name: 'Question' });
@@ -175,14 +175,14 @@ describe('a question for the person, pinned over the message box', () => {
   it('names who asked a ❓ the person snoozed, which still waits on the task but has left their Needs you', async () => {
     detail = { ...task, waits: [asked('m1', 'human:me', 'Ship the fix on Friday?')] };
     snoozed = [{ kind: 'question', id: 'qmark:m1', mark_id: 'm1', message_id: 'msg1', conversation_id: 'c7', task_id: 't1', from_id: 'bot:r2', line: 'Ship the fix on Friday?', since: null, snoozed_until: '2026-12-01T00:00:00Z' }];
-    show(<TaskChat task="12" />, '/tasks/p1/12');
+    show(<TaskChat task="12" />, '/tasks/p1?task=12');
     const pin = await screen.findByRole('region', { name: 'Question' });
     expect(await within(pin).findByRole('img', { name: 'Rowan Reviewer' })).toBeTruthy();
   });
 
   it('goes when the server clears the question (the person replied) and the stream says so', async () => {
     detail = { ...task, waits: [asked('m1', 'human:me', 'Ship the fix on Friday?')] };
-    show(<TaskChat task="12" />, '/tasks/p1/12');
+    show(<TaskChat task="12" />, '/tasks/p1?task=12');
     const chat = await screen.findByRole('region', { name: 'Chat with Birch Builder' });
     await within(chat).findByRole('region', { name: 'Question' });
     // The reply cleared it (backend/question_marks.py replied): the task's change says `question`, and it is read again.
@@ -199,7 +199,7 @@ describe("a task's comments and its agents' sessions", () => {
 
   it('shows the comments, whose box writes a plain comment that names no agent (it wakes nobody)', async () => {
     top = { can_direct: true };
-    show(<TaskChat task="12" />, '/tasks/p1/12');
+    show(<TaskChat task="12" />, '/tasks/p1?task=12');
     const c = await chat();
     expect(data(c, 'view')).toEqual({ comments: true });
     expect(data(c, 'send')).toEqual({ id: 't1' });
@@ -208,7 +208,7 @@ describe("a task's comments and its agents' sessions", () => {
 
   it('keeps the box a plain comment with a ❓ pinned over it: the ❓’s own card answers it', async () => {
     detail = { ...task, waits: [asked('m1', 'human:me', 'Ship the fix on Friday?')] };
-    show(<TaskChat task="12" />, '/tasks/p1/12');
+    show(<TaskChat task="12" />, '/tasks/p1?task=12');
     const c = await chat();
     await within(c).findByRole('region', { name: 'Question' });
     expect(data(c, 'send')).toEqual({ id: 't1' });
@@ -217,34 +217,34 @@ describe("a task's comments and its agents' sessions", () => {
   it('keeps the ❓s for the person over an agent’s session box too', async () => {
     detail = { ...task, waits: [asked('m1', 'human:me', 'Ship the fix on Friday?')] };
     top = { can_direct: true, sessions: [{ agent: 'bot:r2', last_seq: 9 }] };
-    show(<TaskChat task="12" />, '/tasks/p1/12?session=bot%3Ar2');
+    show(<TaskChat task="12" />, '/tasks/p1?task=12&task.session=bot%3Ar2');
     const c = await screen.findByRole('region', { name: 'Chat with Rowan Reviewer' });
     expect(within(await within(c).findByRole('region', { name: 'Question' })).getByText('Ship the fix on Friday?')).toBeTruthy();
   });
 
   it("opens the agent's session the address names: its name heads it, the box writes to it, ✕ goes back to the comments", async () => {
     top = { can_direct: true, sessions: [{ agent: 'bot:a1', last_seq: 4 }, { agent: 'bot:r2', last_seq: 9 }] };
-    const router = show(<TaskChat task="12" />, '/tasks/p1/12?session=bot%3Ar2');
+    const router = show(<TaskChat task="12" />, '/tasks/p1?task=12&task.session=bot%3Ar2');
     const c = await screen.findByRole('region', { name: 'Chat with Rowan Reviewer' });
     expect(data(c, 'view')).toEqual({ session: 'bot:r2' });
     expect(data(c, 'send')).toEqual({ id: 't1', to: 'bot:r2' });
     expect(c.getAttribute('data-can-send')).toBe('true');
     expect(screen.getByRole('link', { name: 'Rowan Reviewer' }).getAttribute('href')).toBe('/team/r2');
     act(() => screen.getByRole('button', { name: 'Back to comments' }).click());
-    await waitFor(() => expect(router.state.location.search).toEqual({}));
+    await waitFor(() => expect(router.state.location.search).toEqual({ task: 12 }));
     expect(data(await screen.findByRole('region', { name: 'Chat with Birch Builder' }), 'view')).toEqual({ comments: true });
   });
 
   it('shows a session to someone who may not message its agent, with a box that sends nothing', async () => {
     top = { can_direct: false };
-    show(<TaskChat task="12" />, '/tasks/p1/12?session=bot%3Ar2');
+    show(<TaskChat task="12" />, '/tasks/p1?task=12&task.session=bot%3Ar2');
     const c = await screen.findByRole('region', { name: 'Chat with Rowan Reviewer' });
     expect(c.getAttribute('data-can-send')).toBe('false');
   });
 
   it('has no comments or sessions for a task filed in its owner’s main chat: that chat, as it is', async () => {
     serveRoom({ id: 'c7', task_id: null, title: 'Chat with Birch Builder' });
-    show(<TaskChat task="12" />, '/tasks/p1/12?session=bot%3Ar2');
+    show(<TaskChat task="12" />, '/tasks/p1?task=12&task.session=bot%3Ar2');
     const c = await screen.findByRole('region', { name: 'Chat with Birch Builder' });
     expect(data(c, 'view')).toBeNull();
     expect(data(c, 'send')).toEqual({ id: 't1' });
@@ -254,7 +254,7 @@ describe("a task's comments and its agents' sessions", () => {
 describe('a task chat whose thread did not read', () => {
   it('says so with Try again in place of the chat, and opens it when the read works', async () => {
     roomFails = 1;
-    show(<TaskChat task="12" />, '/tasks/p1/12');
+    show(<TaskChat task="12" />, '/tasks/p1?task=12');
     expect(await screen.findByText('This chat did not load')).toBeTruthy();
     expect(screen.queryByRole('status', { name: 'Loading messages' })).toBeNull();
     act(() => screen.getByRole('button', { name: 'Try again' }).click());
@@ -265,12 +265,7 @@ describe('a task chat whose thread did not read', () => {
 describe('a task by its number alone', () => {
   it('shows message bones while the task is read', () => {
     vi.stubGlobal('fetch', () => new Promise(() => undefined));
-    show(<TaskChat task="12" />, '/tasks/p1/12');
+    show(<TaskChat task="12" />, '/tasks/p1?task=12');
     return screen.findByRole('status', { name: 'Loading messages' });
-  });
-
-  it('takes the address over to the task under its pipeline @s1', async () => {
-    const router = show(<TaskById task="12" />, '/task/12');
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/details'));
   });
 });

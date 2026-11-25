@@ -1,17 +1,22 @@
 /* The phone: the page, three cards that can stand over it (Tico, the menu, an open chat) and one bar of icons at the
-   bottom: Search · Tico · Company · Agent · Task. Company is the page you are on (on a task, the way back to where it
-   was opened from); Agent is the open chat, there only while one is; Task is the open task. Which card is up is device
-   state: a tap on the bar changes it and adds nothing to the history, so Back is navigation only. */
+   bottom: Search · Tico · Company · Agent. Company is the page you are on; Agent is the open chat, there only while one
+   is. A task opens over all of it (the task modal). Which card is up is device state: a tap on the bar changes it and
+   adds nothing to the history, so Back is navigation only. */
 import { useRouter } from '@tanstack/react-router';
 import { createContext, use, useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
 import { DockSlot } from '@/kit/Dock';
 import { Icon } from '@/kit/Icon';
+import { coldOf, openOf, stuckToBottom, watchKeyboard, type Keys } from '@/lib';
 import { Dot } from '@/tico/dot';
 import { TICO_MARK } from '@/shell/layout';
-import { watchKeyboard, stuckToBottom } from './keyboard';
-import type { Keys } from './keyboard';
 import './phone.css';
+
+/** A link that opens a task over the page (`?task=`, or a task's own address), not a page of its own. */
+const opensTask = (a: HTMLAnchorElement): boolean => {
+  const search = Object.fromEntries(new URLSearchParams(a.search));
+  return !!(openOf(search) ?? coldOf(a.pathname, search));
+};
 
 export type PhoneCard = 'none' | 'tico' | 'menu' | 'chat';
 type Slot = Exclude<PhoneCard, 'none'>;
@@ -29,23 +34,14 @@ export interface PhoneCardsProps {
   faces?: { company?: ReactNode; chat?: ReactNode };
   /** The chat's name, read by screen readers ("Finance Owner"). */
   labels?: { chat?: string };
-  /** The chat belongs to the page (a task's, an agent's own): it waits behind its icon unless the address names a chat
-      (`chat=`), `raiseChat` holds, or the person raises it. */
+  /** The chat belongs to the page (an agent's own, the page owner's): it waits behind its icon unless the address names
+      a chat (`chat=`) or the person raises it. */
   tucked?: boolean;
-  /** The chat is where the page waits on the person (a ❓ for them in a task's chat, the chat tab's address): it comes
-      up when the page opens and whenever this turns true. Turning false never puts it down. */
-  raiseChat?: boolean;
-  /** The ❓s that wait on the person in the chat (their ids, by spaces): each new one brings the chat up, even one put
-      down by hand at the same address. */
-  asked?: string;
-  /** Whose chat it is (the Agent bar's page key; an open task and the chat its address names): when it changes, the
-      chat card is set again from `tucked`, `raiseChat` and the address, even when they are the same as before. A card
-      put down by hand stays down until then. */
+  /** Whose chat it is (the Agent bar's page key): when it changes, the chat card is set again from `tucked` and the
+      address, even when they are the same as before. A card put down by hand stays down until then. */
   chatKey?: string;
   /** Search, from the bar. */
   onSearch?: () => void;
-  /** The page is an open task: the Task icon shows, and Company leaves the task for where it was opened from. */
-  onLeave?: () => void;
   onCardChange?: (card: PhoneCard) => void;
 }
 
@@ -90,14 +86,13 @@ function Tab({ name, label, on = false, onClick, children }: { name: string; lab
   );
 }
 
-export function PhoneCards({ page, tico, menu, chat, faces = {}, labels = {}, tucked = false, raiseChat = false, asked, chatKey, onSearch, onLeave, onCardChange }: PhoneCardsProps) {
+export function PhoneCards({ page, tico, menu, chat, faces = {}, labels = {}, tucked = false, chatKey, onSearch, onCardChange }: PhoneCardsProps) {
   const router = useRouter({ warn: false });
   // a chat that opens comes up and one that ends goes down. An address that already names one (a shared link, a
-  // reload) opens on it. A page's own chat (`tucked`) waits behind its icon unless the address names a chat or the
-  // page says it waits on the person there.
+  // reload) opens on it. A page's own chat (`tucked`) waits behind its icon unless the address names a chat.
   const second = !!chat;
   const named = () => /[?&]chat=/.test(router ? router.state.location.searchStr : window.location.search);
-  const comesUp = () => second && (!tucked || raiseChat || named());
+  const comesUp = () => second && (!tucked || named());
   const [card, setCard] = useState<PhoneCard>(() => (comesUp() ? 'chat' : 'none'));
   const root = useRef<HTMLDivElement>(null);
   const [dock, setDock] = useState<HTMLElement | null>(null);
@@ -105,9 +100,6 @@ export function PhoneCards({ page, tico, menu, chat, faces = {}, labels = {}, tu
   const [seen, setSeen] = useState(second);
   const [wasTucked, setWasTucked] = useState(tucked);
   const [wasKey, setWasKey] = useState(chatKey);
-  const [wasRaised, setWasRaised] = useState(raiseChat);
-  const [wasAsked, setWasAsked] = useState(asked);
-  const newAsk = !!asked && asked.split(' ').some((q) => !wasAsked?.split(' ').includes(q));
   if (seen !== second) {
     setSeen(second);
     if (comesUp()) setCard('chat');
@@ -117,11 +109,9 @@ export function PhoneCards({ page, tico, menu, chat, faces = {}, labels = {}, tu
     // an ask opened it on a narrow computer, the address names it), and one that waits again goes down
     if (comesUp()) setCard('chat');
     else if (card === 'chat') setCard('none');
-  } else if (((raiseChat && !wasRaised) || newAsk) && second) setCard('chat');
+  }
   if (wasTucked !== tucked) setWasTucked(tucked);
-  if (wasAsked !== asked) setWasAsked(asked);
   if (wasKey !== chatKey) setWasKey(chatKey);
-  if (wasRaised !== raiseChat) setWasRaised(raiseChat);
 
   // ---------- focus and the callback: everything that follows a change of card ----------
   const was = useRef<PhoneCard>('none');
@@ -167,14 +157,8 @@ export function PhoneCards({ page, tico, menu, chat, faces = {}, labels = {}, tu
     toLatest([...(ly?.querySelectorAll<HTMLElement>('[data-scroll], .chat-body') ?? [])]);
     raise('tico');
   };
-  // Company: from a card, back to the page; on the page, the menu (and the menu back to the page). On a task, back to
-  // where the task was opened from, and the Task icon goes with it.
-  const toCompany = () => {
-    if (onLeave) {
-      tuck();
-      onLeave();
-    } else setCard(card === 'none' ? 'menu' : 'none');
-  };
+  // Company: from a card, back to the page; on the page, the menu (and the menu back to the page)
+  const toCompany = () => setCard(card === 'none' ? 'menu' : 'none');
 
   // ---------- the keyboard: the card being typed in rides it and keeps its last line in view ----------
   useEffect(() => {
@@ -223,11 +207,13 @@ export function PhoneCards({ page, tico, menu, chat, faces = {}, labels = {}, tu
     }
   };
 
-  // a page opened from a card (a place in the menu, an approval card in a chat, a tracked task in Tico's): the card
-  // goes down and the page comes forward. A link marked `data-stay` changes what the card holds, so it stays up.
+  // a page opened from a card (a place in the menu, a page linked in a chat): the card goes down and the page comes
+  // forward. A task (an approval card, a tracked task in Tico's) opens over everything, the card left as it is for its
+  // Close; a link marked `data-stay` changes what the card holds, so it stays up too.
   const onCardClick = (e: MouseEvent<HTMLElement>) => {
     const a = (e.target as HTMLElement).closest<HTMLAnchorElement>('a[href]');
     if (!a || a.target || a.origin !== location.origin || a.closest('[data-stay]')) return;
+    if (opensTask(a)) return;
     tuck();
   };
 
@@ -268,17 +254,12 @@ export function PhoneCards({ page, tico, menu, chat, faces = {}, labels = {}, tu
             <Tab name="tico" label="Tico" on={card === 'tico'} onClick={typeToTico}>
               <Dot size={TICO_MARK} />
             </Tab>
-            <Tab name="company" label="Company" on={!onLeave && (card === 'none' || card === 'menu')} onClick={toCompany}>
+            <Tab name="company" label="Company" on={card === 'none' || card === 'menu'} onClick={toCompany}>
               {faces.company ?? <Icon name="company" />}
             </Tab>
             {chat ? (
               <Tab name="agent" label={labels.chat ?? 'Agent'} on={card === 'chat'} onClick={() => raise('chat')}>
                 {faces.chat ?? <Icon name="message" />}
-              </Tab>
-            ) : null}
-            {onLeave ? (
-              <Tab name="task" label="Task" on={card === 'none'} onClick={tuck}>
-                <Icon name="file" />
               </Tab>
             ) : null}
           </nav>

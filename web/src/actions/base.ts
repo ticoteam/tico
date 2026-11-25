@@ -1,10 +1,11 @@
 import type { AnyRouter } from '@tanstack/react-router';
 import * as z from 'zod/mini';
+import { openOf, withOpen } from '@/lib';
 import { openSearch } from '@/search';
 import { resetSheetSizes } from '@/shell';
 import { bound } from './bind';
 import * as copy from './copy';
-import { defineAction } from './types';
+import { defineAction, type Ctx } from './types';
 
 /* The base set every page shares. Navigation pushes (Back undoes Tico's moves); filters replace (architecture.md 3). */
 
@@ -53,7 +54,12 @@ export const closeChat = defineAction({
   did: () => copy.didCloseChat,
 });
 
-const sheet = z.enum(['tico', 'menu', 'list', 'widgets', 'side'] as const);
+const sheet = z.enum(['tico', 'menu', 'widgets', 'side'] as const);
+
+const behind =
+  <const T>(input: T) =>
+  (ctx: Ctx): T | null =>
+    openOf(ctx.router.state.location.search as Record<string, unknown>) ? null : input;
 
 /** `folded` left out flips it, which is what the keys do. Never touches history. */
 export const fold = defineAction({
@@ -67,7 +73,8 @@ export const fold = defineAction({
   },
   did: ({ sheet, folded }) => copy.didFold(copy.sheetName[sheet] ?? sheet, folded),
   target: ({ sheet }) => ({ kind: 'sheet', id: sheet }),
-  keys: { '[': { sheet: 'menu' }, ']': { sheet: 'widgets' }, 'mod+j': { sheet: 'tico' } },
+  // none while a task is open over the page: the sheets behind it stay as they are
+  keys: { '[': behind({ sheet: 'menu' }), ']': behind({ sheet: 'widgets' }), 'mod+j': behind({ sheet: 'tico' }) },
 });
 
 /** Forgets this device's sheet widths and folds; every open window follows. */
@@ -81,16 +88,24 @@ export const resetSizes = defineAction({
   target: () => ({ kind: 'setting', id: 'sizes' }),
 });
 
+/** A task over the page you are on (router.tsx opens a task's address there); `list`: the list it opens with, the
+    one it was found in (`search:<words>`), else Needs you. */
+const openOver = (router: AnyRouter, task: number, pipeline?: string, list?: string) =>
+  list
+    ? router.navigate({ to: '.', search: ((s: Record<string, unknown>) => withOpen(s, { task: String(task), list })) as never })
+    : router.navigate({ to: pipeline ? `/tasks/${encodeURIComponent(pipeline)}/${task}` : `/task/${task}` });
+
 export const openTask = defineAction({
   id: 'task.open',
   title: copy.openTask,
   kind: 'view',
-  input: z.strictObject({ task: z.int().check(z.minimum(1)), pipeline: z.optional(z.string().check(z.minLength(1), z.maxLength(100))) }),
-  run: ({ router }, { task, pipeline }) =>
-    // Without a pipeline the deep-link route finds it and redirects with replace (architecture.md 3).
-    router.navigate({ to: pipeline ? `/tasks/${encodeURIComponent(pipeline)}/${task}` : `/task/${task}` }),
-  show: ({ router }, { task, pipeline }) =>
-    router.navigate({ to: pipeline ? `/tasks/${encodeURIComponent(pipeline)}/${task}` : `/task/${task}` }),
+  input: z.strictObject({
+    task: z.int().check(z.minimum(1)),
+    pipeline: z.optional(z.string().check(z.minLength(1), z.maxLength(100))),
+    list: z.optional(z.string().check(z.minLength(1), z.maxLength(220))),
+  }),
+  run: ({ router }, { task, pipeline, list }) => openOver(router, task, pipeline, list),
+  show: ({ router }, { task, pipeline, list }) => openOver(router, task, pipeline, list),
   did: ({ task }) => copy.didOpenTask(task),
   target: ({ task }) => ({ kind: 'task', id: task }),
 });

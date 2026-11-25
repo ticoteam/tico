@@ -1,12 +1,16 @@
 import { Dialog as BaseDialog } from '@base-ui/react/dialog';
-import { createContext, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useRef, useState, type KeyboardEvent as KeyEvent, type PointerEvent, type ReactNode } from 'react';
 import { IconButton } from '@/kit/IconButton';
+import { holdToasts } from '@/kit/Toast';
 import './Viewer.css';
 
 export interface ViewerProps {
   /** Shown, or closed (null content is fine: nothing draws while closed). */
   open: boolean;
-  onClose: () => void;
+  /** `esc`: the Escape that asks it, to leave to whatever else it is for (a drawer of its own, another layer). */
+  onClose: (esc?: KeyboardEvent) => void;
+  /** Once it has gone (its fade done): what it drew can be let go. */
+  onClosed?: () => void;
   /** What it is, by its name: a file's title, a page's, a picture's. Read aloud as the dialog's name. */
   title: string;
   /** Beside the title, quieter: the kind ("PDF"), or where you are in a set ("2 of 5"). */
@@ -16,7 +20,7 @@ export interface ViewerProps {
   /** `sheet`: the thing sits on a sheet of its own (a page, a PDF, a table, text). `bare`: on the dim itself, centred
       (a picture). */
   look?: 'sheet' | 'bare';
-  onKeyDown?: (e: KeyboardEvent) => void;
+  onKeyDown?: (e: KeyEvent) => void;
   /** Its own size beside the look (a live page's dialog). */
   className?: string;
   children?: ReactNode;
@@ -24,6 +28,9 @@ export interface ViewerProps {
 
 /** True inside the layer: what it holds offers no full screen of its own (a PDF's Expand). */
 export const InViewer = createContext(false);
+
+/** How many layers this one is opened from: 1 over the page, 2 from a layer (a file from a task's), and so on. */
+const Depth = createContext(0);
 
 /** A pull this far down the bar on a phone lets it go; less springs it back. */
 const LET_GO = 96;
@@ -34,8 +41,11 @@ const LET_GO = 96;
  * fills the rest. Escape, Close or a click on the dim closes it; on a phone it fills the screen and a pull down on its
  * bar closes it. Focus stays inside while it is open and goes back after.
  */
-export function Viewer({ open, onClose, title, meta, actions, look = 'sheet', onKeyDown, className, children }: ViewerProps) {
+export function Viewer({ open, onClose, onClosed, title, meta, actions, look = 'sheet', onKeyDown, className, children }: ViewerProps) {
   const [pull, setPull] = useState(0);
+  // the toasts' host, held once as it mounts and in its place among the layers, however often this draws
+  const depth = useContext(Depth) + 1;
+  const hold = useCallback((el: HTMLDivElement | null) => (el ? holdToasts(el, depth) : undefined), [depth]);
   const from = useRef<number | null>(null);
   const down = (e: PointerEvent<HTMLDivElement>) => {
     // a mouse drags nothing here; a finger or pen pulls the layer down from its bar
@@ -53,7 +63,11 @@ export function Viewer({ open, onClose, title, meta, actions, look = 'sheet', on
     setPull(0);
   };
   return (
-    <BaseDialog.Root open={open} onOpenChange={(next) => !next && onClose()}>
+    <BaseDialog.Root
+      open={open}
+      onOpenChange={(next, d) => !next && onClose(d.reason === 'escape-key' ? (d.event as KeyboardEvent) : undefined)}
+      onOpenChangeComplete={(now) => !now && onClosed?.()}
+    >
       <BaseDialog.Portal>
         <BaseDialog.Backdrop className="scrim kit-scrim vw-scrim" />
         <BaseDialog.Viewport className="scrim kit-viewport vw-viewport" onClick={(e) => e.target === e.currentTarget && onClose()}>
@@ -73,8 +87,12 @@ export function Viewer({ open, onClose, title, meta, actions, look = 'sheet', on
               <BaseDialog.Close render={<IconButton icon="close" label="Close" />} />
             </div>
             <div className="vw-body">
-              <InViewer value>{children}</InViewer>
+              <InViewer value>
+                <Depth value={depth}>{children}</Depth>
+              </InViewer>
             </div>
+            {/* the toasts while it is open: an Undo stays in reach, inside its focus trap */}
+            <div className="vw-toasts" ref={hold} />
           </BaseDialog.Popup>
         </BaseDialog.Viewport>
       </BaseDialog.Portal>

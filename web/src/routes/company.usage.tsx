@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { UsagePage } from '@/features/settings/exports';
 import { loadUsage, type UsageSearch } from '@/features/settings/routing';
+import { pageSearch } from '@/lib';
 
 const RANGES = ['today', '7d', '30d', 'month'] as const;
 type Range = (typeof RANGES)[number];
@@ -24,5 +25,5 @@ export const Route = createFileRoute('/company/usage')({
 });
 
 function UsageRoute() {
-  return <UsagePage search={Route.useSearch()} />;
+  return <UsagePage search={Route.useSearch({ select: (s) => pageSearch(s), structuralSharing: true })} />;
 }

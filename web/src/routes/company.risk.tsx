@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { RiskPage } from '@/features/company/exports';
 import { loadRisk, riskSearch } from '@/features/company/routing';
+import { pageSearch } from '@/lib';
 
 export const Route = createFileRoute('/company/risk')({
   validateSearch: riskSearch,
@@ -10,5 +11,5 @@ export const Route = createFileRoute('/company/risk')({
 });
 
 function Risk() {
-  return <RiskPage search={Route.useSearch()} />;
+  return <RiskPage search={Route.useSearch({ select: (s) => pageSearch(s), structuralSharing: true })} />;
 }

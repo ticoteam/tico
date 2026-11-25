@@ -20,7 +20,6 @@ export const didSearch = (q: string | undefined) => (q ? `Searched for ${q}` : '
 export const sheetName: Record<string, string> = {
   tico: 'Tico',
   menu: 'the menu',
-  list: 'the list',
   widgets: 'the widgets',
   side: "the call's chat",
 };

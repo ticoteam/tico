@@ -82,7 +82,7 @@ function ListSection({
         )
       }
     >
-      <OwnRows tasks={rows} needs={needs} label={tab.name} onEnd={next && !reading ? () => void readMore() : undefined} />
+      <OwnRows tasks={rows} needs={needs} label={tab.name} list={`rows:${slug}:${list}`} onEnd={next && !reading ? () => void readMore() : undefined} />
       {more > 0 && (
         <div className="stage-fold">
           <span className="fold-label">Earlier</span>

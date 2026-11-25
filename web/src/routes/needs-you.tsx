@@ -1,5 +1,6 @@
 import { createFileRoute, redirect } from '@tanstack/react-router';
 import { NeedsYouViews } from '@/features/tasks/exports';
+import { pageSearch } from '@/lib';
 
 type View = 'all' | 'snoozed' | 'done';
 const VIEWS = new Set<unknown>(['all', 'snoozed', 'done']);
@@ -18,6 +19,6 @@ export const Route = createFileRoute('/needs-you')({
 });
 
 function Page() {
-  const { view } = Route.useSearch();
+  const { view } = Route.useSearch({ select: (s) => pageSearch(s), structuralSharing: true });
   return isView(view) ? <NeedsYouViews view={view} /> : null;
 }

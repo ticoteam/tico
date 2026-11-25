@@ -1,6 +1,6 @@
-import { useInfiniteQuery, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { Link, Outlet, createRootRouteWithContext, useLocation, useRouter, useRouterState } from '@tanstack/react-router';
-import { Suspense, lazy, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
+import { useInfiniteQuery, useQuery, type QueryClient } from '@tanstack/react-query';
+import { CatchBoundary, Link, Outlet, createRootRouteWithContext, useLocation, useRouter, useRouterState } from '@tanstack/react-router';
+import { Suspense, lazy, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { ActionsRoot, run } from '@/actions';
 import { reportCallToDesktop, useCallWindow } from '@/desktop';
 import { ticoRoomQuery } from '@/conversation';
@@ -21,28 +21,22 @@ import { useFileOpen } from '@/features/library/routing';
 import { DesktopMove, PlanLock, UpdateNotice } from '@/features/notices/exports';
 import { StartScreen, useSetupOwed, useStartGate } from '@/features/start/routing';
 import { SUPPORT_CHAT, supportUnreadQuery } from '@/features/support/routing';
-import { TaskChat } from '@/features/task/exports';
-import { boardOf, CHAT_TAB, useLoadedTask } from '@/features/task/routing';
-import { filtersOf, flowCountQuery, flowQuery, inOrder, isFiltered, loadListTools, loadMore, needsYouRows, pipelinesQuery, pipelineTasksQuery, roadmapPipeline, sortOf, stageCount, stagePriorityQuery, useFlowCountRefresh, useNeedsYou, useNeedsYouDrawn, useStageSort, validateTasksSearch, waitsOnMe, type FlowItem, type TaskItem } from '@/features/tasks/routing';
+import { TaskModal } from '@/features/task/exports';
+import { flowCountQuery, flowQuery, pipelinesQuery, roadmapPipeline, useFlowCountRefresh } from '@/features/tasks/routing';
 import { teammateAccessQuery, validateTeamSearch, whoHref } from '@/features/team/routing';
 import { ChatSheet, MenuThreads, MessagePick } from '@/features/threads/exports';
 import { asksOf, catchUpQuery, threadListQuery, type Asks } from '@/features/threads/routing';
-import { Ago } from '@/kit/Ago';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
-import { Empty } from '@/kit/Empty';
-import { FlowMark } from '@/kit/FlowMark';
 import { Icon } from '@/kit/Icon';
+import { Dialog } from '@/kit/Dialog';
 import { IconButton } from '@/kit/IconButton';
-import { Menu as DropMenu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
+import { MenuItem } from '@/kit/Menu';
 import { OfflineBar } from '@/kit/OfflineBar';
-import { LatePill } from '@/kit/Pill';
 import { Placeholder } from '@/kit/placeholder/Placeholder';
 import { Segmented } from '@/kit/Segmented';
 import { Toasts } from '@/kit/Toast';
-import { VirtualList, type VirtualListHandle } from '@/kit/VirtualList';
 import { startLive, useLiveStatus } from '@/live';
-import { useFollow } from '@/live/follow';
 import { useMotionRoot } from '@/motion';
 import { PanelHost, usePagePanelOpen } from '@/pagekinds';
 import { THEME_KEY, usePref, useTheme, type Theme } from '@/prefs';
@@ -81,7 +75,7 @@ import { usePhoneCards } from '@/shell/phone';
 import { PageIntro, TicoSheet, useTicoPower } from '@/tico';
 import { dot } from '@/tico/dot';
 import { pageName, usePageName } from '@/tico/pageName';
-import { boardSearch, chatAddress, hearPlaces, holdRow, leaveTask, NEEDS_YOU, noteList, notePlace, openedFrom, pressListRow } from '@/lib';
+import { chatAddress, closeTask, notePlace, openOf, pageSearch } from '@/lib';
 
 export interface RouterContext {
   queryClient: QueryClient;
@@ -130,8 +124,6 @@ const TeammateChat = lazy(() => import('@/features/team/exports').then((m) => ({
 const AddTeammate = lazy(() => import('@/features/team/exports').then((m) => ({ default: m.AddTeammate })));
 const TeamAccess = lazy(() => import('@/features/team/exports').then((m) => ({ default: m.TeamAccess })));
 const StartCall = lazy(() => import('@/features/calls/exports').then((m) => ({ default: m.StartCall })));
-const ListToolItems = lazy(() => loadListTools().then((m) => ({ default: m.ListToolItems })));
-const ListFind = lazy(() => loadListTools().then((m) => ({ default: m.ListFind })));
 
 /** Mounted from the first time `on` holds, and kept after: its code loads only once it is needed, and what it shows
     can still close in its own way (a dialog's last step stays drawn while it closes). */
@@ -139,6 +131,24 @@ function Later({ on, children }: { on: boolean; children: ReactNode }) {
   const [seen, setSeen] = useState(on);
   if (on && !seen) setSeen(true);
   return seen ? <Suspense fallback={null}>{children}</Suspense> : null;
+}
+
+/** A task that fails to draw (its code did not load, say) fails alone: the page under it stays, and Close takes the
+    task off the address. Another task opening tries again. */
+function TaskCatch({ children }: { children: ReactNode }) {
+  const task = useLocation({ select: (l) => openOf(l.search as Record<string, unknown>)?.task });
+  return (
+    <CatchBoundary getResetKey={() => task} errorComponent={TaskFailed}>
+      {children}
+    </CatchBoundary>
+  );
+}
+
+function TaskFailed() {
+  const router = useRouter();
+  const open = useLocation({ select: (l) => !!openOf(l.search as Record<string, unknown>) });
+  const close = () => closeTask(router);
+  return <Dialog open={open} onOpenChange={(o) => !o && close()} title="This task did not load" actions={<Button onClick={close}>Close</Button>} />;
 }
 
 const dotEl = () => dot.el();
@@ -205,10 +215,8 @@ function App() {
   const at = {
     path: useLocation({ select: (l) => l.pathname.replace(/^\/next(?=\/|$)/, '') || '/' }),
     chat: useLocation({ select: (l) => word((l.search as Record<string, unknown>).chat) }),
-    // read from the address as written: a task's own routes drop `tab` from the search they keep
-    tab: useLocation({ select: (l) => new URLSearchParams(l.searchStr).get('tab') ?? undefined }),
   };
-  const [, top, a, b, c] = at.path.split('/');
+  const [, top, a] = at.path.split('/');
   // A teammate's own page is the `agent` arrangement; a team's old address and your own page are plain pages. Only that
   // one answer is read from the directory, so an agent's status line does not redraw the shell.
   const who = top === 'team' && a ? decodeURIComponent(a) : '';
@@ -218,14 +226,8 @@ function App() {
   const arrangement = arrangementFor(at.path, at.chat ? { chat: at.chat } : {}, isActor);
   useNotePlaces();
   const trail = useTrailParts(at.path, who);
-  /* A task's list closed with its ×: the menu takes its place until you leave the tasks (a board, a page), so the
-     company is always one press away; the next task opened from a board has its list again. */
-  const [listShut, setListShut] = useState(false);
-  if (listShut && arrangement !== 'task') setListShut(false);
-  const closeList = () => {
-    setListShut(true);
-    foldSheet('list', false);
-  };
+  // a task open over the page (`?task=`, lib/taskAddress): the task modal, over whatever page is under it
+  const taskOpen = useLocation({ select: (l) => !!openOf(l.search as Record<string, unknown>) });
 
   // The first run is Tico's (SetupChat, in its sheet): while it is owed, Tico's sheet opens on it (on a phone its card
   // comes up). The sheets are drawn by now: this runs after the frame's own effects.
@@ -265,8 +267,8 @@ function App() {
   const closePanel = () =>
     void router.navigate({ to: '.', search: ({ panel: _, ...rest }: Record<string, unknown>) => rest } as never);
 
-  /* What each place holds in this arrangement (layout.md 6): an open task's chat beside it; a teammate's chat
-     stretching, with their page as the column beside it; otherwise the page, and a second chat when one is open. */
+  /* What each place holds in this arrangement (layout.md 6): a teammate's chat stretching, with their page as the
+     column beside it; otherwise the page, and a second chat when one is open. */
   let page: ReactNode = <Outlet />;
   let chat: ReactNode =
     at.chat === SUPPORT_CHAT ? (
@@ -276,32 +278,11 @@ function App() {
         </Suspense>
       </Sheet>
     ) : at.chat ? (
-      <SecondChat chat={at.chat} task={arrangement === 'task' && top === 'tasks' ? `/tasks/${a}/${b}/${CHAT_TAB}` : undefined} />
+      <SecondChat chat={at.chat} />
     ) : undefined;
   let widgets: ReactNode;
   let side: ReactNode;
-  let list: ReactNode;
-  // An open task: its pipeline (`/tasks/<pipeline>/<n>`; none by its number alone) and the task as its route loaded it.
-  const task = arrangement === 'task' ? (top === 'tasks' ? b : a) : undefined;
-  const pipeline = arrangement === 'task' && top === 'tasks' && a && a !== 'all' ? decodeURIComponent(a) : undefined;
-  const open = useLoadedTask(task && decodeURIComponent(task));
-  // where the open task was opened from (lib/places): Needs you, or its pipeline's board or list
-  const fromNeeds = useSyncExternalStore(hearPlaces, () => (task && top === 'tasks' ? openedFrom(decodeURIComponent(task)) : null)) === NEEDS_YOU;
-  if (arrangement === 'task') {
-    /* Beside the open task: Needs you when it was opened from there; else its pipeline's tasks as its board showed
-       them. The task chosen. A task with no pipeline of its own (`all`) not from Needs you, or its list closed: the
-       menu stays in its place. */
-    if (task && fromNeeds && !listShut) list = <NeedsYouSide key={NEEDS_YOU} open={decodeURIComponent(task)} onClose={closeList} />;
-    else if (task && pipeline && !listShut) list = <PipelineList key={pipeline} pipeline={pipeline} open={decodeURIComponent(task)} stage={open.task?.stage_id ?? undefined} onClose={closeList} />;
-    // opened from a thread (lib besideThread), that thread stays beside it (plan/layers.html); else the task's own chat
-    if (!at.chat) chat = task ? (
-      <Sheet kind="chat" label="The task's chat">
-        <Suspense fallback={null}>
-          <TaskChat task={decodeURIComponent(task)} />
-        </Suspense>
-      </Sheet>
-    ) : undefined;
-  } else if (arrangement === 'call' && a) {
+  if (arrangement === 'call' && a) {
     side = (
       <Suspense fallback={null}>
         <CallSideBeside room={decodeURIComponent(a)} />
@@ -316,23 +297,13 @@ function App() {
   const callNow = useCall();
   const callChat = arrangement === 'page' && !chat && isCallActive(callNow) ? (callNow.chat ?? null) : null;
   if (callChat) chat = <SecondChat chat={callChat} />;
-  // On a phone: whose face the Agent icon shows (the page owner's comes with the bar), and whether the chat comes up: a
-  // link to a task's chat (`/tasks/<p>/<n>/chat`, `?tab=chat`), or a ❓ in it that waits on the person.
-  const chatWho = arrangement === 'agent' ? who : at.chat ? (at.chat === SUPPORT_CHAT ? undefined : bare(at.chat)) : (open.task?.owner_id ?? (callChat ? bare(callChat) : undefined));
-  const chatAsked = arrangement === 'task' && (c === CHAT_TAB || at.tab === CHAT_TAB);
-  const asked = open.asked.join(' ') || undefined;
-  const raiseChat = chatAsked || !!asked;
-  // an open task's own chat is the phone's Agent once its read shows it has one: a task that did not load (gone, not
-  // theirs) or has no chat has none. A thread the address names (`?chat=`) is its own.
-  const chatLater = arrangement === 'task' && !at.chat && !open.task?.conversation_id;
-  // the chat card is set again when the open task or the chat its address names changes; a tuck holds until then
-  const chatKey = task ? `${task}\n${at.chat ?? ''}\n${chatAsked}` : undefined;
-  const client = useQueryClient();
-  const leave = () => leaveTask(router, boardOf(client, open.task?.pipeline_id ?? pipeline));
+  // On a phone: whose face the Agent icon shows (the page owner's comes with the bar)
+  const chatWho = arrangement === 'agent' ? who : at.chat ? (at.chat === SUPPORT_CHAT ? undefined : bare(at.chat)) : callChat ? bare(callChat) : undefined;
   // Every company page's owner, in the Agent bar beside it (master plan P5): the viewer's own DM with them.
   const place = pageAt(at.path);
-  // the phone's card is set again on any change of the full address (path and search); the fold stays per page
-  const address = useLocation({ select: (l) => `${l.pathname}${l.searchStr}` });
+  // the phone's card is set again on any change of the page's address (path and search; a task opened over it is not
+  // the page's); the fold stays per page
+  const address = useLocation({ select: (l) => `${l.pathname}${JSON.stringify(pageSearch(l.search as Record<string, unknown>))}` });
   const bar = useOwnerBar(place, me.data?.id, address);
   const barShown = !!bar && arrangement === 'page' && !chat;
   if (barShown) chat = <OwnerBar bar={bar} place={place} />;
@@ -345,7 +316,6 @@ function App() {
 
   return (
     <>
-      {task && fromNeeds && <NeedsYouOrder open={decodeURIComponent(task)} />}
       {/* a call on another page shows its bar over the frame; the frame takes the rest of the window */}
       <div className="shell-col">
         <Later on={isCallActive(callNow) || callOut}>
@@ -370,18 +340,12 @@ function App() {
           }
           page={page}
           chat={chat}
-          list={list}
           widgets={widgets}
           side={side}
           panel={panel ? <PanelHost /> : undefined}
           trail={trail}
           marks={{ menu: <CompanyMark />, chat: <ChatFace id={chatWho} /> }}
-          raiseChat={raiseChat}
-          asked={asked}
-          chatLater={chatLater}
-          chatKey={chatKey}
           onSearch={() => openSearch()}
-          onLeave={leave}
           edgeActs={{ tico: <SearchButton /> }}
           onCloseChat={callChat ? hideCallChat : closeChat}
           onClosePanel={closePanel}
@@ -394,7 +358,12 @@ function App() {
       <Later on={!!adding}>{adding ? <AddTeammate step={adding} team={addTo ?? ''} /> : null}</Later>
       <ActionsRoot dot={dotEl} fold={foldSheet} />
       <Toasts />
-      {/* the file `files.view` opens, over any page */}
+      {/* a task over any page (`?task=`), and over it the file `files.view` opens */}
+      <Later on={taskOpen}>
+        <TaskCatch>
+          <TaskModal />
+        </TaskCatch>
+      </Later>
       <Later on={fileOpen}>
         <FileViewerHost />
       </Later>
@@ -481,8 +450,9 @@ const some = (n: number | undefined) => (n ? n : undefined);
 /** A menu row's press: the same action Tico would run. */
 const press = (id: string, input: unknown = {}) => () => void run(id, input, { via: 'click' });
 
-/** The pages that mark tasks with the Dot or list Needs you: Tasks and its boards, a task, Roadmap, Tags. */
-const DOTTED = /^(?:\/next)?\/(?:tasks|task|roadmap|tags)(?:\/|$)/;
+/** The pages that mark tasks with the Dot or list Needs you: Tasks and its boards, Roadmap, Tags. (A task opens over
+    a page; its list beside it reads what it shows.) */
+const DOTTED = /^(?:\/next)?\/(?:tasks|roadmap|tags)(?:\/|$)/;
 
 function AppMenu({ note }: { note: ReactNode }) {
   const { data: me } = useQuery(meQuery);
@@ -498,8 +468,8 @@ function AppMenu({ note }: { note: ReactNode }) {
   const [access, setAccess] = useState<MenuTeam | null>(null);
   const { data: pipelines } = useQuery(pipelinesQuery);
   const { data: flow } = useQuery(flowCountQuery);
-  // Needs you's tasks, read once where its Dots or its list show (Tasks, a board, Roadmap, Tags, a task): the Dot on a
-  // task's own page reads it, never reading it itself. Elsewhere the menu reads only its count.
+  // Needs you's tasks, read once where its Dots or its list show (Tasks, a board, Roadmap, Tags). Elsewhere the menu
+  // reads only its count.
   const dotted = useLocation({ select: (l) => DOTTED.test(l.pathname) });
   useQuery({ ...flowQuery, enabled: badgesEnabled && dotted, select: () => null });
   const { data: support } = useQuery({ ...supportUnreadQuery, enabled: badgesEnabled });
@@ -636,18 +606,11 @@ function SearchButton() {
 
 /* ---------------------------------------------------------------- the chats */
 
-/** A chat beside the page. Beside a task on a phone (a side thread a card opened it from), it links to the task's own
-    chat (`task`, its address), which takes its place in the same card. */
-function SecondChat({ chat, task }: { chat: string; task?: string }) {
+/** A chat beside the page. */
+function SecondChat({ chat }: { chat: string }) {
   const who = useActor(bare(chat));
-  const phone = usePhoneCards();
   return (
     <Sheet kind="chat" label={`Chat with ${who?.name ?? 'teammate'}`}>
-      {task && phone ? (
-        <Link className="bar-ask" data-stay to={task as never}>
-          Task chat
-        </Link>
-      ) : null}
       <Suspense fallback={null}>
         <ChatSheet chat={chat} />
       </Suspense>
@@ -762,7 +725,7 @@ function TeammateSheet({ who }: { who: string }) {
 
 /* ---------------------------------------------------------------- where the person came from */
 
-/** Every address shown is noted (lib/places.ts), so closing a task goes back to where it was opened from. */
+/** Every address shown is noted (lib/places.ts): a board's own words, for its list in the task modal. */
 function useNotePlaces() {
   const router = useRouter();
   useEffect(() => {
@@ -771,285 +734,4 @@ function useNotePlaces() {
     note(router.state.location);
     return router.subscribe('onResolved', (ev) => note(ev.toLocation));
   }, [router]);
-}
-
-/* ---------------------------------------------------------------- an open task's list */
-
-/* The list's head is a crumb: Tasks, then the pipeline with its picker at the end. Tasks goes to every pipeline, with
-   the menu back in the list's place. */
-function ListUp() {
-  return (
-    <>
-      <Link to="/tasks" className="li-up">
-        Tasks
-      </Link>
-      <Icon name="chevron" className="li-sep" />
-    </>
-  );
-}
-
-function ListFace({ id }: { id: string | null }) {
-  const who = useActor(id);
-  return id ? <Avatar decorative kind={who?.kind ?? (id.startsWith('bot:') ? 'agent' : 'person')} name={who?.name ?? (id.startsWith('bot:') ? 'Agent' : 'Person')} hue={who?.hue} live={who?.working} size={22} /> : null;
-}
-
-/* Beside a task opened under a pipeline, in the menu's place: one stage of that pipeline's open tasks at a time, with
-   the filters its board was last shown with, and the search, filters and sort the list was given since (lib
-   changeBoardSearch), the open task chosen. The head is the pipeline › the stage and its count: its menu picks another
-   stage (each with its count) or another pipeline's board; one tools button opens Search, Filter and Sort. The stage
-   shown is the one the open task was in as it opened (its own read, `stage`, else its row), or the one picked since;
-   it changes only when another task opens or the person picks, never as the open task moves. Close folds the list to
-   the menu's icons. */
-function PipelineList({ pipeline, open, stage, onClose }: { pipeline: string; open: string; stage?: string; onClose: () => void }) {
-  const needs = useNeedsYou();
-  const { data: pipes } = useQuery(pipelinesQuery);
-  const p = pipes?.find((x) => x.id === pipeline);
-  // every task's change, as its board follows them: a move into the stage shown lands here too
-  useFollow({ allTasks: true });
-  const search = useSyncExternalStore(hearPlaces, () => boardSearch(pipeline));
-  const filters = useMemo(() => ({ ...filtersOf(validateTasksSearch(search)), sort: sortOf(search) }), [search]);
-  const list = useQuery({ ...pipelineTasksQuery(pipeline, filters), enabled: !!p });
-  const page = list.data;
-  const rows = useMemo(() => inOrder(page?.tasks ?? [], filters.sort), [page, filters.sort]);
-  // each stage's rows as the pipeline's read has them, and its count: the server's, under the filters and past what was
-  // read (none from a read without counts)
-  const read = useMemo(
-    () =>
-      (p?.stages ?? []).map((s) => {
-        const items = rows.filter((t) => t.stage_id === s.id);
-        return { ...s, items, n: page && stageCount(page, s.id, items.length) };
-      }),
-    [p, rows, page],
-  );
-  const own = stage ?? rows.find((t) => String(t.number ?? t.id) === open || t.id === open)?.stage_id ?? undefined;
-  // the open task's stage as it opened (`at`), and the stage shown: that one, or the one picked since
-  const [head, setHead] = useState<{ open: string; at: string; stage: string } | null>(null);
-  if (own && head?.open !== open) setHead({ open, at: own, stage: own });
-  const at = head?.open === open ? head.at : undefined;
-  const want = head?.open === open ? head.stage : undefined;
-  // none until it is known: the open task's stage (one of this pipeline's), or the pipeline's read to fall back on, never
-  // a first guess read by priority and dropped
-  const showing = read.find((g) => g.id === want)?.id ?? (page ? (read.find((g) => g.items.length) ?? read[0])?.id : undefined);
-  // Priority: the stage shown is read on its own, in Tico's order for the person, whole (no More), and Tico sorts it
-  // when due; drawn once that read is in, never in the queue's order first
-  const ranks = !filters.sort && !!showing;
-  const byPriority = useQuery({ ...stagePriorityQuery(pipeline, showing ?? '', filters), enabled: !!p && ranks });
-  const ranked = byPriority.data;
-  // a failed read says so with Try again: the stage's by priority, or the pipeline's while no stage is known from it
-  const listFailed = list.isError && !page && !showing;
-  const failed = listFailed || (ranks && byPriority.isError && !ranked);
-  useStageSort((ranks && showing) || null, ranked);
-  const stages = useMemo(
-    () => (ranks ? read.map((g) => (g.id === showing ? { ...g, items: (ranked?.tasks ?? []).filter((t) => t.stage_id === g.id) } : g)) : read),
-    [ranks, read, showing, ranked],
-  );
-  const shown = stages.find((g) => g.id === showing);
-  const countOf = (g: (typeof stages)[number]) => g.n ?? g.items.length;
-  const cut = !!page?.next_after;
-  const [finding, setFinding] = useState(false);
-  // the rows the answer on the open task can go on to, in the order drawn, while the list shows (not folded or tucked
-  // away): from the stage it opened in on, past each stage's last row to the next stage's first (TaskPage; the head then shows that
-  // stage), ending with the first stage the list has not read all of, so an answer at its last row read goes back
-  // rather than past rows it has not read
-  const sheet = useSheet();
-  const shows = sheet.state === 'open' || sheet.peek;
-  const drawn = useMemo(() => {
-    const out: { id: string; n: string }[] = [];
-    for (const g of stages.slice(Math.max(0, stages.findIndex((x) => x.id === at)))) {
-      out.push(...g.items.map((t) => ({ id: t.id, n: String(t.number ?? t.id) })));
-      if (cut && g.items.length < (g.n ?? 0)) break;
-    }
-    return out;
-  }, [stages, at, cut]);
-  useEffect(() => noteList(shows ? { pipeline, open, rows: drawn } : null), [shows, pipeline, open, drawn]);
-  useEffect(() => () => noteList(null), []);
-  const name = p?.name ?? 'Tasks';
-  const more = !ranks && cut && !!shown && shown.items.length < countOf(shown);
-  const using = finding || !!filters.q || isFiltered(filters) || !!filters.sort;
-  return (
-    <Sheet kind="list" label={name}>
-      <header className="li-head">
-        <DropMenu
-          align="start"
-          trigger={
-            <button className="li-pick" type="button" data-target="list:stage">
-              <span className="li-pipe">{name}</span>
-              {shown ? (
-                <>
-                  <Icon name="chevron" className="li-sep" />
-                  <span className="li-stage-name">{shown.name}</span>
-                  <span className="li-n">{countOf(shown)}</span>
-                </>
-              ) : null}
-              <Icon name="chevdown" />
-            </button>
-          }
-        >
-          {stages.map((g) => (
-            <MenuItem key={g.id} label={g.name} meta={String(countOf(g))} on={g.id === shown?.id} onSelect={() => setHead({ open, at: at ?? g.id, stage: g.id })} />
-          ))}
-          {stages.length ? <MenuRule /> : null}
-          <MenuSub label="Pipelines">
-            {(pipes ?? []).map((x) => (
-              <MenuItem key={x.id} label={x.name} on={x.id === pipeline} onSelect={press('shell.goTo', { to: `/tasks/${encodeURIComponent(x.id)}` })} />
-            ))}
-          </MenuSub>
-        </DropMenu>
-        <span className="grow" />
-        <DropMenu trigger={<IconButton icon="sliders" label="Search, filter, sort" quiet on={using} data-target="list:tools" />}>
-          <Suspense fallback={null}>
-            <ListToolItems search={filters} finding={finding} onFind={setFinding} />
-          </Suspense>
-        </DropMenu>
-        <IconButton icon="close" label="Close the list" quiet onClick={onClose} />
-      </header>
-      {finding || filters.q || isFiltered(filters) ? (
-        <Suspense fallback={null}>
-          <ListFind search={filters} finding={finding} />
-        </Suspense>
-      ) : null}
-      <div className="nav-scroll li-body">
-        {failed ? (
-          <Empty icon="alert" title="These tasks did not load">
-            <Button onClick={() => void (listFailed ? list.refetch() : byPriority.refetch())}>Try again</Button>
-          </Empty>
-        ) : page && (!ranks || ranked) && !more && !shown?.items.length ? (
-          <Empty title="No open tasks" />
-        ) : null}
-        {shown?.items.map((t) => <PipelineRow key={t.id} t={t} pipeline={pipeline} open={open} waits={waitsOnMe(t, needs)} />)}
-        {more ? (
-          <button className="li li-more" type="button" onClick={() => void loadMore(pipeline, filters)}>
-            <span className="li-mark" />
-            <span className="li-title">More tasks</span>
-          </button>
-        ) : null}
-      </div>
-    </Sheet>
-  );
-}
-
-function PipelineRow({ t, pipeline, open, waits }: { t: TaskItem; pipeline: string; open: string; waits: boolean }) {
-  const n = String(t.number ?? t.id);
-  return (
-    <Link
-      to="/tasks/$pipeline/$task"
-      params={{ pipeline, task: n }}
-      className={n === open || t.id === open ? 'li is-on' : 'li'}
-      title={t.title}
-      data-target={`task:${n}`}
-      onClick={(e) => pressListRow(pipeline, n, e)}
-    >
-      <span className="li-mark">{waits ? <FlowMark size={10} /> : null}</span>
-      <span className="li-main">
-        <span className="li-title">{t.title}</span>
-        {t.late ? <LatePill /> : null}
-      </span>
-      <span className="li-who">
-        <ListFace id={t.owner_id} />
-        <Ago at={t.stage_since ?? t.updated_at} className="row-age" />
-      </span>
-    </Link>
-  );
-}
-
-/* A task opened from Needs you: Needs you's task rows in the order drawn (useNeedsYouDrawn: Tico's, the rows down to
-   the open task kept in place if a sort lands meanwhile), read from what is read rather than from what a list draws,
-   so an answer that leaves nothing on the task for the person opens the row below (TaskPage) on a phone, with the
-   list tucked away, and past a row's cap alike. The open task is the row the person is on. Drawn only while such a
-   task is open, so Needs you's reads and the held row redraw nothing else on other pages; left (Back, a link, ×; not a
-   step to another task from Needs you), the row and the list go with it, so Tasks draws Tico's order again. */
-function NeedsYouOrder({ open }: { open: string }) {
-  const { data: flow } = useQuery(flowQuery);
-  const order = useNeedsYouDrawn(flow);
-  const rows = useMemo(() => (flow ? needsYouRows(flow, order) : undefined), [flow, order]);
-  const id = flow?.items.find((it) => String(it.number ?? it.id) === open || it.id === open)?.id;
-  useEffect(() => {
-    if (id) holdRow(id);
-  }, [id]);
-  useEffect(() => {
-    if (rows) noteList({ pipeline: NEEDS_YOU, open, rows });
-  }, [open, rows]);
-  useEffect(
-    () => () => {
-      holdRow(null);
-      noteList(null);
-    },
-    [],
-  );
-  return null;
-}
-
-/* Beside a task opened from Needs you, in the menu's place: Needs you's tasks, title only as a pipeline's list draws
-   them, in its own order, the open task chosen. Close folds the list to the menu's icons. Tucked away it draws no rows;
-   past SIDE_LONG it draws only what is on screen. Its order is the one Tasks draws (useNeedsYouDrawn). */
-const SIDE_LONG = 50;
-const SIDE_ROW_H = 34;
-function NeedsYouSide({ open, onClose }: { open: string; onClose: () => void }) {
-  const { data: flow } = useQuery(flowQuery);
-  const order = useNeedsYouDrawn(flow);
-  const items = useMemo(() => {
-    const byId = new Map((flow?.items ?? []).map((it) => [it.id, it] as const));
-    return flow && order.flatMap((id) => byId.get(id) ?? []);
-  }, [flow, order]);
-  const sheet = useSheet();
-  const shows = sheet.state === 'open' || sheet.peek;
-  const long = useRef<VirtualListHandle>(null);
-  const at = items?.find((it) => String(it.number ?? it.id) === open || it.id === open)?.id;
-  const many = !!items && items.length > SIDE_LONG;
-  useEffect(() => {
-    if (shows && many && at) long.current?.scrollToKey(at);
-  }, [shows, many, at]);
-  return (
-    <Sheet kind="list" label="Needs you">
-      <header className="li-head">
-        <ListUp />
-        <span className="li-pick">Needs you</span>
-        <span className="grow" />
-        <IconButton icon="close" label="Close the list" quiet onClick={onClose} />
-      </header>
-      <div className="nav-scroll li-body">
-        {items && !items.length ? <Empty title="Nothing waits on you" /> : null}
-        {!shows || !items ? null : many ? (
-          <VirtualList
-            ref={long}
-            items={items}
-            getKey={(it) => it.id}
-            estimateSize={SIDE_ROW_H}
-            measure
-            scrollParent=".li-body"
-            renderItem={(it) => <NeedsYouRow it={it} open={open} />}
-          />
-        ) : (
-          items.map((it) => <NeedsYouRow key={it.id} it={it} open={open} />)
-        )}
-      </div>
-    </Sheet>
-  );
-}
-
-function NeedsYouRow({ it, open }: { it: FlowItem; open: string }) {
-  const n = String(it.number ?? it.id);
-  const pipeline = it.pipeline_id ?? 'all';
-  return (
-    <Link
-      to="/tasks/$pipeline/$task"
-      params={{ pipeline, task: n }}
-      className={n === open || it.id === open ? 'li is-on' : 'li'}
-      title={it.about || it.title}
-      data-target={`task:${n}`}
-      onClick={(e) => pressListRow(pipeline, n, e, NEEDS_YOU)}
-    >
-      <span className="li-mark">
-        <FlowMark size={10} />
-      </span>
-      <span className="li-main">
-        <span className="li-title">{it.about || it.title}</span>
-        {it.late ? <LatePill /> : null}
-      </span>
-      <span className="li-who">
-        <ListFace id={it.owner_id} />
-        <Ago at={it.since} className="row-age" />
-      </span>
-    </Link>
-  );
 }

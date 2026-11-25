@@ -17,7 +17,7 @@ afterEach(() => {
 });
 
 describe('tasks search', () => {
-  it('asks the server for the words and opens the task in its pipeline', async () => {
+  it('asks the server for the words and opens the task over the page, the hits as its list', async () => {
     queryClient.setQueryData(pipelinesQuery.queryKey, [pipeline]);
     queryClient.setQueryData(directoryQuery.queryKey, { actors: [owner], byId: { [owner.id]: owner } });
     const urls: string[] = [];
@@ -32,8 +32,9 @@ describe('tasks search', () => {
     const hits = await tasksSearch.find('frost', sig());
     expect(new URL(urls[0]!, 'http://x').searchParams.get('search')).toBe('frost');
     expect(hits.map((h) => [h.title, h.meta, h.run])).toEqual([
-      ['Frost dates', 'Sowing', { id: 'task.open', input: { task: 7, pipeline: 'p1' } }],
-      ['Frost cloth', undefined, { id: 'task.open', input: { task: 8 } }],
+      // opened over the page, with the search's hits as its list
+      ['Frost dates', 'Sowing', { id: 'task.open', input: { task: 7, list: 'search:frost' } }],
+      ['Frost cloth', undefined, { id: 'task.open', input: { task: 8, list: 'search:frost' } }],
     ]);
     expect(hits[0]!.lead).toMatchObject({ face: { initials: 'SH', bot: true } });
     expect(hits.map((h) => h.name)).toEqual(['#7', '#8']); // "7" or "#7" finds it by number

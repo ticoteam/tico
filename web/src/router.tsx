@@ -2,6 +2,7 @@ import { createRouter } from '@tanstack/react-router';
 import { queryClient } from '@/data/query-client';
 import { takeHelperCode } from '@/features/library/routing';
 import { newAddressFor } from '@/oldAddress/map';
+import { hearListClicks, openTasksOver } from '@/lib';
 import { PagePending } from '@/pagekinds';
 import { routeTree } from '@/routeTree.gen';
 import { PageFault } from '@/shell/PageFault';
@@ -54,6 +55,10 @@ export const router = createRouter({
   defaultPendingMs: 150,
   defaultPendingMinMs: 250,
 });
+
+/* A task opens over the page you are on (lib/openOver). */
+openTasksOver(router);
+if (typeof document !== 'undefined') hearListClicks();
 
 declare module '@tanstack/react-router' {
   interface Register {

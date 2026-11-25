@@ -15,6 +15,8 @@ export interface PageTab {
   mark?: ReactNode;
   /** Merged into the link's search. The tab is on only while the address's search holds each of these too. */
   search?: Record<string, string>;
+  /** On or off as the page says, not by the address (a task open over another page: its tabs are not that address). */
+  on?: boolean;
 }
 
 /** The head every kind but the centered card has: one height, the title on the left, controls and "⋯" on the right. */

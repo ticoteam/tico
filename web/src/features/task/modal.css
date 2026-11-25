@@ -1,0 +1,52 @@
+/* A task open over a page (plan: the task modal): the list it came from, the agent's chat on it and the task, side by
+   side on the Viewer's sheet. Each column scrolls itself. Under 1100px the list folds to a tab at the left edge and
+   pulls out over the chat; on a phone the task and its chat are tabs and the list pulls up from the bottom. */
+.vw-body>.tmd{position:relative;display:grid;grid-template-columns:288px minmax(320px,1fr) minmax(0,1.7fr);grid-template-rows:minmax(0,1fr);min-height:0;min-width:0;overflow:hidden}
+.tmd>.pane{border-radius:0;box-shadow:none;min-height:0;height:auto}
+.tmd>.tmd-list{grid-column:1;border-right:1px solid var(--line)}
+.tmd>.tmd-chat{grid-column:2;border-right:1px solid var(--line)}
+.tmd>.tmd-task{grid-column:3;display:flex;flex-direction:column;min-height:0;min-width:0}
+/* the task's page fills its column: an email's scroll (a size container) and a file's frame are as tall as it */
+.tmd-task>.pane{flex:1;min-height:0;height:auto;border-radius:0;box-shadow:none}
+.tmd .tmd-fold,.tmd>.tmd-tab,.tmd>.tmd-more,.tmd>.tmd-panes,.tmd>.tmd-dim{display:none}
+/* the task's own way back is the layer's Close */
+.tmd .pk-back,html[data-layout="cards"] .tmd .pk .pk-back{display:none}
+/* a file opened from Details, one layer up */
+.vw-body>.tv-layer{min-height:0;display:flex;flex-direction:column;overflow:hidden}
+
+@media (width < 1100px){
+  .vw-body>.tmd{grid-template-columns:minmax(300px,1fr) minmax(0,1.5fr)}
+  .tmd>.tmd-chat{grid-column:1}
+  .tmd>.tmd-task{grid-column:2}
+  .tmd>.tmd-list{position:absolute;inset:0 auto 0 0;width:300px;z-index:var(--z-pop);background:var(--sheet);box-shadow:var(--lift-3);transform:translateX(-100%);visibility:hidden;transition:transform var(--dur-enter) var(--ease-arrive),visibility 0s linear var(--dur-enter)}
+  .tmd.is-list-up>.tmd-list{transform:none;visibility:visible;transition:transform var(--dur-enter) var(--ease-arrive)}
+  .tmd.is-list-up>.tmd-dim{display:block;position:absolute;inset:0;z-index:var(--z-stick);border:0;padding:0;background:var(--scrim);opacity:.25}
+  .tmd .tmd-fold{display:inline-flex}
+  .tmd>.tmd-tab{display:flex;align-items:center;justify-content:center;position:absolute;left:0;top:var(--s-3);z-index:var(--z-stick);width:28px;height:var(--s-10);padding:0;border:1px solid var(--line);border-left:0;border-radius:0;border-top-right-radius:var(--r-ctl);border-bottom-right-radius:var(--r-ctl);background:var(--raised);color:var(--muted);cursor:pointer}
+  .tmd>.tmd-tab:hover{color:var(--ink)}
+  .tmd>.tmd-chat .side-head{padding-left:var(--s-8)}
+}
+
+:where(html[data-layout="cards"]){
+  /* --kb: the phone's keyboard, while something in the modal is typed in (TaskModal) */
+  .vw-body>.tmd{display:flex;flex-direction:column;padding-bottom:calc(var(--kb,0px))}
+  /* fields are 16px on touch so iOS does not zoom on focus (platforms.md 2.4), as on the phone's cards */
+  .tmd :is(input,textarea,select,[contenteditable]){font-size:var(--t-field)}
+  .tmd>.tmd-panes{display:flex;justify-content:center;flex:none;padding:0 var(--s-4) var(--s-2)}
+  /* a phone hides every list and chat sheet (styles/parts.css); here they are the modal's own */
+  .tmd>.tmd-chat,.tmd>.tmd-list{display:flex}
+  .tmd>.tmd-chat,.tmd>.tmd-task{flex:1;border:0}
+  /* the task's page while it is read (its loading state), until the task or its chat is chosen */
+  .tmd:not([data-pane="chat"])>.tmd-chat,.tmd[data-pane="chat"]>.tmd-task{display:none}
+  /* the dock's Approve shows with what it approves: on the task's page, never over its chat */
+  .tmd[data-pane="chat"]>.tmd-dock{display:none}
+  /* the toasts' Undo above the keyboard too (--kb, on the modal's layer) */
+  .vw .toasts{bottom:calc(84px + var(--kb,0px))}
+  .tmd>.tmd-tab{display:none}
+  .tmd>.tmd-dock{flex:none}
+  .tmd>.tmd-dock>.dock{display:flex;padding-bottom:var(--s-2)}
+  .tmd>.tmd-more{display:flex;align-items:center;justify-content:center;gap:var(--s-1);flex:none;height:44px;padding:0;border:0;border-top:1px solid var(--line);background:var(--raised);color:var(--muted);font-size:var(--t-sm);cursor:pointer}
+  .tmd>.tmd-list{position:absolute;inset:auto 0 0;width:auto;height:70%;z-index:var(--z-pop);border:0;border-radius:0;border-top-left-radius:var(--r-pane);border-top-right-radius:var(--r-pane);box-shadow:var(--lift-3);transform:translateY(100%);visibility:hidden}
+  .tmd.is-list-up>.tmd-list{transform:none;visibility:visible}
+  .tmd .tv{height:auto}
+}

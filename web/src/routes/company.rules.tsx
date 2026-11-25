@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { RulesPage } from '@/features/routines/exports';
 import { loadRules, validateRulesSearch } from '@/features/routines/routing';
+import { pageSearch } from '@/lib';
 
 /** Rules: `?tab=` picks the tab, `?who=` whose rules on Company, `?panel=org:<id>` or `stage:<id>` opens one. */
 export const Route = createFileRoute('/company/rules')({
@@ -11,5 +12,5 @@ export const Route = createFileRoute('/company/rules')({
 });
 
 function Page() {
-  return <RulesPage search={Route.useSearch()} />;
+  return <RulesPage search={Route.useSearch({ select: (s) => pageSearch(s), structuralSharing: true })} />;
 }

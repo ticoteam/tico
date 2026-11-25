@@ -1,5 +1,5 @@
-import { useQuery } from '@tanstack/react-query';
-import { useLocation, useNavigate } from '@tanstack/react-router';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useNavigate, useRouter } from '@tanstack/react-router';
 import { useRef, useState } from 'react';
 import { run } from '@/actions';
 import type { TaskFileResult } from '@/api/schema';
@@ -11,7 +11,7 @@ import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { toast } from '@/kit/Toast';
-import { fmtDate } from '@/lib';
+import { changeWords, fmtDate, openOf } from '@/lib';
 import { DETAILS, failedToast, isPage, reasonOf, tabAddress } from './model';
 import { pagePickQuery, pageShownQuery, taskDetailQuery, taskFilesQuery, type TaskData } from './queries';
 import type { Versions } from './Versions';
@@ -31,13 +31,15 @@ export function download(url: string, name: string) {
   a.remove();
 }
 
-/** Where Details is from the address on screen: the task's own tab. */
-function useToDetails() {
+/** `task`'s Details, while it is still the task open: an answer landing once another took its place leaves that one be. */
+function useToDetails(task: string) {
   const navigate = useNavigate();
-  const { pathname } = useLocation();
-  return () => {
-    const m = /^(\/tasks\/[^/]+\/[^/]+)/.exec(pathname);
-    return m ? navigate({ to: `${m[1]}/${DETAILS}` as never }) : undefined;
+  const router = useRouter();
+  const client = useQueryClient();
+  return async () => {
+    const open = openOf(router.latestLocation.search as Record<string, unknown>)?.task;
+    if (open !== task && open !== String(client.getQueryData(taskDetailQuery(task).queryKey)?.number)) return;
+    await navigate({ to: '.', search: changeWords(() => ({ tab: DETAILS })) as never, replace: true });
   };
 }
 
@@ -49,7 +51,7 @@ export function PageMenu({ task, vs }: { task: string; vs: Versions }) {
   const file = vs.doc.file_id;
   // What only a page offers (archive, delete) shows once the server has answered that it is one.
   const shown = useQuery({ ...pageShownQuery(task, file), enabled: isPage(vs.doc) });
-  const toDetails = useToDetails();
+  const toDetails = useToDetails(task);
   const [open, setOpen] = useState<'delete' | null>(null);
   const p = shown.data?.page;
   const manage = !!shown.data?.can_manage;

@@ -10,7 +10,7 @@ import { sendMessage } from '@/conversation';
 import { keys, queryClient } from '@/data';
 import { matterWhen } from '@/features/company/exports';
 import { Toasts } from '@/kit/Toast';
-import { forgetPlaces, noteList, notePlace, pressListRow, type ListRow } from '@/lib';
+import { coldOf, coldPage, forgetPlaces, hearListClicks, NEEDS_YOU, noteList, notePlace, openOf, openTasksOver, pageSearch, type ListRow } from '@/lib';
 import { useFollow } from '@/live/follow';
 // eslint-disable-next-line no-restricted-imports -- the test hands the page a stream event, as the shell's startLive does
 import { dispatch, installPatchers } from '@/live/patch';
@@ -18,7 +18,8 @@ import { fakePdf } from '@/test/fakePdf';
 import { decisionName, effectOf, sendTitle } from './model';
 import { flowCountQuery, flowQuery, pipelinesQuery } from '@/features/tasks/routing';
 import { taskDetailQuery, taskFilesQuery, type TaskData } from './queries';
-import { loadTask } from './routing';
+import { loadTask, openCold } from './routing';
+import { answered, answering } from './answered';
 import { TaskChat, TaskPage } from './TaskPage';
 
 /* The decision (plan/approvals.html): the thing asked about is the first tab, one box decides it, Approve is bound to
@@ -118,6 +119,45 @@ afterEach(() => {
   vi.mocked(sendMessage).mockClear();
 });
 
+/** A task's old address as a cold link opens it: over its board (lib taskAddress). */
+function over(at: string): string {
+  const [path = '', query = ''] = at.split('?');
+  const words = Object.fromEntries(new URLSearchParams(query));
+  const cold = coldOf(path, words);
+  if (!cold) return at;
+  const to = coldPage(cold, words);
+  return `${to.to}?${new URLSearchParams(Object.entries(to.search).map(([k, v]) => [k, String(v)]))}`;
+}
+
+/** Where the person is, read as the task's own address would name it (`/tasks/<pipeline>/<n>/<tab>` and its words, the
+    page's beside them) while a task is open over a page; the page's address once none is. */
+function was(r: { state: { location: { pathname: string; search: unknown; searchStr: string; href: string } } }) {
+  const l = r.state.location;
+  const open = openOf(l.search as Record<string, unknown>);
+  if (!open) return l;
+  const { tab, ...words } = open.words;
+  const pipeline = /^\/tasks\/([^/]+)/.exec(l.pathname)?.[1] ?? shown.pipeline_id;
+  const pathname = `/tasks/${pipeline}/${open.task}${tab ? `/${tab}` : ''}`;
+  const search: Record<string, unknown> = { ...pageSearch(l.search as Record<string, unknown>), ...words };
+  const query = new URLSearchParams(Object.entries(search).map(([k, v]) => [k, String(v)])).toString();
+  const searchStr = query ? `?${query}` : '';
+  return { pathname, search, searchStr, href: pathname + searchStr };
+}
+
+/** A press on a task's card on its board (in the board's `data-list`), as the board draws it. */
+function pressCard(router: { navigate: (o: { href: string }) => Promise<void> }, href: string, list: string): Promise<void> {
+  const board = document.createElement('div');
+  board.dataset.list = list;
+  const card = document.createElement('a');
+  let went: Promise<void> = Promise.resolve();
+  card.addEventListener('click', () => (went = router.navigate({ href })));
+  board.append(card);
+  document.body.append(board);
+  card.click();
+  board.remove();
+  return went;
+}
+
 function show(node: ReactNode, at: string) {
   const root = createRootRoute({
     component: () => (
@@ -128,8 +168,10 @@ function show(node: ReactNode, at: string) {
       </>
     ),
   });
-  const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: [at] }) });
-  // as the shell does: each address shown is noted, so closing a task goes back to where it was opened from
+  const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: [over(at)] }) });
+  // as the app does: a task opens over the page it was opened on, and each address shown is noted (a board's words)
+  openTasksOver(router);
+  hearListClicks(document);
   const note = (l: typeof router.state.location) => notePlace(l.pathname, l.searchStr, l.search as Record<string, unknown>, l.state);
   note(router.state.location);
   router.subscribe('onResolved', (e) => note(e.toLocation));
@@ -163,8 +205,8 @@ describe('the thing is the first tab', () => {
     };
     shown = task({ documents: [{ file_id: 'd1', name: 'Notes', kind: 'markdown', version: 1 }] as never, to_leave: [req({ shows: ['file:f9@1'], line: 'OK the brief?' })] });
     reply = (url) => (url.endsWith('/files?all=1') ? { body: { files: [brief] } } : url.endsWith('/oks/r1') ? { body: { subject: 'file:f9@1', shown_hash: 'h1', content: {} } } : null);
-    const router = show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/brief'));
+    const router = show(<TaskPage task="12" />, '/tasks/p1/12');
+    await waitFor(() => expect(was(router).pathname).toBe('/tasks/p1/12/brief'));
     const tabs = screen.getByRole('navigation', { name: 'Reply to the late-delivery claim pages' });
     const first = tabs.querySelector('.doc-tab') as HTMLElement;
     expect(first.textContent).toBe('Brief');
@@ -197,12 +239,12 @@ describe('the thing is the first tab', () => {
           : null;
     const router = show(
       <>
-        <TaskPage task="12" pipeline="p1" />
+        <TaskPage task="12" />
         <TaskChat task="12" />
       </>,
       '/tasks/p1/12',
     );
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/declaration-pdf'));
+    await waitFor(() => expect(was(router).pathname).toBe('/tasks/p1/12/declaration-pdf'));
     expect(await screen.findByRole('region', { name: 'declaration.pdf' })).toBeTruthy();
     const box = within(screen.getByRole('region', { name: 'Chat with Legal Owner' })).getByRole('region', { name: 'The decision' });
     expect(within(box).getByText('Review running')).toBeTruthy();
@@ -218,12 +260,12 @@ describe('the thing is the first tab', () => {
       url.endsWith('/files?all=1') ? { body: { files: [pdf] } } : url.endsWith('/oks/r1') ? { body: { subject: 'file:f9@1', shown_hash: 'h-v1', content: { file: 'f9', version: 1 } } } : null;
     const router = show(
       <>
-        <TaskPage task="12" pipeline="p1" />
+        <TaskPage task="12" />
         <TaskChat task="12" />
       </>,
       '/tasks/p1/12',
     );
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/declaration-pdf'));
+    await waitFor(() => expect(was(router).pathname).toBe('/tasks/p1/12/declaration-pdf'));
     expect(await screen.findByRole('region', { name: 'declaration.pdf' })).toBeTruthy();
     expect(pdfRead.at(-1)).toBe('/api/v2/files/f9?v=1');
     // an older version is read, not signed
@@ -241,19 +283,19 @@ describe('the thing is the first tab', () => {
       url.endsWith('/files?all=1') ? { body: { files: [pdf] } } : url.endsWith('/oks/r2') ? { body: { subject: 'file:f9@1', shown_hash: 'h-v1', content: { file: 'f9', version: 1 } } } : null;
     const router = show(
       <>
-        <TaskPage task="12" pipeline="p1" />
+        <TaskPage task="12" />
         <TaskChat task="12" />
       </>,
       '/tasks/p1/12',
     );
     // the email's OK came first: its tab opens first, and the file's tab waits on the person too
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/email'));
+    await waitFor(() => expect(was(router).pathname).toBe('/tasks/p1/12/email'));
     const tabs = screen.getByRole('navigation', { name: 'Search warrant pages' });
     expect((await within(tabs).findByRole('link', { name: /declaration/ })).querySelector('.dot')).toBeTruthy();
     cleanup();
     show(
       <>
-        <TaskPage task="12" pipeline="p1" tab="declaration-pdf" />
+        <TaskPage task="12" tab="declaration-pdf" />
         <TaskChat task="12" />
       </>,
       '/tasks/p1/12/declaration-pdf',
@@ -285,7 +327,7 @@ describe('the thing is the first tab', () => {
             : null;
     const router = show(
       <>
-        <TaskPage task="12" pipeline="p1" tab="b-pdf" />
+        <TaskPage task="12" tab="b-pdf" />
         <TaskChat task="12" />
       </>,
       '/tasks/p1/12/b-pdf?ask=r3&chat=agent%3Alo&via=thread&vs=1',
@@ -297,15 +339,28 @@ describe('the thing is the first tab', () => {
     const own = tabs.querySelector('[data-target="task-tab:b-pdf"]') as HTMLElement;
     expect(new URL(own.getAttribute('href') ?? '', 'http://x').searchParams.get('ask')).toBe('r3');
     fireEvent.click(own);
-    await waitFor(() => expect((router.state.location.search as { ask?: string }).ask).toBe('r3'));
+    await waitFor(() => expect((was(router).search as { ask?: string }).ask).toBe('r3'));
     const box = within(screen.getByRole('region', { name: 'Chat with Legal Owner' })).getByRole('region', { name: 'The decision' });
     fireEvent.click(await ready(box));
     await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/tasks/t1/asks/r3/ok', body: { shown_hash: 'h-b2' } }));
     // then the next ask waiting (r1) opens for itself, its tab, the thread beside it kept
-    await waitFor(() => expect((router.state.location.search as { ask?: string }).ask).toBe('r1'));
-    expect(router.state.location.pathname).toBe('/tasks/p1/12/a-pdf');
-    expect(router.state.location.searchStr).toContain('chat=agent');
-    expect(router.state.location.searchStr).not.toContain('vs='); // the next page at its own pinned version
+    await waitFor(() => expect((was(router).search as { ask?: string }).ask).toBe('r1'));
+    expect(was(router).pathname).toBe('/tasks/p1/12/a-pdf');
+    expect(was(router).searchStr).toContain('chat=agent');
+    expect(was(router).searchStr).not.toContain('vs='); // the next page at its own pinned version
+  });
+
+  it('answered, then closed before the answer is read back: the next ask never opens the task again @approvals', async () => {
+    const { files } = twoPdfs();
+    reply = (url) => (url.endsWith('/files?all=1') ? { body: { files } } : null);
+    const router = show(<TaskPage task="12" tab="b-pdf" />, '/tasks/p1/12/b-pdf?ask=r3');
+    expect(await screen.findByRole('region', { name: 'b.pdf' })).toBeTruthy();
+    // the answer lands while the task as read still has r3 waiting: the next ask waits for the read
+    answering('t1', 'r3');
+    act(() => answered());
+    await act(() => router.navigate({ to: '/tasks/p1', search: {}, replace: true } as never));
+    await act(() => new Promise((done) => setTimeout(done, 20)));
+    expect(openOf(router.state.location.search as Record<string, unknown>)).toBeFalsy();
   });
 
   it('when the next ask after a file’s is an email’s, its Email tab opens, the thread kept and the answered ask gone @approvals', async () => {
@@ -323,7 +378,7 @@ describe('the thing is the first tab', () => {
             : null;
     const router = show(
       <>
-        <TaskPage task="12" pipeline="p1" tab="b-pdf" />
+        <TaskPage task="12" tab="b-pdf" />
         <TaskChat task="12" />
       </>,
       '/tasks/p1/12/b-pdf?ask=r3&chat=agent%3Alo&via=thread&vs=1',
@@ -331,8 +386,8 @@ describe('the thing is the first tab', () => {
     expect(await screen.findByRole('region', { name: 'b.pdf' })).toBeTruthy();
     const box = within(screen.getByRole('region', { name: 'Chat with Legal Owner' })).getByRole('region', { name: 'The decision' });
     fireEvent.click(await ready(box));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/email'));
-    const params = new URLSearchParams(router.state.location.searchStr);
+    await waitFor(() => expect(was(router).pathname).toBe('/tasks/p1/12/email'));
+    const params = new URLSearchParams(was(router).searchStr);
     expect([params.get('chat'), params.get('via'), params.get('ask'), params.get('vs')]).toEqual(['agent:lo', 'thread', null, null]);
   });
 
@@ -348,7 +403,7 @@ describe('the thing is the first tab', () => {
             : null;
     const router = show(
       <>
-        <TaskPage task="12" pipeline="p1" tab="b-pdf" />
+        <TaskPage task="12" tab="b-pdf" />
         <TaskChat task="12" />
       </>,
       '/tasks/p1/12/b-pdf?ask=r3',
@@ -359,15 +414,7 @@ describe('the thing is the first tab', () => {
     expect(await within(box).findByText('This OK is no longer asked.')).toBeTruthy();
     expect(screen.getByRole('region', { name: 'b.pdf' })).toBeTruthy();
     expect(pdfRead.at(-1)).toBe('/api/v2/files/f8?v=2');
-    expect(router.state.location.pathname).toBe('/tasks/p1/12/b-pdf');
-  });
-
-  it('on a computer, opened beside the thread it came from (`?chat=`), the page holds its own Approve @approvals', async () => {
-    show(<TaskPage task="12" pipeline="p1" tab="email" />, '/tasks/p1/12/email?chat=agent%3Alo&via=thread');
-    const box = await decision();
-    // in the page, not in the phone's dock (which a computer does not draw)
-    expect(box.closest('[data-dock]')).toBeNull();
-    expect(await ready(box)).toBeTruthy();
+    expect(was(router).pathname).toBe('/tasks/p1/12/b-pdf');
   });
 
   it('opens the version the address names over the one the ask pinned @approvals', async () => {
@@ -375,7 +422,7 @@ describe('the thing is the first tab', () => {
     const pdf = { id: 'f9', name: 'declaration.pdf', title: 'declaration.pdf', mime: 'application/pdf', archived: false, current_version: 2, links: [], writers: [], versions: [at(1), at(2)] };
     shown = task({ title: 'Search warrant', to_leave: [req({ shows: ['file:f9@1'], line: 'Sign the declaration' })] });
     reply = (url) => (url.endsWith('/files?all=1') ? { body: { files: [pdf] } } : null);
-    show(<TaskPage task="12" pipeline="p1" tab="declaration-pdf" />, '/tasks/p1/12/declaration-pdf?v=2');
+    show(<TaskPage task="12" tab="declaration-pdf" />, '/tasks/p1/12/declaration-pdf?v=2');
     expect(await screen.findByRole('region', { name: 'declaration.pdf' })).toBeTruthy();
     await waitFor(() => expect(pdfRead.at(-1)).toBe('/api/v2/files/f9?v=2'));
   });
@@ -391,7 +438,7 @@ describe('the thing is the first tab', () => {
         : url.endsWith('/api/v2/files/f9/meta?v=1')
           ? { body: { name: 'declaration.pdf', content_type: 'application/pdf', size: 10 } }
           : null;
-    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    show(<TaskPage task="12" />, '/tasks/p1/12');
     expect(await screen.findByRole('region', { name: 'declaration.pdf' })).toBeTruthy();
     expect(pdfRead.at(-1)).toBe('/api/v2/files/f9?v=1');
     expect(screen.queryByRole('button', { name: 'Sign' })).toBeNull();
@@ -409,8 +456,8 @@ describe('the thing is the first tab', () => {
         : url.endsWith('/api/v2/files/x9/versions')
           ? { body: { versions: [{ version: 1, mime: 'application/pdf', name: 'declaration.pdf', size: 10 }, { version: 2, current: true, mime: 'application/pdf', name: 'declaration.pdf', size: 10 }] } }
           : null;
-    const router = show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/file'));
+    const router = show(<TaskPage task="12" />, '/tasks/p1/12');
+    await waitFor(() => expect(was(router).pathname).toBe('/tasks/p1/12/file'));
     const tabs = screen.getByRole('navigation', { name: 'Search warrant pages' });
     await waitFor(() => expect((tabs.querySelector('.doc-tab') as HTMLElement).textContent).toBe('Declaration'));
     await waitFor(() => expect(pdfRead.at(-1)).toBe('/api/v2/files/x9/versions/1'));
@@ -485,7 +532,7 @@ describe('the decision', () => {
     shown = task({ title: 'Ruiz: late delivery', note: 'Dana Ruiz wants a refund.' } as Partial<TaskData>);
     const parent = { id: 'p0', title: 'Legal 2026', label: null, step: null };
     reply = (url) => (url.endsWith('/api/v2/tasks/t1') || url.includes('/api/v2/tasks/%2312') ? { body: { task: shown, runs: [], children: [], parent, can_comment: true, mover: true } } : null);
-    show(<TaskPage task="12" pipeline="p1" tab="email" />, '/tasks/p1/12/email');
+    show(<TaskPage task="12" tab="email" />, '/tasks/p1/12/email');
     const brief = await screen.findByRole('region', { name: 'Brief' });
     expect(within(brief).getByText('Dana Ruiz wants a refund.')).toBeTruthy();
     expect(screen.queryByText(/Legal 2026/)).toBeNull();
@@ -493,7 +540,7 @@ describe('the decision', () => {
   });
 
   it('names the email, who asks and what Approve does; the head is quiet and Details sits under ⋯ @approvals', async () => {
-    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    show(<TaskPage task="12" />, '/tasks/p1/12');
     expect(await screen.findByRole('heading', { level: 1, name: 'Reply to the late-delivery claim' })).toBeTruthy();
     expect(screen.getByText('Legal · Review')).toBeTruthy();
     const box = await decision();
@@ -509,7 +556,7 @@ describe('the decision', () => {
   it('reads the day a held email goes live, and drops it once the hold is cleared @approvals', async () => {
     const held = { ...mail, not_before: '2099-11-25T00:00:00-08:00' };
     reply = (url) => (url.endsWith('/api/v2/email/sends/s1') ? { body: held } : null);
-    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    show(<TaskPage task="12" />, '/tasks/p1/12');
     const box = await decision();
     expect(await within(box).findByText('Sends Nov 25')).toBeTruthy();
     // the case's row on the stream says the hold is gone (live/patch.ts): an explicit null
@@ -520,7 +567,7 @@ describe('the decision', () => {
   it('says the day a held email goes and flags its archived file @approvals', async () => {
     const held = { ...mail, not_before: '2099-11-25T16:00:00.000000Z', send: { ...mail.send, attachments: [{ part: 2, name: 'letter.pdf', size: 4096, archived: true }] } };
     reply = (url) => (url.endsWith('/api/v2/email/sends/s1') ? { body: held } : null);
-    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    show(<TaskPage task="12" />, '/tasks/p1/12');
     const box = await decision();
     expect(await within(box).findByText('Sends Nov 25')).toBeTruthy();
     expect(within(box).getByText('letter.pdf')).toBeTruthy();
@@ -536,7 +583,7 @@ describe('the decision', () => {
         : url.endsWith('/api/v2/oks/r2')
           ? { body: { requirement_id: 'r2', subject: 'email_send:s2', content: {}, shown_hash: 'h-grant-2', standing: 'waiting', task_id: 't1' } }
           : null;
-    show(<TaskPage task="12" pipeline="p1" tab="email-2" />, '/tasks/p1/12/email-2');
+    show(<TaskPage task="12" tab="email-2" />, '/tasks/p1/12/email-2');
     const box = await decision();
     expect(await within(box).findByText('Email to Lee Park')).toBeTruthy();
     fireEvent.click(await ready(box));
@@ -556,7 +603,7 @@ describe('the decision', () => {
       return null;
     };
     shown = task({ documents: [{ file_id: 'd1', name: 'Notes', kind: 'markdown', version: 1 }] as never });
-    show(<TaskPage task="12" pipeline="p1" tab="notes" />, '/tasks/p1/12/notes');
+    show(<TaskPage task="12" tab="notes" />, '/tasks/p1/12/notes');
     const pointer = await screen.findByRole('region', { name: 'Waits on you' });
     expect(within(pointer).getByRole('button', { name: 'Open' })).toBeTruthy();
     expect(screen.queryByRole('region', { name: 'The decision' })).toBeNull();
@@ -609,7 +656,7 @@ describe('the decision', () => {
     await waitFor(() => expect(queryClient.getQueryState(taskFilesQuery('t1').queryKey)?.status).toBe('success'));
     expect(screen.queryByRole('region', { name: 'The decision' })).toBeNull();
     cleanup();
-    show(<TaskPage task="12" pipeline="p1" tab="email-2" />, '/tasks/p1/12/email-2');
+    show(<TaskPage task="12" tab="email-2" />, '/tasks/p1/12/email-2');
     expect(await screen.findByRole('heading', { name: 'Records enclosed' })).toBeTruthy();
     expect(screen.queryByRole('region', { name: 'The decision' })).toBeNull();
   });
@@ -620,7 +667,7 @@ describe('the decision', () => {
       if (method === 'POST' && url.includes('/undo')) return { body: { task: task() } };
       return null;
     };
-    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    show(<TaskPage task="12" />, '/tasks/p1/12');
     fireEvent.click(await ready(await decision()));
     await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/tasks/t1/asks/r1/ok', body: { shown_hash: 'h-mail' } }));
     fireEvent.click(await screen.findByRole('button', { name: 'Undo' }));
@@ -635,7 +682,7 @@ describe('the decision', () => {
       if (restarting) return { status: 503, body: null, text: 'Tico is starting. Try again in a few seconds.' };
       return { body: { task: task({ to_leave: [req({ met: true, may: [] })] }), answer_id: 'a9' } };
     };
-    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    show(<TaskPage task="12" />, '/tasks/p1/12');
     const box = await decision();
     const approve = await ready(box);
     fireEvent.click(approve);
@@ -654,7 +701,7 @@ describe('the decision', () => {
       if (method === 'POST' && url.includes('/undo')) return { body: { task: task() } };
       return null;
     };
-    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    show(<TaskPage task="12" />, '/tasks/p1/12');
     fireEvent.click(await ready(await decision()));
     fireEvent.click(await screen.findByRole('button', { name: 'Undo' }));
     await waitFor(() => expect(sent.at(-1)?.url).toBe('/api/v2/answers/a9/undo'));
@@ -674,7 +721,7 @@ describe('the decision', () => {
       return null;
     };
     shown = task({ to_leave: [req({ shows: ['file:f9@1'], line: 'OK the brief?' })] });
-    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    show(<TaskPage task="12" />, '/tasks/p1/12');
     const box = await decision();
     fireEvent.click(await ready(box));
     expect(await within(box).findByText('Changed')).toBeTruthy();
@@ -691,7 +738,7 @@ describe('the decision', () => {
     };
     const page = { file_id: 'f9', version: 2, ref: 'page:f9@2' };
     shown = task({ visit_id: 'v4', to_leave: [req({ kind: 'page', shows: [], line: 'Go live page', page } as Partial<TaskRequirement>)] } as Partial<TaskData>);
-    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    show(<TaskPage task="12" />, '/tasks/p1/12');
     const box = await decision();
     fireEvent.click(within(box).getByRole('button', { name: 'Request changes' }));
     fireEvent.change(within(box).getByRole('textbox', { name: 'What should change?' }), { target: { value: 'Shorter' } });
@@ -707,15 +754,16 @@ describe('the decision', () => {
     };
     const page = { file_id: 'f9', version: 2, ref: 'page:f9@2' };
     shown = task({ visit_id: 'v4', to_leave: [req({ kind: 'page', shows: [], line: 'Go live page', page } as Partial<TaskRequirement>)] } as Partial<TaskData>);
-    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    show(<TaskPage task="12" />, '/tasks/p1/12');
     fireEvent.click(await ready(await decision()));
     await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/tasks/t1/asks/r1/answer', body: { value: 'ok', page_version: 'f9@2', visit_id: 'v4' } }));
   });
 
   /** The task, drawn only while the address is the task's: the list it was opened from is another page. */
   function OnTask() {
-    const path = useLocation({ select: (l) => l.pathname });
-    return path.startsWith('/tasks/p1/12') ? <TaskPage task="12" pipeline="p1" /> : null;
+    // the task over the page while the address names it, as the task modal draws it
+    const open = useLocation({ select: (l) => openOf(l.search as Record<string, unknown>)?.task });
+    return open === '12' ? <TaskPage task="12" /> : null;
   }
   const approved = (more: Partial<TaskData> = {}) => {
     reply = (url, method) => (method === 'POST' && url.endsWith('/asks/r1/ok') ? { body: { task: task({ to_leave: [req({ met: true, may: [] })], ...more }), answer_id: 'a9' } } : null);
@@ -727,8 +775,8 @@ describe('the decision', () => {
     const router = show(<OnTask />, '/needs-you?view=all');
     await act(() => router.navigate({ href: '/tasks/p1/12' }));
     fireEvent.click(await ready(await decision()));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/needs-you'));
-    expect(router.state.location.search).toEqual({ view: 'all' });
+    await waitFor(() => expect(was(router).pathname).toBe('/needs-you'));
+    expect(was(router).search).toEqual({ view: 'all' });
     // stepped back, not pushed: the list is where it was in the history
     expect(router.history.canGoBack()).toBe(false);
     expect(await screen.findByRole('button', { name: 'Undo' })).toBeTruthy();
@@ -741,7 +789,7 @@ describe('the decision', () => {
     fireEvent.click(await ready(await decision()));
     expect(await screen.findByRole('button', { name: 'Undo' })).toBeTruthy();
     await act(async () => {});
-    expect(router.state.location.pathname).toMatch(/^\/tasks\/p1\/12/);
+    expect(was(router).pathname).toMatch(/^\/tasks\/p1\/12/);
   });
 
   it('Approve stays on the task while Needs you still names it for something else (a paid render to reconcile) @approvals', async () => {
@@ -753,7 +801,7 @@ describe('the decision', () => {
     fireEvent.click(await ready(await decision()));
     expect(await screen.findByRole('button', { name: 'Undo' })).toBeTruthy();
     await act(async () => {});
-    expect(router.state.location.pathname).toMatch(/^\/tasks\/p1\/12/);
+    expect(was(router).pathname).toMatch(/^\/tasks\/p1\/12/);
     expect((queryClient.getQueryData(['flow']) as { task_ids: string[] }).task_ids).toEqual(['t1']);
   });
 
@@ -825,9 +873,9 @@ describe('the decision', () => {
       expect([ids(), count()]).toEqual([only ? undefined : ['t9'], 1]); // out at once
       return router;
     };
-    const taken = async (router: { state: { location: { pathname: string } } }) => {
+    const taken = async (router: Parameters<typeof was>[0]) => {
       take();
-      await waitFor(() => expect(router.state.location.pathname).not.toMatch(/^\/tasks\/p1\/12/));
+      await waitFor(() => expect(was(router).pathname).not.toMatch(/^\/tasks\/p1\/12/));
       await act(async () => {});
     };
     const readAgain = (key: string[]) => act(() => void queryClient.refetchQueries({ queryKey: key, exact: true }));
@@ -847,7 +895,7 @@ describe('the decision', () => {
       told = 4; // more came in meanwhile: the badge says what the server counts now
       reads.list = reads.count = 0;
       take();
-      await waitFor(() => expect(router.state.location.pathname).not.toMatch(/^\/tasks\/p1\/12/));
+      await waitFor(() => expect(was(router).pathname).not.toMatch(/^\/tasks\/p1\/12/));
       await waitFor(() => expect(count()).toBe(4));
       expect(reads).toEqual({ list: 0, count: 1 });
     });
@@ -887,14 +935,52 @@ describe('the decision', () => {
     const router = show(<OnTask />, '/needs-you');
     await act(() => router.navigate({ href: '/tasks/p1/12' }));
     fireEvent.click(await ready(await decision()));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/needs-you'));
+    await waitFor(() => expect(was(router).pathname).toBe('/needs-you'));
+  });
+
+  it('the last ❓ answered in the chat goes on as Approve does, to the next task in the list @approvals', async () => {
+    shown = task({ to_leave: [], waits: [question] } as Partial<TaskData>);
+    // Needs you: the ❓ on task 12, then an OK on task 13; taken, the ❓ no longer waits as the task is read again
+    const row = (id: string, number: number, rid: string) => ({ kind: 'ask', id: `v1:${rid}`, task_id: id, requirement_id: rid, line: 'Which?', since: '2026-11-18T09:00:00Z', task: { id, number, title: `Task ${number}`, pipeline_id: 'p1' } });
+    reply = (url, method) =>
+      method === 'POST' && url.endsWith('/comments')
+        ? ((shown = task({ to_leave: [] })), { body: { comment: { id: 'c1' } } })
+        : method === 'GET' && url.includes('/needs-you?limit=')
+          ? { body: { items: [row('t1', 12, 'qmark:m1'), row('t9', 13, 'r9')], next: null } }
+          : null;
+    const router = show(
+      <>
+        <OnTask />
+        <TaskChat task="12" />
+      </>,
+      '/needs-you?view=all',
+    );
+    await act(() => router.navigate({ href: '/tasks/p1/12' }));
+    const card = await screen.findByRole('region', { name: 'Question' });
+    await waitFor(() => expect((queryClient.getQueryData(['flow']) as { task_ids?: string[] } | undefined)?.task_ids).toEqual(['t1', 't9']));
+    // as the list beside the task draws it
+    noteList({ pipeline: NEEDS_YOU, open: '12', rows: [{ id: 't1', n: '12' }, { id: 't9', n: '13' }] });
+    fireEvent.change(within(card).getByRole('textbox', { name: 'Reply' }), { target: { value: 'UPS' } });
+    fireEvent.click(within(card).getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/tasks/t1/comments', body: { text: 'UPS', ask: 'qmark:m1' } }));
+    await waitFor(() => expect(openOf(router.state.location.search as Record<string, unknown>)?.task).toBe('13'));
+  });
+
+  it('a link to a task whose pipeline is retired opens over Tasks, Needs you beside it, never a board that is gone @approvals', async () => {
+    queryClient.setQueryData(pipelinesQuery.queryKey, [{ id: 'p9', name: 'Ops', stages: [] }] as never);
+    const at = (pathname: string) =>
+      openCold({ location: { pathname, search: { chat: 'agent:lo' } }, context: { queryClient } }).catch((r: { options: { to: string; search: Record<string, unknown> } }) => r.options);
+    expect(await at('/tasks/p1/12/email')).toMatchObject({ to: '/tasks', search: { chat: 'agent:lo', task: 12, 'task.tab': 'email' } });
+    expect((await at('/tasks/p1/12')).search).not.toHaveProperty('list');
+    // a pipeline still there: its board, its list beside the task
+    expect(await at('/tasks/p9/12')).toMatchObject({ to: '/tasks/p9', search: { task: 12, list: 'p9' } });
   });
 
   it('Back closes the task: to the list it was opened from, else its board @approvals', async () => {
     const router = show(<OnTask />, '/needs-you?view=all');
     await act(() => router.navigate({ href: '/tasks/p1/12' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Back' }));
-    await waitFor(() => expect(router.state.location.href).toBe('/needs-you?view=all'));
+    await waitFor(() => expect(was(router).href).toBe('/needs-you?view=all'));
     expect(router.history.canGoBack()).toBe(false);
     cleanup();
     forgetPlaces();
@@ -902,37 +988,7 @@ describe('the decision', () => {
     queryClient.setQueryData(pipelinesQuery.queryKey, [{ id: 'p1', name: 'Legal', stages: [] }] as never);
     const direct = show(<OnTask />, '/tasks/p1/12');
     fireEvent.click(await screen.findByRole('button', { name: 'Back' }));
-    await waitFor(() => expect(direct.state.location.pathname).toBe('/tasks/p1'));
-  });
-
-  it('Back from a link before the pipelines are read waits for them to pick the board @approvals', async () => {
-    let give!: () => void;
-    const list = new Promise<Reply>((done) => (give = () => done({ body: { pipelines: [{ id: 'p1', name: 'Legal', stages: [] }] } })));
-    reply = (url, method) => (method === 'GET' && url.endsWith('/api/v2/pipelines') ? list : null);
-    const router = show(<OnTask />, '/tasks/p1/12');
-    fireEvent.click(await screen.findByRole('button', { name: 'Back' }));
-    await act(async () => {});
-    expect(router.state.location.pathname).toMatch(/^\/tasks\/p1\/12/);
-    give();
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1'));
-  });
-
-  it('Back from a link to a task whose pipeline is retired goes to Tasks, not a board that is gone @approvals', async () => {
-    queryClient.setQueryData(pipelinesQuery.queryKey, [{ id: 'p9', name: 'Ops', stages: [] }] as never);
-    const router = show(<OnTask />, '/tasks/p1/12');
-    fireEvent.click(await screen.findByRole('button', { name: 'Back' }));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks'));
-  });
-
-  it('opened from a thread, ✕ closes the task back to that thread, even after another tab was opened @approvals', async () => {
-    const router = show(<OnTask />, '/team/lo');
-    await act(() => router.navigate({ href: '/tasks/p1/12/email?chat=agent%3Alo&via=thread' }));
-    await decision();
-    await act(() => router.navigate({ href: '/tasks/p1/12/details?chat=agent%3Alo&via=thread' }));
-    await waitFor(() => expect(document.querySelector('.pk-head .pk-close')).toBeTruthy());
-    fireEvent.click(document.querySelector('.pk-head .pk-close') as HTMLElement);
-    await waitFor(() => expect(router.state.location.pathname).toBe('/team/lo'));
-    expect(router.history.canGoBack()).toBe(false);
+    await waitFor(() => expect(was(direct).pathname).toBe('/tasks/p1'));
   });
 
   it('staying for a question, an approval that arrives later does not move the person off the page @approvals', async () => {
@@ -942,7 +998,7 @@ describe('the decision', () => {
     await act(() => router.navigate({ href: '/tasks/p1/12' }));
     fireEvent.click(await ready(await decision()));
     expect(await screen.findByRole('button', { name: 'Undo' })).toBeTruthy();
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/details'));
+    await waitFor(() => expect(was(router).pathname).toBe('/tasks/p1/12/details'));
     // a page to approve arrives with the stream
     const page = req({ requirement_id: 'r2', kind: 'page', line: 'Review page', shows: [], approval: { document: 'Review page', file_id: 'd1', version: 1, visit_id: 'v1', unchecked: false } } as Partial<TaskRequirement>);
     act(() =>
@@ -952,7 +1008,7 @@ describe('the decision', () => {
     );
     expect(await screen.findByRole('link', { name: /Review page/ })).toBeTruthy();
     await act(async () => {});
-    expect(router.state.location.pathname).toBe('/tasks/p1/12/details');
+    expect(was(router).pathname).toBe('/tasks/p1/12/details');
   });
 
   it('Request changes is a message to the agent in its chat, and marks the request Changes asked @approvals', async () => {
@@ -1101,7 +1157,7 @@ describe('an email waiting to send', () => {
 
   it('is titled by its subject alone, and the title is not a field to rename @approvals', async () => {
     shown = task({ title: titled });
-    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    show(<TaskPage task="12" />, '/tasks/p1/12');
     const title = await screen.findByRole('heading', { level: 1, name: 'Notice of claim' });
     fireEvent.click(title);
     expect(screen.queryByRole('textbox', { name: 'Title' })).toBeNull();
@@ -1146,7 +1202,7 @@ describe('an email waiting to send', () => {
     await act(async () => refuse());
     expect(await within(box).findByText('This OK is no longer asked.')).toBeTruthy(); // held on its email, to say why
     await act(() => router.navigate({ to: '/tasks/p1/12/notes' as never }));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/notes'));
+    await waitFor(() => expect(was(router).pathname).toBe('/tasks/p1/12/notes'));
     expect(screen.queryByRole('region', { name: 'The decision' })).toBeNull();
   });
 
@@ -1178,7 +1234,7 @@ describe('what the person needs beside the email', () => {
       { to: ['Dana Ruiz <dana@example.test>'], cc: ['counsel@example.test'], bcc: ['files@example.test'] },
       { recipients: ['counsel@example.test', 'Dana Ruiz <dana@example.test>', 'files@example.test'] },
     );
-    show(<TaskPage task="12" pipeline="p1" tab="email" />, '/tasks/p1/12/email');
+    show(<TaskPage task="12" tab="email" />, '/tasks/p1/12/email');
     await screen.findByText('Dear Ms. Ruiz, our response is attached.');
     expect(pairs(header())).toEqual([
       ['From', 'legal@example.test'],
@@ -1191,7 +1247,7 @@ describe('what the person needs beside the email', () => {
 
   it('before the preview splits them, every address is under To @approvals', async () => {
     reply = withMail({}, { recipients: ['Dana Ruiz <dana@example.test>', 'counsel@example.test'] });
-    show(<TaskPage task="12" pipeline="p1" tab="email" />, '/tasks/p1/12/email');
+    show(<TaskPage task="12" tab="email" />, '/tasks/p1/12/email');
     await screen.findByText('Dear Ms. Ruiz, our response is attached.');
     expect(pairs(header())).toEqual([
       ['From', 'legal@example.test'],
@@ -1207,7 +1263,7 @@ describe('what the person needs beside the email', () => {
       { part: 3, name: 'exhibit.pdf', size: 8192, type: 'application/pdf' },
     ];
     reply = withMail({}, { attachments: files });
-    show(<TaskPage task="12" pipeline="p1" tab="email" />, '/tasks/p1/12/email');
+    show(<TaskPage task="12" tab="email" />, '/tasks/p1/12/email');
     const letter = await screen.findByRole('group', { name: 'letter.pdf' });
     // PDF.js draws the letter (library/PdfView): its place is under the message, before any press
     await waitFor(() => expect(letter.querySelector('.fv-pdf, .fv-none')).toBeTruthy());
@@ -1217,7 +1273,7 @@ describe('what the person needs beside the email', () => {
 
   it('a Word letter is drawn as its sheet under the message @approvals', async () => {
     reply = withMail({}, { attachments: [{ part: 2, name: 'letter.docx', size: 4096, type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }] });
-    show(<TaskPage task="12" pipeline="p1" tab="email" />, '/tasks/p1/12/email');
+    show(<TaskPage task="12" tab="email" />, '/tasks/p1/12/email');
     await screen.findByText('Dear Ms. Ruiz, our response is attached.');
     // the stub answers no .docx bytes: the sheet's own place says so, under the message
     expect(await screen.findByText('letter.docx did not load')).toBeTruthy();
@@ -1227,7 +1283,7 @@ describe('what the person needs beside the email', () => {
     const original = { msg_id: 'm1', thread_id: 'th1', from_header: 'Dana Ruiz <dana@example.test>', from_addr: 'dana@example.test', epoch: 1763400000, body: 'Dear Legal,\nYour delivery was late.\nI want a refund.\nPlease reply by Friday.' };
     const mailRead = withMail({}, { reply_to_id: 'm1', thread_id: 'th1' });
     reply = (url) => (url.includes('/api/v2/mail/messages/m1?mailbox=legal%40example.test') ? { body: original } : mailRead(url));
-    show(<TaskPage task="12" pipeline="p1" tab="email" />, '/tasks/p1/12/email');
+    show(<TaskPage task="12" tab="email" />, '/tasks/p1/12/email');
     const answered = await screen.findByRole('region', { name: 'In reply to' });
     // in the envelope, under From and To: above the message and its letter, not under them
     expect(answered.closest('.ap-env')).toBeTruthy();
@@ -1242,7 +1298,7 @@ describe('what the person needs beside the email', () => {
   it('when the email it answers cannot be read here, shows nothing of it @approvals', async () => {
     const mailRead = withMail({}, { reply_to_id: 'm1' });
     reply = (url) => (url.includes('/api/v2/mail/messages/') ? { status: 403, body: { error: { code: 'forbidden', detail: 'No access to this mailbox' } } } : mailRead(url));
-    show(<TaskPage task="12" pipeline="p1" tab="email" />, '/tasks/p1/12/email');
+    show(<TaskPage task="12" tab="email" />, '/tasks/p1/12/email');
     await screen.findByText('Dear Ms. Ruiz, our response is attached.');
     await waitFor(() => expect(sent).toEqual([]));
     expect(screen.queryByRole('region', { name: 'In reply to' })).toBeNull();
@@ -1253,7 +1309,7 @@ describe('what the person needs beside the email', () => {
     const matter = task({ id: 't5', number: 40, title: 'Late-delivery claim: Dana Ruiz', pipeline_id: 'p9', to_leave: [] });
     const mailRead = withMail({}, { task_id: 't5' });
     reply = (url) => (url.endsWith('/api/v2/tasks/t5') ? { body: { task: matter, runs: [], children: [] } } : mailRead(url));
-    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    show(<TaskPage task="12" />, '/tasks/p1/12');
     const from = await screen.findByRole('link', { name: 'From Late-delivery claim: Dana Ruiz' });
     expect(from.getAttribute('href')).toBe('/tasks/p9/40');
     expect(screen.getAllByRole('link', { name: /^From / })).toHaveLength(1);
@@ -1266,7 +1322,7 @@ describe('what the person needs beside the email', () => {
       url.endsWith('/api/v2/tasks/t4')
         ? { body: { task: earlier, runs: [], children: [], parent: { id: 't5', title: 'Late-delivery claim: Dana Ruiz', label: null, step: null } } }
         : mailRead(url);
-    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    show(<TaskPage task="12" />, '/tasks/p1/12');
     const from = await screen.findByRole('link', { name: 'From Late-delivery claim: Dana Ruiz' });
     expect(from.getAttribute('href')).toBe('/task/t5');
     expect(screen.queryByRole('link', { name: /^From Send/ })).toBeNull();
@@ -1277,7 +1333,7 @@ describe('what the person needs beside the email', () => {
     const earlier = task({ id: 't4', title: 'Send an email', status: 'closed', to_leave: [] });
     const mailRead = withMail({}, { task_id: 't4' });
     reply = (url) => (url.endsWith('/api/v2/tasks/t4') ? { body: { task: earlier, runs: [], children: [] } } : mailRead(url));
-    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    show(<TaskPage task="12" />, '/tasks/p1/12');
     expect((await screen.findByRole('link', { name: 'From Late-delivery claim: Dana Ruiz' })).getAttribute('href')).toBe('/task/t5');
   });
 
@@ -1285,14 +1341,14 @@ describe('what the person needs beside the email', () => {
     const earlier = task({ id: 't4', title: 'Send: Re: Notice of claim → dana@example.test', status: 'closed', to_leave: [] });
     const mailRead = withMail({}, { task_id: 't4' });
     reply = (url) => (url.endsWith('/api/v2/tasks/t4') ? { body: { task: earlier, runs: [], children: [] } } : mailRead(url));
-    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    show(<TaskPage task="12" />, '/tasks/p1/12');
     await within(await decision()).findByText('Email to Dana Ruiz');
     await waitFor(() => expect(screen.queryByRole('link', { name: /^From / })).toBeNull());
   });
 
   it('names no source when the email was queued on the task that is open @approvals', async () => {
     reply = withMail({}, { task_id: 't1' });
-    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    show(<TaskPage task="12" />, '/tasks/p1/12');
     await within(await decision()).findByText('Email to Dana Ruiz');
     expect(screen.queryByRole('link', { name: /^From / })).toBeNull();
   });
@@ -1302,7 +1358,7 @@ describe('on a phone, the decision holds the bottom', () => {
   const docked = () => document.querySelector('[data-dock]');
 
   it('of the thing’s tab and of an attachment open over it @approvals', async () => {
-    show(<TaskPage task="12" pipeline="p1" tab="email" />, '/tasks/p1/12/email');
+    show(<TaskPage task="12" tab="email" />, '/tasks/p1/12/email');
     await screen.findByText('Dear Ms. Ruiz, our response is attached.');
     expect(within(docked() as HTMLElement).getByRole('region', { name: 'The decision' })).toBeTruthy();
     fireEvent.click(screen.getByRole('link', { name: /letter\.pdf/ }));
@@ -1310,23 +1366,38 @@ describe('on a phone, the decision holds the bottom', () => {
     expect(within(docked() as HTMLElement).getByRole('region', { name: 'The decision' })).toBeTruthy();
   });
 
-  it('of the Chat tab, over its message box @approvals', async () => {
+  it('an old link to the Chat tab, on a computer: one chat, beside the page, the decision over its box @approvals', async () => {
     shown = task({ to_leave: [req(), req({ requirement_id: 'r2', shows: [], line: 'Check the brief?' })] });
-    show(<TaskPage task="12" pipeline="p1" tab="chat" />, '/tasks/p1/12/chat');
+    const router = show(
+      <>
+        <TaskChat task="12" />
+        <TaskPage task="12" tab="chat" />
+      </>,
+      '/tasks/p1/12/chat',
+    );
     const chat = await screen.findByRole('region', { name: 'Chat with Legal Owner' });
-    // the task's own ask: an email's OK is approved only on its Email tab
-    expect(within(within(chat).getByRole('region', { name: 'The decision' })).getByText('Check the brief?')).toBeTruthy();
-    // one box: the page's own dock steps aside on the Chat tab
-    expect(screen.getAllByRole('region', { name: 'The decision' })).toHaveLength(1);
+    // the page opens on what waits (the email), never the chat again
+    expect(await screen.findByText('Dear Ms. Ruiz, our response is attached.')).toBeTruthy();
+    await waitFor(() => expect(was(router).pathname).toBe('/tasks/p1/12/email'));
+    expect(screen.getAllByRole('region', { name: 'Chat with Legal Owner' })).toHaveLength(1);
+    // the decision over the chat's box answers the tab the page opened: the email's send
+    await ready(await within(chat).findByRole('region', { name: 'The decision' }));
   });
 
   it('of the Chat tab: a ❓ to the person is pinned over its message box too @approvals', async () => {
     const waits = [{ state: 'person', who: 'human:me', line: 'Which address should it go to?', requirement_id: 'qmark:m1', since: null, until: null, ask: true }];
     shown = task({ to_leave: [], waits } as Partial<TaskData>);
-    show(<TaskPage task="12" pipeline="p1" tab="chat" />, '/tasks/p1/12/chat');
+    show(
+      <>
+        <TaskChat task="12" />
+        <TaskPage task="12" tab="chat" />
+      </>,
+      '/tasks/p1/12/chat',
+    );
     const chat = await screen.findByRole('region', { name: 'Chat with Legal Owner' });
     const pin = await within(chat).findByRole('region', { name: 'Question' });
     expect(within(pin).getByText('Which address should it go to?')).toBeTruthy();
+    expect(screen.getAllByRole('region', { name: 'Chat with Legal Owner' })).toHaveLength(1);
   });
 
   it('on a phone, of the chat’s own address too: it stays the address, the page under the chat card, one box @approvals', async () => {
@@ -1335,7 +1406,7 @@ describe('on a phone, the decision holds the bottom', () => {
     try {
       const router = show(
         <>
-          <TaskPage task="12" pipeline="p1" tab="chat" />
+          <TaskPage task="12" tab="chat" />
           <TaskChat task="12" />
         </>,
         '/tasks/p1/12/chat',
@@ -1344,7 +1415,7 @@ describe('on a phone, the decision holds the bottom', () => {
       // the page opens on what waits (the email), its decision docked; the address stays the chat's, for a reload
       await waitFor(() => expect(within(docked() as HTMLElement).getByRole('region', { name: 'The decision' })).toBeTruthy());
       expect(await screen.findByText('Dear Ms. Ruiz, our response is attached.')).toBeTruthy();
-      expect(router.state.location.pathname).toBe('/tasks/p1/12/chat');
+      expect(was(router).pathname).toBe('/tasks/p1/12/chat');
       expect(screen.queryByRole('link', { name: 'Chat' })).toBeNull();
       expect(screen.getAllByRole('region', { name: 'The decision' })).toHaveLength(1);
     } finally {
@@ -1368,8 +1439,8 @@ describe('the matter shows the email that waits on the person', () => {
 
   it('opens on the email: its brief, then the decision of its "Send:" sub-task, then the email, Approve bound to what was shown @approvals', async () => {
     serve(matter({ note: 'Dana Ruiz wants a refund for a late delivery.' } as Partial<TaskData>), [{ id: 't1', title: sub.title, status: 'open', owner_id: 'bot:lo' }]);
-    const router = show(<TaskPage task="40" pipeline="p9" />, '/tasks/p9/40');
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p9/40/email'));
+    const router = show(<TaskPage task="40" />, '/tasks/p9/40');
+    await waitFor(() => expect(was(router).pathname).toBe('/tasks/p9/40/email'));
     const brief = await screen.findByRole('region', { name: 'Brief' });
     const box = await decision();
     const env = await screen.findByText('Dear Ms. Ruiz, our response is attached.');
@@ -1387,7 +1458,7 @@ describe('the matter shows the email that waits on the person', () => {
     serve(matter({ note: 'Dana Ruiz wants a refund for a late delivery.' } as Partial<TaskData>), [{ id: 't1', title: sub.title, status: 'open', owner_id: 'bot:lo' }]);
     document.documentElement.dataset.layout = 'cards';
     try {
-      show(<TaskPage task="40" pipeline="p9" />, '/tasks/p9/40');
+      show(<TaskPage task="40" />, '/tasks/p9/40');
       const box = await decision();
       expect(box.closest('[data-dock]')).toBeTruthy();
       expect(box.closest('.tv-lead')).toBeNull();
@@ -1400,7 +1471,7 @@ describe('the matter shows the email that waits on the person', () => {
   it('on its other pages, where the email is not on screen, only points to it: no Approve, Open goes to the email @approvals', async () => {
     const deadlines = { file_id: 'd1', name: 'Deadlines', kind: 'markdown', version: 1 };
     serve(matter({ documents: [deadlines], relations: { depends_on: [{ id: 't1', title: sub.title, status: 'open', owner_id: 'bot:lo', direction: 'out' }] } } as unknown as Partial<TaskData>), []);
-    const router = show(<TaskPage task="40" pipeline="p9" tab="deadlines" />, '/tasks/p9/40/deadlines');
+    const router = show(<TaskPage task="40" tab="deadlines" />, '/tasks/p9/40/deadlines');
     const pointer = await screen.findByRole('region', { name: 'Waits on you' });
     // named from the OK task's title: its preview is never read off the Email tab
     expect(await within(pointer).findByText('Email to dana@example.test')).toBeTruthy();
@@ -1412,7 +1483,7 @@ describe('the matter shows the email that waits on the person', () => {
     expect(screen.queryByRole('region', { name: 'The decision' })).toBeNull();
     fireEvent.click(within(pointer).getByRole('button', { name: 'Open' }));
     // the Email tab, where the decision sits over the email (the test above)
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p9/40/email'));
+    await waitFor(() => expect(was(router).pathname).toBe('/tasks/p9/40/email'));
     expect(sent).toEqual([]);
   });
 
@@ -1422,7 +1493,7 @@ describe('the matter shows the email that waits on the person', () => {
     serve(matter({ relations: { depends_on: [{ id: 't1', title: sub.title, status: 'open', owner_id: 'bot:lo', direction: 'out' }] } } as unknown as Partial<TaskData>), []);
     const inner = reply;
     reply = (url, method) => (url.endsWith('/api/v2/tasks/t5/files?all=1') ? { body: { files: [pdf] } } : inner(url, method));
-    show(<TaskPage task="40" pipeline="p9" tab="declaration-pdf" />, '/tasks/p9/40/declaration-pdf');
+    show(<TaskPage task="40" tab="declaration-pdf" />, '/tasks/p9/40/declaration-pdf');
     const pointer = await screen.findByRole('region', { name: 'Waits on you' });
     expect(await within(pointer).findByText('Email to dana@example.test')).toBeTruthy();
     expect(await screen.findByRole('region', { name: 'declaration.pdf' })).toBeTruthy();
@@ -1432,7 +1503,7 @@ describe('the matter shows the email that waits on the person', () => {
 
   it('shows nothing once the email is no longer to go out, or with no OK hung on it @approvals', async () => {
     serve(matter(), [{ id: 't1', title: sub.title, status: 'open', owner_id: 'bot:lo' }], 'canceled');
-    show(<TaskPage task="40" pipeline="p9" />, '/tasks/p9/40');
+    show(<TaskPage task="40" />, '/tasks/p9/40');
     await waitFor(() => expect(queryClient.getQueryData(keys.tasks.detail('t1'))).toBeTruthy());
     await act(async () => {});
     expect(document.querySelector('.tv-waits')).toBeNull();
@@ -1475,7 +1546,7 @@ describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-ta
       return null;
     };
   };
-  const open = () => show(<TaskPage task="36461" pipeline="legal-responses" tab="email" />, '/tasks/legal-responses/36461/email');
+  const open = () => show(<TaskPage task="36461" tab="email" />, '/tasks/legal-responses/36461/email');
 
   it('Approve answers the sub-task’s ask with the hash of the email as shown, and says so @approvals', async () => {
     const answered = send(req({ requirement_id: rid, met: true, may: ['undo'], answer: { id: 'a7', value: 'ok', by: 'human:me', at: '2026-11-19T10:00:00Z', note: null } } as Partial<TaskRequirement>));
@@ -1487,17 +1558,17 @@ describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-ta
     await waitFor(() => expect(document.querySelector('.toasts')?.textContent).toContain('Sending to dana@example.test'));
     expect(screen.getByRole('button', { name: 'Undo' })).toBeTruthy();
     // nothing else on it waits on the person: the task closes (opened from nowhere here, so to its board)
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/legal-responses'));
+    await waitFor(() => expect(was(router).pathname).toBe('/tasks/legal-responses'));
   });
 
   it('opened from a board, Approve closes the task once nothing on it waits: back to the board as it was, Undo offered @approvals', async () => {
     const answered = send(req({ requirement_id: rid, met: true, may: ['undo'], answer: { id: 'a7', value: 'ok', by: 'human:me', at: '2026-11-19T10:00:00Z', note: null } } as Partial<TaskRequirement>));
     serve((url) => (url.endsWith(`/asks/${rid}/ok`) ? { body: { task: answered } } : null));
-    const router = show(<TaskPage task="36461" pipeline="legal-responses" tab="email" />, '/tasks/legal-responses?owner=bot%3Alo');
+    const router = show(<TaskPage task="36461" tab="email" />, '/tasks/legal-responses?owner=bot%3Alo');
     await act(() => router.navigate({ href: '/tasks/legal-responses/36461/email' }));
     fireEvent.click(await ready(await decision()));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/legal-responses'));
-    expect(router.state.location.search).toEqual({ owner: 'bot:lo' });
+    await waitFor(() => expect(was(router).pathname).toBe('/tasks/legal-responses'));
+    expect(was(router).search).toEqual({ owner: 'bot:lo' });
     // stepped back, not pushed: the board is where it was in the history
     expect(router.history.canGoBack()).toBe(false);
     // the email's own toast follows it through its undo window
@@ -1512,7 +1583,7 @@ describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-ta
     serve((url) => (url.endsWith(`/asks/${rid}/ok`) ? { body: { task: answered } } : null));
     const own = reply;
     reply = (url, method) => (method === 'GET' && (url.includes('/api/v2/tasks/%2336461') || url.endsWith('/api/v2/tasks/19ca7418')) ? { body: { task: asking, runs: [], children, can_comment: true, mover: true } } : own(url, method));
-    const router = show(<TaskPage task="36461" pipeline="legal-responses" tab="email" />, '/tasks/legal-responses');
+    const router = show(<TaskPage task="36461" tab="email" />, '/tasks/legal-responses');
     await act(() => router.navigate({ href: '/tasks/legal-responses/36461/email' }));
     // two asks: the email's (over the email) and the matter's own page
     const box = await waitFor(() => {
@@ -1521,7 +1592,7 @@ describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-ta
       return found as HTMLElement;
     });
     fireEvent.click(await ready(box));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/legal-responses/36461/review-page'));
+    await waitFor(() => expect(was(router).pathname).toBe('/tasks/legal-responses/36461/review-page'));
     // the email's own toast follows it through its undo window
     await waitFor(() => expect(document.querySelector('.toasts')?.textContent).toContain('Sending to dana@example.test'));
   });
@@ -1533,9 +1604,8 @@ describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-ta
     // (`then`, once it is taken); opened by a press on its board's card
     const approveBeside = async (rows: ListRow[], then?: ListRow[], earlier?: ListRow[]) => {
       serve((url) => (url.endsWith(`/asks/${rid}/ok`) ? (then && noteList({ pipeline: 'legal-responses', open: '36461', rows: then }), { body: { task: answered() } }) : null));
-      const router = show(<TaskPage task="36461" pipeline="legal-responses" tab="email" />, '/tasks/legal-responses?owner=bot%3Alo');
-      pressListRow('legal-responses', '36461'); // its card on the board
-      await act(() => router.navigate({ href: '/tasks/legal-responses/36461/email' }));
+      const router = show(<TaskPage task="36461" tab="email" />, '/tasks/legal-responses?owner=bot%3Alo');
+      await act(() => pressCard(router, '/tasks/legal-responses/36461/email', 'legal-responses'));
       if (earlier) noteList({ pipeline: 'legal-responses', open: '36461', rows: earlier });
       noteList({ pipeline: 'legal-responses', open: '36461', rows });
       fireEvent.click(await ready(await decision()));
@@ -1547,8 +1617,8 @@ describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-ta
         [row('a1', 36450), row('19ca7418', 36461), row('a2', 36470), row('a3', 36480)],
         [row('a1', 36450), row('a2', 36470), row('a3', 36480), row('19ca7418', 36461)],
       );
-      await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/legal-responses/36470'));
-      expect(router.state.location.search).toEqual({});
+      await waitFor(() => expect(was(router).pathname).toBe('/tasks/legal-responses/36470'));
+      expect(was(router).search).toEqual({ owner: 'bot:lo' });
       await waitFor(() => expect(document.querySelector('.toasts')?.textContent).toContain('Sending to dana@example.test'));
     });
 
@@ -1558,12 +1628,12 @@ describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-ta
         [row('a1', 36450), row('a2', 36470), row('a3', 36480)],
         [row('a1', 36450), row('19ca7418', 36461), row('a2', 36470), row('a3', 36480)],
       );
-      await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/legal-responses/36480'));
+      await waitFor(() => expect(was(router).pathname).toBe('/tasks/legal-responses/36480'));
     });
 
     it('at the last row of its stage goes on into the next stage; at the list’s last row, back to the board @approvals', async () => {
       const on = await approveBeside([row('19ca7418', 36461), row('a3', 36480)]);
-      await waitFor(() => expect(on.state.location.pathname).toBe('/tasks/legal-responses/36480'));
+      await waitFor(() => expect(was(on).pathname).toBe('/tasks/legal-responses/36480'));
       cleanup();
       const people = [queryClient.getQueryData(['me']), queryClient.getQueryData(['directory'])];
       queryClient.clear();
@@ -1572,8 +1642,8 @@ describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-ta
       queryClient.setQueryData(['directory'], people[1]);
       // the row below it left the list before the answer was heard: nothing is below it now
       const back = await approveBeside([row('a1', 36450), row('19ca7418', 36461), row('a2', 36470)], [row('a1', 36450), row('19ca7418', 36461)]);
-      await waitFor(() => expect(back.state.location.pathname).toBe('/tasks/legal-responses'));
-      expect(back.state.location.search).toEqual({ owner: 'bot:lo' });
+      await waitFor(() => expect(was(back).pathname).toBe('/tasks/legal-responses'));
+      expect(was(back).search).toEqual({ owner: 'bot:lo' });
     });
 
     it('stays on the task while another ask on it waits, and its last answer goes on to the task below @approvals', async () => {
@@ -1588,9 +1658,8 @@ describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-ta
           : url.endsWith('/oks/rship')
             ? { status: 404, body: {} }
             : own(url, method);
-      const router = show(<TaskPage task="36461" pipeline="legal-responses" tab="email" />, '/tasks/legal-responses');
-      pressListRow('legal-responses', '36461'); // its card on the board
-      await act(() => router.navigate({ href: '/tasks/legal-responses/36461/email' }));
+      const router = show(<TaskPage task="36461" tab="email" />, '/tasks/legal-responses');
+      await act(() => pressCard(router, '/tasks/legal-responses/36461/email', 'legal-responses'));
       noteList({ pipeline: 'legal-responses', open: '36461', rows: [row('19ca7418', 36461), row('a2', 36470)] });
       const box = (named: string) =>
         waitFor(() => {
@@ -1604,9 +1673,9 @@ describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-ta
       // Ship it? still waits on the person: the task stays open
       const last = await box('Ship it?');
       await act(async () => {});
-      expect(router.state.location.pathname).toMatch(/^\/tasks\/legal-responses\/36461(\/|$)/);
+      expect(was(router).pathname).toMatch(/^\/tasks\/legal-responses\/36461(\/|$)/);
       fireEvent.click(await ready(last));
-      await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/legal-responses/36470'));
+      await waitFor(() => expect(was(router).pathname).toBe('/tasks/legal-responses/36470'));
     });
   });
 
@@ -1637,7 +1706,7 @@ describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-ta
     await waitFor(() => expect(sent).toEqual([{ url: `/api/v2/tasks/b78be168/asks/${rid}/answer`, body: { value: 'no', note: 'Shorter' } }]));
     expect(await screen.findByText(/^Changes asked/)).toBeTruthy();
     // nothing else on it waits on the person: the task closes too, to its board
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/legal-responses'));
+    await waitFor(() => expect(was(router).pathname).toBe('/tasks/legal-responses'));
   });
 });
 
@@ -1651,7 +1720,7 @@ describe('an email’s OK reads with the matter it answers', () => {
       if (url.endsWith('/api/v2/tasks/t5')) return { body: { task: matter, runs: [], children: [] } };
       return null;
     };
-    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    show(<TaskPage task="12" />, '/tasks/p1/12');
     const brief = await screen.findByRole('region', { name: 'Brief' });
     expect(within(brief).getByRole('link', { name: 'Late-delivery claim: Dana Ruiz' }).getAttribute('href')).toBe('/tasks/p9/40');
     expect(within(brief).getByText('Dana Ruiz wants a refund.')).toBeTruthy();
@@ -1675,7 +1744,7 @@ describe('an email’s OK reads with the matter it answers', () => {
       if (url.endsWith('/api/v2/tasks/t5')) return { body: { task: matter, runs: [], children: [] } };
       return null;
     };
-    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    show(<TaskPage task="12" />, '/tasks/p1/12');
     // Date then label, one line; the expected dates come from the same formatter, so no clock is pinned.
     const line = `${matterWhen('2026-12-08T03:00:00Z')} Hearing · ${matterWhen('2026-12-08')} Reply due`;
     const strip = await screen.findByText(line);
@@ -1695,7 +1764,7 @@ describe('an email’s OK reads with the matter it answers', () => {
       if (url.endsWith('/api/v2/tasks/t5')) return { body: { task: matter, runs: [], children: [] } };
       return null;
     };
-    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    show(<TaskPage task="12" />, '/tasks/p1/12');
     expect(await screen.findByText(`${matterWhen('2026-12-15')} Reply due`)).toBeTruthy();
     await screen.findByText('Dear Ms. Ruiz, our response is attached.');
   });
@@ -1708,7 +1777,7 @@ describe('an email’s OK reads with the matter it answers', () => {
       if (url.endsWith('/api/v2/tasks/t5')) return { body: { task: matter, runs: [], children: [] } };
       return null;
     };
-    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    show(<TaskPage task="12" />, '/tasks/p1/12');
     await screen.findByText('Dear Ms. Ruiz, our response is attached.');
     await waitFor(() => expect(queryClient.getQueryData(keys.tasks.detail('t5'))).toBeTruthy());
     expect(screen.queryByRole('region', { name: 'Brief' })).toBeNull();
@@ -1721,7 +1790,7 @@ describe('an open task reads itself afresh', () => {
   const open = () =>
     show(
       <>
-        <TaskPage task="12" pipeline="p1" />
+        <TaskPage task="12" />
         <TaskChat task="12" />
       </>,
       '/tasks/p1/12',
@@ -1755,7 +1824,7 @@ describe('an open task reads itself afresh', () => {
       // the shell's chat card follows the open task too
       return (
         <>
-          <TaskPage task={n} pipeline="p1" />
+          <TaskPage task={n} />
           <TaskChat task={n} />
         </>
       );
@@ -1784,7 +1853,7 @@ describe('an open task reads itself afresh', () => {
     act(() => dispatch('tasks', [{ seq: 5, id: 't1', kind: 'question', kinds: ['question'] }]));
     shown = task({ to_leave: [], waits: [], version: 4 } as Partial<TaskData>);
     land();
-    expect(await loading).not.toBeNull();
+    await loading;
     open();
     await screen.findByRole('region', { name: 'Chat with Legal Owner' });
     await waitFor(() => expect(queryClient.getQueryData<TaskData>(keys.tasks.detail('t1'))?.version).toBe(4));

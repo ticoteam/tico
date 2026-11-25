@@ -7,14 +7,15 @@ import { ActionsRoot } from '@/actions';
 import type * as conversations from '@/conversation';
 import { queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
-import { forgetPlaces, notePlace } from '@/lib';
+import { forgetPlaces, notePlace, openOf, openTasksOver } from '@/lib';
 import type { TaskData } from './queries';
 import { TaskChat, TaskPage } from './TaskPage';
 
 /** The task, drawn only while the address is the task's: the list it was opened from is another page. */
 function OnTask() {
-  const path = useLocation({ select: (l) => l.pathname });
-  return path.startsWith('/tasks/p1/12') ? <TaskPage task="12" pipeline="p1" /> : null;
+  // the task over the page while the address names it, as the task modal draws it
+  const open = useLocation({ select: (l) => openOf(l.search as Record<string, unknown>)?.task });
+  return open === '12' ? <TaskPage task="12" /> : null;
 }
 
 /* A stopped agent's notice (backend/bot_stops.py): the task read names the agent when the person may release it, and
@@ -97,6 +98,7 @@ function show(node: ReactNode, at: string) {
     ),
   });
   const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: [at] }) });
+  openTasksOver(router);
   const note = (l: typeof router.state.location) => notePlace(l.pathname, l.searchStr, l.search as Record<string, unknown>, l.state);
   note(router.state.location);
   router.subscribe('onResolved', (e) => note(e.toLocation));

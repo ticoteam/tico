@@ -240,6 +240,30 @@ describe('An open mail @s159', () => {
     await waitFor(() => expect(sent('POST', '/api/v2/mail/messages/organize')?.body).toEqual({ mailbox: 'help@example.test', action: 'archive', ids: ['l1'] }));
   });
 
+  it('archived, stays out of the list when the list is read again (the inbox, not all mail)', async () => {
+    let archived = false;
+    // Gmail as the server reads it: the inbox drops an archived mail; all mail (no label) keeps it
+    serve((url, method) => {
+      if (method === 'POST' && url.includes('/mail/messages/organize')) {
+        archived = true;
+        return ok({});
+      }
+      if (url.includes('/mail/threads/th1')) return ok({ messages: [letter()] });
+      if (url.includes('/mail/messages')) return ok({ messages: archived && url.includes('label=INBOX') ? [] : [letter()] });
+      return undefined;
+    });
+    queryClient.setQueryData(mailboxesQuery.queryKey, [box]);
+    show(<MailPage box="help@example.test" open="th1" />, '/threads/mail?box=help%40example.test&open=th1');
+    expect(await screen.findByTitle('Sam Lee: Invoice question')).toBeTruthy();
+    const reads = all('GET', '/mail/messages').length;
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive' }));
+    // the write's own read of the list again lands, and the archived mail is not in it
+    await waitFor(() => expect(all('GET', '/mail/messages').length).toBeGreaterThan(reads));
+    await waitFor(() => expect(screen.queryByTitle('Sam Lee: Invoice question')).toBeNull());
+    await new Promise((done) => setTimeout(done, 50));
+    expect(screen.queryByTitle('Sam Lee: Invoice question')).toBeNull();
+  });
+
   it('returns to the selected mailbox and search when closing a letter from its back link', async () => {
     openMail();
     const selected = 'sales@example.test';

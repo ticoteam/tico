@@ -12,6 +12,7 @@
 .vw-title{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:var(--t-md);font-weight:var(--w-title)}
 .vw-meta{flex:none;font-size:var(--t-sm);color:var(--on-scrim);opacity:.66;font-variant-numeric:tabular-nums;white-space:nowrap}
 .vw-grab{display:none}
+.vw-toasts{display:contents}
 .vw-body{min-height:0;min-width:0;display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr);overflow:hidden}
 /* what it holds scrolls itself; `.vw-scroll` is a plain scroller for text or a table */
 .vw-scroll{min-height:0;overflow:auto;overscroll-behavior:contain}

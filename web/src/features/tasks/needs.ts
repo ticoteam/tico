@@ -61,7 +61,7 @@ export const needsYouRows = (flow: Pick<Flow, 'items' | 'requests' | 'order'>, o
   const byId = new Map(flow.items.map((it) => [it.id, it] as const));
   return order.flatMap((id) => {
     const it = byId.get(id);
-    return it ? [{ id: it.id, n: String(it.number ?? it.id), pipeline: it.pipeline_id ?? 'all' }] : [];
+    return it ? [{ id: it.id, n: String(it.number ?? it.id) }] : [];
   });
 };
 

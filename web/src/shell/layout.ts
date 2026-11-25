@@ -7,17 +7,17 @@
      stay open comes from the window (C.OPEN_AT) and from the stretching sheet's floor, whichever tucks more.
    - Click a lower sheet's edge to open it (`forward`): the sheets above it collapse to edges, Tico too; the sheets below
      it follow the window.
-   - The sheet you navigate to counts as opened (its arrangement's `lead`: a page, a task, an agent's page or settings):
+   - The sheet you navigate to counts as opened (its arrangement's `lead`: a page, an agent's page or settings):
      it stays open, the sheets below it follow the window, and the sheets above it collapse to edges only as needed,
      Tico first, then the menu, then the thread. A view a thread leads (a page with a second chat) narrows as above.
    - With the stretching sheet tucked, the open sheets share the window by their widths.
    Pure: it reads only its arguments and never writes `saved`, which is what keeps automatic tucks out of memory. */
 
-export type Arrangement = 'page' | 'chat' | 'agent' | 'task' | 'call';
+export type Arrangement = 'page' | 'chat' | 'agent' | 'call';
 /* `bar`: the chat is the page's Agent bar (its owner's DM, shell/pageOwner.ts), not a second chat: it folds to its edge
    ('fold') instead of closing, and the page leads, so a narrow window folds the bar before it tucks the page. */
 export type ArrangementSpec = Arrangement | { name: 'chat'; chat?: boolean; panel?: boolean; bar?: 'open' | 'fold' };
-export type SheetId = 'tico' | 'menu' | 'list' | 'chat' | 'page' | 'panel' | 'widgets' | 'stage' | 'side';
+export type SheetId = 'tico' | 'menu' | 'chat' | 'page' | 'panel' | 'widgets' | 'stage' | 'side';
 /* open; 'fold' tucked by hand or by default; 'tucked' for room or under a sheet opened below it. Tucked, a sheet shows
    its edge. */
 export type SheetState = 'open' | 'fold' | 'tucked';
@@ -110,9 +110,7 @@ interface Spec {
 export const SPEC = {
   tico: { def: 300, min: 260, max: 480, fold: true },
   menu: { def: 248, min: 220, max: 320, fold: true },
-  list: { def: 288, min: 240, max: 400, fold: true }, // a task's list, in the menu's place
   chat: { def: 320, min: 280, max: 520 },
-  taskchat: { def: 392, min: 360, max: 520 },
   widgets: { def: 360, min: 300, max: 480, fold: true },
   panel: { def: 344, min: 300, max: 480 },
   side: { def: 384, min: 300, max: 520, fold: true }, // a call's chat, transcript and people
@@ -131,7 +129,6 @@ export const ARR: Record<Arrangement, Arr> = {
   page: { row: ['tico', 'menu', 'page'], stretch: 'page', lead: 'page' },
   chat: { row: ['tico', 'menu', 'chat', 'page', 'panel'], stretch: 'page', lead: 'page' }, // the page leads only with no chat
   agent: { row: ['tico', 'menu', 'chat', 'widgets'], stretch: 'chat', lead: 'widgets' }, // the agent's page and settings
-  task: { row: ['tico', 'list', 'chat', 'page'], stretch: 'page', spec: { chat: 'taskchat' }, lead: 'page' },
   call: { row: ['tico', 'menu', 'stage', 'side'], stretch: 'stage', foldByDefault: ['tico', 'menu'], lead: 'stage' },
 };
 

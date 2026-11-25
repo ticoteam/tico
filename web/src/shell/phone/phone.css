@@ -45,7 +45,7 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
 .phone>.ph-dock:empty,.phone:is([data-card="tico"],[data-card="menu"])>.ph-dock{display:none}
 .phone>.ph-dock>.dock{display:flex;padding-bottom:8px}
 
-/* ---------- the bar: Search · Tico · Company · Agent · Task, icons only ---------- */
+/* ---------- the bar: Search · Tico · Company · Agent, icons only ---------- */
 .phone>.tabbar{grid-row:3;grid-column:1;position:relative;z-index:calc(var(--z-tico) + 1);height:var(--tabbar);padding:0 calc(env(safe-area-inset-right,0px) + 12px) var(--sab) calc(env(safe-area-inset-left,0px) + 12px);
   display:flex;align-items:center;justify-content:space-around;gap:4px;background:var(--raised);--surface:var(--raised);border-top:1px solid var(--line)}
 .phone .tab{width:52px;height:44px;border:0;border-radius:12px;background:none;display:grid;place-items:center;padding:0;color:var(--muted);cursor:pointer;-webkit-tap-highlight-color:transparent;

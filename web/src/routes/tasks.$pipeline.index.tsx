@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { TasksPage, TasksPending } from '@/features/tasks/exports';
+import { pageSearch } from '@/lib';
 import { filtersOf, pipelinesQuery, pipelineTasksQuery, shelfQuery, validateTasksSearch } from '@/features/tasks/routing';
 
 /** One pipeline: `?view=board|list|archived` and its filters live in the address. */
@@ -19,5 +20,7 @@ export const Route = createFileRoute('/tasks/$pipeline/')({
 
 function Page() {
   const { pipeline } = Route.useParams();
-  return <TasksPage pipeline={pipeline} search={Route.useSearch()} />;
+  // the board's own words: a task opened over it, or its tab changing, draws nothing here
+  const search = Route.useSearch({ select: (s) => pageSearch(s), structuralSharing: true });
+  return <TasksPage pipeline={pipeline} search={search} />;
 }

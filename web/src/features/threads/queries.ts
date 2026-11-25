@@ -24,6 +24,8 @@ export const threadKeys = {
   chat: (chat: string, only?: 'private') => (only ? ([...keys.threads.chat(chat), only] as const) : keys.threads.chat(chat)),
   team: (group: string) => ['threads', 'team', group] as const,
 };
+/** Gmail's inbox label: the mail list and the menu read it, so archived mail stays out of both. */
+const INBOX = 'INBOX';
 const mailKeys = {
   boxes: ['mail', 'boxes'] as const,
   list: (box: string) => ['mail', 'list', box] as const,
@@ -222,7 +224,7 @@ export const mailboxesQuery = queryOptions({
 export const inboxQuery = (box: string) =>
   queryOptions({
     queryKey: [...mailKeys.list(box), 'inbox'] as const,
-    queryFn: ({ signal }) => api.get<{ messages: Letter[] }>(`/api/v2/mail/messages${qs({ mailbox: box, limit: PAGE })}`, { signal }),
+    queryFn: ({ signal }) => api.get<{ messages: Letter[] }>(`/api/v2/mail/messages${qs({ mailbox: box, label: INBOX, limit: PAGE })}`, { signal }),
   });
 
 export const letterQuery = (box: string, id: string) =>
@@ -639,12 +641,17 @@ export function removeViewer(bot: string) {
 
 /* ---------------------------------------------------------------- the Mail list, or the mail with some words in it */
 
-/** While new words load, the rows already shown stay (the search field keeps focus). */
+/** The inbox, or with words every mail they find (as Gmail searches). Gmail's list with neither is all mail, archived
+    too: an archived mail would come back on the next read. While new words load, the rows already shown stay (the
+    search field keeps focus). */
 export const mailFindQuery = (box: string, q?: string) =>
   infiniteQueryOptions({
     queryKey: [...mailKeys.list(box), { q: q ?? '' }] as const,
     queryFn: ({ pageParam, signal }) =>
-      api.get<{ messages: Letter[]; next_cursor?: string | null }>(`/api/v2/mail/messages${qs({ mailbox: box, q, limit: PAGE, cursor: pageParam })}`, { signal }),
+      api.get<{ messages: Letter[]; next_cursor?: string | null }>(
+        `/api/v2/mail/messages${qs({ mailbox: box, q, label: q ? undefined : INBOX, limit: PAGE, cursor: pageParam })}`,
+        { signal },
+      ),
     initialPageParam: null as string | null,
     getNextPageParam: (last) => last.next_cursor ?? undefined,
     // Only within one mailbox: another mailbox's rows never stand in for this one's.

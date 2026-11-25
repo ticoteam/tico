@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { DocsPage } from '@/features/library/exports';
 import { docsSearch, loadDocs } from '@/features/library/routing';
+import { pageSearch } from '@/lib';
 
 export const Route = createFileRoute('/library/docs')({
   validateSearch: docsSearch,
@@ -10,5 +11,5 @@ export const Route = createFileRoute('/library/docs')({
 });
 
 function Docs() {
-  return <DocsPage search={Route.useSearch()} />;
+  return <DocsPage search={Route.useSearch({ select: (s) => pageSearch(s), structuralSharing: true })} />;
 }

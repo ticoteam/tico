@@ -1,6 +1,7 @@
 import { createLink, useLocation, type LinkProps } from '@tanstack/react-router';
 import { useEffect, useLayoutEffect, useRef, type AnchorHTMLAttributes, type KeyboardEvent, type ReactNode, type Ref } from 'react';
 import { Count } from '@/kit/Count';
+import { pageSearch } from '@/lib';
 import type { PageTab } from '@/pagekinds/types';
 import { rowMarks, scrollFor, stepTab } from './tabFit';
 
@@ -51,13 +52,14 @@ function mark(row: HTMLElement) {
  * than its sheet fades where it runs off, and the open tab is scrolled into view.
  */
 export function PageTabs({ tabs, label, after }: PageTabsProps) {
-  const at = useLocation();
+  // the page's own address: a task opened over it draws nothing here
+  const at = useLocation({ select: (l) => ({ pathname: l.pathname, search: pageSearch(l.search as Record<string, unknown>) as Record<string, string | number | boolean> }), structuralSharing: true });
   const search = at.search as Record<string, unknown>;
   const rowKeys = [...new Set(tabs.flatMap((t) => Object.keys(t.search ?? {})))];
   // a page opened from a thread keeps it beside every tab (lib besideThread)
   const beside = search.via === 'thread' && typeof search.chat === 'string' ? { chat: search.chat, via: 'thread' } : null;
   const keyOf = (t: PageTab) => `${t.to}?${new URLSearchParams(t.search).toString()}`;
-  const onKey = tabs.filter((t) => isOn(t, at.pathname, search, rowKeys)).map(keyOf)[0] ?? '';
+  const onKey = tabs.filter((t) => t.on ?? isOn(t, at.pathname, search, rowKeys)).map(keyOf)[0] ?? '';
   const row = useRef<HTMLDivElement>(null);
 
   // the open tab in view, each time it changes

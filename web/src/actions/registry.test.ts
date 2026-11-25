@@ -43,7 +43,11 @@ describe('registry', () => {
       kind: 'view',
       input: {
         type: 'object',
-        properties: { task: { type: 'integer', minimum: 1 }, pipeline: { type: 'string', minLength: 1, maxLength: 100 } },
+        properties: {
+          task: { type: 'integer', minimum: 1 },
+          pipeline: { type: 'string', minLength: 1, maxLength: 100 },
+          list: { type: 'string', minLength: 1, maxLength: 220 },
+        },
         required: ['task'],
         additionalProperties: false,
       },

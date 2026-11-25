@@ -1,52 +1,53 @@
-/* Where the person came from, for the way back that is not the browser's own Back: closing a task (its Back, or once
-   nothing on it waits on them). The shell notes every address it shows, with its step in the history, so the way back
-   steps the history back to that place (Back and Forward stay as they were) when it is still behind. */
+/* The places the shell keeps as the person moves: each board's search (the list beside a task draws its pipeline's
+   tasks as the board did), and the list beside the open task, for the row below it once it is answered. */
 
-/** An address the app showed, and its step in the history (`__TSR_index`) when known. */
-export interface Place {
-  href: string;
-  at?: number;
-}
+import { openOf, pageSearch } from './taskAddress';
 
-/** What a way back needs of the router: where it is in the history, a step back, and a plain push. */
+/** What closing a task needs of the router: the history (to step back to the page it opened over) and a plain move. */
 export interface Steps {
-  history: { location: { state: unknown }; go: (n: number) => void; subscribe: (on: () => void) => () => void };
-  navigate: (to: { href: string }) => unknown;
+  history: { location: { state: unknown }; back: () => void };
+  state: { location: { pathname: string; search: unknown } };
+  navigate: (to: { to: string; search: Record<string, unknown>; hash?: true; replace?: boolean; resetScroll?: boolean; hashScrollIntoView?: false }) => unknown;
 }
 
-const HOME = '/tasks';
-// An open task: under its pipeline (not the pipeline editor), by its number alone, or an old Flow link to one (it only
-// passes on to the task, and a cold load notes it before it does).
-const TASK = /^\/(tasks\/[^/]+\/(?!edit(\/|$))[^/]+|task\/[^/]+|flow\/[^/]+)(\/|$)/;
+/** The mark on the history step that opened a task over a page (router.tsx): Back from it is that page. */
+export const OVER_PAGE = 'overPage';
+
 const BOARD = /^\/tasks\/([^/]+)\/?$/;
-
-let beforeTask: Place | null = null;
 const boards = new Map<string, Record<string, unknown>>();
+// what the list beside an open task was given since it opened (its search, filters, sort), over its board's own: the
+// open task's alone, gone once it closes
+const given = new Map<string, Record<string, unknown>>();
 
-export const isTaskPath = (path: string): boolean => TASK.test(path);
-
-const stepOf = (state: unknown): number | undefined => {
-  const at = (state as { __TSR_index?: unknown } | null | undefined)?.__TSR_index;
-  return typeof at === 'number' ? at : undefined;
-};
+// the board on screen and its own words, as last noted: a task opened, changed or closed over it changes neither
+let place: string | null = null;
 
 /** The shell, at each address it shows: the path without the app's base, the search as written and as read. */
-export function notePlace(path: string, searchStr: string, search: Record<string, unknown>, state: unknown): void {
-  if (!isTaskPath(path)) beforeTask = { href: path + searchStr, at: stepOf(state) };
-  const board = BOARD.exec(path);
-  if (board?.[1]) boards.set(decodeURIComponent(board[1]), search);
-  noteFromList(path, search, entryOf(state));
+export function notePlace(path: string, _searchStr: string, search: Record<string, unknown>, _state?: unknown): void {
+  const board = BOARD.exec(path)?.[1];
+  // the board's own words, never a task open over it; noted as the board is shown or changes them, so the list over
+  // it keeps what it was given (changeBoardSearch) while tasks open and close over the board
+  const own = board ? pageSearch(search) : null;
+  const at = board ? `${board}?${JSON.stringify(own)}` : null;
+  if (board && at !== place) {
+    boards.set(decodeURIComponent(board), own!);
+    given.delete(decodeURIComponent(board));
+  }
+  place = at;
+  if (!openOf(search)) given.clear();
+  heard.forEach((on) => on());
 }
 
 const NONE: Record<string, unknown> = Object.freeze({});
 
-/** The search a pipeline's board was last shown with (its view, filters and sort), or none; the same object until it
-    changes, so a reader can hear it (`hearPlaces`). */
-export const boardSearch = (pipeline: string): Record<string, unknown> => boards.get(pipeline) ?? NONE;
+/** The search the list of a pipeline beside an open task draws with: what it was given since the task opened, else its
+    board's as last shown (its view, filters and sort), or none; the same object until it changes, so a reader can hear
+    it (`hearPlaces`). */
+export const boardSearch = (pipeline: string): Record<string, unknown> => given.get(pipeline) ?? boards.get(pipeline) ?? NONE;
 
-/** The list beside one of the pipeline's open tasks changes its search, filters or sort (`tasks.filter`, `tasks.sort`
-    there): kept as the board's, which that list draws, until the board is shown again with its own. A null, '' or false
-    clears one. */
+/** The list beside an open task changes its search, filters or sort (`tasks.filter`, `tasks.sort` there): kept for it,
+    over its board's, until the task closes (the next one opened from the board starts from the board's again). A
+    null, '' or false clears one. */
 export function changeBoardSearch(pipeline: string, change: Record<string, unknown>): void {
   const next: Record<string, unknown> = { ...boardSearch(pipeline) };
   for (const [k, v] of Object.entries(change)) {
@@ -54,110 +55,37 @@ export function changeBoardSearch(pipeline: string, change: Record<string, unkno
     if (v === null || v === '' || v === false) delete next[k];
     else next[k] = v;
   }
-  boards.set(pipeline, next);
+  given.set(pipeline, next);
   heard.forEach((on) => on());
 }
 
-/** Closing an open task: back to the board, list or page it was opened from, the history stepping back to it while it
-    is behind. Opened from a link or reloaded, nothing is behind: the board `board` names (its pipeline, read only then,
-    null when there is none), else Tasks. */
-export function leaveTask(r: Steps, board?: () => string | null | Promise<string | null>): void {
-  const now = stepOf(r.history.location.state);
-  const to = beforeTask;
-  if (to?.at !== undefined && now !== undefined && to.at < now) return r.history.go(to.at - now);
-  if (to) return void r.navigate({ href: to.href });
-  // the board may take a moment to read: any move meanwhile (a page opened, Back) stands
-  let moved = false;
-  const stop = r.history.subscribe(() => (moved = true));
-  void Promise.resolve(board?.() ?? null).then((p) => {
-    stop();
-    if (!moved) r.navigate({ href: p ? `/tasks/${encodeURIComponent(p)}` : HOME });
-  });
+/** Closing the task open over a page: the page as it was. Opened over it in the app, the history steps back (Forward
+    opens it again); from a link or a reload, the same page with the task taken out of its address, its anchor kept and
+    never scrolled to. */
+export function closeTask(r: Steps): void {
+  const state = r.history.location.state as Record<string, unknown> | null | undefined;
+  if (state?.[OVER_PAGE]) return r.history.back();
+  const { pathname, search } = r.state.location;
+  void r.navigate({ to: pathname, search: pageSearch((search ?? {}) as Record<string, unknown>), hash: true, replace: true, resetScroll: false, hashScrollIntoView: false });
 }
 
-/* A task opened from a list: by a press on a card of its board, on a row of the list beside an open task, on a row of
-   Needs you (on Tasks, or beside an open task), or as Tico went on to the row below after an answer. Only that press
-   says so, never the address before it (a link, the tracker over the board). Each entry in the history that is one
-   (its own key: Back and Forward come to the same entry, a new address is a new one), with its task (as the address
-   names it, its number: the same whatever pipeline it has moved to since) and the list it was opened from (its
-   pipeline's, or NEEDS_YOU); `seen`, every entry shown, so a step back or forward onto one keeps what it had; `here`,
-   the place shown now. Kept in memory: after a reload, none is. */
-const OPEN_TASK = /^\/tasks\/([^/]+)\/(?!edit(?:\/|$))([^/]+)/;
-
-/** The Needs you list's name among the lists a task opens from: one list across every pipeline. No pipeline's id has a
-    colon, so none is named this. */
+/** Needs you's name among the lists a task opens from: one list across every pipeline, and the list of a task opened
+    with none named (a link, a notice). No pipeline's id has a colon, so none is named this. */
 export const NEEDS_YOU = ':needs-you';
 
-interface Opened {
-  task: string;
-  list: string;
-}
-const fromList = new Map<string, Opened>();
-const seen = new Set<string>();
-let pressed: Opened | null = null;
-let here: { entry: string; task: string } | null = null;
-// who draws by where a task was opened from (the shell's list beside it): told after each address is noted
+// who draws by the places noted (the board's search, the row the person is on): told after each change
 const heard = new Set<() => void>();
 
-const entryOf = (state: unknown): string => {
-  const s = state as { __TSR_key?: unknown; key?: unknown } | null | undefined;
-  return String(s?.__TSR_key ?? s?.key ?? stepOf(state) ?? '');
-};
-
-function noteFromList(path: string, search: Record<string, unknown>, entry: string): void {
-  const t = OPEN_TASK.exec(path);
-  const task = t ? decodeURIComponent(t[2]!) : null;
-  // a new entry only (an address opened, or one changed in place): Back and Forward come to one as it was
-  if (task && !seen.has(entry)) {
-    // the same task's address changing (its tab named, another tab) keeps how it was opened; a thread's card does not
-    const was = here && fromList.get(here.entry);
-    const kept = search.chat === undefined && search.via === undefined && here?.task === task && was?.task === task ? was : null;
-    if (pressed?.task === task) fromList.set(entry, pressed);
-    else if (kept) fromList.set(entry, kept);
-  }
-  seen.add(entry);
-  pressed = null;
-  here = task ? { entry, task } : null;
-  heard.forEach((on) => on());
-}
-
-/** A press that opens a task from a list (a board's card, a row of the list beside an open task, a Needs you row; none
-    for Tico's own move on): its pipeline and task as the address names them, and the list (its pipeline's unless
-    named). The task is matched on alone, so a task that moved to another pipeline keeps where it was opened from. Only
-    a plain press opens it here: one with a key held, another button, or one the page took for itself (picking) marks
-    nothing. */
-export function pressListRow(
-  pipeline: string,
-  task: string,
-  e?: { button: number; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean; defaultPrevented: boolean },
-  list: string = pipeline,
-): void {
-  if (e && (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.defaultPrevented)) return;
-  pressed = { task, list };
-}
-
-/** The list the open task (as its address names it) was opened from (a pipeline, or NEEDS_YOU), or null: as the address
-    is noted, or, while it is on its way, as the press that opened it said. */
-export function openedFrom(task: string): string | null {
-  if (here?.task === task) {
-    const from = fromList.get(here.entry);
-    return from?.task === task ? from.list : null;
-  }
-  return pressed?.task === task ? pressed.list : null;
-}
-
-/** Hear each address noted (what `openedFrom` says may have changed); the returned function stops. */
+/** Hear each address noted (what `boardSearch` says may have changed); the returned function stops. */
 export function hearPlaces(on: () => void): () => void {
   heard.add(on);
   return () => void heard.delete(on);
 }
 
-/** A row of the list beside an open task: its task's id, its number as the address names it, and its pipeline when
-    the list crosses pipelines (Needs you). */
+/** A row of the list beside an open task: its task's id, and its number as the address names it. */
 export interface ListRow {
   id: string;
   n: string;
-  pipeline?: string;
 }
 
 /* The list beside an open task while it shows: its rows in the order drawn, `held` as they were when an answer was
@@ -169,28 +97,28 @@ let listed: { pipeline: string; open: string; rows: ListRow[]; held?: ListRow[] 
 export function noteList(list: { pipeline: string; open: string; rows: ListRow[] } | null): void {
   const same = !!list && listed?.pipeline === list.pipeline && listed.open === list.open;
   listed = list && { ...list, ...(same && listed?.held && { held: listed.held }) };
+  heard.forEach((on) => on());
 }
+
+/** How many rows the list beside the open task draws besides it (a phone's "N more"). */
+export const othersListed = (): number => (listed ? listed.rows.filter((r) => r.n !== listed!.open && r.id !== listed!.open).length : 0);
 
 /** An answer is being given on the open task: the row below it is the one below it now, wherever the answer moves it. */
 export const holdList = (): void => void (listed && (listed.held = listed.rows));
 
-/** The pipeline whose list shows beside the open task, or null (none, or Needs you's). */
-export const listShown = (): string | null => (listed && listed.pipeline !== NEEDS_YOU ? listed.pipeline : null);
+/** The pipeline whose list shows beside the open task, or null (none, Needs you's, a teammate's, search hits: every
+    list but a pipeline's has a colon in its name). */
+export const listShown = (): string | null => (listed && !listed.pipeline.includes(':') ? listed.pipeline : null);
 
-/** The task below `id` in the list beside it as an answer found it (past rows that have left the list since), opened as
-    a press on its row would: its pipeline and number, and the list when it is not that pipeline's (Needs you). Null at
-    the list's last row, with no list showing, or when the open task was not opened from that list (a link, a thread:
-    its answer goes back there). */
-export function nextInList(id: string): { pipeline: string; task: string; list?: string } | null {
-  const from = here && fromList.get(here.entry);
-  if (!listed || !here || from?.task !== here.task || from.list !== listed.pipeline) return null;
-  const { pipeline, rows } = listed;
-  const order = listed.held ?? rows;
-  const now = new Set(rows.map((r) => r.id));
+/** The task below `id` in the list beside it as an answer found it (past rows that have left the list since): its
+    number. Null at the list's last row, or while `list` (the one the task was opened from) is not the one drawn. */
+export function nextInList(id: string, list: string): string | null {
+  if (!listed || listed.pipeline !== list) return null;
+  const order = listed.held ?? listed.rows;
+  const now = new Set(listed.rows.map((r) => r.id));
   const at = order.findIndex((r) => r.id === id);
   const next = at < 0 ? undefined : order.slice(at + 1).find((r) => r.id !== id && now.has(r.id));
-  if (!next) return null;
-  return next.pipeline && next.pipeline !== pipeline ? { pipeline: next.pipeline, task: next.n, list: pipeline } : { pipeline, task: next.n };
+  return next?.n ?? null;
 }
 
 /* A list Tico orders (Needs you), as it was last drawn: the row the person is on (`onRow`: the one they last pressed or
@@ -233,15 +161,28 @@ export function keptOrder(from: unknown, latest: () => string[], held: string | 
   return drawn.order;
 }
 
+/* A list a page draws that no read names again (an agent's own list, its done tasks): its rows as last drawn, by the
+   name its rows give it (`rows:…`), for the list beside a task opened from it, in its order. */
+const drawnLists = new Map<string, { title: string; rows: readonly unknown[] }>();
+
+/** A page draws the list `list` (titled `title`): the list beside a task opened from it is these rows. */
+export function keepRows(list: string, title: string, rows: readonly unknown[]): void {
+  const had = drawnLists.get(list);
+  if (had?.rows === rows && had.title === title) return;
+  drawnLists.set(list, { title, rows });
+  heard.forEach((on) => on());
+}
+
+/** The rows of a list a page drew (`keepRows`), or null: none drawn since the app loaded (a link, a reload). */
+export const keptRows = (list: string): { title: string; rows: readonly unknown[] } | null => drawnLists.get(list) ?? null;
+
 /** Forgets every place (tests). */
 export function forgetPlaces(): void {
-  beforeTask = null;
   boards.clear();
+  given.clear();
+  drawnLists.clear();
+  place = null;
   listed = null;
-  fromList.clear();
-  seen.clear();
-  pressed = null;
-  here = null;
   onRow = null;
   drawn = { order: [], latest: [], held: null };
 }

@@ -4,6 +4,7 @@ import { ctxFor, registry, run } from '@/actions';
 import { Avatar } from '@/kit/Avatar';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
+import { useTopLayer } from '@/kit/Toast';
 import { Dot } from '@/tico/dot';
 import * as copy from './copy';
 import { loadProviders, providers, type Lead, type SearchHit } from './providers';
@@ -16,14 +17,16 @@ import { caught, closeSearch, released, useSearchState } from './state';
    that one is a titled modal with a foot of buttons over a scrim that would dim Tico too. */
 export function SearchDialog() {
   const { open, q, n } = useSearchState();
+  // over a task open over the page, in its layer: the task's dialog hides all outside it from a screen reader
+  const over = useTopLayer();
   return (
     <Dialog.Root open={open} onOpenChange={(next) => !next && closeSearch()}>
-      <Dialog.Portal>
+      <Dialog.Portal container={over ?? undefined}>
         {/* clear, over the whole app: a click anywhere off the palette closes it. Base UI closes a modal only on a press
             that lands on its backdrop, and its own unstyled one sits under the shell, which takes every click. */}
         <Dialog.Backdrop className="pal-off" />
         {/* keyed by each open, so the field starts again from what it was opened with */}
-        <Palette key={n} opened={q} />
+        <Palette key={n} n={n} opened={q} />
       </Dialog.Portal>
     </Dialog.Root>
   );
@@ -56,9 +59,17 @@ function useVisible(el: RefObject<HTMLElement | null>) {
   }, [el]);
 }
 
-function Palette({ opened }: { opened: string }) {
+/** What this open's field holds, kept outside it: the layer closing under the palette (Back closes the task) draws it
+    again in another. */
+const draft = { n: -1, q: '' };
+
+function Palette({ n, opened }: { n: number; opened: string }) {
   // anything typed between the tap (or Cmd+K) and this field drawing went to the catcher (state.ts)
-  const [q, setQ] = useState(() => opened + caught());
+  const [q, setQ] = useState(() => (draft.n === n ? draft.q : opened + caught()));
+  useEffect(() => {
+    draft.n = n;
+    draft.q = q;
+  }, [n, q]);
   const [results, setResults] = useState<{ query: string; groups: Group[] }>({ query: opened, groups: [] });
   const [selected, setSelected] = useState<string | null>();
   const [at] = useState(dropAt);

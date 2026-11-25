@@ -2,7 +2,7 @@ import { directoryQuery, queryClient } from '@/data';
 import { defineSearch } from '@/search/define';
 import { faceOf, fetchFor, HITS } from '@/search/helpers';
 import { matches } from '@/search/results';
-import { pipelinesQuery, taskSearchQuery, type Due, type Filters, type Sort } from './queries';
+import { numberIn, pipelinesQuery, taskHitsQuery, type Due, type Filters, type Sort } from './queries';
 
 /** Board and list are a pipeline's open tasks; Archived is its snoozed, done and closed ones. */
 export type View = 'board' | 'list' | 'archived';
@@ -81,9 +81,6 @@ export const pipelinesSearch = defineSearch({
   },
 });
 
-/** A task's id as a board shows it, with its pipeline's letters ("G35001", "E-12"): the number in it. */
-const ID = /^#?[a-z]{1,2}-?(\d{2,})$/i;
-
 /** Tasks in any pipeline by title words, #N or the id a board shows (G35001), from the server's search; each shows
     its stage and owner's face. */
 export const tasksSearch = defineSearch({
@@ -93,32 +90,29 @@ export const tasksSearch = defineSearch({
   find: async (q, signal) => {
     const words = q.trim().slice(0, 200);
     if (!words) return [];
-    // the server knows a task by its number, not by its pipeline's letters: ask for the number too
-    const id = ID.exec(words)?.[1];
-    const [found, byId, pipelines, directory] = await Promise.all([
-      fetchFor(taskSearchQuery(words, HITS), signal),
-      id ? fetchFor(taskSearchQuery(id, HITS), signal).catch(() => null) : null,
+    const id = numberIn(words);
+    const [page, pipelines, directory] = await Promise.all([
+      fetchFor(taskHitsQuery(words, HITS), signal),
       queryClient.ensureQueryData(pipelinesQuery).catch(() => []),
       queryClient.ensureQueryData(directoryQuery).catch(() => undefined),
     ]);
-    const exact = byId?.tasks.filter((t) => String(t.number) === id) ?? [];
-    const page = { tasks: [...exact, ...found.tasks.filter((t) => !exact.some((e) => e.id === t.id))] };
     const stages = new Map<string, string>();
     const names = new Map<string, string>();
     for (const p of pipelines) {
       names.set(p.id, p.name);
       for (const s of [...p.stages, p.done, p.closed]) if (s) stages.set(s.id, s.name);
     }
-    return page.tasks.slice(0, HITS).map((t) => {
+    return page.tasks.map((t) => {
       const owner = t.owner_id ? directory?.byId[t.owner_id] : undefined;
       return {
         key: `task:${t.number}`,
         title: t.title,
         // "412" or "#412" finds it by its number, "G412" by the id its board shows
-        name: exact.includes(t) ? words : `#${t.number}`,
+        name: id && String(t.number) === id ? words : `#${t.number}`,
         meta: (t.stage_id && stages.get(t.stage_id)) || (t.pipeline_id && names.get(t.pipeline_id)) || undefined,
         lead: owner ? faceOf(owner) : { icon: 'tasks' as const },
-        run: { id: 'task.open', input: t.pipeline_id ? { task: t.number, pipeline: t.pipeline_id } : { task: t.number } },
+        // opened from here, its list is this search's hits
+        run: { id: 'task.open', input: { task: t.number, list: `search:${words}` } },
       };
     });
   },

@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { RiskPage } from '@/features/company/exports';
 import { loadDisputes, riskSearch } from '@/features/company/routing';
+import { pageSearch } from '@/lib';
 
 /* Risk's Disputes tab: every dispute in one table; a row opens its matter in the panel. */
 export const Route = createFileRoute('/company/risk_/disputes')({
@@ -10,5 +11,5 @@ export const Route = createFileRoute('/company/risk_/disputes')({
 });
 
 function Disputes() {
-  return <RiskPage view="disputes" search={Route.useSearch()} />;
+  return <RiskPage view="disputes" search={Route.useSearch({ select: (s) => pageSearch(s), structuralSharing: true })} />;
 }

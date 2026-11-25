@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { MailPage } from '@/features/threads/exports';
 import { mailboxesQuery } from '@/features/threads/routing';
+import { pageSearch } from '@/lib';
 
 interface MailSearch {
   /** The mailbox read. */
@@ -27,6 +28,6 @@ export const Route = createFileRoute('/threads/mail')({
 });
 
 function MailRoute() {
-  const { box, open, view, q } = Route.useSearch();
+  const { box, open, view, q } = Route.useSearch({ select: (s) => pageSearch(s), structuralSharing: true });
   return <MailPage box={box} open={open} view={view} q={q} />;
 }

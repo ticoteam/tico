@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { ToolsPage } from '@/features/library/exports';
 import { loadTools, toolsSearch } from '@/features/library/routing';
+import { pageSearch } from '@/lib';
 
 export const Route = createFileRoute('/library/tools')({
   validateSearch: toolsSearch,
@@ -10,5 +11,5 @@ export const Route = createFileRoute('/library/tools')({
 });
 
 function Tools() {
-  return <ToolsPage search={Route.useSearch()} />;
+  return <ToolsPage search={Route.useSearch({ select: (s) => pageSearch(s), structuralSharing: true })} />;
 }

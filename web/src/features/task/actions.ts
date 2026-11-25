@@ -1,4 +1,5 @@
 import type { AnyRouter } from '@tanstack/react-router';
+import { changeWords, closeTask, openOf, type Steps, type TaskWords } from '@/lib';
 import * as z from 'zod/mini';
 import { defineAction } from '@/actions';
 import {
@@ -305,23 +306,24 @@ export const sendHold = defineAction({
 
 /* ---------------------------------------------------------------- what the open page shows */
 
-/** A task's page or Details is on screen, under its pipeline. */
-const onTask = (path: string) => /^\/tasks\/[^/]+\/[^/]+/.test(path);
+/** A task is open over the page. */
+const onTask = (search: unknown) => !!openOf(search as Record<string, unknown>);
 const version = z.int().check(z.minimum(1));
 
 /** The address keeps it, so Back and a shared link come back to the same version. */
 function show(router: AnyRouter, change: Record<string, unknown>) {
-  // The same page by its path: the address changes only in its search.
+  // The same task: the address changes only in its words.
   return router.navigate({
-    to: router.state.location.pathname,
-    search: (prev: Record<string, unknown>) => {
-      const next = { ...prev };
+    to: '.',
+    search: changeWords((prev) => {
+      const next: Record<string, unknown> = { ...prev };
       for (const [k, v] of Object.entries(change)) {
         if (v == null) delete next[k];
         else next[k] = v;
       }
-      return next;
-    },
+      return next as TaskWords;
+    }),
+    replace: true,
   });
 }
 
@@ -331,7 +333,7 @@ export const showVersion = defineAction({
   title: 'Show a version of a page',
   kind: 'view',
   input: z.strictObject({ task, version: z.nullable(version) }),
-  can: ({ router }) => onTask(router.state.location.pathname),
+  can: ({ router }) => onTask(router.state.location.search),
   run: ({ router }, i) => show(router, { v: i.version, vs: null }),
   did: (i) => (i.version ? `Opened v${i.version}` : 'Opened the newest version'),
   target: (i) => ({ kind: 'task-version', id: i.task }),
@@ -343,7 +345,7 @@ export const compare = defineAction({
   title: 'Mark what changed in a page',
   kind: 'view',
   input: z.strictObject({ task, against: z.nullable(version), version: z.optional(z.nullable(version)) }),
-  can: ({ router }) => onTask(router.state.location.pathname),
+  can: ({ router }) => onTask(router.state.location.search),
   run: ({ router }, i) => show(router, { vs: i.against, ...(i.version !== undefined && { v: i.version }) }),
   did: (i) => (i.against ? `Marked the changes since v${i.against}` : 'Took the marks off'),
   target: (i) => ({ kind: 'task-changes', id: i.task }),
@@ -355,7 +357,7 @@ export const showPicture = defineAction({
   title: 'Show a picture full size',
   kind: 'view',
   input: z.strictObject({ task, file: z.nullable(z.string().check(z.minLength(1), z.maxLength(100))) }),
-  can: ({ router }) => onTask(router.state.location.pathname),
+  can: ({ router }) => onTask(router.state.location.search),
   run: ({ router }, i) => show(router, { full: i.file }),
   did: (i) => (i.file ? 'Opened the picture' : 'Closed the picture'),
   target: (i) => ({ kind: 'task-files', id: i.task }),
@@ -431,17 +433,14 @@ export const setReaders = defineAction({
   target: (i) => ({ kind: 'task-visible', id: i.task }),
 });
 
-/** To another pipeline, at its `stage` (its first when left out). On the task's page, the address follows it there. */
+/** To another pipeline, at its `stage` (its first when left out). A task open stays open: its address names no pipeline. */
 export const moveTo = defineAction({
   id: 'task.moveTo',
   title: 'Move a task to another pipeline',
   kind: 'change',
   input: z.strictObject({ task, pipeline: z.string().check(z.minLength(1), z.maxLength(200)), stage: z.optional(z.string().check(z.minLength(1), z.maxLength(200))), why: z.optional(z.string().check(z.maxLength(2000))) }),
-  run: async ({ router }, i) => {
-    const r = await said(moveTaskTo(i.task, i.pipeline, i.stage, i.why?.trim() || undefined));
-    const path = router.state.location.pathname;
-    const n = r.task.number ?? r.task.id;
-    if (path.startsWith('/tasks/')) await router.navigate({ to: `/tasks/${encodeURIComponent(r.task.pipeline_id ?? i.pipeline)}/${n}` });
+  run: async (_ctx, i) => {
+    await said(moveTaskTo(i.task, i.pipeline, i.stage, i.why?.trim() || undefined));
   },
   did: () => 'Moved it',
   target: (i) => ({ kind: 'task-stage', id: i.task }),
@@ -455,9 +454,11 @@ export const remove = defineAction({
   input: z.strictObject({ task }),
   tico: false,
   run: async ({ router, queryClient }, i) => {
-    const held = queryClient.getQueryData<{ pipeline_id: string | null }>(['tasks', 'detail', i.task]);
+    const held = queryClient.getQueryData<{ number?: number | null }>(['tasks', 'detail', i.task]);
     await said(deleteTask(i.task));
-    await router.navigate({ to: `/tasks/${encodeURIComponent(held?.pipeline_id ?? 'all')}` });
+    // still open over the page, it closes; closed meanwhile, or another task open in its place, nothing moves
+    const open = openOf(router.state.location.search as Record<string, unknown>)?.task;
+    if (open && (open === i.task || open === String(held?.number ?? ''))) closeTask(router as unknown as Steps);
   },
   did: () => 'Deleted',
 });

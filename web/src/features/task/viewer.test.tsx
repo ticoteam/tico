@@ -6,6 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { ActionsRoot } from '@/actions';
 import { queryClient } from '@/data';
 import { FileFrame } from '@/features/library/exports';
+import { openTasksOver } from '@/lib';
 import { fakePdf } from '@/test/fakePdf';
 import type { TaskData } from './queries';
 import { tabLabel } from './model';
@@ -152,7 +153,7 @@ describe('a task’s tabs: pages and plain files', () => {
   });
 
   it('lists each page once, its Markdown files and its other files but pictures, then Details', async () => {
-    show(<TaskPage task="12" pipeline="p1" tab="details" />, '/tasks/p1/12/details');
+    show(<TaskPage task="12" tab="details" />, '/tasks/p1/12/details');
     // A file's tab reads its name without the extension; its address keeps the whole name.
     const pdf = await screen.findByRole('link', { name: 'letter' });
     expect(pdf.getAttribute('href')).toBe('/tasks/p1/12/letter-pdf');
@@ -170,13 +171,13 @@ describe('a task’s tabs: pages and plain files', () => {
   });
 
   it('draws a Markdown file that is no page as formatted text, without asking for a page', async () => {
-    show(<TaskPage task="12" pipeline="p1" tab="deadlines" />, '/tasks/p1/12/deadlines');
+    show(<TaskPage task="12" tab="deadlines" />, '/tasks/p1/12/deadlines');
     expect(await screen.findByRole('heading', { name: 'Due dates' })).toBeTruthy();
     expect(calls.some((c) => c.includes('/api/v2/pages/md1'))).toBe(false);
   });
 
   it('draws a PDF file’s pages with PDF.js from its address', async () => {
-    show(<TaskPage task="12" pipeline="p1" tab="letter-pdf" />, '/tasks/p1/12/letter-pdf');
+    show(<TaskPage task="12" tab="letter-pdf" />, '/tasks/p1/12/letter-pdf');
     expect(await screen.findByRole('region', { name: 'letter.pdf' })).toBeTruthy();
     expect(openPdf).toHaveBeenLastCalledWith('/api/v2/files/pdf1?v=2');
   });
@@ -189,7 +190,7 @@ describe('a task’s tabs: pages and plain files', () => {
         ? { status: 503, body: { error: { code: 'unavailable', detail: 'Try again' } } }
         : null;
     try {
-      const router = show(<TaskPage task="12" pipeline="p1" tab="letter-pdf" />, path);
+      const router = show(<TaskPage task="12" tab="letter-pdf" />, path);
       expect(await screen.findByText('This file did not load')).toBeTruthy();
       expect(router.state.location.pathname).toBe(path);
       unavailable = false;
@@ -216,7 +217,7 @@ describe('a task’s tabs: pages and plain files', () => {
           ? { body: docx, type: mime }
           : null;
     try {
-      show(<TaskPage task="12" pipeline="p1" tab="details" file="word1" />, '/tasks/p1/12/details?file=word1&v=1');
+      show(<TaskPage task="12" tab="details" file="word1" />, '/tasks/p1?task=12&list=p1&task.tab=details&task.file=word1&task.v=1');
       const sheet = await screen.findByRole('article', { name: 'draft.docx, v1' });
       expect(within(sheet).getByText('Original draft')).toBeTruthy();
       expect(calls).not.toContain('GET /api/v2/files/word1?v=2');
@@ -226,7 +227,7 @@ describe('a task’s tabs: pages and plain files', () => {
   });
 
   it('draws a page as today, from its page read', async () => {
-    show(<TaskPage task="12" pipeline="p1" tab="reply" />, '/tasks/p1/12/reply');
+    show(<TaskPage task="12" tab="reply" />, '/tasks/p1/12/reply');
     await waitFor(() => expect(screen.getByTitle('Reply').getAttribute('src')).toBe('https://pages.example.test/pg1'));
   });
 
@@ -237,7 +238,7 @@ describe('a task’s tabs: pages and plain files', () => {
         : url.endsWith('/api/v2/files/pg1?v=3')
           ? { body: '<h1>Reviewed</h1>', type: 'text/html' }
           : null;
-    show(<TaskPage task="12" pipeline="p1" tab="reply" />, '/tasks/p1/12/reply');
+    show(<TaskPage task="12" tab="reply" />, '/tasks/p1/12/reply');
     const frame = await screen.findByTitle('Reply');
     expect(frame.getAttribute('srcdoc')).toContain('<h1>Reviewed</h1>');
     expect(frame.getAttribute('src')).toBeNull();
@@ -255,7 +256,7 @@ describe('a task’s tabs: pages and plain files', () => {
           : url.endsWith('/api/v2/files/h1/versions/1')
             ? { body: '<h1>Looks right</h1>', type: 'text/html' }
             : null;
-    show(<TaskPage task="12" pipeline="p1" tab="review" />, '/tasks/p1/12/review');
+    show(<TaskPage task="12" tab="review" />, '/tasks/p1/12/review');
     const frame = await screen.findByTitle('Review');
     await waitFor(() => expect(frame.getAttribute('srcdoc')).toContain('<h1>Looks right</h1>'));
     expect(frame.getAttribute('srcdoc')).toContain("img-src data:"); // under lib/safeFrame's policy: it loads nothing
@@ -331,14 +332,15 @@ describe('an email the task asks about', () => {
   });
 
   it('opens on the email that waits, with its words and files', async () => {
-    const router = show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    const router = show(<TaskPage task="12" />, '/tasks/p1?task=12&list=p1');
+    openTasksOver(router);
     expect(await screen.findByRole('heading', { name: 'Your quote' })).toBeTruthy();
     expect(screen.getByText('Hello Pat, the quote is attached.')).toBeTruthy();
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/email'));
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ task: 12, 'task.tab': 'email' }));
   });
 
   it('opens on the email that waits, as it will go: subject, From, To, its files as cards @approvals', async () => {
-    show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
+    show(<TaskPage task="12" />, '/tasks/p1/12');
     const tabs = await screen.findByRole('navigation', { name: 'Answer the letter pages' });
     // the email is the first tab, marked as waiting on the person
     await waitFor(() => expect(tabs.querySelector('.doc-tab')?.textContent).toBe('Email'));
@@ -358,7 +360,7 @@ describe('an email the task asks about', () => {
     );
     const before = reply;
     reply = (url) => (url.includes('/attachments/2') ? { body: docx, type: 'application/octet-stream' } : before(url));
-    show(<TaskPage task="12" pipeline="p1" tab="email" />, '/tasks/p1/12/email?part=2');
+    show(<TaskPage task="12" tab="email" />, '/tasks/p1?task=12&list=p1&task.tab=email&task.part=2');
     const sheet = await screen.findByRole('article', { name: 'quote.docx' });
     expect(within(sheet).getByRole('heading', { name: 'Quote' })).toBeTruthy();
     expect(within(sheet).getByText('Total:').tagName).toBe('B');
@@ -367,7 +369,7 @@ describe('an email the task asks about', () => {
   });
 
   it('shows a PDF attachment inline, read and held as a PDF', async () => {
-    show(<TaskPage task="12" pipeline="p1" tab="email" />, '/tasks/p1/12/email?part=3');
+    show(<TaskPage task="12" tab="email" />, '/tasks/p1?task=12&list=p1&task.tab=email&task.part=3');
     expect(await screen.findByRole('region', { name: 'terms.pdf' })).toBeTruthy();
     expect(openPdf).toHaveBeenLastCalledWith('blob:held');
     expect(calls).toContain('GET /api/v2/email/sends/s1/attachments/3');
