@@ -212,6 +212,19 @@ describe("An agent's own sidebar", () => {
     await waitFor(() => expect(reads.filter((u) => u.startsWith('/api/v2/files/')).map((u) => u.split('?')[0])).toEqual(['/api/v2/files/f1', '/api/v2/files/f2', '/api/v2/files/f3']));
   });
 
+  it('runs a pinned page as a widget: its small card view, live from the signed address its pin carries', async () => {
+    queryClient.setQueryData(['config'], { visual_origin: 'https://visuals.acme.example' });
+    const live = (v: number) => ({ ...pins, pins: [{ ...pins.pins[0], page: { ...pins.pins[0].page, version: v, src: `https://visuals.acme.example/visuals/tok${v}` } }] });
+    open([w('page:f1'), w('tasks')], pinsReply(live(2)));
+    const card = await screen.findByRole('region', { name: 'Videos by stage' });
+    const frame = await waitFor(() => within(card).getByTitle('Videos by stage') as HTMLIFrameElement);
+    expect(frame.getAttribute('src')).toBe('https://visuals.acme.example/visuals/tok2#tico-view=card&tico-size=small');
+    expect(reads.filter((u) => u.startsWith('/api/v2/files/'))).toEqual([]); // live: neither its text nor its facts are read
+    // a new version: the pin's next read carries its address, and the widget runs it
+    queryClient.setQueryData(['team', 'pins', 'ana'], live(3));
+    await waitFor(() => expect(within(card).getByTitle('Videos by stage').getAttribute('src')).toBe('https://visuals.acme.example/visuals/tok3#tico-view=card&tico-size=small'));
+  });
+
   it('reads the automation runs card over its last 24 hours, with which runs failed', async () => {
     const runs = { total: 4, failed: 1, running: 0, runs: [{ id: 'r1', automation_id: 'a1', name: 'Nightly sync', status: 'failed', started_at: '2026-11-20T10:00:00Z', finished_at: '2026-11-20T10:01:00Z' }] };
     open([w('card:c9'), w('tasks')], pinsReply(cardPins('automation_runs', runs)));
@@ -231,7 +244,7 @@ describe("An agent's own sidebar", () => {
   it('opens a pinned page full screen at the version it shows', async () => {
     open([w('page:f1'), w('tasks')]);
     const card = await screen.findByRole('region', { name: 'Videos by stage' });
-    fireEvent.click(within(card).getByRole('button', { name: 'Videos by stage' }));
+    fireEvent.click(await within(card).findByRole('button', { name: 'Videos by stage' }));
     expect(previews()).toEqual([{ file: 'f1', version: 2 }]);
   });
 

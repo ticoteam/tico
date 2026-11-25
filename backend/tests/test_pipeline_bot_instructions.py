@@ -360,6 +360,19 @@ def test_the_example_page_passes_its_own_check():
     assert tool.problems_in(example, "change-spec") == [] and tool.warnings_in(example, "change-spec") == []
 
 
+def test_a_page_kit_slip_is_a_hint_that_never_fails_the_check():
+    # The kit is the default, never required: a page with kit tags passes its check, and a tag or value the kit does
+    # not know is named as a hint. Tico's live blocks are not the kit's.
+    tool = page_tool()
+    example = page_skill()["examples/change-spec.html"].decode()
+    slips = '<tico-chart kind="pie" data="Mon 3"></tico-chart><tico-stats></tico-stats><tico-tasks pipeline="x"></tico-tasks>'
+    page = example.replace('<section id="scope">', slips + '<section id="scope">', 1)
+    assert tool.problems_in(page, "change-spec") == []
+    hints = tool.kit_hints(page)
+    assert len(hints) == 2 and "kind is bars or line" in hints[0] and "<tico-stats> is not a kit tag" in hints[1]
+    assert tool.kit_hints(page_skill()["examples/widget.html"].decode()) == []
+
+
 def test_the_page_check_refuses_what_people_sent_back(tmp_path):
     tool = page_tool()
     (tmp_path / "shots").mkdir()

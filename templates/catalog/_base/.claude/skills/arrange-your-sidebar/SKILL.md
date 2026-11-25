@@ -14,7 +14,8 @@ It holds the built-ins `updates`, `tasks` and `files`, then any pages and cards 
 is `bot:<your slug>`. A position counts everything there, built-ins too: 0 is the top, as `tico_card_list` lists it.
 
 - See it: `tico_card_list` with that place (`tico card list --place bot:<your slug>`), for pin ids.
-- Pin one of your pages: `tico_pin_add` with item `page:<file id>` (and `position` for where).
+- Pin one of your pages: `tico_pin_add` with item `page:<file id>` (and `position` for where). Asked for a widget
+  ("add a widget showing..."), build it as a page first: build-the-page, "The page kit".
 - Add a card: `tico_card_add` with the place, and `position` for where. Tasks by stage is a pipeline's open, not
   snoozed tasks grouped by stage, each with its first titles. At the top:
   `tico card add tasks_by_stage --pipeline Videos --agent <your slug> --place bot:<your slug> --position 0 --title "Videos by stage"`.

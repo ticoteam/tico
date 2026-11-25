@@ -338,9 +338,25 @@ def loading_references(data):
 # adds after this script (a module script's) still wins.
 REPORTER = Path(__file__).with_name("visual-reporter.js").read_text().strip()
 
+# The page kit (backend/page-kit/<n>.js): display tags an agent's page may use to look like Tico. A new page version is
+# pinned to KIT when it is stored (bot_file_versions.page_kit), and a version that uses a kit tag gets its pinned kit
+# after the reporter, so a later kit never changes a page already published. Each released kit file stays as it is.
+KIT = 1
+KITS = {n: (Path(__file__).with_name("page-kit") / f"{n}.js").read_text().strip().encode() for n in range(1, KIT + 1)}
+KIT_TAG = re.compile(rb"<tico-(?:stat|chart|table|list|badge)[\s/>]", re.I)
 
-def with_reporter(data):
-    return data + b"<script>" + REPORTER.encode() + b"</script>"
+
+def kit_for(mime):
+    """The page kit a new version of this type is pinned to: KIT for a page, else None."""
+    return KIT if KINDS.get((mime or "").split(";", 1)[0].strip().lower()) == "page" else None
+
+
+def with_reporter(data, kit=None):
+    """A page as served: as written, then the height reporter, then its pinned kit when it uses a kit tag."""
+    out = data + b"<script>" + REPORTER.encode() + b"</script>"
+    if kit in KITS and KIT_TAG.search(data):
+        out += b"<script>" + KITS[kit] + b"</script>"
+    return out
 
 
 # A page runs as its author wrote it: its scripts, inline handlers, forms, storage, popups, downloads, dialogs and loads
@@ -770,7 +786,7 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None, later=N
                             here + "/visuals/" + mint(key, actor, fid, number, "preview", task_actor=delegated)
                         )
                     if hostable:
-                        waiting.append((view, {k: v[k] for k in ("digest", "size", "mime")}, src))
+                        waiting.append((view, {k: v[k] for k in ("digest", "size", "mime", "page_kit")}, src))
                 for field in ("width", "height", "duration_ms"):
                     if v[field] is not None:
                         view[field] = v[field]
@@ -815,7 +831,7 @@ def _settle(hosted, waiting):
     instead of an Open card. One question to the bucket per version, whichever messages show it."""
     ready = {}
     for view, v, src in waiting:
-        known = (v["digest"], v["size"], v["mime"])
+        known = (v["digest"], v["size"], v["mime"], v["page_kit"])
         if known not in ready:
             ready[known] = hosted(v)
         if ready[known]:
@@ -875,7 +891,8 @@ def for_reader(app, settings, c, who, messages, later=None):
     full, blobs, frames = mode(settings) == "full", app.state.blobs, ancestors(settings)
 
     def hosted(v):
-        return visual_ready(blobs, v["digest"], v["size"], (v["mime"] or "").split(";", 1)[0].strip().lower(), frames)
+        mime = (v["mime"] or "").split(";", 1)[0].strip().lower()
+        return visual_ready(blobs, v["digest"], v["size"], mime, frames, kit=v["page_kit"])
 
     return decorate(
         c,
@@ -948,6 +965,7 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
         v = c.execute("SELECT * FROM bot_file_versions WHERE file_id=? AND version=?", (fid, number)).fetchone()
         if not v:
             return gone
+        kit = v["page_kit"]
         page = c.execute("SELECT audience FROM pages WHERE file_id=?", (fid,)).fetchone()
         restricted = bool(page and page["audience"] is not None)
         mime = (v["mime"] or "").split(";", 1)[0].strip().lower()
@@ -972,7 +990,7 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
         from .tico_storage import visual_link
 
         # A page with live blocks never has a hosted copy (tico_storage.make_visual), so it is filled in below.
-        link = None if restricted else visual_link(blobs, blob["digest"], blob["size"], mime, ancestors)
+        link = None if restricted else visual_link(blobs, blob["digest"], blob["size"], mime, ancestors, kit=kit)
         if link:
             return Response(
                 status_code=302,
@@ -987,7 +1005,7 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
             # Filled in for this reader alone, with what they may see now.
             with store.read() as c:
                 data = fill_live(text, c, who, auth, files).encode("utf-8")
-        data = with_reporter(data) if kind == "page" else clean(data, kind)[0]
+        data = with_reporter(data, kit) if kind == "page" else clean(data, kind)[0]
         response = Response(
             data if request.method != "HEAD" else b"",
             media_type=mime,
