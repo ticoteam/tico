@@ -129,7 +129,9 @@ async def _pages(app: Any, who: Any, base: str, only_if: Json) -> list[Any]:
                 try:
                     said: Any = answer.json()
                     error: Any = said.get("error")
-                    detail: Any = error.get("detail") if isinstance(error, dict) else said.get("detail") or error
+                    detail: Any = (
+                        cast(Json, error).get("detail") if isinstance(error, dict) else said.get("detail") or error
+                    )
                 except (ValueError, AttributeError):
                     detail = None
                 raise Failed(f"the read answered {answer.status_code}" + (f": {detail}" if detail else ""))
