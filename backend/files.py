@@ -106,7 +106,10 @@ MEDIA_SQL = (
     "WHERE o.file_id=f.id AND o.actor='bot:' || f.bot_id)) "
     "ORDER BY f.last_activity_at DESC, f.id DESC"
 )
-_READ = object()  # view(): the version or last activity not read ahead, so it reads its own
+# Made recently checks at most this many of a bot's newest pictures and videos: a reader who may see few of them gets
+# fewer previews rather than a scan of every file the bot ever made.
+MEDIA_SCAN = 300
+
 MENTIONS_MAX = 60  # names one message lookup asks about
 DATES_MAX = 500  # files one date correction carries (runner-rs/src/files_publish.rs DATE_BATCH)
 
@@ -2731,18 +2734,19 @@ class Files:
                 cache[task_id] = None
         return cache[task_id]
 
-    def view(self, c, who, row, caches, page=None, version=_READ, last=_READ):
-        """One file as the Files rail lists it; `page` when the caller already knows whether it is a page, and its
-        current `version` and `last` activity row (None when it has none) when the caller read them ahead."""
-        if version is _READ:
+    def view(self, c, who, row, caches, page=None, ahead: tuple[sqlite3.Row | None, sqlite3.Row | None] | None = None):
+        """One file as the Files rail lists it; `page` when the caller already knows whether it is a page, and `ahead`
+        its current version and last activity rows (each None when it has none) when the caller read them ahead."""
+        if ahead is None:
             version = c.execute(
                 "SELECT * FROM bot_file_versions WHERE file_id=? AND version=?", (row["id"], row["current_version"])
             ).fetchone()
-        if last is _READ:
             last = c.execute(
                 "SELECT actor,action,created_at FROM bot_file_activity WHERE file_id=? ORDER BY id DESC LIMIT 1",
                 (row["id"],),
             ).fetchone()
+        else:
+            version, last = ahead
         link = row["locator"] == "remote_link"
         synced = row["state"] == "ready" and (link or version is not None)
         provider = row["provider"] or ""
@@ -2842,13 +2846,14 @@ class Files:
     def made_recently(self, who, bot, limit):
         """The agent page's Made recently: the bot's newest `limit` stored pictures and videos on tasks the caller may
         read (MEDIA_SQL), through the same checks as its whole list. It reads newest first in chunks and stops as soon
-        as it has `limit`, never deciding one more: it counts nothing (total is None), pages no further and never says
-        there are more (has_more is False)."""
-        with self.store.read() as c:
+        as it has `limit`, never deciding one more, and checks no more than the newest MEDIA_SCAN: past them it shows
+        fewer. It counts nothing (total is None), pages no further and never says there are more (has_more is False).
+        One snapshot: the rows it checks and the versions and activity it shows them with are read at the same moment."""
+        with self.store.read_transaction() as c:
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             self.bot_row(c, who, bot)
             caches, out = {"task": {}, "repo": {}}, []
-            rows = visible_rows(c, self.auth, who, MEDIA_SQL, (bot,))
+            rows = visible_rows(c, self.auth, who, MEDIA_SQL + " LIMIT ?", (bot, MEDIA_SCAN))
             while len(out) < limit and (batch := list(islice(rows, limit - len(out)))):
                 ids = [r["id"] for r in batch]
                 marks = ",".join("?" * len(ids))
@@ -2869,7 +2874,7 @@ class Files:
                     )
                 }
                 for row in batch:
-                    item = self.view(c, who, row, caches, False, versions.get(row["id"]), last.get(row["id"]))
+                    item = self.view(c, who, row, caches, False, (versions.get(row["id"]), last.get(row["id"])))
                     if item["task_id"]:  # its task, which the caller may read, is a click away
                         out.append(item)
             return {

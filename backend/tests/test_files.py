@@ -2,6 +2,7 @@
 S3 imports and link rules. See docs/files.md."""
 
 import base64
+from contextlib import contextmanager
 import os
 
 import pytest
@@ -293,6 +294,77 @@ def test_made_recently_stops_at_its_sixth_readable_file_before_the_private_ones_
     assert [f["id"] for f in cara["files"]] == [shown[f"seen-{i}"] for i in range(5, -1, -1)], cara
     assert cara["has_more"] is False and cara["total"] is None
     assert decided == [shown[f"seen-{i}"] for i in range(5, -1, -1)], len(decided)
+
+
+def test_made_recently_checks_at_most_its_newest_few_and_shows_fewer_past_them(api, monkeypatch):
+    """A bot's newest pictures all on a task the reader may not read, the ones they may see older: Made recently checks
+    only the newest MEDIA_SCAN and shows what it found among them (here none), never every file the bot made."""
+    from backend import files as F
+
+    store = api.app.state.store
+    _, attempt = turn(api)
+    with store.transaction() as c:
+        open_ = H.task_create(c, "human:ben", "Launch", "Plan it", "bot:ops", lint=False)["id"]
+        hidden = H.task_create(c, "human:ben", "Private launch", "Secret", "bot:ops", private=True, lint=False)["id"]
+    seen = _media(api, attempt, [f"seen-{i}" for i in range(2)], open_)
+    _media(api, attempt, [f"hush-{i}" for i in range(12)], hidden, start=2)
+    monkeypatch.setattr(F, "MEDIA_SCAN", 10)
+    decided, decide = [], F.file_visible
+    monkeypatch.setattr(
+        F,
+        "file_visible",
+        lambda c, auth, who, row, cache: decided.append(row["id"]) or decide(c, auth, who, row, cache),
+    )
+    assert _made(api, "cara-test")["files"] == []
+    assert len(decided) == 10, len(decided)
+    monkeypatch.setattr(F, "MEDIA_SCAN", 14)
+    assert [f["id"] for f in _made(api, "cara-test")["files"]] == [seen["seen-1"], seen["seen-0"]]
+
+
+def test_made_recently_reads_its_rows_and_their_activity_in_one_snapshot(api, monkeypatch):
+    """A file someone acts on while Made recently checks it shows as it was when the check began: the rows it checks
+    and the versions and last activity it shows them with are one snapshot, never a row of one moment beside the
+    activity of the next. Its one readable picture sits past fifty private ones, in the last chunk of the scan, which
+    ends the candidates' read before its activity is read."""
+    from backend import files as F
+
+    store = api.app.state.store
+    _, attempt = turn(api)
+    with store.transaction() as c:
+        open_ = H.task_create(c, "human:ben", "Launch", "Plan it", "bot:ops", lint=False)["id"]
+        hidden = H.task_create(c, "human:ben", "Private launch", "Secret", "bot:ops", private=True, lint=False)["id"]
+    made = _media(api, attempt, ["still"], open_)
+    _media(api, attempt, [f"hush-{i}" for i in range(50)], hidden, start=1)
+    before = [(f["id"], f["actor"], f["action"]) for f in _made(api, "cara-test")["files"]]
+    assert [x[0] for x in before] == [made["still"]] and before[0][2] != "renamed", before
+    acted, decide = [], F.file_visible
+
+    def act_then_decide(c, auth, who, row, cache):
+        if row["id"] == made["still"] and not acted:  # another request acts on it while this one reads
+            with store.transaction() as w:
+                w.execute(
+                    "INSERT INTO bot_file_activity(file_id,actor,action,created_at) VALUES (?,?,?,?)",
+                    (made["still"], "human:cara", "renamed", "2031-01-01T00:00:00Z"),
+                )
+            acted.append(row["id"])
+        return decide(c, auth, who, row, cache)
+
+    # SQLite may hold a plain read's statements open across the scan, so the race does not always show without the
+    # snapshot: the read is also seen to run in one (store.read_transaction).
+    snapshots, real = [], store.read_transaction
+
+    @contextmanager
+    def snapshot():
+        with real() as c:
+            snapshots.append(c)
+            yield c
+
+    monkeypatch.setattr(F, "file_visible", act_then_decide)
+    monkeypatch.setattr(store, "read_transaction", snapshot)
+    files = _made(api, "cara-test")["files"]
+    assert acted == [made["still"]]
+    assert [(f["id"], f["actor"], f["action"]) for f in files] == before, files
+    assert snapshots, "Made recently read outside one snapshot"
 
 
 def test_refusals_and_a_bot_writes_only_its_own_files(api):

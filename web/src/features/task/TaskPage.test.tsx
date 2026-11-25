@@ -1303,6 +1303,37 @@ describe('a task’s files and pages @s56 @s76 @s780', () => {
     expect((router.state.location.search as Record<string, unknown>)['task.v']).toBeUndefined();
   });
 
+  it('names the tab of a file opened with no tab, leaving the page’s version the page’s and the file at its newest', async () => {
+    serve(files);
+    const router = show(<TaskPage task="12" file="f9" />, '/tasks/p1?task=12&list=p1&task.file=f9&task.v=1');
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ 'task.tab': 'qa-report', 'task.file': 'f9', 'task.v': 1 }));
+    expect((router.state.location.search as Record<string, unknown>)['task.fv']).toBeUndefined();
+    expect(await screen.findByRole('button', { name: 'Sign-in screen, full size' })).toBeTruthy();
+    expect(screen.queryByAltText('Sign-in screen, v1')).toBeNull();
+  });
+
+  describe('an open file at a version past its listing (it keeps only the newest)', () => {
+    const newest = { ...shot, versions: shot.versions.slice(1) };
+    const at = '/tasks/p1?task=12&list=p1&task.tab=qa-report&task.file=f9&task.fv=1';
+    const serveMeta = (meta: Reply) =>
+      serve((url) => (url.endsWith('/api/v2/tasks/t1/files?all=1') ? { status: 200, body: { files: [newest] } } : url.endsWith('/api/v2/files/f9/meta?v=1') ? meta : files(url)));
+
+    it('is read by the file’s id, never shown at its current version', async () => {
+      serveMeta({ status: 200, body: { name: 'shot-old.png', content_type: 'image/png', size: 10 } });
+      const router = show(<TaskPage task="12" tab="qa-report" file="f9" />, at);
+      expect((await screen.findByAltText('Sign-in screen, v1')).getAttribute('src')).toBe('/api/v2/files/f9?v=1');
+      expect(screen.queryByRole('button', { name: 'Sign-in screen, full size' })).toBeNull();
+      expect((router.state.location.search as Record<string, unknown>)['task.fv']).toBe(1);
+    });
+
+    it('says it did not load when that read fails, never showing the current one', async () => {
+      serveMeta({ status: 404, body: { error: 'not_found' } });
+      show(<TaskPage task="12" tab="qa-report" file="f9" />, at);
+      expect(await screen.findByText('This file did not load')).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'Sign-in screen, full size' })).toBeNull();
+    });
+  });
+
   describe('an old link to a tab a video had', () => {
     /** A file of the task as the server lists it, made at `day`. */
     const made = (id: string, title: string, mime: string, day: number) => ({

@@ -149,7 +149,29 @@ export function FileView({ t, file, full, back, onClose }: { t: TaskData; file: 
   const i = list.findIndex((f) => f.id === file);
   const f = (files.data ?? []).find((x) => x.id === file);
   const current = f && currentOf(f);
-  const v = (search.fv && f?.versions.find((x) => x.n === search.fv)) || current;
+  // The version the address names (`fv`), else its current one. The listing keeps only a file's newest versions: one
+  // past them is read by the file's id, its own name and type, and says so when it cannot be read; never the current.
+  const listed = search.fv ? f?.versions.find((x) => x.n === search.fv) : current;
+  const meta = useQuery({ ...fileMetaQuery(file, search.fv ?? 0), enabled: !!f && !!search.fv && !listed });
+  const unlisted: FileVersion | undefined =
+    !listed && search.fv && current && meta.data
+      ? {
+          ...current,
+          n: search.fv,
+          url: `/api/v2/files/${encodeURIComponent(file)}?v=${search.fv}`,
+          mime: meta.data.content_type,
+          name: meta.data.name,
+          size: meta.data.size ?? 0,
+          width: null,
+          height: null,
+          poster_url: null,
+          thumb_url: null,
+          signed: null,
+          answers: [],
+          ask: null,
+        }
+      : undefined;
+  const v = listed ?? unlisted;
   const versions = [...(f?.versions ?? [])].sort((a, b) => b.n - a.n);
   const other = search.fvs && search.fvs !== v?.n ? f?.versions.find((x) => x.n === search.fvs) : undefined;
   // Compare puts the one before the shown version beside it; the oldest is compared with the one after.
@@ -232,8 +254,8 @@ export function FileView({ t, file, full, back, onClose }: { t: TaskData; file: 
             {v.width} by {v.height}
           </small>
         ) : null}
-        {v && <Face id={v.by} decorative />}
-        {v && <Ago at={v.created_at} />}
+        {listed && <Face id={listed.by} decorative />}
+        {listed && <Ago at={listed.created_at} />}
         {v?.signed && <small className="fv-signed">{signedLine(v.signed)}</small>}
         <span className="grow" />
         {list.length > 1 && i >= 0 && (
@@ -245,7 +267,7 @@ export function FileView({ t, file, full, back, onClose }: { t: TaskData; file: 
         {list.length > 1 && i >= 0 && step(1, 'Next', false)}
         {menu}
       </div>
-      {files.isError ? (
+      {files.isError || (f && !listed && meta.isError) ? (
         <Empty icon="alert" title="This file did not load" />
       ) : files.isSuccess && !f ? (
         <Empty title="This file is gone" />
