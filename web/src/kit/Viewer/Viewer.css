@@ -6,6 +6,8 @@
 .vw[data-starting-style]{opacity:0;transform:translateY(var(--move)) scale(var(--pop))}
 .vw[data-ending-style]{opacity:0;transition:opacity var(--dur-leave) var(--ease-in),transform var(--dur-leave) var(--ease-in)}
 .vw[data-pulled]{transition:none}
+/* another layer open over this one: its bar alone shows on the dim, not this one's drawn through beside it */
+.vw[data-covered]>.vw-bar{visibility:hidden}
 .vw-bar{display:flex;align-items:center;gap:var(--s-2);min-width:0;height:var(--s-10);color:var(--on-scrim);position:relative}
 .vw-bar .ib{color:var(--on-scrim)}
 .vw-bar .grow{flex:1}

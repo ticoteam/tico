@@ -12,15 +12,18 @@
 seed() returns the ids a journey needs. It also adds test routes on the server: POST /_e2e/drain (one pass of the
 email queue, as the server's own sender runs it), GET /_e2e/sent (what reached the fake Gmail) and POST /_e2e/ask (a
 Launch task on which the Engineering Lead asks Dana a ❓, two numbered questions under it, with three suggested answers; only the journey that answers one
-calls it, so the others' Needs you holds the two emails alone).
+calls it, so the others' Needs you holds the two emails alone) and POST /_e2e/made (a task on which the Engineering Lead
+made a video, two pictures and a page; only the journey that looks at them calls it).
 """
 
 import base64
+import io
+import uuid
 from email.message import EmailMessage
 
 from fastapi.responses import JSONResponse
 
-from evals.redesign.harness import DANA, DANA_ID, LEAD_ID, RELEASE_ID
+from evals.redesign.harness import DANA, DANA_ID, LEAD, LEAD_ID, RELEASE_ID
 from evals.redesign.seeds import SEEDS
 
 BOX = "dana@acme.example"
@@ -183,6 +186,62 @@ def asks(world):
     _route(world, "/_e2e/ask", ask, ["POST"])
 
 
+# A video's first bytes (an MP4 box), so the upload is taken as one; the journey looks at its poster, never plays it.
+CLIP = b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2" + bytes(2048)
+
+
+def _frame(sky, sea, sun, label):
+    """A made-up picture, 640x400: sky over sea, a sun, a caption. PNG bytes."""
+    from PIL import Image, ImageDraw
+
+    im = Image.new("RGB", (640, 400), sky)
+    draw = ImageDraw.Draw(im)
+    draw.rectangle((0, 250, 640, 400), fill=sea)
+    draw.ellipse((420, 70, 540, 190), fill=sun)
+    draw.rectangle((0, 330, 640, 400), fill=(236, 214, 170))
+    draw.text((24, 24), label, fill=(255, 255, 255))
+    out = io.BytesIO()
+    im.save(out, "PNG")
+    return out.getvalue()
+
+
+def made(world):
+    """POST /_e2e/made?title=...: a Launch task the Engineering Lead owns, on which it made two pictures, then a video
+    (with its poster), then a page."""
+
+    def attach(task, name, data, mime, poster=None):
+        files = {"file": (name, data, mime), **({"poster": ("poster.png", poster, "image/png")} if poster else {})}
+        headers = {"Authorization": "Bearer " + LEAD, "Idempotency-Key": str(uuid.uuid4())}
+        reply = world.client.post(f"/api/v2/tasks/{task}/files", headers=headers, files=files)
+        if reply.status_code >= 300:
+            raise RuntimeError(f"{name}: {reply.status_code} {reply.text[:300]}")
+        return reply.json()["file_id"]
+
+    def make(title: str):
+        body = {"title": title, "owner": LEAD_ID, "pipeline": "launch"}
+        task = _ok(world.api("post", "/api/v2/tasks", body, who=DANA), title)
+        task = task.get("task", task)
+        attach(
+            task["id"], "beach-wide.png", _frame((120, 180, 230), (40, 110, 170), (255, 210, 90), "Wide"), "image/png"
+        )
+        attach(
+            task["id"], "beach-close.png", _frame((240, 150, 110), (60, 90, 150), (255, 240, 200), "Close"), "image/png"
+        )
+        poster = _frame((30, 40, 80), (20, 60, 110), (250, 250, 230), "Night cut")
+        video = attach(task["id"], "beach-cut.mp4", CLIP, "video/mp4", poster=poster)
+        page = {
+            "name": "promo-plan.html",
+            "title": "Promo plan",
+            "text": "<!doctype html><html><head><title>Promo plan</title></head><body><h1>Promo plan</h1>"
+            "<p>Post the cut on Friday; the two stills go with it.</p></body></html>",
+            "task": task["id"],
+        }
+        _ok(world.api("post", "/api/v2/pages", page, who=LEAD), "the page")
+        return JSONResponse({"id": task["id"], "number": task["number"], "title": title, "video": video})
+
+    _route(world, "/_e2e/made", make, ["POST"])
+
+
 def providers(world):
     _ok(
         world.api(
@@ -203,4 +262,5 @@ def thread(world):
 def seed(world):
     providers(world)
     asks(world)
+    made(world)
     return {"mail": mail(world), "board": board(world), "thread": thread(world)}

@@ -41,6 +41,10 @@ SCHEMAS.update(
                     "type": ["string", "null"],
                     "description": "set when an image has a small preview at /api/v2/files/{id}/thumb",
                 },
+                "poster_blob_id": {
+                    "type": ["string", "null"],
+                    "description": "set when a video has a frame to show at /api/v2/files/{id}/poster",
+                },
                 "open": {
                     "type": ["object", "null"],
                     "description": "{type: tico|external, url}: "
@@ -87,7 +91,10 @@ SCHEMAS.update(
             {
                 "bot": "s",
                 "files": items(ref("BotFile")),
-                "total": "i",
+                "total": {
+                    "type": ["integer", "null"],
+                    "description": "the files the caller sees; null for media=1, which counts nothing",
+                },
                 "next_cursor": "n",
                 "has_more": "b",
                 "can_manage": "b",

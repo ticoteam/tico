@@ -1207,6 +1207,177 @@ describe('a task’s files and pages @s56 @s76 @s780', () => {
     await waitFor(() => expect((router.state.location.search as Record<string, unknown>)['task.file']).toBeUndefined());
   });
 
+  it('puts its pictures and videos first, newest first, and opens one over the tab it is on', async () => {
+    const at = (id: string, mime: string, created_at: string, more: Record<string, unknown> = {}) => ({
+      n: 1, by: 'bot:a1', created_at, mime, url: `/api/v2/files/${id}?v=1`, answers: [], ask: null, poster_url: null, thumb_url: null, ...more,
+    });
+    const cut = { ...shot, id: 'v1', name: 'cut.mp4', title: 'Beach cut', mime: 'video/mp4', current_version: 1, versions: [at('v1', 'video/mp4', '2026-11-03T10:00:00Z', { poster_url: '/api/v2/files/v1/poster?v=1' })] };
+    const notes = { ...shot, id: 'n1', name: 'notes.txt', title: 'Shot list', mime: 'text/plain', current_version: 1, versions: [at('n1', 'text/plain', '2026-11-04T10:00:00Z')] };
+    const old = { ...shot, id: 'p0', title: 'Old frame', archived: true };
+    serve((url) => (url.endsWith('/api/v2/tasks/t1/files?all=1') ? { status: 200, body: { files: [notes, shot, old, cut] } } : files(url)));
+    const router = details();
+    const strip = await screen.findByRole('list', { name: 'Pictures and videos' });
+    // newest first, pictures and videos only: the archived picture and the text file are not in it
+    expect(within(strip).getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual(['Beach cut', 'Sign-in screen']);
+    expect(strip.querySelector('img')?.getAttribute('src')).toBe('/api/v2/files/v1/poster?v=1');
+    // a task may have many: each is read only as it nears the screen
+    expect([...strip.querySelectorAll('img')].map((img) => img.getAttribute('loading'))).toEqual(['lazy', 'lazy']);
+    // first: before the tab's own body; Details' Files keeps only what is not a picture or a video
+    await waitFor(() => expect(document.querySelector('.dt-file[title="Shot list"]')).toBeTruthy());
+    const rows = [...document.querySelectorAll('.dt-file')].map((row) => row.getAttribute('title'));
+    expect(rows).toEqual(['Shot list']);
+    expect(strip.compareDocumentPosition(screen.getByText('Has it')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // a video is not a tab of its own, as a picture is not: the strip opens it
+    const tabs = screen.getByRole('navigation', { name: / pages$/ });
+    expect(within(tabs).getByRole('link', { name: /Shot list/ })).toBeTruthy();
+    expect(within(tabs).queryByRole('link', { name: /Beach cut/ })).toBeNull();
+    fireEvent.click(within(strip).getByRole('button', { name: 'Beach cut' }));
+    await waitFor(() => expect((router.state.location.search as Record<string, unknown>)['task.file']).toBe('v1'));
+  });
+
+  it('opens a picture from the top over a page tab and leaves the page’s version and comparison as they were', async () => {
+    serve(files);
+    const router = show(<TaskPage task="12" tab="qa-report" />, '/tasks/p1/12/qa-report?v=1&vs=1');
+    const strip = await screen.findByRole('list', { name: 'Pictures and videos' });
+    fireEvent.click(within(strip).getByRole('button', { name: 'Sign-in screen' }));
+    await waitFor(() => expect((router.state.location.search as Record<string, unknown>)['task.file']).toBe('f9'));
+    expect(router.state.location.search).toMatchObject({ 'task.tab': 'qa-report', 'task.v': 1, 'task.vs': 1 });
+  });
+
+  it('a file over a page tab: its versions are its own, Next steps in place, and Back returns to the page as it was', async () => {
+    const notes = {
+      ...shot,
+      id: 'n1',
+      name: 'notes.txt',
+      title: 'Shot list',
+      mime: 'text/plain',
+      current_version: 1,
+      versions: [{ n: 1, by: 'bot:a1', created_at: '2026-11-04T10:00:00Z', mime: 'text/plain', url: '/api/v2/files/n1?v=1', answers: [], ask: null }],
+    };
+    serve((url) => (url.endsWith('/api/v2/tasks/t1/files?all=1') ? { status: 200, body: { files: [shot, notes] } } : files(url)));
+    const router = show(<TaskPage task="12" tab="qa-report" file="f9" />, '/tasks/p1?task=12&list=p1&task.tab=qa-report&task.file=f9&task.v=1');
+    const words = () => router.state.location.search as Record<string, unknown>;
+    // named for the tab under it, never Details
+    const back = await screen.findByRole('button', { name: 'Back to QA report' });
+    expect(screen.queryByRole('button', { name: 'Back to Details' })).toBeNull();
+    // the file's version and comparison are its own words: the page's v stays, and it gets no vs
+    await lastMore();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Versions' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'v1' }));
+    await waitFor(() => expect(words()['task.fv']).toBe(1));
+    await lastMore();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Compare' }));
+    await waitFor(() => expect(words()['task.fvs']).toBe(2));
+    expect(words()).toMatchObject({ 'task.tab': 'qa-report', 'task.v': 1 });
+    expect(words()['task.vs']).toBeUndefined();
+    // Next: the next file in its place, over the same tab, no step in the history
+    const steps = router.history.length;
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(words()['task.file']).toBe('n1'));
+    expect(words()).toMatchObject({ 'task.tab': 'qa-report', 'task.v': 1 });
+    expect(words()['task.fv']).toBeUndefined();
+    expect(router.history.length).toBe(steps);
+    // Back: the page as it was read
+    fireEvent.click(back);
+    await waitFor(() => expect(words()['task.file']).toBeUndefined());
+    expect(words()).toMatchObject({ 'task.tab': 'qa-report', 'task.v': 1 });
+    expect(router.history.length).toBe(steps);
+  });
+
+  it('Remove from a file over a page tab goes back to that tab', async () => {
+    serve(files);
+    const router = show(<TaskPage task="12" tab="qa-report" file="f9" />, '/tasks/p1/12/qa-report?file=f9');
+    await screen.findByRole('button', { name: 'Back to QA report' });
+    await lastMore();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Remove file' }));
+    await waitFor(() => expect((router.state.location.search as Record<string, unknown>)['task.file']).toBeUndefined());
+    expect(router.state.location.search).toMatchObject({ 'task.tab': 'qa-report' });
+  });
+
+  it('an old link to a video’s own tab opens that video over the page, at the version it named', async () => {
+    const at = (n: number) => ({ n, by: 'bot:a1', created_at: `2026-11-0${n}T10:00:00Z`, mime: 'video/mp4', url: `/api/v2/files/v1?v=${n}`, answers: [], ask: null, poster_url: null });
+    const cut = { ...shot, id: 'v1', name: 'beach-cut.mp4', title: '', mime: 'video/mp4', current_version: 2, versions: [at(1), at(2)] };
+    serve((url) => (url.endsWith('/api/v2/tasks/t1/files?all=1') ? { status: 200, body: { files: [cut] } } : files(url)));
+    const router = show(<TaskPage task="12" tab="beach-cut-mp4" />, '/tasks/p1/12/beach-cut-mp4?v=1');
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ 'task.tab': 'qa-report', 'task.file': 'v1', 'task.fv': 1 }));
+    expect((router.state.location.search as Record<string, unknown>)['task.v']).toBeUndefined();
+  });
+
+  it('names the tab of a file opened with no tab, leaving the page’s version the page’s and the file at its newest', async () => {
+    serve(files);
+    const router = show(<TaskPage task="12" file="f9" />, '/tasks/p1?task=12&list=p1&task.file=f9&task.v=1');
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ 'task.tab': 'qa-report', 'task.file': 'f9', 'task.v': 1 }));
+    expect((router.state.location.search as Record<string, unknown>)['task.fv']).toBeUndefined();
+    expect(await screen.findByRole('button', { name: 'Sign-in screen, full size' })).toBeTruthy();
+    expect(screen.queryByAltText('Sign-in screen, v1')).toBeNull();
+  });
+
+  describe('an open file at a version past its listing (it keeps only the newest)', () => {
+    const newest = { ...shot, versions: shot.versions.slice(1) };
+    const at = '/tasks/p1?task=12&list=p1&task.tab=qa-report&task.file=f9&task.fv=1';
+    const serveMeta = (meta: Reply) =>
+      serve((url) => (url.endsWith('/api/v2/tasks/t1/files?all=1') ? { status: 200, body: { files: [newest] } } : url.endsWith('/api/v2/files/f9/meta?v=1') ? meta : files(url)));
+
+    it('is read by the file’s id, never shown at its current version', async () => {
+      serveMeta({ status: 200, body: { name: 'shot-old.png', content_type: 'image/png', size: 10 } });
+      const router = show(<TaskPage task="12" tab="qa-report" file="f9" />, at);
+      expect((await screen.findByAltText('Sign-in screen, v1')).getAttribute('src')).toBe('/api/v2/files/f9?v=1');
+      expect(screen.queryByRole('button', { name: 'Sign-in screen, full size' })).toBeNull();
+      expect((router.state.location.search as Record<string, unknown>)['task.fv']).toBe(1);
+    });
+
+    it('says it did not load when that read fails, never showing the current one', async () => {
+      serveMeta({ status: 404, body: { error: 'not_found' } });
+      show(<TaskPage task="12" tab="qa-report" file="f9" />, at);
+      expect(await screen.findByText('This file did not load')).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'Sign-in screen, full size' })).toBeNull();
+    });
+  });
+
+  describe('an old link to a tab a video had', () => {
+    /** A file of the task as the server lists it, made at `day`. */
+    const made = (id: string, title: string, mime: string, day: number) => ({
+      ...shot,
+      id,
+      name: `${id}.${mime.split('/')[1]}`,
+      title,
+      mime,
+      current_version: 1,
+      versions: [{ n: 1, by: 'bot:a1', created_at: `2026-11-0${day}T10:00:00Z`, mime, url: `/api/v2/files/${id}?v=1`, answers: [], ask: null, poster_url: null }],
+    });
+    /** The task, its files in the server's order, opened at the old address `at`: the words it lands on. */
+    const land = async (list: unknown[], at: string) => {
+      serve((url) => (url.endsWith('/api/v2/tasks/t1/files?all=1') ? { status: 200, body: { files: list } } : files(url)));
+      const slug = at.split('?')[0]!.split('/').at(-1)!;
+      const router = show(<TaskPage task="12" tab={slug} />, `/tasks/p1/12/${at}`);
+      await waitFor(() => expect((router.state.location.search as Record<string, unknown>)['task.tab']).not.toBe(slug));
+      return router.state.location.search as Record<string, unknown>;
+    };
+    // Two videos named alike had beach-cut and beach-cut-2, in the server's order: the newer one is second.
+    const twins = [made('v1', 'Beach cut', 'video/mp4', 1), made('v2', 'Beach cut', 'video/mp4', 3)];
+
+    it('opens the video a -2 slug named', async () => {
+      expect(await land(twins, 'beach-cut-2?v=1')).toMatchObject({ 'task.tab': 'qa-report', 'task.file': 'v2', 'task.fv': 1 });
+    });
+
+    it('opens the first of two videos named alike, never the newer one', async () => {
+      expect(await land(twins, 'beach-cut')).toMatchObject({ 'task.tab': 'qa-report', 'task.file': 'v1' });
+    });
+
+    it('opens the video, never the PDF of its name that took the slug after it', async () => {
+      const list = [made('v1', 'Promo', 'video/mp4', 1), made('d1', 'Promo', 'application/pdf', 2)];
+      expect(await land(list, 'promo')).toMatchObject({ 'task.tab': 'qa-report', 'task.file': 'v1' });
+      // the PDF keeps the slug it had beside the video
+      expect(within(screen.getByRole('navigation', { name: / pages$/ })).getByRole('link', { name: /Promo/ }).getAttribute('href')).toContain('promo-2');
+    });
+
+    it('opens nothing for a picture’s name: a picture never had a tab', async () => {
+      const words = await land([shot], 'sign-in-screen');
+      expect(words['task.tab']).toBe('qa-report');
+      expect(words['task.file']).toBeUndefined();
+    });
+  });
+
   describe('archived files', () => {
     const live = {
       id: 'f8',

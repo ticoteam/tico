@@ -742,6 +742,18 @@ export const agentFilesQuery = (slug: string, find = '') =>
     getNextPageParam: (last) => (last.has_more && last.next_cursor) || undefined,
   });
 
+/** How many pictures and videos Made recently shows. */
+export const MADE = 6;
+
+/** Its newest stored pictures and videos on tasks (`media=1`), Made recently on its page: the same checks as its files,
+    so a reader sees only those of tasks they may read, read newest first until there are enough (uncounted). Under its
+    files' key, so whatever refreshes them refreshes these; a task's file changing refreshes these alone (live/patch). */
+export const agentMediaQuery = (slug: string) =>
+  queryOptions({
+    queryKey: ['team', 'files', slug, { media: true }] as const,
+    queryFn: ({ signal }) => api.get<BotFileList>(`/api/v2/bots/${at(slug)}/files?${q({ media: 1, limit: MADE })}`, { signal }),
+  });
+
 /* ---------------------------------------------------------------- its last run */
 
 /** Why its last run ended without finishing (backend/execution.py last_stop). Not in the generated schema. */

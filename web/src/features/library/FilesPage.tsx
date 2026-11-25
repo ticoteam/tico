@@ -17,7 +17,7 @@ import { tagsQuery } from '@/features/tasks/exports';
 import { Document, FilterRow, List, Section } from '@/pagekinds';
 import { SectionHead } from '@/kit/SectionHead';
 import { VirtualList } from '@/kit/VirtualList';
-import { FileGet, linkOf, Preview } from './FileViewer';
+import { FileGet, linkOf, posterOf, Preview } from './FileViewer';
 import { Face, Find, KindGlyph, press, size, when, Who } from './parts';
 import { fileQuery, fileSearchQuery, filesQuery, fileUrl, fileVersionsQuery, type FileRow } from './queries';
 import type { FilesSearch } from './search';
@@ -338,6 +338,7 @@ function FilePage({ id, search }: { id: string; search: FilesSearch }) {
           size={shown?.size ?? (older ? undefined : file.size)}
           link={linkOf(file)}
           signable={signable}
+          poster={posterOf(file, id, n ?? 1, older)}
         />
       }
       sideFacts
