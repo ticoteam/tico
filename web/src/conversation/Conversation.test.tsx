@@ -863,6 +863,27 @@ describe('an agent answering', () => {
     expect(live()).toContain('Fixing the header');
   });
 
+  it("an agent's session drops its run's row once the run posts with a tool, though a caller's turn_id names another run", () => {
+    queryClient.setQueryData(['thread', T, 'live'], [{ run: 'r5', bot: 'bot:qa', parts: ['Fixing the header'], typing: null, doing: 'type', ended: false }]);
+    queryClient.setQueryData(['thread', T, 'waits'], { bots: [], version: 0 });
+    const view = { session: 'bot:qa' } as const;
+    queryClient.setQueryData(['thread', T, 'timeline', view], { pages: [{ messages: [], next_cursor: null }], pageParams: [null] });
+    render(<Conversation id={T} variant="task" view={view} task={{ id: 'k1' }} />, { wrapper });
+    expect(live()).toContain('Fixing the header');
+    const posted = msg(3, 'bot:qa', 'Fixed the header.', { refs: { by_run: 'r5', turn_id: 'r0' } });
+    emit('messages', [{ id: posted.id, conversation_id: T, message: posted }]);
+    expect(live()).toBeNull();
+  });
+
+  it('tells a screen reader the agent got the message, and how its run ended', () => {
+    show();
+    const said = () => screen.queryAllByRole('status').map((e) => e.textContent);
+    waiting(wait('up_next', 'm2'));
+    expect(said()).toContain('QA Owner got your message');
+    waiting(wait('no_reply', 'm2'));
+    expect(said()).toContain('QA Owner finished without replying');
+  });
+
   it('never gives a queued @mention the agent run on something else: the comment shows it got it, not that work', () => {
     const view = { comments: true } as const;
     const ask = msg(3, ME, '@qa-owner can you check this?');

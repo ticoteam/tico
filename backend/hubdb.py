@@ -2260,10 +2260,11 @@ def _write_message(
         if held:
             refs = {**refs, "quiet": True, wake_rules.MARK: held}
     run = RUN.get()
-    if run and is_bot(actor) and not (refs or {}).get("turn_id"):
+    if run and is_bot(actor):
         found = conn.execute("SELECT bot_id FROM attempts WHERE id=?", (run,)).fetchone()
         if found and "bot:" + str(found[0]) == actor:
-            # A run's own post (a tool call): the chat's status reads it as the run's answer (thread_bot_status).
+            # A run's own post (a tool call): the chat's status reads it as the run's answer (thread_bot_status), this
+            # run's whatever `turn_id` the caller wrote.
             refs = {**(refs or {}), "by_run": run}
     row = {
         "id": new_id(),

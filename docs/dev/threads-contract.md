@@ -550,9 +550,10 @@ newest first, so a chat that draws a bot's first row says the latest:
   `detail` "" and `since` the wake's time. On purpose: the person whose message woke the bot is told it is working on
   it and how that ended (`replied`, `no_reply`, `stopped`), with no run id, step or time when the run itself is not
   theirs to read.
-- `replied`: the run that took it posted after it in the root, as the run's own bot: its reply (`refs.turn_id`) or a
-  tool post it made (`refs.by_run`, stamped from the run's own token by `hubdb._write_message`, which drops a caller's
-  `by_run` before the wake rules read the refs), while the run goes or for a minute after. A later post of the bot's
+- `replied`: the run that took it posted after it in the root, as the run's own bot, in a message the reader reads:
+  its reply (`refs.turn_id`) or a tool post it made (`refs.by_run`, stamped from the run's own token by
+  `hubdb._write_message`, which drops a caller's `by_run` before the wake rules read the refs; it names the post's run
+  whatever `turn_id` the caller wrote), while the run goes or for a minute after. A later post of the bot's
   that no run of this wake made, or another bot's post naming the run, changes nothing. A wake whose job is queued
   again is `up_next`, whatever an earlier run of it posted.
 - `no_reply` / `stopped`: its run ended (completed / failed, stopped or lost) with no such post: kept a minute.

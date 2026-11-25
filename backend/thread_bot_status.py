@@ -101,14 +101,14 @@ _WAKES_SQL = (
     "(SELECT i.attempt_id FROM attempt_inputs i WHERE i.message_id=d.message_id)) AND 'bot:'||a.bot_id=d.recipient "
     "WHERE d.id IN (SELECT id FROM picked) ORDER BY d.created_at"
 )
-# The newest post of each of these runs in the root by the run's own bot: its reply or a tool post it made. Another
-# bot's post naming the run is not its answer.
+# Each post of these runs in the root by the run's own bot: its reply or a tool post it made. The run a run-token
+# post names is its own (`by_run`, which the server stamps), whatever `turn_id` its caller wrote; another bot's post
+# naming the run is not its answer.
 _REPLIES_SQL = (
-    "SELECT run, MAX(seq) FROM (SELECT COALESCE(json_extract(refs,'$.turn_id'), json_extract(refs,'$.by_run')) AS run, "
-    "seq, sender_id FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE id=?1 OR root_id=?1) "
+    "SELECT run, id FROM (SELECT COALESCE(json_extract(refs,'$.by_run'), json_extract(refs,'$.turn_id')) AS run, "
+    "id, sender_id FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE id=?1 OR root_id=?1) "
     "AND seq>?2 AND sender_id LIKE 'bot:%' AND deleted_at IS NULL) p "
-    "WHERE run IN (SELECT value FROM json_each(?3)) AND sender_id=(SELECT 'bot:'||bot_id FROM attempts WHERE id=p.run) "
-    "GROUP BY run"
+    "WHERE run IN (SELECT value FROM json_each(?3)) AND sender_id=(SELECT 'bot:'||bot_id FROM attempts WHERE id=p.run)"
 )
 # The root's newest `bot_status` change, the newest of its time first (the partial index changes_bot_status walked
 # back one step), its seq the read's version.
@@ -191,7 +191,7 @@ def candidates(c, v, root_id):
     while none has). The viewer's check comes first: no wake `v` cannot read is counted or limited."""
     since = H.shift(H.now(), seconds=-ENDED_S)
     rows = [dict(r) for r in c.execute(_WAKES_SQL, (root_id, since))]
-    seqs = _readable_wakes(c, v, [r["message_id"] for r in rows])
+    seqs = _readable(c, v, [r["message_id"] for r in rows])
     # Two wakes of the same instant keep the order of their messages: `status` says the newest ending first, and a
     # chat draws an agent's first row.
     rows = sorted(
@@ -201,7 +201,12 @@ def candidates(c, v, root_id):
     replies = {}
     if runs:
         first = min(seqs[r["message_id"]] for r in rows if r["run"])
-        replies = dict(c.execute(_REPLIES_SQL, (root_id, first, json.dumps(runs))).fetchall())
+        posts = c.execute(_REPLIES_SQL, (root_id, first, json.dumps(runs))).fetchall()
+        # only a reply the viewer reads answers the wake for them (a post in a sub-thread hidden from them does not)
+        shown = _readable(c, v, [mid for _, mid in posts])
+        for run, mid in posts:
+            if mid in shown:
+                replies[run] = max(replies.get(run, 0), shown[mid])
     out = []
     for r in rows:
         run, seq = r["run"], seqs[r["message_id"]]
@@ -227,15 +232,16 @@ def candidates(c, v, root_id):
     return out
 
 
-def _readable_wakes(c, v, ids):
-    """{message id: seq} for the waking messages, of `ids`, that viewer `v` reads: read in one query however many,
-    each checked as a timeline checks it."""
+def _readable(c, v, ids):
+    """{message id: seq} for the messages, of `ids`, that viewer `v` reads: read in one query however many, each
+    checked as a timeline checks it."""
     from . import threads
 
     ids = sorted({i for i in ids if i})
     out = {}
     if not ids:
         return out
+    H.prime_messages(c, ids)  # the restricted checks look each message up again: one read for all of them
     for row in c.execute("SELECT * FROM messages WHERE id IN (SELECT value FROM json_each(?))", (json.dumps(ids),)):
         message = {**dict(row), "refs": H._json(row["refs"], {}) or {}}
         if threads.message_readable(c, v, message):

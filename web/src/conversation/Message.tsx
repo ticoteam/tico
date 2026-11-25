@@ -448,7 +448,7 @@ function doingWords(r: LiveRun): string {
 }
 
 /** A reply being written: its text so far, or what it is doing, with the typing dots; from the moment the agent got
-    the message (`doing: 'wait'`). Heard once, when posted. */
+    the message (`doing: 'wait'`). Heard once, when posted; a screen reader is told only that the agent got it. */
 export function LiveRow({ r, variant, text }: { r: LiveRun; variant: Variant; text: string }) {
   const who = whoOf({ sender_id: r.bot }, variant, undefined, useActor(r.bot)?.name);
   const dots = (
@@ -459,15 +459,20 @@ export function LiveRow({ r, variant, text }: { r: LiveRun; variant: Variant; te
     </span>
   );
   return (
-    <div className={['msg', 'is-live'].filter(Boolean).join(' ')} aria-hidden="true">
-      <Face who={who} size={22} live />
-      <div className="msg-main">
-        <div className="msg-meta">
-          <b>{who.name}</b>
+    <>
+      <div className={['msg', 'is-live'].filter(Boolean).join(' ')} aria-hidden="true">
+        <Face who={who} size={22} live />
+        <div className="msg-main">
+          <div className="msg-meta">
+            <b>{who.name}</b>
+          </div>
+          {text ? <Markdown text={text} compact streaming tail={r.ended ? null : dots} /> : <p>{doingWords(r)}{dots}</p>}
         </div>
-        {text ? <Markdown text={text} compact streaming tail={r.ended ? null : dots} /> : <p>{doingWords(r)}{dots}</p>}
       </div>
-    </div>
+      <span className="sr-only" role="status">
+        {r.doing === 'wait' && !text ? `${who.name} got your message` : ''}
+      </span>
+    </>
   );
 }
 
@@ -476,7 +481,7 @@ export function LiveRow({ r, variant, text }: { r: LiveRun; variant: Variant; te
 export function ReplyLine({ bot, name, variant, why, detail }: { bot: string; name?: string; variant: Variant; why: 'none' | 'failed' | 'stuck'; detail?: string }) {
   // the server's name for it, where this page has not read the agent
   const who = whoOf({ sender_id: bot }, variant, undefined, useActor(bot)?.name ?? (name || undefined));
-  if (why === 'stuck') return <DidLine text={detail ? `${who.name} can't reply. ${detail}` : `${who.name} can't reply`} fault />;
-  if (why === 'failed') return <DidLine text={`${who.name} stopped before replying`} fault />;
-  return <DidLine text={`${who.name} finished without replying`} face={<Face who={who} size={22} />} />;
+  if (why === 'stuck') return <DidLine text={detail ? `${who.name} can't reply. ${detail}` : `${who.name} can't reply`} fault status />;
+  if (why === 'failed') return <DidLine text={`${who.name} stopped before replying`} fault status />;
+  return <DidLine text={`${who.name} finished without replying`} face={<Face who={who} size={22} />} status />;
 }

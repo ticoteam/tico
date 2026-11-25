@@ -679,3 +679,5 @@ time{font-size:var(--t-xs);color:var(--muted);white-space:nowrap;font-variant-nu
   .toasts{bottom:84px}
   .toast{height:48px;border-radius:14px}
 }
+/* words for a screen reader only: kept in the page, drawn nowhere */
+.sr-only{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}

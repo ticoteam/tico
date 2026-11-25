@@ -503,8 +503,9 @@ export function installConversationLive(): void {
       const cid = e.conversation_id ?? e.thread_id;
       if (cid) stir(cid, (a) => ({ ...a, messages: a.messages + 1 }));
       if (!m || !cid) continue;
-      // The posted reply takes its live row's place in the same frame.
-      const turn = m.refs?.turn_id;
+      // The posted reply takes its live row's place in the same frame: a run's reply, or a post it made with a tool
+      // (its run in `by_run`, which wins over a `turn_id` its caller wrote, as the server reads them).
+      const turn = m.refs?.by_run || m.refs?.turn_id;
       if (turn) for (const id of new Set([cid, m.thread_id, m.conversation_id])) if (id) setRuns(id, (runs) => (runs.some((r) => r.run === turn) ? runs.filter((r) => r.run !== turn) : runs));
       // My own message echoed before its POST answered: the pending row gives way now, so it never shows twice.
       if (me && m.sender_id === me) {

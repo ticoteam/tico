@@ -279,6 +279,44 @@ def test_another_bots_post_naming_a_run_is_not_that_runs_answer(api):
     assert (row["state"], row["run_id"], row["message_id"]) == ("working", attempt["id"], asked["id"])
 
 
+def test_a_run_token_post_naming_another_run_of_its_bot_answers_only_its_own_run(api):
+    machine = machine_for(api)
+    first = new_thread(api)
+    asked = say(api, first["id"], "@ops can you check this?")
+    earlier = claim(api, machine)
+    end_run(api, machine, earlier)
+    other = new_thread(api, title="Elsewhere")
+    say(api, other["id"], "@ops and this one?")
+    later = claim(api, machine)
+    reset = H.RUN.set(later["id"])
+    try:  # the later run's tool post, its caller naming the earlier run
+        made = bot_post(api, "bot:ops", first["id"], "See the other thread.", refs={"turn_id": earlier["id"]})
+    finally:
+        H.RUN.reset(reset)
+    assert H._json(row_of(api, made["id"])["refs"], {})["by_run"] == later["id"]
+    [row] = bot_status(api, first["id"])
+    assert (row["state"], row["message_id"]) == ("no_reply", asked["id"])
+
+
+def test_a_reply_the_reader_cannot_read_does_not_answer_the_wake_for_them(api, monkeypatch):
+    machine = machine_for(api)
+    thread = new_thread(api)
+    asked = say(api, thread["id"], "@ops can you check this?")
+    attempt = claim(api, machine)
+    reply = run_post(api, attempt, "bot:ops", thread["id"], "Checked: the salary numbers are fine.")
+    real = threads.message_readable
+    monkeypatch.setattr(
+        threads,
+        "message_readable",
+        lambda c, v, m, **kw: (
+            m.get("id") != reply["id"] if getattr(v, "actor", "") == "human:ben" else real(c, v, m, **kw)
+        ),
+    )
+    assert bot_status(api, thread["id"])[0]["state"] == "replied"
+    [row] = bot_status(api, thread["id"], "ben-test")
+    assert (row["state"], row["message_id"]) == ("working", asked["id"])
+
+
 def test_a_wake_whose_job_is_queued_again_waits_whatever_its_last_run_posted(api):
     machine = machine_for(api)
     thread = new_thread(api)
