@@ -94,8 +94,8 @@ pub struct Stderr(
     Arc<std::sync::atomic::AtomicBool>,
     Arc<tokio::sync::Notify>,
     Arc<tokio::sync::Notify>,
-    /// Set by `clear`: the line being read when it came is dropped too.
-    Arc<std::sync::atomic::AtomicBool>,
+    /// The redactors of the attempts the process has run for (`lend`).
+    Arc<Mutex<Vec<Arc<Redactor>>>>,
 );
 
 impl Stderr {
@@ -134,22 +134,14 @@ impl Stderr {
                         _ = kept.3.notified() => Ok(0),
                     }} => {
                         let n = read.unwrap_or(0);
-                        // Held for the whole chunk: a `clear_then` comes before it or after it, never inside.
-                        let mut lines = kept.0.lock().unwrap();
-                        if kept.4.swap(false, std::sync::atomic::Ordering::SeqCst) {
-                            pending.clear();
-                            oversized = false;
-                            dirty = false;
-                        }
                         if n == 0 {
                             if !pending.is_empty() || oversized {
-                                keep_line(&mut lines, if oversized { "[oversized stderr line omitted]".into() } else {
-                                    safe(&String::from_utf8_lossy(&scrub.scrub_bytes(&pending)), &scrub)
+                                kept.push(if oversized { "[oversized stderr line omitted]".into() } else {
+                                    kept.scrubbed(&pending, &scrub)
                                 });
                                 dirty = true;
                             }
-                            if dirty { send_tail(&lines, &send); }
-                            drop(lines);
+                            if dirty { send(json!({"kind": "diagnostic", "stderr_tail": kept.tail()})); }
                             kept.1.store(true, std::sync::atomic::Ordering::SeqCst);
                             kept.2.notify_one();
                             break;
@@ -157,9 +149,9 @@ impl Stderr {
                         for b in &buf[..n] {
                             if *b == b'\n' {
                                 let line = if oversized { "[oversized stderr line omitted]".into() } else {
-                                    safe(&String::from_utf8_lossy(&scrub.scrub_bytes(&pending)), &scrub)
+                                    kept.scrubbed(&pending, &scrub)
                                 };
-                                keep_line(&mut lines, line);
+                                kept.push(line);
                                 pending.clear();
                                 oversized = false;
                                 dirty = true;
@@ -168,14 +160,8 @@ impl Stderr {
                         }
                     }
                     _ = tick.tick() => {
-                        let lines = kept.0.lock().unwrap();
-                        if kept.4.swap(false, std::sync::atomic::Ordering::SeqCst) {
-                            pending.clear();
-                            oversized = false;
-                            dirty = false;
-                        }
                         if dirty {
-                            send_tail(&lines, &send);
+                            send(json!({"kind": "diagnostic", "stderr_tail": kept.tail()}));
                             dirty = false;
                         }
                     }
@@ -185,9 +171,34 @@ impl Stderr {
         tail
     }
 
-    #[cfg(test)]
+    /// `line` with the process's own secrets (`scrub`, its environment's) and every lent attempt's taken out.
+    fn scrubbed(&self, line: &[u8], scrub: &Redactor) -> String {
+        let mut text = String::from_utf8_lossy(&scrub.scrub_bytes(line)).into_owned();
+        for lent in self.4.lock().unwrap().iter() {
+            text = lent.scrub_text(&text).into_owned();
+        }
+        safe(&text, scrub)
+    }
+
+    /// The process runs for an attempt whose secrets `redactor` holds, those added later too: what it says from now on
+    /// is scrubbed of them as long as it lives. A process kept between turns gathers every turn's, so its stderr is
+    /// safe in whichever turn's tail it lands.
+    pub fn lend(&self, redactor: Option<Arc<Redactor>>) {
+        let Some(redactor) = redactor else {
+            return;
+        };
+        let mut lent = self.4.lock().unwrap();
+        if !lent.iter().any(|r| Arc::ptr_eq(r, &redactor)) {
+            lent.push(redactor);
+        }
+    }
+
     fn push(&self, line: String) {
-        keep_line(&mut self.0.lock().unwrap(), line);
+        let mut lines = self.0.lock().unwrap();
+        lines.push_back(line);
+        while lines.len() > LINES || lines.iter().map(|l| l.len() + 1).sum::<usize>() > BYTES {
+            lines.pop_front();
+        }
     }
 
     /// A reaped process may have unread stderr in its pipe. Background children can keep it open, so bound the drain.
@@ -206,16 +217,7 @@ impl Stderr {
 
     /// Forget what a process kept between turns said in an earlier turn, so a failure carries only its own turn's.
     pub fn clear(&self) {
-        self.clear_then(|| {});
-    }
-
-    /// Forget what a process kept between turns said in an earlier turn, a line it left unfinished too, and then
-    /// `attach` where it says from now on, in one step: a failure carries only its own turn's.
-    pub fn clear_then(&self, attach: impl FnOnce()) {
-        let mut lines = self.0.lock().unwrap();
-        self.4.store(true, std::sync::atomic::Ordering::SeqCst);
-        lines.clear();
-        attach();
+        self.0.lock().unwrap().clear();
     }
 
     pub fn tail(&self) -> String {
@@ -226,23 +228,6 @@ impl Stderr {
             .cloned()
             .collect::<Vec<_>>()
             .join("\n")
-    }
-}
-
-fn keep_line(lines: &mut VecDeque<String>, line: String) {
-    lines.push_back(line);
-    while lines.len() > LINES || lines.iter().map(|l| l.len() + 1).sum::<usize>() > BYTES {
-        lines.pop_front();
-    }
-}
-
-/// The tail, sent with its lines held, so no `Stderr::clear_then` comes between reading and sending it. Nothing once
-/// cleared.
-fn send_tail(lines: &VecDeque<String>, send: &impl Fn(serde_json::Value)) {
-    if !lines.is_empty() {
-        send(
-            json!({"kind": "diagnostic", "stderr_tail": lines.iter().cloned().collect::<Vec<_>>().join("\n")}),
-        );
     }
 }
 
@@ -365,5 +350,39 @@ mod tests {
         assert!(ev["stderr_tail"].as_str().unwrap().contains("failure"));
         assert!(!tail.tail().contains("abcdefghijklmnop"));
         assert_eq!(code, -15);
+    }
+
+    /// A process kept between turns says one turn's secrets while running for the next: every attempt's redactor lent
+    /// to it, a secret added to one after it was lent too, scrubs its stderr for as long as it lives.
+    #[tokio::test]
+    async fn a_kept_processs_stderr_is_scrubbed_of_every_attempts_secrets_it_was_lent() {
+        use tokio::io::AsyncWriteExt;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut child = tokio::process::Command::new("sh")
+            .args(["-c", "while read l; do echo \"said $l\" >&2; done"])
+            .stdin(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let tail = Stderr::capture(&mut child, tx, &crate::env::Env::new());
+        let first = Arc::new(Redactor::new(&["synthetic-first-turn".to_string()]));
+        let second = Arc::new(Redactor::new(&["synthetic-second-turn".to_string()]));
+        tail.lend(Some(first.clone()));
+        tail.lend(Some(second));
+        first.add(&["synthetic-added-later".to_string()]);
+        let mut stdin = child.stdin.take().unwrap();
+        stdin
+            .write_all(b"synthetic-first-turn\nsynthetic-second-turn\nsynthetic-added-later\n")
+            .await
+            .unwrap();
+        drop(stdin);
+        child.wait().await.unwrap();
+        tail.drained().await;
+        let mut shown = tail.tail();
+        while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await {
+            shown.push_str(ev["stderr_tail"].as_str().unwrap_or_default());
+        }
+        assert_eq!(tail.tail().lines().count(), 3, "{shown:?}");
+        assert!(!shown.contains("synthetic-"), "{shown:?}");
     }
 }

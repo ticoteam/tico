@@ -150,11 +150,13 @@ and completes every message; only the process is reused. The app-server reads `H
 after 2 minutes unused (up to 4 hours while a tool call or subagent a turn started still runs), when it exits, when the
 runner stops, or when the next turn would start it differently: another model, environment, folder, MCP servers, config,
 plan or sign-in (a new login revision too). Each turn's company skills are given to it as that turn resumes. A kept
-process found gone at any point before the next turn's prompt went to it is dropped, and that turn goes on as a cold
-one in a process of its own, which resumes the thread and sends its prompt once. A ChatGPT plan's home made for the turn
-the process started in stays while the process does and goes with it; a login Codex refreshes there during a later turn
-goes back to the hub at that turn's revision. A tool call or subagent stays background work until it ends itself, and a
-subagent's calls are its starting turn's. Never kept: a fresh
+process that has exited when the next turn would take it is dropped, and that turn starts cold: a process of its own
+resumes the thread. One that dies after the turn took it is that turn's crash, as a turn's own process dying would be;
+nothing is sent again. A ChatGPT plan's home made for the turn the process started in stays while the process does and
+goes with it; a login Codex refreshes there during a later turn goes back to the hub at that turn's revision. A tool
+call or subagent stays background work until it ends itself, and a subagent's calls are the turn's that spawned it. Its
+stderr is the process's: a line may land in a later turn's diagnostics, scrubbed of every secret lent to the process
+while it lives. Never kept: a fresh
 stateless chat, a relationship or one-off thread, a voice call, a Model exit or Gateway relay, a leased turn user, a
 fallback's turn, a process on a plan's home its turns share (a legacy `codex_login` file), or one whose MCP server
 header names `HUB_TOKEN` (the token would sit in its config).

@@ -6,9 +6,11 @@
 //! thread here, since a bot's environment, folder and plan are its own): its next turn is the next `turn/start` on the
 //! live thread, with no `thread/resume`. It reads HUB_TOKEN from a token file of its own (crate::warm), blanked while it
 //! is kept. The turn's settings decide whether it will do (`take_kept`): a process started any other way (`fingerprint`)
-//! or signed in otherwise (`signed_in`) starts the turn cold, and one found gone before the turn's prompt went to it
-//! leaves the turn to the host it made, which resumes the thread as before (execute.rs `go_cold`). What
-//! it says while kept goes nowhere; its tool calls and subagents still running hold it (crate::keeper::MAX_PIN).
+//! or signed in otherwise (`signed_in`) starts the turn cold, as does one that has exited (`Kept::alive`); one that
+//! dies after its turn took it is that turn's crash. What it says while kept goes nowhere; its tool calls and subagents
+//! still running hold it (crate::keeper::MAX_PIN), each until it ends itself. Its stderr is the process's, not a
+//! turn's: a line an earlier turn caused may land in a later turn's diagnostics, the same thread and bot's, and is
+//! scrubbed of every secret lent to the process while it lives (run_diagnostics::Stderr::lend).
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -314,6 +316,8 @@ struct Shared {
     next_id: AtomicI64,
     alive: AtomicBool,
     child: Mutex<Option<(super::Stopper, Arc<AtomicBool>)>>,
+    /// The process has exited, set as soon as it is reaped, before its output has drained (`exited`).
+    exited: Mutex<Arc<AtomicBool>>,
     /// Confirms a successful wait even if the caller that started the stop was cancelled.
     reaped: Mutex<Option<tokio::sync::watch::Receiver<bool>>>,
     /// The current app-server, swept before replacing it or ending the attempt.
@@ -323,8 +327,8 @@ struct Shared {
     active_turn: Mutex<HashMap<String, String>>,
     done_turns: Mutex<HashSet<String>>,
     token_seen: Mutex<HashMap<String, [i64; 3]>>,
-    /// A subagent's thread to the thread that started it and the turn it started in: its tool calls are reported on
-    /// that turn, whichever turn of the parent's runs when they come.
+    /// A subagent's thread to the thread that started it and the turn it started in, set once when first seen: its tool
+    /// calls are reported on that turn, whichever turn of the parent's runs when they come.
     children: Mutex<HashMap<String, (String, Option<String>)>>,
     /// Tool events already sent, by item id and status: a start or end is reported once.
     tools_sent: Mutex<HashSet<String>>,
@@ -368,6 +372,7 @@ impl CodexHost {
             next_id: AtomicI64::new(0),
             alive: AtomicBool::new(false),
             child: Mutex::new(None),
+            exited: Mutex::new(Arc::new(AtomicBool::new(false))),
             reaped: Mutex::new(None),
             sweep: Mutex::new(None),
             sweep_redactor: Mutex::new(None),
@@ -542,9 +547,10 @@ impl CodexHost {
     /// The turn's settings are known: this host notes what its process would start with (`fingerprint`, and the
     /// sign-in it would start on), and takes the process the keeper holds for `previous` when that one was started the
     /// same way and still runs, to go on in place of this host (Host::warm), with this attempt's events, capture,
-    /// masking and admission, and stderr afresh. A kept process gets the turn's token only once the hub has started the
-    /// turn (`lend_started`); its own process, not yet started, has it now. None: this host starts its own. This host
-    /// stays ready to start for the turn should the kept one be gone before the turn's prompt went to it (execute.rs).
+    /// masking and admission. A kept process gets the turn's token only once the hub has started the turn
+    /// (`lend_started`); its own process, not yet started, has it now. None: this host starts its own, the thread
+    /// resumed in it as any cold turn's; a kept one that has exited is never taken (`Kept::alive`). One that dies after
+    /// it was taken is that turn's crash, as its own process's would be.
     pub(crate) async fn take_kept(
         &self,
         previous: Option<&str>,
@@ -561,16 +567,16 @@ impl CodexHost {
         self.0.holds_token.store(holds_token, Ordering::SeqCst);
         let mut kept = keeper.take::<Kept>(previous?, &key, "").await?;
         let host = kept.0.take()?;
-        // What it printed before goes nowhere; from now on, to this attempt. One step, so nothing earlier lands here.
-        let tx = self.0.tx.lock().unwrap().clone();
-        let stderr = host.0.stderr.lock().unwrap().clone();
-        let attach = || *host.0.tx.lock().unwrap() = tx;
-        match stderr {
-            Some(stderr) => stderr.clear_then(attach),
-            None => attach(),
+        // What it says from now on goes to this attempt. Its stderr is the process's, not a turn's: scrubbed of every
+        // attempt's secrets it was lent (run_diagnostics::Stderr::lend), so an earlier turn's line in this one's is
+        // still clean, and of this thread and bot.
+        *host.0.tx.lock().unwrap() = self.0.tx.lock().unwrap().clone();
+        let redactor = self.0.sweep_redactor.lock().unwrap().clone();
+        if let Some(stderr) = host.0.stderr.lock().unwrap().as_ref() {
+            stderr.lend(redactor.clone());
         }
         *host.0.capture.lock().unwrap() = self.capture();
-        *host.0.sweep_redactor.lock().unwrap() = self.0.sweep_redactor.lock().unwrap().clone();
+        *host.0.sweep_redactor.lock().unwrap() = redactor;
         host.0.holds_token.store(holds_token, Ordering::SeqCst);
         let turn = self.0.allocation.0.lock().unwrap().turn.clone();
         if let Some(turn) = turn {
@@ -599,7 +605,7 @@ impl CodexHost {
             .filter(|home| crate::model_subscriptions::turn_only(home))
     }
 
-    /// Kill the process now and wait until it has gone (`alive`).
+    /// Kill the process now and wait until it has gone and its output has drained (`alive`).
     #[cfg(test)]
     pub(crate) async fn die(&self) {
         let stopper = self
@@ -773,6 +779,7 @@ impl CodexHost {
             move |value| sink.emit(value),
             &self.0.env,
         );
+        _stderr.lend(self.0.sweep_redactor.lock().unwrap().clone());
         *self.0.stderr.lock().unwrap() = Some(_stderr.clone());
         let stdout = child
             .stdout
@@ -795,8 +802,10 @@ impl CodexHost {
         #[cfg(not(target_os = "macos"))]
         let before_reap = None::<fn()>;
         let (stopper, exited) = super::own_with_before_reap(child, before_reap);
-        // `exited` resolves once; whether it has is kept here for `alive`.
+        // `exited` resolves once; whether it has is kept here for `exited`, and once its output has drained for `alive`.
         let gone = Arc::new(AtomicBool::new(false));
+        let reaped_now = Arc::new(AtomicBool::new(false));
+        *self.0.exited.lock().unwrap() = reaped_now.clone();
         let (reaped_tx, reaped_rx) = tokio::sync::watch::channel(false);
         *self.0.reaped.lock().unwrap() = Some(reaped_rx);
         *self.0.child.lock().unwrap() = Some((stopper, gone.clone()));
@@ -826,8 +835,7 @@ impl CodexHost {
             let status = exited
                 .await
                 .unwrap_or_else(|_| Err(std::io::Error::other("codex app-server reaper ended")));
-            // Gone now, whatever still holds its output open (`alive`).
-            gone.store(true, Ordering::SeqCst);
+            reaped_now.store(true, Ordering::SeqCst);
             _stderr.drained().await;
             // Drain final usage/completion, then detach the old reader if a tool inherited the pipe.
             if tokio::time::timeout(Duration::from_millis(100), &mut reader)
@@ -843,6 +851,7 @@ impl CodexHost {
             }
             let code = super::return_code(&status);
             host.emit(json!({"kind": "error", "error": crate::run_diagnostics::process_reason(code, &_stderr.tail()), "exit_code": code, "process_exit": true}));
+            gone.store(true, Ordering::SeqCst);
             host.0.ended.send_replace(true);
             if status.is_ok() {
                 let _ = reaped_tx.send(true);
@@ -915,6 +924,9 @@ impl CodexHost {
     }
 
     pub(super) fn set_attempt(&self, redactor: Option<Arc<Redactor>>) {
+        if let Some(stderr) = self.0.stderr.lock().unwrap().as_ref() {
+            stderr.lend(redactor.clone());
+        }
         *self.0.sweep_redactor.lock().unwrap() = redactor;
         self.prepare_sweep();
     }
@@ -971,6 +983,12 @@ impl CodexHost {
 
     pub fn track_allocation(&self, turn: std::sync::Arc<std::sync::atomic::AtomicBool>) {
         self.0.allocation.track(turn);
+    }
+
+    /// The process has exited, though what it wrote last may still be read (`alive` stays true until it has been):
+    /// the keeper takes no process that has.
+    fn exited(&self) -> bool {
+        self.0.exited.lock().unwrap().load(Ordering::SeqCst)
     }
 
     pub fn alive(&self) -> bool {
@@ -1117,7 +1135,7 @@ impl CodexHost {
                         let turn = self.0.active_turn.lock().unwrap().get(parent).cloned();
                         (parent.to_string(), turn)
                     });
-                    children.insert(child, root);
+                    children.entry(child).or_insert(root);
                 }
             }
             "turn/started" => {
@@ -1359,13 +1377,16 @@ impl CodexHost {
             Some(thread.as_str()).filter(|t| !t.is_empty()),
             turn.as_deref(),
         );
+        // A subagent is the turn's that spawned it, set once: a later turn waiting on it or messaging it (its
+        // `receiverThreadIds`) does not make it that turn's.
         let mut adopt = |child: &str| {
             if !child.is_empty() && child != thread {
                 self.0
                     .children
                     .lock()
                     .unwrap()
-                    .insert(child.to_string(), (thread.clone(), turn.clone()));
+                    .entry(child.to_string())
+                    .or_insert_with(|| (thread.clone(), turn.clone()));
             }
         };
         if kind == "collabAgentToolCall" {
@@ -1660,8 +1681,8 @@ impl CodexHost {
         settings: &Settings,
     ) -> Result<String, HostError> {
         // A kept process (`take_kept`) has the thread loaded, started as this turn would start it: its next turn goes
-        // straight in, told only this turn's company skills. One found gone is never started again: the turn goes on
-        // in the host it made for itself (execute.rs).
+        // straight in, told only this turn's company skills. One gone since is never started again: the turn ends as a
+        // crash would.
         self.set_skill_roots(settings).await;
         if self.warm() && self.0.confirmed.lock().unwrap().contains(thread_id) {
             return Ok(thread_id.to_string());
@@ -1999,7 +2020,9 @@ struct Kept(Option<CodexHost>);
 
 impl Session for Kept {
     fn alive(&self) -> bool {
-        self.0.as_ref().is_some_and(CodexHost::alive)
+        self.0
+            .as_ref()
+            .is_some_and(|host| host.alive() && !host.exited())
     }
 
     fn lend(&self, token: &str) -> bool {
@@ -3202,6 +3225,47 @@ for line in sys.stdin:
         }
         assert_eq!(tools.len(), 1, "{tools:?}");
         assert_eq!(tools[0]["turn_id"], "t1");
+    }
+
+    /// A later turn that waits on an earlier turn's subagent (`receiverThreadIds`) before its tool ends does not take
+    /// it over: the tool, and its failure, stay the earlier turn's.
+    #[tokio::test]
+    async fn a_later_turn_waiting_on_an_earlier_turns_subagent_leaves_its_tool_on_the_earlier_turn()
+    {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let host = CodexHost::on_home(Env::new(), tx, None);
+        let turn = |method: &str, id: &str| json!({"method": method, "params": {"threadId": "th", "turn": {"id": id, "status": "completed"}}});
+        let tool = |method: &str, status: &str| {
+            json!({"method": method, "params": {"threadId": "sub", "turnId": "s1", "item": {"type": "commandExecution",
+                "id": "c1", "command": "make test", "status": status, "exitCode": 2, "aggregatedOutput": "boom"}}})
+        };
+        host.on_message(turn("turn/started", "t1")).await;
+        host.on_message(json!({"method": "thread/started",
+            "params": {"thread": {"id": "sub", "parentThreadId": "th"}}}))
+            .await;
+        host.on_message(tool("item/started", "inProgress")).await;
+        host.on_message(turn("turn/completed", "t1")).await;
+        host.on_message(turn("turn/started", "t2")).await;
+        host.on_message(json!({"method": "item/started", "params": {"threadId": "th", "turnId": "t2",
+            "item": {"type": "collabAgentToolCall", "id": "w1", "tool": "wait", "status": "inProgress",
+                     "receiverThreadIds": ["sub"]}}}))
+            .await;
+        host.on_message(tool("item/completed", "failed")).await;
+        let mut on = vec![];
+        while let Ok(event) = rx.try_recv() {
+            if event["item_id"] == "c1" || event["failed_tool"]["item_id"] == "c1" {
+                on.push((text_of(&event["kind"]), text_of(&event["turn_id"])));
+            }
+        }
+        assert!(!on.is_empty());
+        assert!(
+            on.iter().all(|(kind, turn)| kind != "tool" || turn == "t1"),
+            "{on:?}"
+        );
+        assert!(
+            on.iter().all(|(kind, _)| kind == "tool"),
+            "no failure kept for t2: {on:?}"
+        );
     }
 
     /// A call an earlier turn started that fails while a later one runs is not kept as the later turn's failure.
