@@ -3,7 +3,7 @@
 // and clicks through the app's build as a person does. A journey fails on any page error, console error or API refusal
 // it did not expect. What a click wrote is read back from the server (/_e2e/sql, /_e2e/sent: only that test server has
 // them). Run: `npm run e2e` (builds first), `npm run e2e:repeat` (each journey three times).
-import { expect, test as base, type Browser, type BrowserContextOptions, type Page } from '@playwright/test';
+import { expect, test as base, type Browser, type BrowserContextOptions, type Locator, type Page } from '@playwright/test';
 import { startSeeded, type Seeded } from './hub/seeded.ts';
 
 const DESKTOP: BrowserContextOptions = { viewport: { width: 1440, height: 900 } };
@@ -81,6 +81,12 @@ const layers = (page: Page) => page.locator('.vw');
 /** The address's search, as the app wrote it. */
 const searchOf = (page: Page) => Object.fromEntries(new URL(page.url()).searchParams);
 const sql = <T = Record<string, unknown>>(hub: Seeded, query: string) => call<T[]>(hub, `/_e2e/sql?q=${encodeURIComponent(query)}`);
+
+/** Each of a list's `n` previews drawn: its picture or poster read and decoded, never a grey tile. */
+const shown = (list: Locator, n: number) =>
+  expect
+    .poll(() => list.locator('img').evaluateAll((imgs) => imgs.map((i) => (i as HTMLImageElement).complete && (i as HTMLImageElement).naturalWidth > 0)))
+    .toEqual(Array(n).fill(true));
 
 /** Whether the page head's title shows every letter (its words fit its box). */
 const titleWhole = (page: Page) =>
@@ -232,6 +238,7 @@ test("an agent's newest pictures and videos lead its sidebar and its task; each 
   await expect(recent.getByRole('button')).toHaveCount(3);
   await expect(recent.locator('.thumb.is-video img')).toHaveAttribute('src', /\/poster\?v=1$/);
   await expect(recent.getByRole('link', { name: made.title })).toHaveCount(3);
+  await shown(recent, 3);
   await page.screenshot({ path: test.info().outputPath('made-recently-1440.png') });
   // a picture opens in the viewer over the page
   await recent.getByRole('button', { name: /beach.close/i }).click();
@@ -246,6 +253,7 @@ test("an agent's newest pictures and videos lead its sidebar and its task; each 
   const strip = over.locator('[data-target="task-media"]').getByRole('list', { name: 'Pictures and videos' });
   await expect(strip.getByRole('button')).toHaveCount(3);
   await expect(over.locator('.tv-view > *').first()).toHaveAttribute('data-target', 'task-media');
+  await shown(strip, 3);
   await page.screenshot({ path: test.info().outputPath('made-task-1440.png') });
   // the video opens one layer up, on the tab the task was on
   const tab = searchOf(page)['task.tab'];
