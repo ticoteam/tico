@@ -667,7 +667,9 @@ def _page_fields(args):
         "spec": {"type": "boolean", "description": "A visual spec for the Product roadmap card in task"},
         "app": _s(
             "Make this version an app that reads Tico as its viewer through window.tico: reads=tasks,files,pages,kpis,"
-            "contacts,store (what it needs). Each version declares its own; leave it out and the version is no app"
+            "contacts,store (what it needs). Add writes=comment,task,move,tag,meta for tico.act (each one the viewer "
+            "confirms) and store:<collection> for rows viewers write without a confirm. Each version declares its own; "
+            "leave it out and the version is no app"
         ),
     },
     required=("name", "text"),

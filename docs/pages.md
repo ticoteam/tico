@@ -286,6 +286,39 @@ points to the source. The copy starts with one version and an empty page data st
 carries over when the original author makes the copy.
 Agents can use `tico page duplicate ID --title "Quarterly plan"` or `tico_page_duplicate`.
 
+## Apps that write
+
+An app may also ask to write, declared next to its reads and approved with that version. Changing what a version may
+write makes a new version.
+
+    tico page publish votes.html --app "reads=tasks writes=comment,move,store:votes"
+
+- **Page data.** `writes=store:<collection>` lets each viewer write rows in that collection with
+  `tico.store(collection).set(id, data)` and `.rm(id)`, with no confirm. Each row records who wrote it
+  (`updated_by`). Other collections stay read-only to viewers, and the writer must still be one of the page's
+  writers.
+- **Actions.** `tico.act(kind, payload)` asks for one action, `tico.act([{kind, payload}, ...])` for up to 20 on one
+  sheet. Kinds, each declared in `writes=`:
+
+  | Kind | Payload | Does |
+  |---|---|---|
+  | `comment` | `{task, text}` | Comments on a task |
+  | `task` | `{title, message?, pipeline?, owner?}` | Makes a task |
+  | `move` | `{task, to}` | Moves a task to a stage of its pipeline (id or name), never to Closed |
+  | `tag` | `{file, tag}` | Tags a file with one of the company's tags (not a template) |
+  | `meta` | `{file, set}` | Sets a file's [metadata](files.md#tags-metadata-and-made-from) fields (no nulls) |
+
+  Tico, outside the page, shows the viewer a sheet with each action as Tico reads it (the task's number and title,
+  the stage, the exact text), never the page's own words. Nothing is written until the viewer confirms; then Tico reads
+  each action again (anything changed since: 409 `changed`) and runs it as the viewer through the usual call, which
+  checks it again. A write a company rule holds comes back as not done. The promise resolves
+  `{status: "done" | "failed" | "cancelled", items: [{ok, error}]}`. A sheet is good once, for 10 minutes; closing
+  the page or a new version cancels it, and a page waits for one sheet at a time (`busy`).
+- Every target must be one both the viewer and the page's writer can read. A page never approves, spends, sends
+  email, deletes anything or changes access.
+- Calls: `POST /api/v2/pages/{id}/app` with op `store.set`, `store.rm` or `act` (which returns the sheet's one-use
+  `key` and its lines), then `POST /api/v2/pages/{id}/app/act` with `{key, confirm}` from the viewer's own session.
+
 ## Archiving
 
 The maintainer bot, people who manage it, admins and the owner archive a page (`tico page archive ID`, or **Archive**

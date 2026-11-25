@@ -35,6 +35,9 @@ class PageWriter(TypedDict):
 @answer
 class PageAppAccess(TypedDict):
     reads: list[Literal["tasks", "files", "pages", "kpis", "contacts", "store"]]
+    writes: NotRequired[list[str]]
+    """Declared writes: comment, task, move, tag, meta (each confirmed by the viewer), and store:<collection> (a
+    collection of the page's data its viewers write)"""
 
 
 @answer
@@ -119,8 +122,22 @@ class PageList(TypedDict):
 @answer
 class PageAppAnswer(TypedDict):
     result: dict[str, Any]
-    """What the op answers: `rows` and `next` for query and store.list, `row` for store.get, `url` for thumb, `href`
-    for open, `actor` and `name` for me"""
+    """What the op answers: `rows` and `next` for query and store.list, `row` for store.get and store.set, `removed`
+    for store.rm, `url` for thumb, `href` for open, `actor` and `name` for me, and `key`, `page` and `lines` (the
+    sheet's {kind, label, detail}) for act"""
+
+
+@answer
+class PageAppActItem(TypedDict):
+    ok: bool
+    error: str | None
+
+
+@answer
+class PageAppActAnswer(TypedDict):
+    status: Literal["done", "failed", "cancelled"]
+    items: list[PageAppActItem]
+    """One per held action, in order: whether its route took it"""
 
 
 @answer

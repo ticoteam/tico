@@ -10,4 +10,4 @@ export { directoryQuery, useActor, useActors, useDirectory, withStatus, type Act
 export { asksGone, needsYouItems, needsYouRead } from './needs';
 export { pageOwnersQuery, type PageOwnerRow, type PageOwners } from './pageOwners';
 export { rangeBytes, rangeText, rangeTextQuery, textOf, transient, zipList, zipListQuery, ZIP_NAMES, type Bytes, type Text, type ZipList } from './range';
-export { APP_FRAMES, APP_SANDBOX, bridge, useAppBridge, useAppSlot, type AppPage } from './pageApp';
+export { APP_FRAMES, APP_SANDBOX, bridge, useActSheet, useAppBridge, useAppSlot, type ActLine, type ActSheet, type AppPage } from './pageApp';
