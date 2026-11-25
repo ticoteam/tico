@@ -187,11 +187,11 @@ describe('a task’s tabs: pages and plain files', () => {
     let unavailable = true;
     reply = (url) =>
       unavailable && url.endsWith('/api/v2/tasks/t1/files?all=1')
-        ? { status: 503, body: { error: { code: 'unavailable', detail: 'Try again' } } }
+        ? { status: 409, body: { error: { code: 'refused', detail: 'Refused' } } }
         : null;
     try {
       const router = show(<TaskPage task="12" tab="letter-pdf" />, path);
-      expect(await screen.findByText('This file did not load')).toBeTruthy();
+      expect(await screen.findByText("This file didn't load · request refused")).toBeTruthy();
       expect(router.state.location.pathname).toBe(path);
       unavailable = false;
       fireEvent.click(screen.getByRole('button', { name: 'Try again' }));

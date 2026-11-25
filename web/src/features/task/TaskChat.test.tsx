@@ -96,7 +96,7 @@ function serveRoom(room: Record<string, unknown>) {
   vi.stubGlobal('fetch', async (url: string) => {
     const u = String(url);
     if (u.endsWith('/api/v2/threads/c7') && roomFails > 0 && roomFails--)
-      return new Response(JSON.stringify({ error: { code: 'unavailable', detail: 'Try again' } }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ error: { code: 'refused', detail: 'Refused' } }), { status: 409, headers: { 'Content-Type': 'application/json' } });
     const body = u.includes('/api/v2/tasks/')
       ? { task: detail, runs: [], children: [], comments: [], events: [], messages: [], has_more: false, ...top }
       : u.includes('/api/v2/needs-you/snoozed')
@@ -255,7 +255,7 @@ describe('a task chat whose thread did not read', () => {
   it('says so with Try again in place of the chat, and opens it when the read works', async () => {
     roomFails = 1;
     show(<TaskChat task="12" />, '/tasks/p1?task=12');
-    expect(await screen.findByText('This chat did not load')).toBeTruthy();
+    expect(await screen.findByText("This chat didn't load · request refused")).toBeTruthy();
     expect(screen.queryByRole('status', { name: 'Loading messages' })).toBeNull();
     act(() => screen.getByRole('button', { name: 'Try again' }).click());
     expect(await screen.findByRole('region', { name: 'Chat with Birch Builder' })).toBeTruthy();

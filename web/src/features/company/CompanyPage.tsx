@@ -10,7 +10,7 @@ import { MenuItem } from '@/kit/Menu';
 import { FoldButton } from '@/kit/SectionHead';
 import { LatePill } from '@/kit/Pill';
 import { chatAddress, fmtAge } from '@/lib';
-import { Dashboard, FiguresStrip, PageMore, SidePanel, type Figure } from '@/pagekinds';
+import { Dashboard, type Figure, FiguresStrip, PageMore, ReadFault, SidePanel } from '@/pagekinds';
 import { Face, Go, NameOf, PanelLink, usd } from './parts';
 import { floorQuery, loadMoreStageTasks, revenueQuery, spendQuery, stageTasksQuery, type Pipeline, type Stage } from './queries';
 import './company.css';
@@ -235,10 +235,7 @@ function StagePanel({ pipeline, stage, onClose }: { pipeline: Pipeline; stage: S
       <section className="rail-sec" aria-label="Tasks">
         {tasks.isError && (
           <p className="pt-none">
-            Tasks did not load{' '}
-            <Button variant="quiet" onClick={() => tasks.refetch()}>
-              Try again
-            </Button>
+            <ReadFault what="Tasks" reads={[tasks]} inline />
           </p>
         )}
         {list.map((t) => (

@@ -79,7 +79,7 @@ export function AccessPage({ search }: { search: FinanceSearch }) {
     <List
       {...head}
       state={readState(q, q.data === null)}
-      onRetry={() => void q.refetch()}
+      reads={[q]}
       empty={{ title: "You don't see who has access" }}
       actions={
         !viewing && (

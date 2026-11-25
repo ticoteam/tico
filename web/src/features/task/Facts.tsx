@@ -13,7 +13,7 @@ import { Link } from '@/kit/Link';
 import { Menu, MenuItem } from '@/kit/Menu';
 import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
-import { Section } from '@/pagekinds';
+import { ReadFault, Section } from '@/pagekinds';
 import { goalLink } from '@/features/company/exports';
 import { pipelinesQuery, roadmapPipeline } from '@/features/tasks/routing';
 import { EditKv, Inline, Kv, PickKv, saved } from './Fact';
@@ -379,10 +379,9 @@ export function Meetings({ t }: { t: TaskData }) {
           <span className="dt-mark">
             <Icon name="alert" />
           </span>
-          <span className="dt-text">Couldn’t load meetings</span>
-          <button type="button" className="dt-act" onClick={() => void meetings.refetch()}>
-            Try again
-          </button>
+          <span className="dt-text">
+            <ReadFault what="Meetings" reads={[meetings]} inline />
+          </span>
         </div>
       </Section>
     );

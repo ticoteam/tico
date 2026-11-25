@@ -443,12 +443,13 @@ describe('Conversation loading @s157', () => {
     serve((url) =>
       url.includes('/timeline') || url.includes('/messages')
         ? fail
-          ? { status: 500, body: { detail: 'down' } }
+          ? { status: 409, body: { detail: 'refused' } }
           : { status: 200, body: { messages: [msg(1, 'bot:qa', 'Back again')], next_cursor: null, read_marks: {} } }
         : { status: 200, body: [] },
     );
     show();
-    expect(await screen.findByRole('heading', { name: 'This chat did not load' })).toBeTruthy();
+    // a refusal: only Try again reads it again (a server's failure is read again by itself once the stream is back)
+    expect(await screen.findByRole('heading', { name: "This chat didn't load · request refused" })).toBeTruthy();
     const box = screen.getByRole<HTMLTextAreaElement>('textbox', { name: 'Message Ana' });
     const send = screen.getByRole<HTMLButtonElement>('button', { name: 'Send' });
     fireEvent.change(box, { target: { value: 'My draft' } });

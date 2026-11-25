@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useAction } from '@/actions';
 import { Button } from '@/kit/Button';
 import { toast } from '@/kit/Toast';
+import { ReadFault } from '@/pagekinds';
 import { AskCard, Docked, useAnswering } from './AskCard';
 import { holdQuery, othersHeld, REVIEW_LABEL, taskHoldsQuery, type Hold, type HoldRule } from './holds';
 import { Go } from './parts';
@@ -115,10 +116,7 @@ function HeldBox({ t, summary }: { t: TaskData; summary: Hold }) {
       <div className="hold-body">
         {opened.isError ? (
           <p className="an-err" role="alert">
-            {opened.error.message || 'It did not load'}
-            <Button variant="quiet" onClick={() => opened.refetch()}>
-              Try again
-            </Button>
+            <ReadFault what="It" reads={[opened]} inline />
           </p>
         ) : opened.data ? (
           text && (

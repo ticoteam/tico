@@ -12,7 +12,7 @@ import { Row } from '@/kit/Row';
 import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
 import { fmtDate } from '@/lib';
-import { SidePanel } from '@/pagekinds';
+import { ReadFault, SidePanel } from '@/pagekinds';
 import { PanelRead, press, pressOut, RemoveItem, useConfirmRemove, Verb, Word } from './parts';
 import { deliveriesQuery, hooksQuery, payloadQuery } from './queries';
 import type { Delivery, Hook } from './types';
@@ -244,7 +244,11 @@ function Deliveries({ hook }: { hook: Hook }) {
   return (
     <section className="rail-sec">
       <h3>Recent calls</h3>
-      {q.isError && <Word>Calls did not load</Word>}
+      {q.isError && (
+        <Word>
+          <ReadFault what="Calls" reads={[q]} inline />
+        </Word>
+      )}
       {list.map((d) => (
         <Row key={d.delivery} className="prun" title={deliveryWords(d)}>
           <span className="run-at">{fmtDate(d.received_at)}</span>
@@ -342,7 +346,11 @@ function PayloadDialog({ hook, delivery, onClose }: { hook: string; delivery: st
         </Button>
       }
     >
-      {q.isError && <Word>The call did not load</Word>}
+      {q.isError && (
+        <Word>
+          <ReadFault what="The call" reads={[q]} inline />
+        </Word>
+      )}
       {d &&
         (d.expired ? (
           <p className="row-sub">No longer kept</p>

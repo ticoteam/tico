@@ -775,12 +775,13 @@ describe('Messages', () => {
     await waitFor(() => expect(reads(sent)().some((u) => u.includes('before=77'))).toBe(true));
   });
 
-  it('shows the fault with Try again when the inboxes fail, not "No messages yet" @s870', async () => {
+  it('shows the fault and why when the inboxes fail, not "No messages yet" @s870', async () => {
     serve((url) => (url === '/api/v2/inbound/inboxes' ? refused(500, 'internal') : url.startsWith('/api/v2/inbound/messages?') ? { messages: [], next: null } : undefined));
     open('messages');
     const page = await screen.findByRole('region', { name: 'Messages' });
-    expect(await within(page).findByText('Messages did not load')).toBeTruthy();
-    expect(within(page).getByRole('button', { name: 'Try again' })).toBeTruthy();
+    expect(await within(page).findByText("Messages didn't load · server error")).toBeTruthy();
+    // a server error is read again by itself once the stream is back: no Try again
+    expect(within(page).queryByRole('button', { name: 'Try again' })).toBeNull();
     expect(within(page).queryByText('No messages yet')).toBeNull();
   });
 
@@ -1195,7 +1196,7 @@ describe('a section whose read fails', () => {
     const asked = reads(serve((url) => (url.startsWith(requests) ? answer : undefined)));
     tools();
     open('number');
-    expect(await screen.findByText('Requests did not load')).toBeTruthy();
+    expect(await screen.findByText("Requests didn't load · request refused")).toBeTruthy();
     expect(screen.queryByText('No requests')).toBeNull();
     const before = asked().filter((u) => u.startsWith(requests)).length;
     answer = ok({ phone_requests: [], next: null });
@@ -1229,8 +1230,8 @@ describe('a section whose read fails', () => {
     queryClient.setQueryData(lettersSettingsQuery.queryKey, { mode: 'ask_first', monthly_cap_micros: null, return_address: null, availability: 'ready' } as never);
     open('address');
     const connects = await screen.findByRole('region', { name: 'How it connects' });
-    expect(await within(connects).findByText('Addresses did not load')).toBeTruthy();
-    expect(within(connects).getByRole('button', { name: 'Try again' })).toBeTruthy();
+    expect(await within(connects).findByText("Addresses didn't load · server error")).toBeTruthy();
+    expect(within(connects).queryByRole('button', { name: 'Try again' })).toBeNull();
     expect(screen.getByRole('region', { name: 'What it can do' })).toBeTruthy();
   });
 
@@ -1240,7 +1241,7 @@ describe('a section whose read fails', () => {
     queryClient.setQueryData(lettersQuery.queryKey, []);
     open('address');
     const out = await screen.findByRole('region', { name: 'What it can do' });
-    expect(await within(out).findByText('Sending letters did not load')).toBeTruthy();
+    expect(await within(out).findByText("Sending letters didn't load · server error")).toBeTruthy();
   });
 });
 });
@@ -1276,12 +1277,12 @@ describe('the list and the open tool’s states', () => {
   it('an open tool shows grey bars while it loads, and Try again when its read fails', async () => {
     let fail = true;
     const tool1 = { tool: { id: 't1', name: 'Sample API', base_url: 'https://api.example.com', auth_scheme: 'bearer', delivery: 'proxy' }, keys: [], access: [], checks: [], recent: [], status: { tone: 'ok', text: 'Working' }, can_manage: false, mcp: null };
-    serve((url) => (url === '/api/v2/api-tools/t1' ? (fail ? refused(500, 'boom') : tool1) : undefined));
+    serve((url) => (url === '/api/v2/api-tools/t1' ? (fail ? refused(409, 'boom') : tool1) : undefined));
     tools([indexRow({ id: 'api:t1', name: 'Sample API' })]);
     open('api:t1');
     const tool = await page('Sample API');
     expect(within(tool).getByRole('status', { name: 'Loading' })).toBeTruthy();
-    expect(await within(tool).findByText('Sample API did not load')).toBeTruthy();
+    expect(await within(tool).findByText("Sample API didn't load · request refused")).toBeTruthy();
     fail = false;
     fireEvent.click(within(tool).getByRole('button', { name: 'Try again' }));
     expect(await within(tool).findByRole('region', { name: 'What it is' })).toBeTruthy();

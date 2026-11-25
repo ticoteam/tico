@@ -7,7 +7,7 @@ import { Field, SettledSearch } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Link } from '@/kit/Link';
-import { Section } from '@/pagekinds';
+import { ReadFault, Section } from '@/pagekinds';
 import { agentToolsQuery, findToolsQuery, readable, toolRows, type AgentTool } from './queries';
 
 /* Its Tools (backend tool guides): the software it lists, may use or used in the last 30 days. Each row is the tool's
@@ -131,7 +131,11 @@ export function AddToolDialog({ slug, name, onClose }: { slug: string; name: str
           </button>
         ))}
         {found.isSuccess && !rows.length && !found.hasNextPage && <p className="now-step">Nothing matches</p>}
-        {found.isError && <p className="now-step">Search did not load</p>}
+        {found.isError && (
+          <p className="now-step">
+            <ReadFault what="Search" reads={[found]} inline />
+          </p>
+        )}
       </div>
       {found.hasNextPage && (
         <button className="verb" type="button" disabled={found.isFetchingNextPage} onClick={() => void found.fetchNextPage()}>

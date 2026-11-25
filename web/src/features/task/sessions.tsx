@@ -2,11 +2,9 @@ import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-quer
 import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { activityQuery, agentWords, dropRun, liveQuery, markRead, rowsOf, seedRun, timelineQuery, type LiveRun, type TimelineView } from '@/conversation';
 import { keys, useActor } from '@/data';
-import { Button } from '@/kit/Button';
-import { Empty } from '@/kit/Empty';
 import { useCards } from '@/kit/Popover';
 import { Row } from '@/kit/Row';
-import { Section } from '@/pagekinds';
+import { type FailedRead, ReadFault, Section } from '@/pagekinds';
 import { threadQuery } from '@/features/threads/exports';
 import { CHAT, tabAddress } from './model';
 import { Face } from './parts';
@@ -30,16 +28,12 @@ export function useOwnThread(t: Pick<TaskData, 'id' | 'conversation_id'> | undef
 /** `useOwnThread`, and whether the thread's read failed (with nothing held), with a way to read it again. */
 export function useThreadRead(t: Pick<TaskData, 'id' | 'conversation_id'> | undefined) {
   const room = useQuery({ ...threadQuery(t?.conversation_id ?? ''), enabled: !!t?.conversation_id });
-  return { own: room.data ? room.data.task_id === t?.id : undefined, failed: room.isError && !room.data, retry: () => void room.refetch() };
+  return { own: room.data ? room.data.task_id === t?.id : undefined, failed: room.isError && !room.data, room };
 }
 
-/** In place of a task's chat whose thread did not read: says so, with Try again. */
-export function ChatNotRead({ retry }: { retry: () => void }) {
-  return (
-    <Empty icon="alert" title="This chat did not load">
-      <Button onClick={retry}>Try again</Button>
-    </Empty>
-  );
+/** In place of a task's chat whose thread did not read: says why. */
+export function ChatNotRead({ read }: { read: FailedRead }) {
+  return <ReadFault what="This chat" reads={[read]} />;
 }
 
 /* ---------------------------------------------------------------- one read mark per task */

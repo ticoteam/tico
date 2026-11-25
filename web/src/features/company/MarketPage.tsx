@@ -9,7 +9,7 @@ import { MenuItem } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { Table, Td, Th, Tr } from '@/kit/Table';
 import { fmtAge, fmtDate } from '@/lib';
-import { Dashboard, FiguresStrip, PageMore, Section, SidePanel, type Figure, type PageTab } from '@/pagekinds';
+import { Dashboard, type Figure, FiguresStrip, PageMore, type PageTab, ReadFault, Section, SidePanel } from '@/pagekinds';
 import { Go, PanelLink, useDo, usdShort } from './parts';
 import {
   listeningStatsQuery,
@@ -92,7 +92,7 @@ export function MarketTab({ head, search }: { head: Head; search: { panel?: stri
         </PageMore>
       }
       state={state}
-      onRetry={() => void Promise.all([spend.refetch(), brief.refetch()])}
+      reads={[spend, brief]}
       empty={{ title: 'Nothing here yet' }}
       figures={!blank && figures.length > 0 && <FiguresStrip figures={figures} label="Market figures" />}
       chart={!blank && daily.length > 1 && <PostsChart daily={daily} />}
@@ -518,7 +518,11 @@ function NotePanel({ id, onClose }: { id: string; onClose: () => void }) {
     <SidePanel title={e?.name ?? 'Organization'} target={`player:${id}`} onClose={onClose}>
       <section className="rail-sec">
         {q.isPending && <p className="none">Loading</p>}
-        {q.isError && <p className="none">The note did not load</p>}
+        {q.isError && (
+          <p className="none">
+            <ReadFault what="The note" reads={[q]} inline />
+          </p>
+        )}
         {e && [e.type, e.tier].some(Boolean) && <p className="mkt-kick">{[e.type, e.tier].filter(Boolean).join(', ')}</p>}
         {e?.summary && <p className="mkt-p">{e.summary}</p>}
         {aliases.length > 0 && <Fact k="Also called" v={<span className="fact-clip">{aliases.join(', ')}</span>} />}

@@ -9,6 +9,7 @@ import { Icon } from '@/kit/Icon';
 import { Segmented } from '@/kit/Segmented';
 import { SkeletonRows } from '@/kit/Skeleton';
 import { VirtualList } from '@/kit/VirtualList';
+import { ReadFault } from '@/pagekinds';
 import { press } from './people';
 import { archivedQuery, browseQuery, type BrowseRow } from './queries';
 
@@ -54,9 +55,7 @@ export function Browse({ onClose }: { onClose: () => void }) {
       {list.isPending ? (
         <SkeletonRows rows={4} />
       ) : list.isError ? (
-        <Empty icon="alert" title="Threads did not load">
-          <Button onClick={() => list.refetch()}>Try again</Button>
-        </Empty>
+        <ReadFault what="Threads" reads={[list]} />
       ) : shown.length === 0 ? (
         <Empty icon="threads" title={view === 'open' ? 'No threads to join' : 'Nothing archived'} />
       ) : (

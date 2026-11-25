@@ -26,7 +26,7 @@ export function faultReason(err: unknown): string {
 
 /** Whether reading again may answer differently: no answer, or the server's own failure (not a stopped company). A
     refusal (4xx) or the app's own error would only fail again; Try again stays for those. */
-const passing = (err: unknown) => err instanceof ApiError && (err.status === 0 || err.status >= 500) && err.code !== 'stopped';
+export const passing = (err: unknown) => err instanceof ApiError && (err.status === 0 || err.status >= 500) && err.code !== 'stopped';
 
 /** A read that failed: its error, and how to read it again (a query's own result fits). */
 export interface FailedRead {

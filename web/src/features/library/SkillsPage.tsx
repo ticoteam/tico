@@ -17,7 +17,7 @@ import { Row } from '@/kit/Row';
 import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
 import { VirtualList } from '@/kit/VirtualList';
-import { Document, List, PageMore, Section } from '@/pagekinds';
+import { Document, List, PageMore, ReadFault, Section } from '@/pagekinds';
 import { Markdown } from '@/kit/Markdown';
 import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { forgetHelperCode, heldHelperCode } from './helperCode';
@@ -835,7 +835,7 @@ function InstallDialog({ name, versions, onClose }: { name: string; versions: Sk
         />
       }
     >
-      {t.isError && <Empty title="This did not load" icon="alert" />}
+      {t.isError && <ReadFault what="This" reads={[t]} />}
       <Select label="For" options={options} value={who} onValueChange={setWho} placeholder="Choose" />
       <Select
         label="Version"

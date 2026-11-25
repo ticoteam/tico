@@ -436,11 +436,11 @@ describe('Growth panels @s480 @s444', () => {
     expect(await within(panel).findByText('$50', { selector: '.pfig b' })).toBeTruthy();
   });
 
-  it('a channel that fails offers Try again', async () => {
+  it('a channel that fails says why; a server error is read again by itself, so no Try again', async () => {
     serve({ '/growth/read?scope=channel:search': broken });
     show('/company/growth?panel=channel:search');
-    expect(await screen.findByRole('heading', { name: 'This channel did not load' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: "This channel didn't load · server error" })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });
 
   it('says where its numbers come from, from the read, and draws its cost per customer by month', async () => {

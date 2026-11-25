@@ -99,7 +99,7 @@ function UpdatesList({ tab }: { tab: UpdateTab }) {
       }
       state={searchingOlder ? searchState : listState}
       empty={{ title: archive ? 'Nothing archived' : 'No updates yet' }}
-      onRetry={searchingOlder ? () => void fetchNextPage({ cancelRefetch: false }) : undefined}
+      reads={searchingOlder ? [{ error: list.error, refetch: () => fetchNextPage({ cancelRefetch: false }) }] : undefined}
       sections={
         noMatch ? (
           <Empty icon="search" title="No matches" />

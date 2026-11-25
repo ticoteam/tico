@@ -13,7 +13,7 @@ import { Menu, MenuItem } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { Select } from '@/kit/Select';
 import { fmtAge, fmtDate } from '@/lib';
-import { List, RecordPanel, SidePanel, type PageTab } from '@/pagekinds';
+import { List, type PageTab, ReadFault, RecordPanel, SidePanel } from '@/pagekinds';
 import { amount, Face, Go, NameOf, PanelLink, PanelSection, Trend, useDo } from './parts';
 import {
   goalNeedsQuery,
@@ -804,7 +804,11 @@ function KpiPlace({ kid }: { kid: string }) {
       }
     >
       {q.isPending && <p className="rail-sec pt-none">Loading</p>}
-      {q.isError && <p className="rail-sec pt-none">The KPI tree did not load</p>}
+      {q.isError && (
+        <p className="rail-sec pt-none">
+          <ReadFault what="The KPI tree" reads={[q]} inline />
+        </p>
+      )}
       {q.data && !k && <p className="rail-sec pt-none">Not in the KPI tree</p>}
       {k && (
         <div className="rail-sec kf">

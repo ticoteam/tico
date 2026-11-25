@@ -16,6 +16,7 @@ import { StoppedDecision } from './Stopped';
 import { followSend } from './sending';
 import { addressesOf, answerKey, decisionShownQuery, emailSendQuery, sendStateQuery, type AnswerKey, type BoundAction, type BoundRule, type TaskData } from './queries';
 import { Facts, LabelValue } from '@/kit/LabelValue';
+import { ReadFault } from '@/pagekinds';
 
 /* The decision (plan/approvals.html): one box wherever a request waits on the person. It names the thing, who asks and
    what Approve does; Request changes opens one line in it; Approve is the one filled button, bound to exactly what was
@@ -222,12 +223,17 @@ export function Answer({ t, r, onAsking, hold }: AnswerProps) {
       error={
         fault && (
           <>
-            {error || 'Part of it did not load'}
-            {!error && (
-              <Button variant="quiet" onClick={() => shown.refetch()}>
-                Try again
-              </Button>
-            )}
+            {error ||
+              (shown.isError ? (
+                <ReadFault what="Part of it" reads={[shown]} inline />
+              ) : (
+                <>
+                  Part of it did not load
+                  <Button variant="quiet" onClick={() => shown.refetch()}>
+                    Try again
+                  </Button>
+                </>
+              ))}
           </>
         )
       }

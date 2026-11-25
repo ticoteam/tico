@@ -10,7 +10,7 @@ import { Button } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
 import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
-import { Document } from '@/pagekinds';
+import { Document, ReadFault } from '@/pagekinds';
 import { FileGet } from './FileViewer';
 import { Face, when } from './parts';
 import { PageActionDialog, type PageAction } from './PageActionDialog';
@@ -86,9 +86,7 @@ export function LibraryPage({ id, search }: { id: string; search: PagesSearch })
             {live && !against ? (
               <HostedPage key={`${id}@${version}`} src={live} title={page.title} app={app} />
             ) : text.isError || prior.isError ? (
-              <Empty icon="alert" title="This version did not load">
-                <Button onClick={() => Promise.all([text.isError && text.refetch(), prior.isError && prior.refetch()])}>Try again</Button>
-              </Empty>
+              <ReadFault what="This version" reads={[text, prior]} />
             ) : html ? (
               <iframe key={`${version}:${against ?? ''}`} srcDoc={html} sandbox={sandbox} referrerPolicy="no-referrer" title={page.title} />
             ) : (

@@ -212,7 +212,7 @@ function useAddressReaders(scope: string, on: boolean) {
   const q = useQuery({ ...addressGrantsQuery(scope), enabled: on });
   const actors = useActors();
   if (!on) return { who: undefined, add: null };
-  if (q.isError && !q.data) return { who: <ReadFault name="Who may use it" error={q.error} onRetry={() => void q.refetch()} />, add: null };
+  if (q.isError && !q.data) return { who: <ReadFault name="Who may use it" reads={[q]} />, add: null };
   const subject = (type: string, who: string) => `${type === 'bot' ? 'bot' : 'human'}:${who}`;
   const short = (actor: string) => actor.slice(actor.indexOf(':') + 1);
   const grants = q.data ?? [];
@@ -274,7 +274,7 @@ function OlderLetters({ before, onDetails }: { before: string; onDetails: (l: Le
   return (
     <>
       {q.data?.pages.flatMap((p) => p.items).map((l) => <LetterRow key={l.id} l={l} onDetails={onDetails} />)}
-      {q.isError && <ReadFault name="Older letters" error={q.error} onRetry={() => void q.refetch()} />}
+      {q.isError && <ReadFault name="Older letters" reads={[q]} />}
       {q.hasNextPage && !q.isFetchingNextPage && <More onClick={() => q.fetchNextPage()}>Load more</More>}
     </>
   );

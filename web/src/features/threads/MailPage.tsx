@@ -16,7 +16,7 @@ import { Menu, MenuItem } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { Row } from '@/kit/Row';
 import { VirtualList } from '@/kit/VirtualList';
-import { ItemHead, ListAndItem, PageMore, type ItemHeadProps } from '@/pagekinds';
+import { ItemHead, type ItemHeadProps, ListAndItem, PageMore, ReadFault } from '@/pagekinds';
 import { contactsOf, letterAt, letterRows, letterUnread, senderName, type Letter, type LetterRow, type Text } from './model';
 import { ChatWith, press } from './people';
 import { letterQuery, mailboxesQuery, mailFindQuery, mailInstructionsQuery, textListQuery, textQuery, textsBySenderQuery, type Mailbox } from './queries';
@@ -130,7 +130,7 @@ export function MailPage({ box, open, view, q: words }: MailPageProps) {
             }
           : { title: 'No mail' }
       }
-      onRetry={() => void list.refetch()}
+      reads={[list]}
       {...(reading
         ? {
             itemHead: <ItemHead title="Instructions" target="page:/threads/mail?view=instructions" back={back} />,
@@ -212,13 +212,11 @@ function LetterHead({ box, id, back }: { box: Mailbox; id: string; back: ItemHea
 }
 
 function LetterBody({ box, id }: { box: string; id: string }) {
-  const { data, isPending, isError, refetch } = useQuery(letterQuery(box, id));
+  const { data, isPending, isError, error, refetch } = useQuery(letterQuery(box, id));
   if (isPending) return <MessageBones label="Loading mail" className="lt-bones" />;
   if (isError)
     return (
-      <Empty icon="alert" title="This mail did not load">
-        <Button onClick={() => refetch()}>Try again</Button>
-      </Empty>
+      <ReadFault what="This mail" reads={[{ error, refetch }]} />
     );
   return (
     <>
@@ -249,13 +247,11 @@ function MailAgentBox({ box, id, agent }: { box: string; id: string; agent: stri
 
 /** What the mailbox's agent works from; written in the agent's own files, so read only here. */
 function Instructions({ box }: { box: string }) {
-  const { data, isPending, isError, refetch } = useQuery(mailInstructionsQuery(box));
+  const { data, isPending, isError, error, refetch } = useQuery(mailInstructionsQuery(box));
   if (isPending) return <MessageBones label="Loading instructions" className="lt-bones" />;
   if (isError)
     return (
-      <Empty icon="alert" title="The instructions did not load">
-        <Button onClick={() => refetch()}>Try again</Button>
-      </Empty>
+      <ReadFault what="The instructions" reads={[{ error, refetch }]} />
     );
   if (!data.instructions.trim()) return <Empty icon="rules" title="No instructions" />;
   return (
@@ -333,7 +329,7 @@ export function MessagingPage({ open }: MessagingPageProps) {
       open={!!open}
       state={list.isPending ? 'loading' : list.isError ? 'fault' : contacts.length === 0 && !open && !words ? 'empty' : 'ready'}
       empty={{ title: 'No texts yet' }}
-      onRetry={() => void list.refetch()}
+      reads={[list]}
       {...(open
         ? {
             itemHead: (
@@ -372,9 +368,7 @@ function Texts({ from }: { from: string }) {
   if (list.isPending) return <MessageBones label="Loading texts" className="lt-bones" />;
   if (list.isError)
     return (
-      <Empty icon="alert" title="These texts did not load">
-        <Button onClick={() => list.refetch()}>Try again</Button>
-      </Empty>
+      <ReadFault what="These texts" reads={[list]} />
     );
   return (
     <div className="mg-list">

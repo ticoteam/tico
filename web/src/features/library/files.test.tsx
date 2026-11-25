@@ -241,13 +241,14 @@ describe('Files', () => {
     let searches = 0;
     const sent = serve((url) => {
       if (url === '/api/v2/files/search?q=notes&limit=50&kind=document') {
-        if (++searches === 1) return new Response(null, { status: 500 });
+        if (++searches === 1) return new Response(null, { status: 409 });
         return { results: [{ id: 'f1', title: 'Sample notes' }] };
       }
       return {};
     });
     at('/library/files?kind=document&q=notes', <FilesPage search={{ kind: 'document', q: 'notes' }} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+    expect(await screen.findByRole('heading', { name: "The search didn't load · request refused" })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(await screen.findByRole('link', { name: 'Sample notes' })).toBeTruthy();
     expect(searches).toBe(2);
     expect(sent.some(({ url }) => url.startsWith('/api/v2/files?'))).toBe(false);

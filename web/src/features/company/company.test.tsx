@@ -184,11 +184,11 @@ describe('Company @s248 @s250', () => {
     expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });
 
-  it('shows the fault with Try again when the Floor fails', async () => {
+  it('shows the fault and why when the Floor fails; a server error is read again by itself, so no Try again', async () => {
     serve((url) => (url.includes('/company/floor') ? { status: 500, body: { detail: 'boom' } } : nothing()));
     show(<CompanyPage search={{}} />, '/company');
-    expect(await screen.findByText('This page did not load')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    expect(await screen.findByText("This page didn't load · server error")).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });
 
   it("opens a hall manager's chat beside the Floor, at the address @s291", async () => {

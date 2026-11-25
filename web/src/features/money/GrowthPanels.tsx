@@ -1,10 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { fmtDate, fmtMoney } from '@/lib';
-import { Button } from '@/kit/Button';
 import { Lines } from '@/kit/Chart';
-import { Empty } from '@/kit/Empty';
 import { SkeletonRows } from '@/kit/Skeleton';
-import { Section, SidePanel } from '@/pagekinds';
+import { ReadFault, Section, SidePanel } from '@/pagekinds';
 import { axis, count, monShort, monthName, ratio, readDay, statusWord } from './model';
 import { Pfig, Prow, Ptrace, usePress } from './parts';
 import { growthChannelQuery, type GrowthChannel, type GrowthPoint, type GrowthRead } from './queries';
@@ -13,17 +11,6 @@ import { growthChannelQuery, type GrowthChannel, type GrowthPoint, type GrowthRe
    asked of the Growth Manager in its chat. */
 
 const usd = (v: number | null | undefined, cents = false) => (v == null ? '' : fmtMoney(v, { cents }));
-/** A small read's fault inside a panel: what did not load, and Try again. */
-function Failed({ what, retry }: { what: string; retry: () => unknown }) {
-  return (
-    <Empty title={`${what} did not load`} icon="alert">
-      <Button variant="quiet" onClick={() => retry()}>
-        Try again
-      </Button>
-    </Empty>
-  );
-}
-
 const CAMPAIGN: Record<string, string> = { none: 'No campaign', other: 'Other' };
 
 /** One channel, opened (`?panel=channel:<slug>`): its budget and spend, its months and its campaigns by name, from its
@@ -42,7 +29,7 @@ export function ChannelPanel({ slug, month, row }: { slug: string; month: string
         {q.isPending ? (
           <SkeletonRows rows={4} />
         ) : q.isError ? (
-          <Failed what="This channel" retry={q.refetch} />
+          <ReadFault what="This channel" reads={[q]} />
         ) : (
           <>
             <Pfig big={cac != null ? usd(cac, true) : statusWord(c?.status ?? h?.cac.status)} sub={`for a new customer, ${monthName(month)}`} />

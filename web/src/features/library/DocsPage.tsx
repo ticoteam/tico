@@ -13,7 +13,7 @@ import { useCards } from '@/kit/Popover';
 import { Row } from '@/kit/Row';
 import { toast } from '@/kit/Toast';
 import { VirtualList } from '@/kit/VirtualList';
-import { List, PageMore, Section, SidePanel, type PageState, type PageTab } from '@/pagekinds';
+import { List, PageMore, type PageState, type PageTab, ReadFault, Section, SidePanel } from '@/pagekinds';
 import { Face, Find, Foot, KindGlyph, More, press, trimmed, useGo, Who } from './parts';
 import { archivedDocsQuery, docRows, docsListQuery, docsSearchQuery, IMPORT_MAX, IMPORT_TYPES, sourceDocsQuery, sourcesQuery, type DocHit, type DocRow } from './queries';
 import type { DocSource } from '@/api/schema';
@@ -302,7 +302,7 @@ function SourcePanel({ id }: { id: string }) {
         </>
       }
     >
-      {src.isLoadingError && <Empty title="This source did not load" icon="alert" />}
+      {src.isLoadingError && <ReadFault what="This source" reads={[src]} />}
       {docs?.length === 0 && !src.hasNextPage && <Empty title="No documents yet" />}
       {docs?.map((d) => (
         <Link key={d.id} className="row lrow frow" to="/library/$doc" params={{ doc: `ext:${d.id}` }} search={d.commit ? { revision: d.commit } : {}} title={d.title}>

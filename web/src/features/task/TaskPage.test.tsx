@@ -640,12 +640,12 @@ describe('one open task', () => {
     expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
   });
 
-  it('offers Try again when the read fails', async () => {
+  it('says why when the read fails; a server error is read again by itself, so no Try again', async () => {
     serve(() => ({ status: 500, body: { error: { code: 'oops', detail: 'down' } } }));
     show(<TaskPage task="12" />);
     // The read is tried once more (after a second) before the fault shows.
-    expect(await screen.findByRole('heading', { name: 'Task did not load' }, { timeout: 4000 })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: "Task didn't load · server error" }, { timeout: 4000 })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });
 });
 
@@ -1329,7 +1329,7 @@ describe('a task’s files and pages @s56 @s76 @s780', () => {
     it('says it did not load when that read fails, never showing the current one', async () => {
       serveMeta({ status: 404, body: { error: 'not_found' } });
       show(<TaskPage task="12" tab="qa-report" file="f9" />, at);
-      expect(await screen.findByText('This file did not load')).toBeTruthy();
+      expect(await screen.findByText("This file didn't load · not found")).toBeTruthy();
       expect(screen.queryByRole('button', { name: 'Sign-in screen, full size' })).toBeNull();
     });
   });

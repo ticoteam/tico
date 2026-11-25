@@ -251,7 +251,7 @@ describe('Send anyway is only drawn over what the person can read', () => {
     detail = {};
     show(<TaskChat task="12" />, '/tasks/p1/12');
     const box = await decision();
-    expect((await within(box).findByRole('alert')).textContent).toContain('There is no hold h1');
+    expect((await within(box).findByRole('alert')).textContent).toContain("It didn't load · not found");
     expect(within(box).getByRole('button', { name: 'Try again' })).toBeTruthy();
     expect(within(box).queryByRole('button', { name: 'Send anyway' })).toBeNull();
   });

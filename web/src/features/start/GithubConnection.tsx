@@ -35,7 +35,7 @@ export function GithubConnection() {
       {app.isPending ? (
         <SkeletonRows rows={3} />
       ) : app.isError ? (
-        <PartFault name="GitHub" onRetry={() => void app.refetch()} />
+        <PartFault name="GitHub" reads={[app]} />
       ) : app.data.connected ? (
         <Connected app={app.data} />
       ) : (

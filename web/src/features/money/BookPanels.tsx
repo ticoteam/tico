@@ -8,7 +8,7 @@ import { Button } from '@/kit/Button';
 import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem } from '@/kit/Menu';
 import { toast } from '@/kit/Toast';
-import { Section, SidePanel } from '@/pagekinds';
+import { ReadFault, Section, SidePanel, type FailedRead } from '@/pagekinds';
 import { DocDecide, LimitDialog, PaidDialog, ScheduleDialog, VoidDialog, WriteOffDialog } from './BillForms';
 import { useMay, useRun } from './dialogs';
 import { cash } from './model';
@@ -45,13 +45,13 @@ const STATUS: Record<string, string> = {
 const LIVE = new Set(['queued', 'sending', 'awaiting_bank_approval', 'submitted']);
 const FROM: Record<string, string> = { payment: 'Payment', feed: 'Bank', credit: 'Credit', account: 'Account', expected: 'Expected' };
 
-function Unread({ error, onRetry }: { error: unknown; onRetry: () => void }) {
+function Unread({ what, reads }: { what: string; reads: readonly FailedRead[] }) {
+  const error = reads[0]?.error;
   if (error instanceof ApiError && error.status === 403) return <p className="t-read">Not in your view</p>;
   return (
-    <div className="stack">
-      <p className="t-read">Did not load</p>
-      <Button onClick={onRetry}>Try again</Button>
-    </div>
+    <p className="t-read">
+      <ReadFault what={what} reads={reads} inline />
+    </p>
   );
 }
 
@@ -112,7 +112,7 @@ export function DocPanel({ kind, id }: { kind: DocKind; id: string }) {
     >
       <div className="money pbody">
         {q.isError ? (
-          <Unread error={q.error} onRetry={() => void q.refetch()} />
+          <Unread what={bill ? 'Bill' : 'Invoice'} reads={[q]} />
         ) : (
           d && (
             <>
@@ -220,7 +220,7 @@ export function CardPanel({ id }: { id: string }) {
     >
       <div className="money pbody">
         {q.isError ? (
-          <Unread error={q.error} onRetry={() => void q.refetch()} />
+          <Unread what="Card" reads={[q]} />
         ) : (
           c && (
             <>

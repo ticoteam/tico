@@ -10,6 +10,7 @@ import { IconButton } from '@/kit/IconButton';
 import { Pill } from '@/kit/Pill';
 import { SkeletonRows } from '@/kit/Skeleton';
 import { VirtualList } from '@/kit/VirtualList';
+import { ReadFault } from '@/pagekinds';
 import type { Thread } from './model';
 import { Face, press, useMe, useNameOf } from './people';
 import { membersQuery, type MemberRow } from './queries';
@@ -71,10 +72,7 @@ export function Members({ thread: t, onClose, onAdd }: { thread: Thread; onClose
         <SkeletonRows rows={3} />
       ) : q.isError ? (
         <p className="mb-note">
-          Couldn't load who is in it.{' '}
-          <Button variant="quiet" onClick={() => q.refetch()}>
-            Try again
-          </Button>
+          <ReadFault what="Who is in it" reads={[q]} inline />
         </p>
       ) : (
         <VirtualList

@@ -11,7 +11,7 @@ import { Row } from '@/kit/Row';
 import { MenuItem } from '@/kit/Menu';
 import { LinksEntry } from '@/features/company/exports';
 import { pipelinesQuery, type Pipeline } from '@/features/tasks/routing';
-import { List, PageMore, Section, type PageTab } from '@/pagekinds';
+import { List, PageMore, Section, type FailedRead, type PageTab } from '@/pagekinds';
 import { hasWho, ROUTINES, RULES, type RuleTab } from './actions';
 import { CompanyRules, holdsOf, OrgRuleRow, partiesOf, PartyPick } from './CompanyRules';
 import { Find, press, pressOut, RemoveItem, Rows, RuleRow, useConfirmRemove, useName } from './parts';
@@ -99,7 +99,7 @@ export function RulesPage({ search }: { search: RulesSearch }) {
 
 /** The page around one tab's rows: the head, its states and the open rule. A tab's own read comes with the address
     (the route's loader), so most tabs are only empty or ready; Suggested reads two lists and draws their states. */
-function Page({ search, asked, state, retry, empty, dialogs, children }: Omit<TabProps, 'confirm'> & { state: State; retry?: () => void; empty: string; dialogs?: ReactNode; children: ReactNode }) {
+function Page({ search, asked, state, reads, empty, dialogs, children }: Omit<TabProps, 'confirm'> & { state: State; reads?: readonly FailedRead[]; empty: string; dialogs?: ReactNode; children: ReactNode }) {
   const t: RuleTab = search.tab ?? '';
   const [reading, setReading] = useState(false);
   const [making, setMaking] = useState(false);
@@ -134,7 +134,7 @@ function Page({ search, asked, state, retry, empty, dialogs, children }: Omit<Ta
         </PageMore>
       }
       state={state}
-      onRetry={retry}
+      reads={reads}
       // The tabs share one head, whose Add rule stays put; an empty tab says so and adds no second button.
       empty={{ title: empty }}
       sections={children}
@@ -379,7 +379,7 @@ function SuggestedTab({ search, asked }: TabProps) {
       search={search}
       asked={asked}
       state={state}
-      retry={() => void Promise.all([orgSugg.refetch(), stageSugg.refetch()])}
+      reads={[orgSugg, stageSugg]}
       empty="No suggestions"
       dialogs={whoFor && <AcceptWho rule={whoFor} onClose={() => setWhoFor(null)} />}
     >

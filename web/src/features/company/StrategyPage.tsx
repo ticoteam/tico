@@ -9,7 +9,7 @@ import { Pill } from '@/kit/Pill';
 import { FoldButton } from '@/kit/SectionHead';
 import { SkeletonRows } from '@/kit/Skeleton';
 import { fmtDate } from '@/lib';
-import { Document, type PageTab } from '@/pagekinds';
+import { Document, type PageTab, ReadFault } from '@/pagekinds';
 import { GoalsPage, type GoalsSearch } from './GoalsPage';
 import { MarketTab, spendOf } from './MarketPage';
 import { OrgTab } from './OrgPage';
@@ -115,7 +115,7 @@ function StrategyTabBody({ search }: { search: StrategySearch }) {
       {...head('strategy')}
       // a past version is its own read, with its own states
       state={asked && !past.isSuccess ? readState(past) : !v && !s.bets.length ? 'empty' : 'ready'}
-      onRetry={() => void past.refetch()}
+      reads={[past]}
       empty={{ title: 'No strategy yet' }}
       body={
         <>
@@ -210,12 +210,11 @@ function WherePlay() {
   );
 }
 
-/** The Market read failed: Try again. */
+/** The Market read failed: why. */
 function MarketFault({ q }: { q: UseQueryResult<unknown> }) {
   return (
-    <p className="play-fault">
-      <span className="none">Market did not load</span>
-      <Button onClick={() => q.refetch()}>Try again</Button>
+    <p className="play-fault none">
+      <ReadFault what="Market" reads={[q]} inline />
     </p>
   );
 }
@@ -257,7 +256,7 @@ function BrandBook({ b, search }: { b: Brand; search: StrategySearch }) {
       }
       // a past version is its own read, with its own states
       state={asked && !past.isSuccess ? readState(past) : book ? 'ready' : 'empty'}
-      onRetry={() => void past.refetch()}
+      reads={[past]}
       empty={{ title: 'No brand book yet', action: editButton }}
       body={
         book && (

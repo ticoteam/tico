@@ -348,7 +348,7 @@ export function UsagePage({ search }: { search: UsageSearch }) {
       }
       state={q.isPending ? 'loading' : isForbidden(q.error) ? 'no-access' : q.isError ? 'fault' : undefined}
       noAccess={NO_ACCESS}
-      onRetry={() => void q.refetch()}
+      reads={[q]}
       figures={
         limits ? undefined : (
           <>

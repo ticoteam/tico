@@ -172,7 +172,7 @@ describe('Mailboxes @s1203', () => {
     queryClient.setQueryData(mailboxesQuery.queryKey, [{ address: 'help@example.test' }]);
     show(<MailPage />, '/threads/mail');
     expect(await screen.findByRole('heading', { name: 'Mail is not connected' })).toBeTruthy();
-    expect(screen.queryByText('Threads did not load')).toBeNull();
+    expect(screen.queryByText(/didn't load/)).toBeNull();
   });
 });
 

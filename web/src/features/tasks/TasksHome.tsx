@@ -1,10 +1,9 @@
 import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { Button } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
 import { Row } from '@/kit/Row';
 import { useFollow } from '@/live/follow';
-import { List, Section } from '@/pagekinds';
+import { List, ReadFault, Section } from '@/pagekinds';
 import { NeedsYouList } from './NeedsYouList';
 import { useNeedsYouSorting } from './NeedsYouPage';
 import { NEEDS_YOU_VIEWS } from './NeedsYouViews';
@@ -39,9 +38,9 @@ export function TasksHome() {
                 <p className="flow-shelf-state">Nothing needs you</p>
               )
             ) : flow.isError ? (
-              <Button variant="quiet" onClick={() => void flow.refetch()}>
-                Try again
-              </Button>
+              <p className="flow-shelf-state">
+                <ReadFault what="Needs you" reads={[flow]} inline />
+              </p>
             ) : (
               <p className="flow-shelf-state" role="status">
                 Loading

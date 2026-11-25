@@ -7,7 +7,6 @@ import { filtersOf, flowQuery, inOrder, isFiltered, loadListTools, loadMore, nee
 import { ownerListQuery, type OwnTask } from '@/features/team/routing';
 import { Ago } from '@/kit/Ago';
 import { Avatar } from '@/kit/Avatar';
-import { Button } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
 import { FlowMark } from '@/kit/FlowMark';
 import { Icon } from '@/kit/Icon';
@@ -18,6 +17,7 @@ import { VirtualList, type VirtualListHandle } from '@/kit/VirtualList';
 import { useFollow } from '@/live/follow';
 import { HITS } from '@/search/helpers';
 import { boardSearch, hearPlaces, holdRow, keptRows, NEEDS_YOU, noteList, type ListRow } from '@/lib';
+import { ReadFault, type FailedRead } from '@/pagekinds';
 
 /* The list beside a task open over a page (plan: the task modal): the list it was opened from. A board's stage (its
    pipeline's id), Needs you (none), an agent's or a person's open tasks (their id), search hits (`search:<words>`), or
@@ -257,9 +257,7 @@ function PipelineList({ pipeline, open, stage, end }: { pipeline: string; open: 
       ) : null}
       <div className="nav-scroll li-body">
         {failed ? (
-          <Empty icon="alert" title="These tasks did not load">
-            <Button onClick={() => void (listFailed ? list.refetch() : byPriority.refetch())}>Try again</Button>
-          </Empty>
+          <ReadFault what="These tasks" reads={[listFailed ? list : byPriority]} />
         ) : page && (!ranks || ranked) && !more && !shown?.items.length ? (
           <Empty title="No open tasks" />
         ) : null}
@@ -342,7 +340,7 @@ function WhoList({ who, open, current, end }: { who: string; open: string; curre
 }
 
 /** A list a page drew (lib keepRows), its rows in its order; none drawn since the app loaded: Needs you. */
-const READ = { isError: false, refetch: () => undefined };
+const READ = { isError: false, error: null, refetch: () => undefined };
 function DrawnList({ list, open, current, end }: { list: string; open: string; current?: Shown; end?: ReactNode }) {
   const kept = useSyncExternalStore(hearPlaces, () => keptRows(list));
   const needs = useNeedsYou();
@@ -373,13 +371,11 @@ function SearchList({ words, list, open, current, end }: { words: string; list: 
   );
 }
 
-function Rows({ read, tasks, open, needs, empty }: { read: { isError: boolean; refetch: () => unknown }; tasks: readonly Shown[] | undefined; open: string; needs: ReadonlySet<string> | undefined; empty: string }) {
+function Rows({ read, tasks, open, needs, empty }: { read: FailedRead & { isError: boolean }; tasks: readonly Shown[] | undefined; open: string; needs: ReadonlySet<string> | undefined; empty: string }) {
   return (
     <div className="nav-scroll li-body">
       {read.isError && !tasks ? (
-        <Empty icon="alert" title="These tasks did not load">
-          <Button onClick={() => void read.refetch()}>Try again</Button>
-        </Empty>
+        <ReadFault what="These tasks" reads={[read]} />
       ) : tasks && !tasks.length ? (
         <Empty title={empty} />
       ) : null}

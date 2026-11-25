@@ -11,7 +11,7 @@ import { Menu, MenuItem } from '@/kit/Menu';
 import { Row } from '@/kit/Row';
 import { Select } from '@/kit/Select';
 import { fmtDate, fmtMoney } from '@/lib';
-import { SidePanel } from '@/pagekinds';
+import { ReadFault, SidePanel } from '@/pagekinds';
 import { BoardItemEditor, BoardView, type ItemRef } from './BoardEditor';
 import { routineBoard, takesTemplate } from './board';
 import { Ends, Face, HeadSwitch, PanelRead, press, pressOut, RemoveItem, useConfirmRemove, useName, Verb, Word } from './parts';
@@ -232,7 +232,11 @@ function Versions({ routine, onDone, onClose }: { routine: Routine; onDone: () =
       )}
       <section className="rail-sec">
         <h3>Versions</h3>
-        {q.isError && <Word>Versions did not load</Word>}
+        {q.isError && (
+          <Word>
+            <ReadFault what="Versions" reads={[q]} inline />
+          </Word>
+        )}
         {saved.map((v) => (
           <VersionRow key={v.n} v={v}>
             {v.n === routine.version ? (
@@ -377,7 +381,11 @@ function Runs({ id }: { id: string }) {
           Run now
         </Verb>
       </h3>
-      {runs.isError && <Word>Runs did not load</Word>}
+      {runs.isError && (
+        <Word>
+          <ReadFault what="Runs" reads={[runs]} inline />
+        </Word>
+      )}
       {list.map((run) => {
         const at = run.started_at ?? run.finished_at;
         const what = run.error || run.summary || runWords(run.status);

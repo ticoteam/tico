@@ -7,6 +7,7 @@ import { FlowMark } from '@/kit/FlowMark';
 import { Icon, type IconName } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { SkeletonRows } from '@/kit/Skeleton';
+import { ReadFault } from '@/pagekinds';
 import { contactsOf, conversationsOf, isDm, isTaskThread, letterAt, letterRows, letterUnread, othersOf, rowsOf, senderName, teamOf, unreadOf, type LetterRow, type Text, type Thread } from './model';
 import { Face, press, useMe, useTitle } from './people';
 import { archivedQuery, inboxQuery, mailboxesQuery, textListQuery, threadListQuery } from './queries';
@@ -60,9 +61,9 @@ export function MenuThreads({ asks }: MenuThreadsProps) {
       <div className="ca-list">
         {list.isPending ? <SkeletonRows rows={3} label="Loading threads" /> : null}
         {list.isError && !list.data ? (
-          <button type="button" className="tree-row ca-more" disabled={list.isFetching} onClick={() => void list.refetch()}>
-            Try again
-          </button>
+          <div className="tree-row ca-more">
+            <ReadFault what="Threads" reads={[list]} inline />
+          </div>
         ) : null}
         {items.map((it) =>
           it.kind === 'thread' ? (

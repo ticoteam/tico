@@ -83,7 +83,7 @@ function OneDoc({ id, search }: { id: string; search: DocSearch }) {
       path={`/library/${id}`}
       className="lib"
       state={requested && !past ? (old.isError ? 'fault' : 'loading') : 'ready'}
-      onRetry={requested ? () => void old.refetch() : undefined}
+      reads={requested ? [old] : undefined}
       after={versionPick}
       onRename={typable ? (title) => void keep(doc, { title }) : undefined}
       more={

@@ -9,7 +9,7 @@ import { FlowMark } from '@/kit/FlowMark';
 import { Popover, useCards } from '@/kit/Popover';
 import { TaskRow } from '@/kit/Row';
 import { useFollow } from '@/live/follow';
-import { List, Section } from '@/pagekinds';
+import { List, ReadFault, Section } from '@/pagekinds';
 import { Capped, LIST_CAP, LIST_SHOW, PHONE_ROW_H, RowMore, ROW_H } from './capped';
 import { useNeedsYouDrawn } from './needs';
 import { Blocks, Face } from './parts';
@@ -144,7 +144,12 @@ function useFlowList(owner: string | undefined, shelf: 'open' | 'snoozed' | 'don
 function FlowShelf({ owner, shelf }: { owner?: string; shelf: 'snoozed' | 'done' }) {
   const read = useFlowList(owner, shelf);
   if (read.isPending) return <p className="flow-shelf-state" role="status">Loading</p>;
-  if (read.isLoadingError) return <Button variant="quiet" onClick={() => void read.refetch()}>Try again</Button>;
+  if (read.isLoadingError)
+    return (
+      <p className="flow-shelf-state">
+        <ReadFault what={shelf === 'done' ? 'Done tasks' : 'Snoozed tasks'} reads={[read]} inline />
+      </p>
+    );
   if (!read.data?.pages[0]?.tasks.length) return <p className="flow-shelf-state">{shelf === 'done' ? 'No done tasks' : 'No snoozed tasks'}</p>;
   return <TaskSections read={read} />;
 }
@@ -163,7 +168,12 @@ function SnoozedAsk({ id, title, href, until }: { id: string; title: string; hre
 function SnoozedAsks() {
   const read = useQuery(flowSnoozedAsksQuery);
   if (read.isPending) return <p className="flow-shelf-state" role="status">Loading asks</p>;
-  if (read.isError) return <Button variant="quiet" onClick={() => void read.refetch()}>Try again</Button>;
+  if (read.isError)
+    return (
+      <p className="flow-shelf-state">
+        <ReadFault what="Asks" reads={[read]} inline />
+      </p>
+    );
   if (!read.data.items.length) return null;
   return (
     <Section name="Asks" count={read.data.items.length}>
@@ -242,7 +252,7 @@ export function NeedsYouPage() {
       // Always here, the same height either way: the rows never shift when it clears.
       after={all ? undefined : <span className="flow-sorting" role="status">{waiting ? 'Tico is sorting…' : ''}</span>}
       state={all && read.isPending ? 'loading' : all && read.isLoadingError ? 'fault' : 'ready'}
-      onRetry={() => void read.refetch()}
+      reads={[read]}
       className="tasks-page"
       sections={all
         ? read.data?.pages[0]?.tasks.length ? <TaskSections read={read} /> : <Empty title="No work to claim" />

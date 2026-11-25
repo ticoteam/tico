@@ -155,10 +155,10 @@ describe('Strategy: where we play @s304', () => {
     expect(screen.queryByText('None yet')).toBeNull();
   });
 
-  it('offers Try again when the market did not load, and reads it again @s304', async () => {
-    market(500);
+  it('offers Try again when the market was refused, and reads it again @s304', async () => {
+    market(409);
     show('strategy', '/company/strategy');
-    expect(await screen.findByText('Market did not load')).toBeTruthy();
+    expect(await screen.findByText("Market didn't load · request refused")).toBeTruthy();
     market(200);
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(await screen.findByText('Balcony growers')).toBeTruthy();
@@ -421,7 +421,7 @@ describe('KPI place @s367', () => {
   it('says so when the KPI tree does not load', async () => {
     serve(nothing);
     show('goals', PLACE);
-    expect(await screen.findByText('The KPI tree did not load')).toBeTruthy();
+    expect(await screen.findByText("The KPI tree didn't load · not found")).toBeTruthy();
   });
 });
 

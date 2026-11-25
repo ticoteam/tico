@@ -235,7 +235,7 @@ describe('One watch', () => {
 
   it('with no matches says so in the page, and one that failed has Try again @s540', async () => {
     let n = 0;
-    record((u) => (u.includes('/listening/items') ? (n++ ? ok({ items: [] }) : { status: 500, body: { error: { code: 'boom', detail: 'boom' } } }) : nothing()));
+    record((u) => (u.includes('/listening/items') ? (n++ ? ok({ items: [] }) : { status: 409, body: { error: { code: 'boom', detail: 'boom' } } }) : nothing()));
     queryClient.setQueryData(watchQuery('w1').queryKey, watch({ trigger: { type: 'listening', sources: [] } as unknown as Routine['trigger'] }));
     show('/company/listening?watch=w1');
     fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));

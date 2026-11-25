@@ -14,6 +14,7 @@ import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { PictureViewer, type Picture } from '@/kit/PictureViewer';
 import { Skeleton, useDelayed } from '@/kit/Skeleton';
 import { toast } from '@/kit/Toast';
+import { ReadFault } from '@/pagekinds';
 import { download } from './Files';
 import { failedToast, isPage } from './model';
 import { Face } from './parts';
@@ -59,7 +60,7 @@ function PageOrFile({ task, id, title, page, file, pin }: { task: string; id: st
   if (!app && held.mount) setHeld({ mount: '', src: '' });
   const src = app && held.mount === mount ? held.src : p?.src;
   if (!page || shown.isError) return <div className="frame fv">{file}</div>;
-  if (text.isError) return <Empty icon="alert" title={`${title} did not load`} />;
+  if (text.isError) return <ReadFault what={title} reads={[text]} />;
   const html = text.data != null ? frameDoc(parsePage(text.data)) : null;
   return (
     <div className="frame is-inset">
@@ -90,7 +91,7 @@ export function FileTab({ task, f, version }: { task: string; f: TaskFileView; v
   const v =
     listed ??
     (now && meta.data && { ...now, n: version as number, url: `/api/v2/files/${encodeURIComponent(f.id)}?v=${version}`, mime: meta.data.content_type, name: meta.data.name, size: meta.data.size ?? null });
-  if (meta.isError) return <Empty icon="alert" title="This file did not load" />;
+  if (meta.isError) return <ReadFault what="This file" reads={[meta]} />;
   if (!v) return <PageBones />;
   const name = f.title || f.name;
   // Each version keeps the name it was stored under: its viewer and its download follow that version's own.
@@ -278,7 +279,7 @@ export function FileView({ t, file, full, back, onClose }: { t: TaskData; file: 
         {menu}
       </div>
       {files.isError || (f && !listed && meta.isError) ? (
-        <Empty icon="alert" title="This file did not load" />
+        <ReadFault what="This file" reads={[files, meta]} />
       ) : files.isSuccess && !f ? (
         <Empty title="This file is gone" />
       ) : f && v && other ? (

@@ -184,7 +184,7 @@ describe('Market @s302 @s319 @s320 @s324 @s325 @s357 @s360 @s361', () => {
   it('shows the fault when Market does not load', async () => {
     serve((url) => (url.includes('/api/v2/market/') ? { status: 500, body: { detail: 'boom' } } : nothing()));
     show(<StrategyPage tab="market" />, at());
-    expect(await screen.findByText('Strategy did not load')).toBeTruthy();
+    expect(await screen.findByText("Strategy didn't load · server error")).toBeTruthy();
   });
 
   it('opens a segment: its size, estimates and organizations; the owner accepts an estimate', async () => {
@@ -269,7 +269,7 @@ describe('Market @s302 @s319 @s320 @s324 @s325 @s357 @s360 @s361', () => {
     serve(nothing);
     market();
     show(<StrategyPage tab="market" search={{ panel: 'player:e9' }} />, at('player:e9'));
-    expect(await screen.findByText('The note did not load')).toBeTruthy();
+    expect(await screen.findByText("The note didn't load · not found")).toBeTruthy();
   });
 });
 

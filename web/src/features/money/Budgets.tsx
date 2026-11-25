@@ -116,7 +116,7 @@ export function BudgetsPage({ search, mine = false }: { search: FinanceSearch; m
     <List
       {...head}
       state={readState(current)}
-      onRetry={() => void current.refetch()}
+      reads={[current]}
       actions={
         <>
           <span data-phone data-target="range:budgets">

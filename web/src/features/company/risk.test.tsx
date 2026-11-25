@@ -139,10 +139,11 @@ describe('Risk list @n:re:risk', () => {
     expect(within(b).queryByText('New')).toBeNull();
   });
 
-  it('says so when the risks do not load, with Try again', async () => {
+  it('says why when the risks do not load; a server error is read again by itself, so no Try again', async () => {
     serve((url) => (url.includes('/api/v2/risks') ? { status: 500, body: { detail: 'boom' } } : ok({ matters: [], next_offset: null })));
     show('/company/risk');
-    expect(await screen.findByRole('button', { name: 'Try again' })).toBeTruthy();
+    expect(await screen.findByText(/didn't load · server error$/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });
 });
 

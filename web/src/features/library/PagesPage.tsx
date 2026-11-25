@@ -88,7 +88,7 @@ function PagesList({ filters }: { filters: PageFilters }) {
         }
         filter={chips.length > 0 && <FilterRow filters={chips} />}
         state={query.isError ? 'fault' : query.isPending ? 'loading' : 'ready'}
-        onRetry={() => void query.refetch()}
+        reads={[query]}
         sections={rows.length ? (
           <VirtualList
             className="lib-vl"

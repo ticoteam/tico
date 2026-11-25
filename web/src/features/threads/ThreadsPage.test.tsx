@@ -318,13 +318,14 @@ describe('The Agent bar reads the member-private DM @4857-S28', () => {
 });
 
 describe('The Agent bar that did not load @4857-S16', () => {
-  it('keeps its head, the agent named and linked, where the frame puts its fold control, with Try again', async () => {
+  it('keeps its head, the agent named and linked, where the frame puts its fold control, and says why', async () => {
     serve((url) => (url.includes('/threads/dm?') ? { status: 500, body: { error: { code: 'boom', detail: 'Broke' } } } : undefined));
     queryClient.setDefaultOptions({ queries: { ...queryClient.getDefaultOptions().queries, retry: false } });
     show(<ChatSheet chat="agent:qa" />, '/tasks');
-    expect(await screen.findByText('This chat did not load')).toBeTruthy();
+    expect(await screen.findByText("This chat didn't load · server error")).toBeTruthy();
     expect(screen.getByRole('link', { name: 'QA' }).closest('header')?.className).toContain('side-head');
-    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    // a server error is read again by itself once the stream is back
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });
 });
 
@@ -385,8 +386,9 @@ describe('The menu\'s Threads list @s156', () => {
     );
     show(<MenuThreads asks={new Set()} />, '/threads');
     expect(await screen.findByRole('status', { name: 'Loading threads' })).toBeTruthy();
-    finish({ status: 500, body: {} });
-    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+    finish({ status: 409, body: {} });
+    expect(await screen.findByText("Threads didn't load · request refused")).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(await screen.findByTitle('Launch plan')).toBeTruthy();
     expect(reads).toBe(2);
   });

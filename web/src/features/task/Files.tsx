@@ -12,6 +12,7 @@ import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { toast } from '@/kit/Toast';
 import { changeWords, fmtDate, openOf } from '@/lib';
+import { ReadFault } from '@/pagekinds';
 import { DETAILS, failedToast, isPage, reasonOf, tabAddress } from './model';
 import { pagePickQuery, pageShownQuery, taskDetailQuery, taskFilesQuery, type TaskData } from './queries';
 import type { Versions } from './Versions';
@@ -176,7 +177,7 @@ export function LinkPage({ task, onDone }: { task: string; onDone: () => void })
     <div className="tv-new">
       <Search label="Find a page" placeholder="Find a page" value={q} onValueChange={setQ} wide autoFocus />
       {found.isError ? (
-        <Empty icon="alert" title="Pages did not load" />
+        <ReadFault what="Pages" reads={[found]} />
       ) : found.data && !rows.length ? (
         <Empty title={q.trim() ? 'No pages' : 'No other pages'} />
       ) : (

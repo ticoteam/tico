@@ -13,7 +13,7 @@ import { MenuItem, MenuRule } from '@/kit/Menu';
 import { Select } from '@/kit/Select';
 import { Switch } from '@/kit/Switch';
 import { toast } from '@/kit/Toast';
-import { PageMore } from '@/pagekinds';
+import { PageMore, ReadFault } from '@/pagekinds';
 import { TRANSCRIPT_SOURCES, type TranscriptSource } from './model';
 import { PeoplePick } from './PeoplePick';
 import { press, useNameOf } from './parts';
@@ -500,9 +500,14 @@ type Team = 'review' | 'auto';
 const SHARE_WORDS: Record<Team, string> = { review: 'Review before sharing', auto: 'Share at once' };
 
 function SettingsForm({ done }: { done: () => void }) {
-  const { data: s, isError } = useQuery(meetingSettingsQuery);
+  const { data: s, isError, error, refetch } = useQuery(meetingSettingsQuery);
   const owner = useQuery(meQuery).data?.role === 'owner';
-  if (isError) return <p className="call-src-err">Settings did not load.</p>;
+  if (isError)
+    return (
+      <p className="call-src-err">
+        <ReadFault what="Settings" reads={[{ error, refetch }]} inline />
+      </p>
+    );
   if (!s) return null;
   return <SettingsFields key={String(s.auto_share) + s.review_default} s={s} owner={owner} done={done} />;
 }

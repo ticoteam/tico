@@ -508,6 +508,20 @@ test('settings: change the model a new agent uses; add a Cloud agent', async ({ 
   clean(page);
 });
 
+test("a read that failed says why in the page's one line; a restart has no Try again (it is read again by itself)", async ({ browser, hub }) => {
+  const page = await open(browser, hub, '/tasks');
+  await expect(page.locator('.pk-head h1')).toHaveText('Tasks');
+  // Tico restarting: Usage's reads answer 503 starting (said not to wait, so the page shows it at once)
+  const starting = JSON.stringify({ code: 'starting', detail: 'Tico is starting', retryable: false });
+  await page.route('**/api/v2/usage?**', (r) => r.fulfill({ status: 503, contentType: 'application/problem+json', body: starting }));
+  await page.goto(`${hub.url}/company/usage`);
+  await expect(page.locator('.pk-head h1')).toHaveText('Usage');
+  await expect(page.getByRole('heading', { name: "Usage didn't load · server restarting" })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Try again' })).toHaveCount(0);
+  await page.screenshot({ path: test.info().outputPath('read-fault-1440.png') });
+  expect(page.problems.filter((p) => p !== '503 GET /api/v2/usage')).toEqual([]);
+});
+
 test("phone: a case opening shows its page while it loads; its chat's card for the email raises the email with its Approve", async ({ browser, hub }) => {
   const { subject } = hub.facts.mail;
   const page = await open(browser, hub, '/tasks', PHONE);

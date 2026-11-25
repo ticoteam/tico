@@ -5,8 +5,6 @@ import { run } from '@/actions';
 import { ApiError } from '@/api/client';
 import { agentWords, Conversation, MessageBones, SessionLine, type ChatMessage, type Session } from '@/conversation';
 import { meQuery, useActor } from '@/data';
-import { Button } from '@/kit/Button';
-import { Empty } from '@/kit/Empty';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { useCards } from '@/kit/Popover';
@@ -14,7 +12,7 @@ import { Link } from '@/kit/Link';
 import { Viewer } from '@/kit/Viewer';
 import { toast } from '@/kit/Toast';
 import { useFollow } from '@/live/follow';
-import { Document, type PageState, type PageTab } from '@/pagekinds';
+import { Document, type PageState, type PageTab, ReadFault } from '@/pagekinds';
 import { FilePreview } from '@/features/library/exports';
 import { flowQuery, flowSnoozedAsksQuery } from '@/features/tasks/routing';
 import { whoHref } from '@/features/team/routing';
@@ -101,7 +99,7 @@ function OneTask({ task, tab, file }: TaskPageProps) {
         state={stateOf(error)}
         empty={{ title: 'This task is gone' }}
         noAccess={{ text: "You don't have access" }}
-        onRetry={retry}
+        reads={error ? [{ error, refetch: retry }] : undefined}
       />
     );
   }
@@ -347,9 +345,7 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
   const body =
     unresolved ? (
       files.isError ? (
-        <Empty icon="alert" title="This file did not load">
-          <Button onClick={() => files.refetch()}>Try again</Button>
-        </Empty>
+        <ReadFault what="This file" reads={[files]} />
       ) : (
         <PageBones />
       )
@@ -501,7 +497,7 @@ export function TaskChat({ task }: TaskChatProps) {
         {session && <IconButton icon="close" label="Back to comments" size="sm" onClick={toComments} />}
       </header>
       {t.conversation_id && room.failed ? (
-        <ChatNotRead retry={room.retry} />
+        <ChatNotRead read={room.room} />
       ) : t.conversation_id && own === undefined ? (
         <MessageBones />
       ) : t.conversation_id ? (

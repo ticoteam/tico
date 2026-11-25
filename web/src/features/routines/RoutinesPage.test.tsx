@@ -149,11 +149,11 @@ describe('Routines', () => {
     expect(screen.queryByRole('textbox', { name: 'Search routines' })).toBeNull();
   });
 
-  it('shows the fault with Try again', async () => {
+  it('shows the fault and why; a server error is read again by itself, so no Try again', async () => {
     record((url) => (url.includes('/automations') ? failed() : nothing()));
     show('/company/routines');
-    expect(await screen.findByText('This page did not load')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    expect(await screen.findByText("This page didn't load · server error")).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });
 
   it('counts a built-in routine as a search match', async () => {
@@ -247,10 +247,11 @@ describe('One routine', () => {
 
   it('a routine that did not load says so in its panel, with Try again @s510', async () => {
     let n = 0;
-    record((u) => (u.endsWith('/api/v2/automations/r7') ? (n++, failed()) : nothing()));
+    // a refusal: only Try again reads it again
+    record((u) => (u.endsWith('/api/v2/automations/r7') ? (n++, { status: 409, body: { error: { code: 'boom', detail: 'boom' } } }) : nothing()));
     queryClient.setQueryData(routinesQuery.queryKey, []);
     show('/company/routines?panel=routine:r7');
-    expect(await screen.findByText('This routine did not load')).toBeTruthy();
+    expect(await screen.findByText("This routine didn't load · request refused")).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     await waitFor(() => expect(n).toBe(2));
   });

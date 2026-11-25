@@ -13,7 +13,7 @@ import { Menu, MenuItem } from '@/kit/Menu';
 import { Row } from '@/kit/Row';
 import { SkeletonRows } from '@/kit/Skeleton';
 import { VirtualList } from '@/kit/VirtualList';
-import { FilterRow, List, RecordPanel, Section, type PageState, type PageTab } from '@/pagekinds';
+import { FilterRow, List, type PageState, type PageTab, ReadFault, RecordPanel, Section } from '@/pagekinds';
 import { ContactRules, PlaceFacts, PlaceSections, useUs } from './ContactPlace';
 import { Face, Find, Foot, press, useGo, Who } from './parts';
 import {
@@ -231,7 +231,7 @@ function ContactPanel({ id, search }: { id: string; search: ContactsSearch }) {
         card.isPending ? (
           <SkeletonRows rows={6} label="Loading the contact" />
         ) : card.isError ? (
-          <Empty title="This contact did not load" icon="alert" />
+          <ReadFault what="This contact" reads={[card]} />
         ) : (
           c && (
             <Facts label="About">
@@ -415,7 +415,7 @@ function FactHistory({ contact, field, onClose }: { contact: string; field: Attr
   const rows = useQuery(factHistoryQuery(contact, field.key));
   return (
     <Section name={`${field.name} history`} count={rows.data?.length} actions={<IconButton icon="close" label="Close" onClick={onClose} />}>
-      {rows.isError && <Empty title="This did not load" icon="alert" />}
+      {rows.isError && <ReadFault what="This" reads={[rows]} />}
       {rows.data && !rows.data.length && <Empty title="No past values" />}
       {rows.data?.map((h) => (
         <div key={h.id} className="row lrow hrow">

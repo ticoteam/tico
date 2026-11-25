@@ -132,7 +132,7 @@ function Overview({ mayReadSources, mayReadPayables, mayReadReceivables }: { may
     <Dashboard
       {...head}
       state={state}
-      onRetry={() => void sources.refetch()}
+      reads={[sources]}
       empty={{
         title: 'No source connected',
         action: (
