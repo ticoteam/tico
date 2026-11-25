@@ -282,10 +282,10 @@ export function deleteHistory() {
 }
 
 /** The install's error-reporting settings (backend/observability.py browser_config): empty when reporting is off, the
-    caller is not a person, or the server did not answer. Asked once, without retries: a page goes on without them. */
+    caller is not a person, or the server did not answer through a restart (the client's own retries). */
 export async function observabilityConfig(): Promise<Record<string, unknown>> {
   try {
-    const config = await api.get<unknown>('/api/v2/observability', { once: true, signal: AbortSignal.timeout(10_000) });
+    const config = await api.get<unknown>('/api/v2/observability');
     return config && typeof config === 'object' ? (config as Record<string, unknown>) : {};
   } catch {
     return {};

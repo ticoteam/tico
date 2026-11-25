@@ -9,8 +9,9 @@ one PostHog project between several apps by filtering on the `app` property (Tic
 
 1. Create a PostHog project (and, optionally, a Sentry project for Tico). Preserve the pinned SDK
    and privacy filters described below.
-2. Set the variables below in the API service's environment. In Docker, add them to the install's private `.env` and explicitly
-   forward them with the [compose override](#docker-configuration) below; `.env` alone does not pass them into the container. Do not commit populated values.
+2. Set the variables below in the API service's environment. In Docker, add them to the install's private `.env`: the stock
+   `compose.yaml` passes the four Sentry settings (`TICO_OBSERVABILITY_ENVIRONMENT`, `TICO_OBSERVABILITY_ID_SECRET`,
+   `TICO_SENTRY_DSN`, `TICO_SENTRY_SERVER_DSN`) into the server; the others need the [compose override](#docker-configuration). Do not commit populated values.
 
 | Variable | Purpose |
 | --- | --- |
@@ -27,23 +28,35 @@ one PostHog project between several apps by filtering on the `app` property (Tic
    key; legacy password-bearing DSNs and custom/self-hosted endpoints are rejected. Only
    human/owner sessions can fetch `/api/v2/observability`; responses are not cached. The endpoint
    exposes the public project key/DSN and an opaque identity, never the identity secret.
-3. Install the locked Python dependencies. The checked-in browser vendor bundle is ready
-   for the existing static-file deployment. To regenerate it: `npm ci` then
-   `npm run build:observability`. Commit the generated bundle with source/dependency changes.
+3. Install the locked Python dependencies. The web app pins `@sentry/browser` in `web/package.json`; its code is a
+   separate file the page fetches only when a DSN is set.
 4. In a staging deployment, sign in, navigate, create a test task,
    send a test message, and exercise a safe rejected submission. Inspect `app=tico`, environment,
    outcomes and duration fields in PostHog. Inspect one controlled frontend error and API
    failure in Sentry. Confirm network payloads contain no content or raw URLs. Test logout
    and a different account; check that identities change and prior events do not follow it.
 5. Enable it in production only after the staging check. To disable, remove the relevant key/DSN or required environment and restart
-   the API. Browser config refreshes every 30 seconds;
-   reload open tabs to apply configuration changes immediately.
+   the API. The web app reads the config once per page load; reload open tabs to apply changes.
 
 No `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, or `SENTRY_PROJECT` is sent to the browser. Stack
 locations are restricted to known static filenames and line/column numbers. The web app's files
 (`/next/assets/<name>-<hash>.js`, built from `web/`) are minified, and nothing is uploaded to Sentry.
 If upload is added later, its authentication token must remain in CI/build secrets, never in
 public config or browser assets. Release/debug mapping needs its own tested privacy policy.
+
+## Web app errors
+
+The web app (`web/`, `web/src/features/support/errors.ts`) sends errors only, to Sentry; it sends nothing to
+PostHog. With `TICO_SENTRY_DSN` and `TICO_OBSERVABILITY_ENVIRONMENT` set, it reports uncaught errors, unhandled
+rejections and every "This page did not load" screen (`source=page_fault`, except a refused 403). Each event is
+rebuilt before sending from: the error's type, stack frames in the app's own files, the route's template
+(`/_app/tasks/$id`, never the address), the server's status and error code for a failed read, the release,
+the environment and the opaque `tico:` identity. Only a `TypeError` or `ReferenceError` keeps the engine's
+message (it names code), with any address in it replaced by `<url>`. Breadcrumbs, request data, other messages,
+user info and IP inference are off. If the Sentry file itself fails to load, reporting stays off for that page
+and the app does not reload for it.
+
+The PostHog event contract below described the removed `ui/` app; `web/` does not send it.
 
 ## Event contract and interpretation
 
@@ -138,7 +151,7 @@ richness for privacy; stack locations are the primary grouping evidence.
 
 To report one install's server and runner errors, and no other install's, set on that install only:
 `TICO_SENTRY_SERVER_DSN` (the Sentry project's public DSN), `TICO_OBSERVABILITY_ENVIRONMENT` (`production`), and
-optionally `TICO_INSTANCE_NAME`; forward them with the [compose override](#docker-configuration) and recreate the
+optionally `TICO_INSTANCE_NAME` (forward that one with the [compose override](#docker-configuration)), and recreate the
 server. With either of the first two unset or empty, the Sentry SDK is never started and nothing is sent. Several
 installs can share one Sentry project: every event carries `release` (the Tico version, or `TICO_RELEASE`) and an
 `instance` tag. Runners need no setting: each sends the file and line of a panic to its own server with its next
@@ -175,7 +188,8 @@ secret, use 32-256 URL-safe letters, digits, underscores or hyphens. Keep it sta
 
 ### Docker configuration
 
-Add this `compose.override.yaml` beside the install's `compose.yaml`:
+The stock `compose.yaml` already passes `TICO_OBSERVABILITY_ENVIRONMENT`, `TICO_OBSERVABILITY_ID_SECRET`,
+`TICO_SENTRY_DSN` and `TICO_SENTRY_SERVER_DSN`. For the other settings, add this `compose.override.yaml` beside the install's `compose.yaml`:
 
 ```yaml
 services:

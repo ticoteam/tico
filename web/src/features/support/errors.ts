@@ -1,10 +1,11 @@
 /* Errors to the install's Sentry project, when its server names one (GET /api/v2/observability, backend/observability.py
    browser_config). The rule is the server's own reports' rule: code labels, never data. An event carries the error's
    type, the frames in our own files (file name, line, column, function), the page's route template, the server's code
-   and status for a refused read, and, for a TypeError or ReferenceError only, the engine's message (it names code, not
-   data). No address, query, cookie, header, body, breadcrumb, typed text or any other message leaves the page. Off (no
+   and status for a refused read, and, for a TypeError or ReferenceError only, the engine's message with any address
+   cut out (it names code, not data). No address, query, cookie, header, body, breadcrumb, typed text or any other message leaves the page. Off (no
    DSN), nothing more loads: the SDK is its own chunk, fetched only when reporting is on. */
 
+import type * as SentryBrowser from '@sentry/browser';
 import type { ErrorEvent, StackFrame } from '@sentry/browser';
 import { ApiError } from '@/api/client';
 import { observabilityConfig } from './queries';
@@ -17,7 +18,7 @@ interface Labels {
   route?: string;
 }
 
-type Sdk = typeof import('@sentry/browser');
+type Sdk = typeof SentryBrowser;
 
 const DSN = /^https:\/\/[a-fA-F0-9]+@(?:[a-z0-9-]+\.)*ingest(?:\.[a-z]{2})?\.sentry\.io\/[0-9]+$/;
 const ENVIRONMENTS = new Set(['development', 'staging', 'production', 'test']);
@@ -35,6 +36,8 @@ let sdk: Sdk | null = null;
 let identity = '';
 // idle until main.tsx starts it; off when the server names no project (or the SDK did not load)
 let state: 'idle' | 'starting' | 'off' | 'on' = 'idle';
+// The SDK's own chunk is on its way: its failing is not the app's (features/notices/recovery.ts lets it be).
+let loading = false;
 // Reports made before the SDK loaded (a page that fails on its first load), sent once it has.
 const early: [unknown, Labels][] = [];
 
@@ -49,10 +52,13 @@ export async function startErrorReports(): Promise<void> {
   identity = typeof config.distinct_id === 'string' && /^tico:[a-f0-9]{64}$/.test(config.distinct_id) ? config.distinct_id : '';
   const release = typeof config.release === 'string' && RELEASE.test(config.release) ? config.release : undefined;
   let loaded: Sdk;
+  loading = true;
   try {
     loaded = await import('@sentry/browser');
   } catch {
-    return stop(); // its chunk did not load (a release meanwhile): no reports from this page
+    return stop(); // its chunk did not load (blocked, or a release meanwhile): no reports from this page
+  } finally {
+    loading = false;
   }
   loaded.init({
     dsn,
@@ -60,7 +66,9 @@ export async function startErrorReports(): Promise<void> {
     release,
     // Only the window's own error and rejection handlers: no breadcrumbs, no fetch or history wrapping, no sessions.
     defaultIntegrations: false,
-    integrations: [loaded.globalHandlersIntegration(), loaded.linkedErrorsIntegration()],
+    integrations: [loaded.globalHandlersIntegration()],
+    // no user info: Sentry would otherwise infer the visitor's IP address
+    dataCollection: { userInfo: false },
     maxBreadcrumbs: 0,
     sendClientReports: false,
     tracesSampleRate: 0,
@@ -71,6 +79,9 @@ export async function startErrorReports(): Promise<void> {
   state = 'on';
   for (const [error, labels] of early.splice(0)) send(error, labels);
 }
+
+/** The SDK's chunk is loading now: a file that fails meanwhile may be it, which only turns reporting off. */
+export const loadingReporter = (): boolean => loading;
 
 function stop(): void {
   state = 'off';
@@ -104,7 +115,9 @@ export function scrub(event: ErrorEvent, environment: string, release: string | 
     .map(ownFrame)
     .filter((f): f is StackFrame => f !== null)
     .slice(-30);
-  const value = CODE_MESSAGES.has(type) && typeof last.value === 'string' ? last.value.slice(0, 200) : undefined;
+  // An engine message may still name an address (a module that did not load): never the address.
+  const value =
+    CODE_MESSAGES.has(type) && typeof last.value === 'string' ? last.value.replace(/[a-z][a-z0-9+.-]*:\/\/\S*/gi, '<url>').slice(0, 200) : undefined;
   const given = event.tags ?? {};
   const tags: Record<string, string> = { app: 'tico-web', source: 'error' };
   for (const key of ['source', 'route', 'status', 'code'] as const) {

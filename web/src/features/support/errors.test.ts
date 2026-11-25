@@ -6,7 +6,6 @@ const sdk = vi.hoisted(() => ({
   init: vi.fn(),
   captureException: vi.fn(),
   globalHandlersIntegration: vi.fn(() => ({ name: 'GlobalHandlers' })),
-  linkedErrorsIntegration: vi.fn(() => ({ name: 'LinkedErrors' })),
 }));
 const config = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
 vi.mock('@sentry/browser', () => sdk);
@@ -44,7 +43,14 @@ describe('error reports', () => {
     errors.reportError(refused, { source: 'page_fault', route: '/_app/tasks/$id' });
     await errors.startErrorReports();
     expect(sdk.init).toHaveBeenCalledWith(
-      expect.objectContaining({ dsn: DSN, environment: 'production', release: 'v0.6.90', defaultIntegrations: false, maxBreadcrumbs: 0 }),
+      expect.objectContaining({
+        dsn: DSN,
+        environment: 'production',
+        release: 'v0.6.90',
+        defaultIntegrations: false,
+        dataCollection: { userInfo: false },
+        maxBreadcrumbs: 0,
+      }),
     );
     expect(sdk.captureException).toHaveBeenCalledWith(refused, {
       tags: { source: 'page_fault', route: '/_app/tasks/$id', status: '502', code: 'http_502' },
@@ -114,6 +120,8 @@ describe('error reports', () => {
     expect(JSON.stringify(plain)).not.toMatch(/secret|Ana|\$40/);
     const typed = errors.scrub(event('TypeError', "Cannot read properties of undefined (reading 'id')"), 'production', undefined);
     expect(typed?.exception?.values?.[0]?.value).toBe("Cannot read properties of undefined (reading 'id')");
+    const missing = errors.scrub(event('TypeError', 'Failed to fetch dynamically imported module: https://acme.tico.team/next/assets/Tasks-1a2b.js'), 'production', undefined);
+    expect(missing?.exception?.values?.[0]?.value).toBe('Failed to fetch dynamically imported module: <url>');
     expect(errors.scrub({ type: undefined, message: 'no exception' }, 'production', undefined)).toBeNull();
   });
 });
