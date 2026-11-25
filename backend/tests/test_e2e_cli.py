@@ -202,6 +202,8 @@ def argument_value(action, command):
         "conversation",
     ) or dest.endswith("_id"):
         return SEEDS.get(command[0], SEEDS["default"])
+    if dest == "pin" and list(command) == ["pin", "update"]:
+        return "updates"  # a built-in on every agent's sidebar (the arrange-your-sidebar skill's example), not a pin id
     if dest == "owner" and command[0] == "task":
         return "human:ana"  # an explicit actor: the test registry has no employees.yaml
     if dest in ("bot", "owner", "to", "slug", "from_bot", "bots"):
@@ -232,6 +234,7 @@ SEEDS = {"default": "acme-smoke-id"}
 EXTRA = {
     "bot create": ["acme-smoke-bot", "--record-only"],
     "decision ask": ["--list"],
+    "pin update": ["--place", "bot:ops", "--position", "0"],
     "task child": ["--owner", "human:ana"],
 }
 
