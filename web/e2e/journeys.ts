@@ -389,11 +389,45 @@ test('a thread: send a message; archive a mail row', async ({ browser, hub }) =>
     .poll(async () => (await sql(hub, `SELECT COUNT(*) AS n FROM messages WHERE body='The launch note is in Plan.'`))[0]?.n)
     .toBe(1);
 
+  // every mail call and every change to the rows, printed if the archived row stays (or comes back)
+  const t0 = Date.now();
+  const trace: string[] = [];
+  const at = () => `${String(Date.now() - t0).padStart(6)}ms`;
+  page.on('request', (r) => r.url().includes('/api/v2/') && trace.push(`${at()} > ${r.method()} ${new URL(r.url()).pathname}${new URL(r.url()).search}`));
+  page.on('response', async (r) => {
+    const u = new URL(r.url());
+    if (!u.pathname.startsWith('/api/v2/')) return;
+    let note = '';
+    if (u.pathname.endsWith('/mail/messages')) note = ` ${(await r.text().catch(() => '')).match(/"subject":"[^"]*"/g)?.join(',') ?? ''}`;
+    trace.push(`${at()} < ${r.status()} ${r.request().method()} ${u.pathname}${u.search}${note}`);
+  });
+  page.on('framenavigated', (f) => f === page.mainFrame() && trace.push(`${at()} nav ${f.url()}`));
+  page.on('console', (m) => trace.push(`${at()} console.${m.type()} ${m.text().slice(0, 200)}`));
+  await page.exposeFunction('__traceRows', (s: string) => trace.push(`${at()} rows ${s}`));
   await page.goto(`${hub.url}/threads/mail?box=${encodeURIComponent(hub.facts.mail.mailbox)}`);
+  await page.evaluate(() => {
+    const say = (window as unknown as { __traceRows: (s: string) => void }).__traceRows;
+    let last = '';
+    new MutationObserver(() => {
+      const now = [...document.querySelectorAll('a.ml-row')].map((a) => a.getAttribute('title') ?? '').join(' | ') + ` @ ${location.search}`;
+      if (now !== last) say((last = now));
+    }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['href', 'title'] });
+  });
   const row = page.locator('a.ml-row', { hasText: 'Order 1042 shipped' });
   await row.click();
+  trace.push(`${at()} clicked row`);
   await page.getByRole('button', { name: 'Archive' }).click();
-  await expect(row).toHaveCount(0);
+  trace.push(`${at()} clicked Archive`);
+  try {
+    await expect(row).toHaveCount(0);
+    // the list read again (as the write does, and a reload): the archived mail is out of the inbox, not only hidden
+    await page.reload();
+    await expect(page.locator('a.ml-row').first()).toBeVisible();
+    await expect(row).toHaveCount(0);
+  } catch (e) {
+    console.log(`TRACE archive-a-mail-row\n${trace.join('\n')}`);
+    throw e;
+  }
   const inbox = await api<{ messages: { msg_id: string; labels: string[] }[] }>(hub, `mail/messages?mailbox=${hub.facts.mail.mailbox}`);
   expect(inbox.messages.find((m) => m.msg_id === 'm-1')?.labels ?? []).not.toContain('INBOX');
   clean(page);
