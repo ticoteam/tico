@@ -633,7 +633,7 @@ def _last_move(conn: "sqlite3.Connection", task_id: str) -> Row:
         "ORDER BY rowid DESC LIMIT 1",
         (task_id,),
     ).fetchone()
-    data = _h()._json(found[0], {}) if found and found[0] else {}
+    data: Any = _h()._json(found[0], {}) if found and found[0] else {}
     return cast("Row", data) if isinstance(data, dict) else {}
 
 
@@ -1352,7 +1352,7 @@ def move(
     elif kind in ("back", "closed"):
         _need_why(conn, by, why, "close it" if kind == "closed" else "move it back", task_id)
     restored = _undoes_close(conn, row, target, by) if kind == "reopen" and undo_close else None
-    closed_with = [str(t) for t in _last_move(conn, task_id).get("closed_with") or ()] if restored else []
+    give_back = [str(t) for t in _last_move(conn, task_id).get("closed_with") or ()] if restored else []
     if kind == "back" or (kind == "side" and row["stage"].get("side") and is_main_work(target)):
         _may_go_back_to(conn, by, row, target)
     if kind == "closed" and not cascade:
@@ -1463,8 +1463,8 @@ def move(
     # What a move causes beyond the task's own row: the events, a routine's day, stopping work on a closed task
     # (backend/task_effects.py). Last, and for every move, so nothing that moves a task can leave them out.
     task_effects.moved(conn, row, moved, "side" if side else kind, by, why, revision)
-    if closed_with:
-        _undo_cascade(conn, closed_with, by, why)
+    if give_back:
+        _undo_cascade(conn, give_back, by, why)
     return _task(conn, task_id)
 
 
