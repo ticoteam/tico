@@ -17,6 +17,7 @@ from fastapi import FastAPI, Request
 from . import access as _Access
 from . import company_floor as _floor
 from . import models as M
+from . import pipeline_changes
 from .store import H as _H
 from .store import Problem
 from .api_contract import api_v2
@@ -140,11 +141,11 @@ def _and(words: list[str]) -> str:
 
 def _save_text(c: Any, by: str, detail: dict[str, Any], pipeline_id: str) -> str:
     """What a pipeline save says in the Log. Tico's move of untouched preset wording names the stages it moved (the goal
-    for the pipeline's own goal); a person's save says it was made or saved."""
+    for the pipeline's own goal); any other save names its first change from and to (pipeline_changes.sentence)."""
     who = H.actor_name(c, by)
     moved = detail.get("newer_preset_text")
     if not moved:
-        return f"{who} {'made' if detail.get('made') else 'saved'} the pipeline"
+        return pipeline_changes.sentence(c, by, pipeline_id, detail)[0]
     names = {
         str(r["id"]): r["name"] for r in c.execute("SELECT id,name FROM stages WHERE pipeline_id=?", (pipeline_id,))
     }
@@ -183,8 +184,20 @@ def log(c: Any, pipeline_id: str, visible_sql: str) -> list[dict[str, Any]]:
         "ORDER BY created_at DESC LIMIT ?",
         (pipeline_id, LOG_LIMIT),
     ):
-        text = _save_text(c, by, H._json(detail, {}), pipeline_id)
-        lines.append({"at": at, "text": text, "task_id": None, "by": by, "why": ""})
+        data = H._json(detail, {})
+        text = _save_text(c, by, data, pipeline_id)
+        every = [] if data.get("newer_preset_text") else pipeline_changes.sentence(c, by, pipeline_id, data)[1]
+        lines.append(
+            {
+                "at": at,
+                "text": text,
+                "task_id": None,
+                "by": by,
+                "why": "",
+                "version": data.get("version"),
+                "changes": every,
+            }
+        )
     lines.sort(key=lambda line: line["at"] or "", reverse=True)
     return lines[:LOG_LIMIT]
 

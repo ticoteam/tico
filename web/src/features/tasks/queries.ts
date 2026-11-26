@@ -59,6 +59,8 @@ export interface Pipeline {
   preset?: string | null;
   /** Who manages it: an actor id. */
   manager?: string | null;
+  /** Who owns it, as set on its Edit page (only the company's owner and Admins set it): an actor id. */
+  boardOwner?: string | null;
 }
 
 type PipelineRecord = PipelineSettings & {
@@ -80,6 +82,7 @@ function adaptPipeline(p: PipelineRecord): Pipeline {
     mayChange: p.may_change !== false,
     preset: p.preset ?? null,
     manager: p.manager_id ?? null,
+    boardOwner: p.owner_id ?? null,
   };
 }
 
@@ -541,6 +544,8 @@ export interface PipelineFacts {
   name?: string;
   goal?: string;
   manager_id?: string | null;
+  /** Who owns it: only the company's owner and Admins may change it. */
+  owner_id?: string | null;
   factory_id?: string | null;
   /** One or two letters its tasks are numbered with (E-12); null for none. */
   prefix?: string | null;
@@ -578,7 +583,7 @@ export async function savePipeline(pipeline: string, { stages, facts = {}, versi
   const rec = await queryClient.ensureQueryData(pipelineSettingsQuery(pipeline));
   const held = new Map(rec.stages.map((s) => [s.id, s as unknown as Record<string, unknown>]));
   const next = stages.map((d) => stageOut(d, d.id ? held.get(d.id) : undefined));
-  const { bot_families: _families, may_change: _may, ...kept } = rec;
+  const { bot_families: _families, may_change: _may, may_choose_owner: _choose, ...kept } = rec;
   const shown = (list: Pipeline[] | undefined) =>
     list?.map((p) =>
       p.id === pipeline
@@ -586,6 +591,7 @@ export async function savePipeline(pipeline: string, { stages, facts = {}, versi
             ...p,
             ...(facts.name ? { name: facts.name } : {}),
             ...(facts.manager_id !== undefined ? { manager: facts.manager_id } : {}),
+            ...(facts.owner_id !== undefined ? { boardOwner: facts.owner_id } : {}),
             stages: stages.map((d, i) => ({
               id: d.id ?? `tmp:${i}`,
               name: d.name,

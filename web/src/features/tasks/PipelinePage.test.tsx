@@ -130,6 +130,36 @@ describe('Pipeline editor @s138', () => {
     });
   });
 
+  it('an Admin chooses who owns the pipeline; anyone else sees the Owner field but cannot change it', async () => {
+    serve((url, method) => {
+      if (url === '/api/v2/pipelines/ops' && method === 'GET') return { status: 200, body: { pipeline: { ...REC, may_choose_owner: true } } };
+      if (url === '/api/v2/pipelines/ops') return { status: 200, body: { pipeline: { ...REC, owner_id: 'human:ana', settings_version: 6 } } };
+      return { status: 200, body: {} };
+    });
+    show(<PipelinePage pipeline="ops" fresh={false} />, '/tasks/ops/edit');
+    const owner = await screen.findByRole('combobox', { name: /Owner/ });
+    await pick(owner, 'Ana Ruiz');
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(posts).toHaveLength(1));
+    expect(posts[0]!.body).toMatchObject({ owner_id: 'human:ana', settings_version: 5 });
+    expect(posts[0]!.body).not.toHaveProperty('may_choose_owner');
+  });
+
+  it('the Owner field is read-only for a board owner who is not an Admin', async () => {
+    serve((url) => (url === '/api/v2/pipelines/ops' ? { status: 200, body: { pipeline: { ...REC, owner_id: 'human:ana', may_choose_owner: false } } } : { status: 200, body: {} }));
+    show(<PipelinePage pipeline="ops" fresh={false} />, '/tasks/ops/edit');
+    await screen.findByRole('textbox', { name: 'Goal' });
+    const owner = screen.getAllByRole('combobox', { name: /Owner/ })[0]!;
+    expect(owner.hasAttribute('disabled') || owner.getAttribute('aria-disabled') === 'true').toBe(true);
+  });
+
+  it('someone who may not change it reads who may, by name', async () => {
+    queryClient.setQueryData(pipelinesQuery.queryKey, [{ ...PIPE, mayChange: false, boardOwner: 'human:ana', manager: 'bot:packer' }]);
+    serve(() => ({ status: 200, body: {} }));
+    show(<PipelinePage pipeline="ops" fresh={false} />, '/tasks/ops/edit');
+    expect(await screen.findByText('Only Ana Ruiz (owner), Packer (manager) and Admins can change this board.')).toBeTruthy();
+  });
+
   it('when someone saved first, says what they changed and keeps the edits: Save mine goes at their version @s138', async () => {
     const theirs = { ...REC, settings_version: 6, goal: 'Same-day orders', stages: [REC.stages[0], { ...REC.stages[1], name: 'Pack' }] };
     let read = 0;

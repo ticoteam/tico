@@ -31,6 +31,7 @@ interface Facts {
   name: string;
   goal: string;
   manager: string;
+  owner: string;
   factory: string;
   prefix: string;
 }
@@ -42,14 +43,20 @@ interface Draft {
 
 const HAS_TASKS = 'stage_has_tasks';
 const CHANGED = 'task_changed';
-const NEW: Draft = { facts: { name: '', goal: '', manager: '', factory: '', prefix: '' }, rows: [] };
+const NEW: Draft = { facts: { name: '', goal: '', manager: '', owner: '', factory: '', prefix: '' }, rows: [] };
 
 function draftOf(rec: PipelineSettingsRecord): Draft {
   const text = (v: unknown) => (typeof v === 'string' ? v : '');
   return {
-    facts: { name: rec.name, goal: text(rec.goal), manager: text(rec.manager_id), factory: text(rec.factory_id), prefix: text(rec.prefix) },
+    facts: { name: rec.name, goal: text(rec.goal), manager: text(rec.manager_id), owner: text(rec.owner_id), factory: text(rec.factory_id), prefix: text(rec.prefix) },
     rows: rec.stages.map((s) => ({ id: s.id, name: s.name, side: s.side, purpose: s.purpose ?? '', owner: s.owner ?? null, task_limit: s.task_limit ?? null, k: s.id })),
   };
+}
+
+/** Who may change a pipeline, by name: its owner and its manager when it has them, and Admins. */
+function mayChangeLine(owner: string, manager: string): string {
+  const named = [owner && `${owner} (owner)`, manager && `${manager} (manager)`].filter(Boolean);
+  return named.length ? `Only ${named.join(', ')} and Admins can change this board.` : 'Only Admins can change this board.';
 }
 
 /**
@@ -119,6 +126,7 @@ export function PipelinePage({ pipeline, fresh }: { pipeline: string; fresh: boo
     const fields = {
       goal: facts.goal.trim(),
       manager_id: facts.manager || null,
+      owner_id: facts.owner || null,
       factory_id: facts.factory || null,
       prefix: facts.prefix.trim() ? facts.prefix.trim().toUpperCase() : null,
     };
@@ -142,7 +150,7 @@ export function PipelinePage({ pipeline, fresh }: { pipeline: string; fresh: boo
         setHeld({ text: "Couldn't read the pipeline again", move: false });
       }
     } else if (out.error === HAS_TASKS && keep) setHeld({ text: `A removed stage holds tasks. Move them to ${keep.name}?`, move: true });
-    else setHeld({ text: out.error === 'not_allowed' ? 'Only the pipeline’s owner can change it' : (out.why ?? "Couldn't save the pipeline"), move: false });
+    else setHeld({ text: out.error === 'not_allowed' ? who : (out.why ?? "Couldn't save the pipeline"), move: false });
   };
 
   /** Their record in place of these edits. */
@@ -162,6 +170,10 @@ export function PipelinePage({ pipeline, fresh }: { pipeline: string; fresh: boo
 
   const agents = actors.filter((a) => a.kind === 'agent');
   const people = actors.filter((a) => a.kind === 'person');
+  const nameOf = (id: string | null | undefined) => (id ? (actors.find((a) => a.id === id)?.name ?? id) : '');
+  const who = mayChangeLine(nameOf(p?.boardOwner), nameOf(p?.manager));
+  // Who owns the pipeline is the company's owner's and Admins' to choose; a new pipeline is made by one of them.
+  const mayChoose = !p || rec.data?.may_choose_owner === true;
   const choice = (list: { id: string; name: string }[], none: string, on: string): SelectOption[] => {
     const out = [{ value: '', label: none }, ...list.map((a) => ({ value: a.id, label: a.name }))];
     // A saved value the list lacks stays chosen under its own id.
@@ -194,7 +206,7 @@ export function PipelinePage({ pipeline, fresh }: { pipeline: string; fresh: boo
       className="pe-page"
       state={state}
       empty={{ title: 'No such pipeline' }}
-      noAccess={{ text: 'Only the pipeline’s owner can change it.' }}
+      noAccess={{ text: who }}
       reads={[rec]}
       actions={
         <>
@@ -241,6 +253,15 @@ export function PipelinePage({ pipeline, fresh }: { pipeline: string; fresh: boo
               </div>
               <div className="w-manager">
                 <Select label="Manager" options={choice(agents, 'Not set', facts.manager)} value={facts.manager} onValueChange={(manager) => fact({ manager })} />
+              </div>
+              <div className="w-owner">
+                <Select
+                  label="Owner"
+                  options={choice([...people, ...agents], 'Not set', facts.owner)}
+                  value={facts.owner}
+                  onValueChange={(owner) => fact({ owner })}
+                  disabled={!mayChoose}
+                />
               </div>
               {factories && (
                 <Select label="Factory" options={choice(factories, 'None', facts.factory)} value={facts.factory} onValueChange={(factory) => fact({ factory })} />

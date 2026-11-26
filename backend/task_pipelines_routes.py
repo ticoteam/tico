@@ -33,7 +33,12 @@ def register(app: "FastAPI", auth: Any, mutate: "Callable[..., Any]", store: Any
         if not found:
             raise Problem("not_found", "No such pipeline", 404)
         row = c.execute("SELECT * FROM pipelines WHERE id=?", (pipeline_id,)).fetchone()
-        return {**found, "may_change": pipeline_settings.may_change(c, who.actor, dict(row))}
+        return {
+            **found,
+            "may_change": pipeline_settings.may_change(c, who.actor, dict(row)),
+            # Who owns a board is the company's owner's and Admins' to choose (pipeline_settings.OWNER_ADMINS_ONLY).
+            "may_choose_owner": pipeline_settings.company_admin(c, who.actor),
+        }
 
     @app.get(
         "/api/v2/pipelines",
@@ -119,6 +124,7 @@ def register(app: "FastAPI", auth: Any, mutate: "Callable[..., Any]", store: Any
             given = body.model_dump()
             seen = given.pop("settings_version", None)
             given.pop("may_change", None)
+            given.pop("may_choose_owner", None)
             raw: Any = given.pop("move_tasks_to", None)
             given = {**given, "id": pipeline_id}
             move_to = cast("dict[str, Any] | None", raw) if raw is None or isinstance(raw, dict) else None

@@ -258,6 +258,8 @@ const stageDraft = z.strictObject({
 const pipelineFacts = {
   goal: z.optional(z.string().check(z.maxLength(300))),
   manager_id: clearable(actor),
+  // Who owns the pipeline: the server lets only the company's owner and Admins change it.
+  owner_id: clearable(actor),
   factory_id: clearable(z.string().check(z.minLength(1), z.maxLength(100), z.describe('a factory id'))),
   prefix: clearable(z.string().check(z.regex(/^[A-Za-z]{1,2}$/), z.describe('one or two letters'))),
 };
