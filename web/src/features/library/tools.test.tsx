@@ -49,13 +49,15 @@ import { toolsSearch } from './search';
 import { NumberRequests, SharedInboxDialog } from './ToolSettings';
 import { flowQuery, type FlowRequest } from '@/features/tasks/exports';
 import { narrow, ToolsPage } from './ToolsPage';
+import { agentsQuery } from '@/features/team/exports';
+import type * as TeamExports from '@/features/team/exports';
 
 /* Tools: the list, and the one page every kind of tool opens on (what it is, how it connects, who may use it, what it
    can do, recent use), each kind's changes, and the company's mail settings. By what a person sees and presses, what
    is sent, and what Tico may not run. Made-up tools, teammates, addresses and letters only. */
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
-vi.mock('@/features/team/exports', () => ({ BrowserDialog: () => null }));
+vi.mock('@/features/team/exports', async (real) => ({ ...(await real<typeof TeamExports>()), BrowserDialog: () => null }));
 
 beforeAll(() => queryClient.setDefaultOptions({ queries: { ...queryClient.getDefaultOptions().queries, retry: false } }));
 beforeEach(() => {
@@ -63,6 +65,7 @@ beforeEach(() => {
   queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'person', slug: null });
   queryClient.setQueryData(['directory'], { actors: [], byId: {} });
   queryClient.setQueryData(toolsQuery.queryKey, { rows: [] } as never);
+  queryClient.setQueryData(agentsQuery.queryKey, []); // Used by links by slug; no roster, so by id
 });
 afterEach(() => {
   cleanup();
