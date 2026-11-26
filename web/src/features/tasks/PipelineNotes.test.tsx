@@ -75,6 +75,36 @@ describe('PipelineNotes', () => {
     await waitFor(() => expect(post).toHaveBeenCalledWith('/api/v2/pipeline-notes/n_9/accept', { reason: 'Two refusals back it.' }));
   });
 
+  it('an edit sends the revision it read, so a stale save is refused', async () => {
+    list([note({ revision: 3 })]);
+    const post = vi.spyOn(api, 'post').mockResolvedValue({});
+    shown('eng-qa');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByLabelText('What changed and why'), { target: { value: 'Tightened.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(post).toHaveBeenCalled());
+    expect(post.mock.calls[0]?.[0]).toBe('/api/v2/pipeline-notes/n_1');
+    expect(post.mock.calls[0]?.[1]).toMatchObject({ revision: 3, line: 'Tightened.' });
+  });
+
+  it('a save that ends after its form was cancelled leaves the next form open', async () => {
+    list([]);
+    let finish: (v: unknown) => void = () => {};
+    vi.spyOn(api, 'post').mockReturnValue(new Promise((r) => (finish = r)) as never);
+    shown('eng-qa');
+    fireEvent.click(screen.getByRole('button', { name: 'Add note' }));
+    fireEvent.change(screen.getByLabelText('Note'), { target: { value: 'First.' } });
+    fireEvent.change(screen.getByLabelText('Why'), { target: { value: 'One.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add note' }));
+    fireEvent.change(screen.getByLabelText('Note'), { target: { value: 'Second, still typing.' } });
+    finish({});
+    await waitFor(() => expect(vi.mocked(api.post)).toHaveBeenCalledTimes(1));
+    await new Promise((r) => setTimeout(r, 0));
+    expect((screen.getByLabelText('Note') as HTMLInputElement).value).toBe('Second, still typing.');
+  });
+
   it('offers no change to someone who may not change the pipeline', () => {
     list([note({}), note({ id: 'n_9', state: 'proposed' })]);
     shown('eng-qa', false);

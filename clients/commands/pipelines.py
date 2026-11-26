@@ -1200,7 +1200,7 @@ def pipeline_note_list(api, args):
 )
 def pipeline_note_add(api, args):
     body = _note_body(args, "stage", "note", "why", "since", "evidence", "guard")
-    return api.post(f"pipelines/{_pipeline_id(api, args)}/notes", body)
+    return api.post(f"pipelines/{_pipeline_id(api, args)}/notes", body, key=_key(args))
 
 
 @tool(
@@ -1223,7 +1223,7 @@ def pipeline_note_add(api, args):
 )
 def pipeline_note_propose(api, args):
     body = _note_body(args, "stage", "note", "why", "since", "evidence")
-    return api.post(f"pipelines/{_pipeline_id(api, args)}/notes/propose", body)
+    return api.post(f"pipelines/{_pipeline_id(api, args)}/notes/propose", body, key=_key(args))
 
 
 @tool(
@@ -1250,7 +1250,7 @@ def pipeline_note_edit(api, args):
         **_note_body(args, "note", "why", "since", "evidence", "guard", "revision"),
         "line": args.get("message", ""),
     }
-    return api.post(_note_path(args), body)
+    return api.post(_note_path(args), body, key=_key(args))
 
 
 @tool(
@@ -1262,7 +1262,7 @@ def pipeline_note_edit(api, args):
     writes=True,
 )
 def pipeline_note_retire(api, args):
-    return api.post(_note_path(args) + "/retire", {"reason": args.get("message", "")})
+    return api.post(_note_path(args) + "/retire", {"reason": args.get("message", "")}, key=_key(args))
 
 
 @tool(
@@ -1275,7 +1275,7 @@ def pipeline_note_retire(api, args):
     writes=True,
 )
 def pipeline_note_accept(api, args):
-    return api.post(_note_path(args) + "/accept", {"reason": args.get("message", "")})
+    return api.post(_note_path(args) + "/accept", {"reason": args.get("message", "")}, key=_key(args))
 
 
 @tool(
@@ -1287,7 +1287,7 @@ def pipeline_note_accept(api, args):
     writes=True,
 )
 def pipeline_note_decline(api, args):
-    return api.post(_note_path(args) + "/decline", {"reason": args.get("message", "")})
+    return api.post(_note_path(args) + "/decline", {"reason": args.get("message", "")}, key=_key(args))
 
 
 # ----------------------------------------------------------------------------- joining the table

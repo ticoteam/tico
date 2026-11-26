@@ -21,13 +21,10 @@ N: Any = _pipeline_notes
 Row = dict[str, Any]
 
 
-class NoteFields(Contract):
+class NoteText(Contract):
     """A note as written: the note, why we have it, since when, its evidence (a task, a pull request, a run), and the
     guard whose refusal quotes it."""
 
-    stage: str | None = Field(
-        default=None, max_length=200, description="The stage's id or name; absent for the pipeline"
-    )
     note: str | None = Field(default=None, max_length=1000)
     why: str | None = Field(default=None, max_length=1000)
     since: str | None = Field(default=None, max_length=40, description="YYYY-MM-DD; today when absent")
@@ -36,7 +33,17 @@ class NoteFields(Contract):
     line: str | None = Field(default=None, max_length=1000, description="What changed and why, shown under the note")
 
 
-class NoteEdit(NoteFields):
+class NoteFields(NoteText):
+    """A new note: its text, on the pipeline or one of its stages."""
+
+    stage: str | None = Field(
+        default=None, max_length=200, description="The stage's id or name; absent for the pipeline"
+    )
+
+
+class NoteEdit(NoteText):
+    """A change to a note in force. Its stage stays: a note for another scope is a new note (retire this one)."""
+
     revision: int | None = Field(
         default=None, ge=1, description="The note's revision as you read it; another answers 409"
     )

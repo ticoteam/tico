@@ -65,6 +65,8 @@ def test_a_person_who_may_change_the_pipeline_adds_edits_and_retires_notes_and_e
     path = f"pipeline-notes/{heavy['id']}"
     loosened = {"note": "Heavy checks run one at a time per machine; runs over 100 tests go to RunsOn."}
     post(api, path, loosened, expected=422)
+    # An edit keeps the note's scope: a stage sent with it is refused, never silently dropped.
+    post(api, path, {**loosened, "line": "Moved to QA.", "stage": "QA"}, expected=422)
     post(api, path, {**loosened, "line": "Loosened: small runs stay local."}, token="cara-test", expected=403)
     post(api, path, {**loosened, "line": "Loosened: small runs stay local.", "revision": 2}, expected=409)
     edited = post(api, path, {**loosened, "line": "Loosened: small runs stay local.", "revision": 1})

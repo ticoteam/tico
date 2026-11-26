@@ -910,3 +910,24 @@ def test_a_document_approval_is_added_with_its_approvers_and_unshared_back_to_on
     assert (one["person_id"], one["person_ids"]) == ("human:ben", None)
     with pytest.raises(ValueError, match="--unshare takes one --person"):
         P._requirement_fields(Api(), {"person": "me,human:ben", "unshare": True}, dict(shared))
+
+
+def test_every_note_write_sends_its_operation_id_as_the_request_key_so_a_rerun_writes_once(monkeypatch):
+    from clients.commands import pipelines
+
+    monkeypatch.setattr(pipelines, "_pipeline", lambda api, ref: ({"id": ref, "name": ref, "stages": []}, None))
+
+    sent = []
+
+    class Api:
+        def get(self, path, **kw):
+            return {"id": "eng", "name": "Engineering", "stages": []}
+
+        def post(self, path, body=None, key=None):
+            sent.append((path, key))
+            return {}
+
+    args = {"pipeline": "eng", "note_id": "n_1", "note": "N", "why": "W", "evidence": "#1", "message": "m"}
+    for fn in ("add", "propose", "edit", "retire", "accept", "decline"):
+        getattr(pipelines, f"pipeline_note_{fn}")(Api(), {**args, "operation_id": f"op-{fn}"})
+    assert [k for _, k in sent] == [f"op-{fn}" for fn in ("add", "propose", "edit", "retire", "accept", "decline")]

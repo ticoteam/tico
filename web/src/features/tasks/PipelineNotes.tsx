@@ -1,5 +1,5 @@
 import { queryOptions, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { api } from '@/api/client';
 import { Button } from '@/kit/Button';
 import { Field } from '@/kit/Field';
@@ -41,7 +41,9 @@ const BLANK: Draft = { note: '', why: '', since: '', evidence: '', line: '' };
 export function PipelineNotes({ pipeline, stage, mayChange }: { pipeline: string; stage: string | null; mayChange: boolean }) {
   const q = useQuery(pipelineNotesQuery(pipeline));
   const client = useQueryClient();
-  const [open, setOpen] = useState<{ id: string | null; act: 'add' | 'edit' | 'retire' | 'accept' | 'decline' } | null>(null);
+  const [open, setOpen] = useState<{ id: string | null; act: 'add' | 'edit' | 'retire' | 'accept' | 'decline'; revision?: number } | null>(null);
+  // The form a save belongs to: a save that ends after its form was closed or replaced leaves the new one alone.
+  const current = useRef<object | null>(null);
   const [draft, setDraft] = useState<Draft>(BLANK);
   const [error, setError] = useState('');
   const all = stage === null ? (q.data?.notes ?? []) : (q.data?.stages?.find((s) => s.id === stage)?.notes ?? []);
@@ -51,25 +53,32 @@ export function PipelineNotes({ pipeline, stage, mayChange }: { pipeline: string
   const start = (act: NonNullable<typeof open>['act'], n?: PipelineNote) => {
     setError('');
     setDraft(n && act === 'edit' ? { note: n.note, why: n.why, since: n.since, evidence: n.evidence, line: '' } : BLANK);
-    setOpen({ id: n?.id ?? null, act });
+    const next = { id: n?.id ?? null, act, revision: n?.revision };
+    current.current = next;
+    setOpen(next);
+  };
+  const close = () => {
+    current.current = null;
+    setOpen(null);
   };
 
   const save = async () => {
     if (!open) return;
+    const mine = open;
     const id = encodeURIComponent(open.id ?? '');
     const p = encodeURIComponent(pipeline);
     try {
       if (open.act === 'add') {
         await api.post(`/api/v2/pipelines/${p}/notes`, { stage: stage ?? undefined, note: draft.note, why: draft.why, since: draft.since || undefined, evidence: draft.evidence });
       } else if (open.act === 'edit') {
-        await api.post(`/api/v2/pipeline-notes/${id}`, { note: draft.note, why: draft.why, since: draft.since || undefined, evidence: draft.evidence, line: draft.line });
+        await api.post(`/api/v2/pipeline-notes/${id}`, { note: draft.note, why: draft.why, since: draft.since || undefined, evidence: draft.evidence, line: draft.line, revision: open.revision });
       } else {
         await api.post(`/api/v2/pipeline-notes/${id}/${open.act}`, { reason: draft.line });
       }
-      setOpen(null);
+      if (current.current === mine) close();
       await client.invalidateQueries({ queryKey: ['pipeline-notes', pipeline] });
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (current.current === mine) setError(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -94,7 +103,7 @@ export function PipelineNotes({ pipeline, stage, mayChange }: { pipeline: string
           <Button variant="primary" onClick={save} disabled={(words && (!draft.note.trim() || !draft.why.trim())) || (open.act !== 'add' && !draft.line.trim())}>
             Save
           </Button>
-          <Button onClick={() => setOpen(null)}>Cancel</Button>
+          <Button onClick={close}>Cancel</Button>
         </div>
       </div>
     );
