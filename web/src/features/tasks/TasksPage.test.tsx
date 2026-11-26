@@ -465,6 +465,8 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
         await board();
         const c = card('Fix the export');
         touch('pointerDown', c, 100, 200);
+        // the browser's own drag stays off under a finger (Android would start it on the long press)
+        expect(c.draggable).toBe(false);
         act(() => vi.advanceTimersByTime(499));
         touch('pointerMove', c, 104, 203);
         expect(strip()).toBeNull();
@@ -487,6 +489,7 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
         await waitFor(() => expect(posts).toEqual([{ url: '/api/v2/tasks/a1/move', body: { to: 's2', version: 1 } }]));
         expect(strip()).toBeNull();
         expect(document.querySelector('.drag-lift, .is-drag, [data-drop]')).toBeNull();
+        expect(c.draggable).toBe(true);
         expect(await screen.findByText('Moved to Doing')).toBeTruthy();
       });
 

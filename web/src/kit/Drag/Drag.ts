@@ -85,12 +85,16 @@ export function useDrag(options: DragOptions) {
       const done = new AbortController();
       const on = <K extends keyof DocumentEventMap>(type: K, fn: (e: DocumentEventMap[K]) => void, passive = true) =>
         document.addEventListener(type, fn, { signal: done.signal, passive, capture: true });
+      // Android's Chrome starts the browser's own drag on a long press of a draggable element, which cancels the
+      // finger's pointer: for the length of a touch press the element is not one
+      el.draggable = false;
       let state: 'waiting' | 'held' | 'dragging' = 'waiting';
       let lifted: HTMLElement | null = null;
       const timer = setTimeout(() => (state = 'held'), hold);
       const stop = (zone: Element | null) => {
         clearTimeout(timer);
         done.abort();
+        el.draggable = true;
         stopTouch = () => {};
         if (state !== 'dragging') return;
         lifted?.remove();
@@ -113,7 +117,7 @@ export function useDrag(options: DragOptions) {
           if (!far) return;
           state = 'dragging';
           begin();
-          lifted = liftOf(el);
+          lifted = liftOf(el, first.clientY);
         }
         if (lifted) lifted.style.translate = `${e.clientX - first.clientX}px ${e.clientY - first.clientY}px`;
         mark(zoneAt(e.clientX, e.clientY));
@@ -164,15 +168,19 @@ export function useDrag(options: DragOptions) {
   }, []);
 }
 
-/** The copy that rides under a finger: drawn over everything, where the element is, and never what the finger is over. */
-function liftOf(el: HTMLElement): HTMLElement {
+/** How far above the finger the lifted copy rides, so the finger never hides the stage it is over. */
+const ABOVE_PX = 16;
+
+/** The copy that rides with a finger: drawn over everything, its foot just above the finger (`y`, where it pressed),
+    and never what the finger is over. */
+function liftOf(el: HTMLElement, y: number): HTMLElement {
   const box = el.getBoundingClientRect();
   const copy = el.cloneNode(true) as HTMLElement;
   copy.classList.remove('is-drag');
   copy.classList.add('drag-lift');
   copy.removeAttribute('data-task');
   copy.setAttribute('aria-hidden', 'true');
-  Object.assign(copy.style, { position: 'fixed', left: `${box.left}px`, top: `${box.top}px`, width: `${box.width}px`, margin: '0', pointerEvents: 'none' });
+  Object.assign(copy.style, { position: 'fixed', left: `${box.left}px`, top: `${Math.min(box.top, y - box.height - ABOVE_PX)}px`, width: `${box.width}px`, margin: '0', pointerEvents: 'none' });
   document.body.append(copy);
   return copy;
 }

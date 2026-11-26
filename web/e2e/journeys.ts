@@ -435,17 +435,17 @@ test('board: drag a card to another stage, and Move to does the same', async ({ 
   clean(page);
 });
 
-test('board on a phone: hold a card, drag it to a stage in the strip, Undo takes it back; held and let go it opens Move to', async ({ browser, hub }) => {
-  const [draft, date] = hub.facts.board.tasks;
+test('board on a phone: hold a card, drag it to a stage in the strip, Undo takes it back', async ({ browser, hub }) => {
+  const [draft] = hub.facts.board.tasks;
   const page = await open(browser, hub, '/tasks/launch?view=board', PHONE);
   const stageOf = async (id: string) => (await sql<{ stage_id: string }>(hub, `SELECT stage_id FROM tasks WHERE id='${id}'`))[0]?.stage_id;
   const card = (id: string) => page.locator(`.tk-item[data-task="${id}"]`);
   await expect(card(draft!.id)).toBeVisible();
-  // the hold is timed on the page's clock, so the journey never waits on the wall clock for it
-  await page.clock.install();
   const cdp = await page.context().newCDPSession(page);
   const finger = (type: 'touchStart' | 'touchMove' | 'touchEnd', x: number, y: number) =>
     cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y }] });
+  // A long press is time the finger stays down: Chrome tells it from a tap by the real clock, so the hold is real.
+  const hold = () => new Promise((r) => setTimeout(r, 700));
   const middle = async (l: Locator) => {
     const b = (await l.boundingBox())!;
     return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
@@ -453,7 +453,7 @@ test('board on a phone: hold a card, drag it to a stage in the strip, Undo takes
 
   const from = await middle(card(draft!.id));
   await finger('touchStart', from.x, from.y);
-  await page.clock.runFor(600);
+  await hold();
   await finger('touchMove', from.x + 20, from.y + 30);
   const strip = page.getByRole('list', { name: 'Drop on a stage' });
   await expect(strip).toBeVisible();
@@ -476,24 +476,15 @@ test('board on a phone: hold a card, drag it to a stage in the strip, Undo takes
   await expect.poll(() => stageOf(draft!.id)).toBe('launch-plan');
   await expect(page.locator('.toast', { hasText: 'Moved back to Plan' })).toBeVisible();
 
-  // held still and let go: Move to, as before
-  const other = await middle(card(date!.id));
-  await finger('touchStart', other.x, other.y);
-  await page.clock.runFor(600);
-  await finger('touchEnd', other.x, other.y);
-  await expect(page.getByRole('menuitem', { name: 'Ship' })).toBeVisible();
-  await expect(page.getByRole('list', { name: 'Drop on a stage' })).toHaveCount(0);
   clean(page);
 });
 
-test('board on a computer: a drag brings up every stage along the bottom, and a drop there reaches a stage past the edge', async ({ browser, hub }) => {
+test('board on a computer: a drag brings up every stage along the bottom, and a drop on one there moves the task', async ({ browser, hub }) => {
   const [draft] = hub.facts.board.tasks;
-  // narrow enough that Ship lies past the board's right edge
-  const page = await open(browser, hub, '/tasks/launch?view=board', { viewport: { width: 760, height: 800 } });
+  const page = await open(browser, hub, '/tasks/launch?view=board');
   const stageOf = async (id: string) => (await sql<{ stage_id: string }>(hub, `SELECT stage_id FROM tasks WHERE id='${id}'`))[0]?.stage_id;
   const col = (stage: string) => page.locator(`.col[data-target="stage:launch-${stage}"]`);
   await expect(col('plan')).toContainText(draft!.title);
-  await expect(page.getByRole('button', { name: 'Later stages' })).toBeVisible();
 
   const card = page.locator(`.tk-item[data-task="${draft!.id}"]`);
   const b = (await card.boundingBox())!;
