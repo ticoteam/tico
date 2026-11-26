@@ -114,7 +114,7 @@ def computer_hold(c, runner_id, now=None, status=None, row=None, *, person=False
 
 def memory_holds(mem, was_held):
     """Whether a memory reading (percent) holds new starts: at MEM_HOLD_AT or more, or between the two bars while the
-    computer is already held (`runners.memory_hold`, set by performance.ingest in reading order)."""
+    computer is already held (`runner_states.memory_hold`, set by performance.ingest in reading order)."""
     from .performance import MEM_HOLD_AT, MEM_HOLD_CLEAR
 
     return mem >= MEM_HOLD_AT or (mem >= MEM_HOLD_CLEAR and bool(was_held))

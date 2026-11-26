@@ -254,15 +254,13 @@ def _login_problem(state):
 def runner_route_latency(c, now=None):
     """Merge the last fifteen minutes' histograms; averaging minute percentiles hides stalls."""
     import time
-    from .flight import _merge, quantile
+    from .flight import _merge, quantile, route_minutes
 
-    if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='flight_requests'").fetchone():
-        return None
     routes = {f"POST /api/v2/attempts/{{aid}}/{name}": {} for name in ("inputs", "renew", "events")}
-    for row in c.execute(
-        "SELECT route,hist FROM flight_requests WHERE created_at>=? AND span=60 AND route IN (?,?,?)",
-        (int(now or time.time()) - 15 * 60, *routes),
-    ):
+    rows = route_minutes(c, int(now or time.time()) - 15 * 60, tuple(routes))
+    if rows is None:
+        return None
+    for row in rows:
         _merge(routes[row[0]], json.loads(row[1] or "{}"))
     slow = {
         route.rsplit("/", 1)[-1]: quantile(hist, 0.95) for route, hist in routes.items() if quantile(hist, 0.95) > 1000

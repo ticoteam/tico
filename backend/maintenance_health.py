@@ -589,8 +589,9 @@ def _brief_drops(lines):
 
 def _server_starts(c):
     """When this server started, as epoch seconds: the flight recorder's start events, and this process."""
-    starts = [r[0] for r in c.execute("SELECT created_at FROM flight_events WHERE kind='start'")]
-    return starts + [calendar.timegm(time.strptime(diagnostics.RING.started, "%Y-%m-%dT%H:%M:%SZ"))]
+    from . import flight
+
+    return flight.start_times(c) + [calendar.timegm(time.strptime(diagnostics.RING.started, "%Y-%m-%dT%H:%M:%SZ"))]
 
 
 def _near_start(line, starts):

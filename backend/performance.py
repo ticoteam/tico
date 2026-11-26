@@ -7,9 +7,11 @@ turns ran at the time comes from this server's own attempts, not from the runner
 
 Samples land as one-minute points, kept 48 hours, then ten-minute points, kept 14 days. A computer that stays very
 loaded for ten minutes (CPU or memory over 90%, swapping, or a nearly full disk) records an overload with what was
-running. That is diagnostics only: Health shows it and nothing acts on it. Every person and bot may read a
-computer's performance; the data stays on this server and reaches Tico only when a person attaches a window to a
-support ticket (backend/diagnostics.py), redacted like the rest of the bundle.
+running. Health shows it, and starts act on it: a computer that is overloaded, has stopped reporting, or whose
+memory is held (`runner_states.memory_hold`, set here) holds new starts (start_places.computer_hold), so the perf_
+tables stay in the server's database beside the scheduling that reads them. Every person and bot may read a computer's
+performance; the data stays on this server and reaches Tico only when a person attaches a window to a support ticket
+(backend/diagnostics.py), redacted like the rest of the bundle.
 """
 
 import json
