@@ -288,7 +288,7 @@ def config(api, who="ben-test"):
 
 
 def test_config_says_pages_show_from_file_hosting_and_names_its_address_for_the_desktop_app(api, tico, monkeypatch):
-    """The desktop app follows a frame only to the address the signed-in config names (app/src/visual_origin.rs), and
+    """The desktop app follows a frame only to the address the signed-in config names (desktop/src/main/shell.ts filesOrigin), and
     Settings says whether pages show inline: hosted while Tico's bucket takes new files; off or a visual address of
     its own, nothing about file hosting."""
     made, hq, sync = tico

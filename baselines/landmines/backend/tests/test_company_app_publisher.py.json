@@ -1,5 +1,0 @@
-{
-  "backend/tests/test_company_app_publisher.py": {
-    "no-unittest-mock": 1
-  }
-}
