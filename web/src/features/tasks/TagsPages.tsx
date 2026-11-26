@@ -14,7 +14,7 @@ import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { TaskRow } from '@/kit/Row';
 import { Table, Td, Th } from '@/kit/Table';
 import { FilterRow, List, PageMore, Section, type FilterChip } from '@/pagekinds';
-import { Capped, LIST_CAP, LIST_SHOW, RowMore, ROW_H } from './capped';
+import { AllRows, ReadOn, ROW_H } from './capped';
 import { NewTask } from './NewTask';
 import { useNeedsYou } from './needs';
 import { Face, markOf, taskHref } from './parts';
@@ -232,20 +232,15 @@ export function TagPage({ tag }: { tag: string }) {
           <>
             {groups.map((g) => (
               <Section key={g.pipe?.id ?? 'none'} name={g.pipe?.name ?? 'Tasks'} count={g.rows.length}>
-                <Capped list={g.rows} cap={LIST_CAP} show={LIST_SHOW} height={ROW_H} more={undefined} draw={row} moreRow={(n, open) => <RowMore key="more" n={n} onClick={open} />} />
+                <AllRows list={g.rows} height={ROW_H} draw={row} />
               </Section>
             ))}
             {done.length > 0 && (
               <Section name="Done" count={done.length} defaultOpen={false}>
-                <Capped list={done} cap={LIST_CAP} show={LIST_SHOW} height={ROW_H} more={undefined} draw={row} moreRow={(n, open) => <RowMore key="more" n={n} onClick={open} />} />
+                <AllRows list={done} height={ROW_H} draw={row} />
               </Section>
             )}
-            {detail.next_offset != null && (
-              <button className="row task row-more" type="button" disabled={more.pending} onClick={() => void more.run({ tag })}>
-                <span className="row-mark" />
-                <span className="row-title">More tasks</span>
-              </button>
-            )}
+            <ReadOn more={detail.next_offset != null ? () => more.run({ tag }).then((r) => r.ok) : undefined} />
           </>
         }
       />

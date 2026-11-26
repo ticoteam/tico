@@ -3,13 +3,15 @@
 /* stages with nothing in them: folded names on one line under the list */
 .stage-line{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s-1) calc(var(--s-6) + var(--s-1));min-height:var(--row);margin-top:var(--s-2h);padding:var(--s-2h) 0 0 var(--s-8);border-top:1px solid var(--line)}
 
-/* a stage past twelve rows shows ten and says how many more */
+/* a list's "Try again" row, where its next page failed to read */
 .row-more{color:var(--muted);font-size:var(--t-sm)}
 .row-more:hover{color:var(--ink)}
 button.row-more{width:100%;border:0;background:none;font:inherit;font-size:var(--t-sm);text-align:left;grid-template-columns:24px minmax(0,1fr)}
 
-/* a stage opened past its cap: its rows scroll inside it */
-.tk-long{max-height:calc(var(--row) * 12);overflow:auto;scrollbar-width:thin}
+/* where a list ends while the server holds more: the next page is read as it nears the screen. On a board it lies
+   under the longest column and stays at the board's left edge as the board scrolls across. */
+div.tk-end{height:1px}
+.board>.tk-end{position:sticky;left:0;width:max-content}
 
 /* a row's or a card's "⋯": shown under a pointer and on focus, over the row's right end */
 .tk-item{position:relative}

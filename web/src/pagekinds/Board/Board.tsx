@@ -13,10 +13,12 @@ export interface BoardProps extends PageBaseProps {
   folded?: ReactNode;
   /** A side panel beside the board (`<SidePanel>`), as List has. */
   panel?: ReactNode;
+  /** Under the longest column, in the board's scroll: where the columns end while more are to come. */
+  end?: ReactNode;
 }
 
 /** The same rows as cards in columns, one per stage, scrolling sideways. Only a pipeline has a board. */
-export function Board({ filter, columns, folded, panel, ...page }: BoardProps) {
+export function Board({ filter, columns, folded, panel, end, ...page }: BoardProps) {
   return (
     <Page kind="board" under={filter} over={panel && <PanelSlot>{panel}</PanelSlot>} skeleton={<BoardSkeleton />} {...page}>
       <div className="page-body board-wrap pk-body-board">
@@ -25,6 +27,7 @@ export function Board({ filter, columns, folded, panel, ...page }: BoardProps) {
             {columns}
             {folded}
           </div>
+          {end}
         </div>
       </div>
     </Page>

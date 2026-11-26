@@ -256,35 +256,43 @@ export const taskHitsQuery = (words: string, limit: number) => {
   });
 };
 
-const loading = new Set<string>();
+const loading = new Map<string, Promise<boolean>>();
 
 /** The next page of a pipeline's open list, added to the same cache entry (so the stream keeps patching it). */
 export const loadMore = (pipeline: string, f: Filters) => loadMoreOf(listParams(pipeline, f));
 
-/** The next page of any list read with these params. */
-export async function loadMoreOf(params: Record<string, string | number>): Promise<void> {
+/** The next page of any list read with these params; false when the read failed. A read already running is joined, not
+    started again. */
+export function loadMoreOf(params: Record<string, string | number>): Promise<boolean> {
   const key = keys.tasks.list(params);
   const id = JSON.stringify(key);
   const have = queryClient.getQueryData<TaskPage>(key);
-  if (!have?.next_after || loading.has(id)) return;
-  loading.add(id);
-  try {
-    const page = await api.get<TaskPage>(`/api/v2/tasks?${query({ ...params, after: have.next_after })}`);
-    queryClient.setQueryData<TaskPage>(key, (cur) => {
-      // read again from its first page meanwhile (a live insert resets a list in made order): this page no longer
-      // starts where the list ends, so it is dropped rather than leave a hole
-      if (!cur || cur.next_after !== have.next_after) return cur;
-      const seen = new Set(cur.tasks.map((t) => t.id));
-      const fresh = page.tasks.filter((t) => !seen.has(t.id));
-      // the server counted these already: they are not a change
-      const counted = cur.counted && perStage(fresh, { ...cur.counted });
-      return { ...cur, tasks: [...cur.tasks, ...fresh], next_after: page.next_after ?? null, ...(counted && { counted }) };
-    });
-  } catch {
-    toast({ text: "Couldn't read more", kind: 'failed' });
-  } finally {
-    loading.delete(id);
-  }
+  const running = loading.get(id);
+  if (running) return running;
+  if (!have?.next_after) return Promise.resolve(true);
+  const read = (async () => {
+    try {
+      const page = await api.get<TaskPage>(`/api/v2/tasks?${query({ ...params, after: have.next_after })}`);
+      queryClient.setQueryData<TaskPage>(key, (cur) => {
+        // read again from its first page meanwhile (a live insert resets a list in made order): this page no longer
+        // starts where the list ends, so it is dropped rather than leave a hole
+        if (!cur || cur.next_after !== have.next_after) return cur;
+        const seen = new Set(cur.tasks.map((t) => t.id));
+        const fresh = page.tasks.filter((t) => !seen.has(t.id));
+        // the server counted these already: they are not a change
+        const counted = cur.counted && perStage(fresh, { ...cur.counted });
+        return { ...cur, tasks: [...cur.tasks, ...fresh], next_after: page.next_after ?? null, ...(counted && { counted }) };
+      });
+      return true;
+    } catch {
+      toast({ text: "Couldn't read more", kind: 'failed' });
+      return false;
+    } finally {
+      loading.delete(id);
+    }
+  })();
+  loading.set(id, read);
+  return read;
 }
 
 /* ---------------------------------------------------------------- changes */

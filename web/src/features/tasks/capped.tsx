@@ -1,74 +1,81 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from 'react';
 import { VirtualList } from '@/kit/VirtualList';
 
-/* The mock's caps (list.js): a list stage past twelve rows shows ten, a column past ten cards shows eight, then
-   "N more", which opens the rest. A stage opened past this many rows draws only what is on screen. */
-export const LIST_CAP = 12;
-export const LIST_SHOW = 10;
-export const COL_CAP = 10;
-export const COL_SHOW = 8;
+/* A task list shows every task it holds and runs on down the page as it scrolls: no "N more" (task 3535). Past LONG
+   rows only those near the screen are drawn, still in the page's own scroll. */
 const LONG = 100;
 export const ROW_H = 34;
 export const PHONE_ROW_H = 44;
 export const CARD_H = 96;
+/** The scroller a list runs on in: List's body, the board, a page body (each marked `data-scroll`). */
+const SCROLLER = '[data-scroll]';
+/** How far below the screen a list's end starts the next read, so the rows are there by the time it shows. */
+const NEAR = '0px 0px 600px 0px';
 
-/** The first `show` rows, or all of them once opened; past LONG, only what is on screen is drawn. */
-export function Capped<T extends { id: string }>({
+/** Every row, one after another; past LONG, only those near the screen are drawn, in the page's own scroll. */
+export function AllRows<T extends { id: string }>({
   list,
-  cap,
-  show,
-  more,
   draw,
-  moreRow,
   height,
   measure,
 }: {
   list: readonly T[];
-  cap: number;
-  show: number;
-  /** Read the next page; only while the server has one. */
-  more: (() => void) | undefined;
   draw: (t: T) => ReactNode;
-  moreRow: (n: number, open: () => void) => ReactNode;
   height: number;
   measure?: boolean;
 }) {
-  const [all, setAll] = useState(false);
-  if (all && list.length > LONG)
+  if (list.length > LONG)
     return (
-      <VirtualList
-        key={height}
-        className="tk-long"
-        items={list}
-        getKey={(t) => t.id}
-        estimateSize={height}
-        measure={measure}
-        renderItem={(t) => draw(t)}
-        onReachEnd={more}
-      />
+      <VirtualList key={height} items={list} getKey={(t) => t.id} estimateSize={height} measure={measure} renderItem={(t) => draw(t)} scrollParent={SCROLLER} />
     );
-  if (all || list.length <= cap)
-    return (
-      <>
-        {list.map(draw)}
-        {more && moreRow(0, more)}
-      </>
-    );
-  return (
-    <>
-      {list.slice(0, show).map(draw)}
-      {moreRow(list.length - show, () => setAll(true))}
-    </>
-  );
+  return <>{list.map(draw)}</>;
 }
 
-/** "N more"; "N+ more" while the server holds more than was read. Zero is the next server page. */
-export const moreText = (n: number, cut?: boolean) => (n ? `${n}${cut ? '+' : ''} more` : 'More tasks');
-
-/** "N more" under a list stage's first rows. */
-export const RowMore = ({ n, cut, onClick }: { n: number; cut?: boolean; onClick: () => void }) => (
-  <button key="more" className="row task row-more" type="button" onClick={onClick}>
-    <span className="row-mark" />
-    <span className="row-title">{moreText(n, cut)}</span>
-  </button>
-);
+/**
+ * Where a list ends while the server holds more of it. The next page is read as this comes near the screen, with no
+ * click, and again after each page while the end stays near. It reads only when no read is running and none has
+ * failed; a failed read leaves a "Try again" row. `more` resolves false when the read failed.
+ */
+export function ReadOn({ more, look = 'row' }: { more: (() => Promise<boolean>) | undefined; look?: 'row' | 'col' }) {
+  const end = useRef<HTMLDivElement>(null);
+  const busy = useRef(false);
+  const [failed, setFailed] = useState(false);
+  // a page that came in: watch again, so an end still on screen reads the next one
+  const [round, setRound] = useState(0);
+  const watch = typeof IntersectionObserver !== 'undefined';
+  const read = () => {
+    if (!more || busy.current) return;
+    busy.current = true;
+    setFailed(false);
+    void more().then((ok) => {
+      busy.current = false;
+      if (ok) setRound((n) => n + 1);
+      else setFailed(true);
+    });
+  };
+  const near = useEffectEvent(read);
+  const on = !!more;
+  useEffect(() => {
+    const el = end.current;
+    if (!on || failed || !el || typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver((es) => es.some((e) => e.isIntersecting) && near(), { root: el.parentElement?.closest<HTMLElement>(SCROLLER) ?? null, rootMargin: NEAR });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [on, failed, round]);
+  if (!more) return null;
+  // without a way to see the end come near (an old browser), a press reads on
+  if (failed || !watch) {
+    const text = failed ? 'Try again' : 'More tasks';
+    return look === 'col' ? (
+      <button className="col-more tk-end" type="button" onClick={read}>
+        {text}
+      </button>
+    ) : (
+      <button className="row task row-more tk-end" type="button" onClick={read}>
+        <span className="row-mark" />
+        <span className="row-title">{text}</span>
+      </button>
+    );
+  }
+  return <div ref={end} className="tk-end" aria-hidden="true" />;
+}
