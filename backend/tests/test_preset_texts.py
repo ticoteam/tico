@@ -284,6 +284,21 @@ def test_an_unedited_review_rubric_follows_to_the_one_with_the_builder_rule(one_
     assert _page(PS.read(c, "engineering"), "engineering-review-1")["settings"]["rubric"] == own
 
 
+def test_an_unedited_review_purpose_follows_to_the_one_that_asks_for_a_different_maker_than_the_builders(one_review):
+    """Review of #5395: a Review stage that follows to the builder rule is also told to pick the second review's model by
+    a different maker than the builder's and to name the builder, so a page that obeys its purpose meets its bar. An
+    edited purpose stays."""
+    c = one_review
+    before = PS._REVIEW_PURPOSE_BEFORE_BUILDER
+    _purpose(c, "engineering-review-1", before)
+    PS.ensure_presets(c)
+    now = _stage(PS.read(c, "engineering"), "engineering-review-1")["purpose"]
+    assert now != before and "different maker" in now and "builder's model" in now, now
+    _purpose(c, "engineering-review-1", "Our own: " + before)
+    PS.ensure_presets(c)
+    assert _stage(PS.read(c, "engineering"), "engineering-review-1")["purpose"] == "Our own: " + before
+
+
 # ----------------------------------------------------------------------------- QA, added to a company made before it
 def test_an_edited_engineering_pipeline_gets_qa_with_the_page_its_person_oks_as_it_was_set(c):
     _before_qa(c)

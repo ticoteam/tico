@@ -318,7 +318,8 @@ def _review(sid: str) -> Row:
         "Review",
         "Review the newest commit of every linked PR. File a subtask here with tico task child <id> --check-model "
         "<runtime>:<model> --role review --title \"Review: second opinion\", with the PRs and commits in --body. "
-        "Choose a different model and attach both reviews in one Review page.",
+        "Choose a model by a different maker than the model that built the change, name the builder's model, and "
+        "attach both reviews in one Review page.",
         120,
         [_page("Review page", REVIEW_RUBRIC, at_head=True), {"kind": "linked_done"}],
     )
@@ -587,6 +588,12 @@ _FIXES_2_RUBRICS = (
     "to OK it without opening the code.",
     _FIXES_2_RUBRIC_QA,
 )
+# The Review stage's purpose before the builder rule (task #3970): a second review by any different model.
+_REVIEW_PURPOSE_BEFORE_BUILDER = (
+    "Review the newest commit of every linked PR. File a subtask here with tico task child <id> --check-model "
+    "<runtime>:<model> --role review --title \"Review: second opinion\", with the PRs and commits in --body. "
+    "Choose a different model and attach both reviews in one Review page."
+)
 _REVIEW_PURPOSE_BEFORE_BODY = (
     "Review the newest commit of every linked PR. File a subtask here with tico task child <id> --check-model "
     "<runtime>:<model> --role review --title \"Review: second opinion\", with the PRs and commits in its message. "
@@ -610,8 +617,16 @@ EARLIER: dict[str, tuple[str, ...]] = {
         _REVIEW_RUBRIC_BEFORE_NO_BLOCKERS,
         _REVIEW_RUBRIC_BEFORE_BUILDER,
     ),
-    "engineering-review-1/purpose": ("Review the newest commit and attach a Review page.", _REVIEW_PURPOSE_BEFORE_BODY),
-    "product-review-1/purpose": ("Review the newest commit and attach a Review page.", _REVIEW_PURPOSE_BEFORE_BODY),
+    "engineering-review-1/purpose": (
+        "Review the newest commit and attach a Review page.",
+        _REVIEW_PURPOSE_BEFORE_BODY,
+        _REVIEW_PURPOSE_BEFORE_BUILDER,
+    ),
+    "product-review-1/purpose": (
+        "Review the newest commit and attach a Review page.",
+        _REVIEW_PURPOSE_BEFORE_BODY,
+        _REVIEW_PURPOSE_BEFORE_BUILDER,
+    ),
     "engineering-fixes-2/purpose": (
         "Fix what the second review found and attach a Review page that shows what was built.",
         "Fix what the second review found and attach a Review page that shows what was built, the checks at the "
