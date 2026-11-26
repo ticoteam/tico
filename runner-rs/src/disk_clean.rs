@@ -14,7 +14,7 @@
 //!    the clone's lock while other bots' worktree steps wait;
 //! 5. last, idle task checkouts of a bot's own repository (`sessions/bot-<bot>/<task>`, sessions.rs), oldest first: one
 //!    nothing touched for SESSION_IDLE_S, with no turn in its bot's main checkout or on its task, no file waiting to upload from it
-//!    and no other checkout inside it, goes through sessions.rs `remove`, which keeps any tree holding uncommitted
+//!    and no other checkout inside it, goes through sessions.rs `remove_tree` (its branch kept), which keeps any tree holding uncommitted
 //!    work or a commit no remote has on it or its task branch. Its task may still be open (a ticket waiting in a later stage): its next turn
 //!    checks the tree out again. What goes with it is what its repository ignores (test videos, traces, builds).
 //!
@@ -546,7 +546,7 @@ pub async fn remove_session(
     };
     // A turn that started while Git ran keeps it.
     if !owners_free(&owner, host.as_ref())
-        || !crate::sessions::remove(&main, &s.path, &s.task, env).await
+        || !crate::sessions::remove_tree(&main, &s.path, &s.task, env, true).await
     {
         return 0;
     }
@@ -1770,7 +1770,7 @@ mod tests {
             0
         );
         assert!(done.exists());
-        // Clean and pushed: it goes with its ignored video, and so does its branch.
+        // Clean and pushed: it goes with its ignored video. Its task may be open, so its branch stays for the next turn.
         assert!(remove_session(&of(&done), &host, &none, &env()).await >= 8192);
         assert!(!done.exists());
         let branches = std::process::Command::new("git")
@@ -1780,7 +1780,14 @@ mod tests {
             .output()
             .unwrap();
         let branches = String::from_utf8_lossy(&branches.stdout).to_string();
-        assert!(!branches.contains("tico-session/t1"), "{branches}");
+        assert!(branches.contains("tico-session/t1"), "{branches}");
+        let (back, problem) = crate::sessions::ensure(&main, &done, "t1", &env())
+            .await
+            .unwrap();
+        assert!(
+            problem.is_empty() && done.join(".gitignore").exists(),
+            "{back} {problem}"
+        );
         // A commit no remote has, or a file Git would show, keeps it.
         assert_eq!(
             remove_session(&of(&unpushed), &host, &none, &env()).await,

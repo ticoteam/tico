@@ -412,7 +412,9 @@ Only an install that failed (no `npm` on a Mac, say) blocks the move, with the r
 Every day, and at every start on a cloud machine, the runner asks each harness it installed (and has not been turned off) for the newest release. With the default policy (`latest`) it
 installs the new version **between runs**: the copy is downloaded and checked beside the old one while runs are in progress,
 and switched in only at a moment no run in progress uses that harness (a run on another harness does not hold it
-back). A failed install keeps the working version and is retried after 30 minutes.
+back). A failed install keeps the working version and is retried after 30 minutes. A copy a runner downloaded but
+had not switched in when it stopped is removed by the next runner, once no run uses that harness; only the copy in use
+stays.
 
 A daily update also waits until **no turn has used that harness on the computer for 60 minutes**. A new Claude Code
 changes its system prompt and tools, so a session still inside its 1-hour prompt cache would write its whole

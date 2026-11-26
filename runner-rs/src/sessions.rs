@@ -945,6 +945,17 @@ pub async fn discard_pass(path: &Path, turn: &Env) -> Result<Vec<String>, String
 
 /// Take a closed task's worktree and branch away once nothing in it is unsaved. True when gone.
 pub async fn remove(main: &Path, path: &Path, task: &str, turn: &Env) -> bool {
+    remove_tree(main, path, task, turn, false).await
+}
+
+/// As `remove`; `keep_branch` leaves the task branch for an open task, whose next turn checks it out again (`ensure`).
+pub async fn remove_tree(
+    main: &Path,
+    path: &Path,
+    task: &str,
+    turn: &Env,
+    keep_branch: bool,
+) -> bool {
     if crate::repo_safety::outside_installation(main).is_err()
         || crate::repo_safety::outside_installation(path).is_err()
     {
@@ -989,13 +1000,15 @@ pub async fn remove(main: &Path, path: &Path, task: &str, turn: &Env) -> bool {
         {
             return Ok(false);
         }
-        g(
-            main,
-            &env,
-            &["branch", "-D", &format!("{BRANCH}{task}")],
-            15,
-        )
-        .await?;
+        if !keep_branch {
+            g(
+                main,
+                &env,
+                &["branch", "-D", &format!("{BRANCH}{task}")],
+                15,
+            )
+            .await?;
+        }
         Ok(true)
     }
     .await;

@@ -153,10 +153,10 @@ its limit its queued work waits on every computer, and its other bots keep their
 free turn on <computer>" in its thread and on its task. The task shows the same waiting reason as the thread (a paused bot,
 an update, a computer being set up) to anyone who can read the task.
 
-Each task session has a git worktree at `sessions/bot-<slug>/<task>` on branch `tico-session/<task>`. A bot can hold
-up to 30 worktrees, or fewer when the computer gets under 5 GB free. Nothing is removed to make room: at the limit
-the bot ends its turn and Tico wakes the task when its worktree is ready ([Task worktrees](worktrees.md)), or the bot,
-or a person, cleans one up first. A task's worktree goes when the task is finished: at the end of
+Each task session has a git worktree at `sessions/bot-<slug>/<task>` on branch `tico-session/<task>`. Their number
+is not capped (the worktree limit in [Task worktrees](worktrees.md) counts code worktrees under `tasks/`). When the
+computer runs low on disk, its clean-up removes idle ones, oldest first, keeping their branches
+([Low disk](worktrees.md#low-disk)). A task's worktree goes when the task is finished: at the end of
 that bot's turn, or within about 10 minutes for another bot's copy or one whose files were still uploading. A worktree
 with unsaved changes, or commits that are on no remote, stays until someone saves or discards them.
 Before making or reusing a session folder, the Computer checks its full path against the Tico install. A link
