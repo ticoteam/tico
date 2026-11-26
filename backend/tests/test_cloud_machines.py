@@ -4481,6 +4481,34 @@ def test_a_burst_return_goes_to_the_replacement_when_its_base_computer_was_revok
         assert not c.execute("SELECT 1 FROM burst_guests WHERE bot='ops'").fetchone()
 
 
+def test_a_burst_return_never_goes_to_an_own_machine_being_deleted(cloud):
+    """#3587 review: the own-machine fallback skips a machine with a pending deletion. The guest stays on the burst
+    computer (its return still pending) rather than land on a computer HQ is about to remove."""
+    from backend import compute_pool
+
+    computer = own_computer(cloud, "ops")
+    gone = runner(cloud.api, label="Gone")
+    burst = runner(cloud.api, label="Burst")
+    with cloud.store.transaction() as c:
+        assert not CM.row(c, CM.SHARED)
+        generation = c.execute(
+            "UPDATE assignments SET runner_id=?,generation=generation+1 WHERE bot='ops' RETURNING generation",
+            (burst["runner_id"],),
+        ).fetchone()[0]
+        c.execute(
+            "INSERT INTO burst_guests(bot,runner_id,generation,base_runner,return_pending) VALUES(?,?,?,?,?)",
+            ("ops", burst["runner_id"], generation, gone["runner_id"], "settled"),
+        )
+        c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), gone["runner_id"]))
+        CM.intend_delete(c, CM.row(c, "ops"), "manual")
+        assert not compute_pool.return_guests(c, burst["runner_id"])
+        assert c.execute("SELECT 1 FROM burst_guests WHERE bot='ops'").fetchone()
+        assert c.execute("SELECT runner_id FROM assignments WHERE bot='ops'").fetchone()[0] == burst["runner_id"]
+        c.execute("DELETE FROM cloud_machine_deletions")  # the same machine, not being deleted: the return lands
+        assert compute_pool.return_guests(c, burst["runner_id"])
+        assert c.execute("SELECT runner_id FROM assignments WHERE bot='ops'").fetchone()[0] == computer["runner_id"]
+
+
 def ticked(cloud, seconds):
     """HQ's calls from this one tick (`cloud.tick` returns every call so far), heartbeats left out."""
     before = len(cloud.hq.actions())

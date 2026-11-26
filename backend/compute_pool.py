@@ -558,6 +558,9 @@ def return_guests(c: Connection, runner: str) -> bool:
         -- A base computer revoked since (its own cloud machine's, replaced): the machine's computer now.
         LEFT JOIN cloud_machines o ON o.bot=g.bot AND o.mode='cloud' AND o.placement='own'
                                   AND o.state NOT IN ('deleted','failed') AND m.bot IS NULL
+                                  -- Never a machine being deleted: the guest waits on the burst computer until the
+                                  -- replacement enrolls, and bind() resumes the return there.
+                                  AND NOT EXISTS (SELECT 1 FROM cloud_machine_deletions d WHERE d.machine_id=o.machine_id)
         LEFT JOIN runners own ON own.id=o.runner_id AND own.revoked_at IS NULL AND own.id<>g.runner_id
         WHERE g.runner_id=? AND g.return_pending<>''
           AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.bot_id=g.bot AND a.runner_id=g.runner_id
