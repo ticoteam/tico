@@ -18,6 +18,8 @@ the request.
 """
 
 import logging
+import sqlite3
+from typing import Any
 
 from .store import H
 
@@ -25,7 +27,7 @@ LOG = logging.getLogger("tico.file_use")
 ACTIONS = ("list", "open", "search", "review")
 
 
-def record(c, actor, action, at=None):
+def record(c: sqlite3.Connection, actor: str, action: str, at: str | None = None) -> None:
     """Add one use of `action` by `actor` on the UTC day of `at` (now by default), inside the caller's transaction.
     Only a person or a bot counts: a service, support or Tico itself is no team member using Files."""
     if action not in ACTIONS:
@@ -41,7 +43,7 @@ def record(c, actor, action, at=None):
     )
 
 
-def count(store, who, action):
+def count(store: Any, who: Any, action: str) -> None:
     """One use by the caller of an answered request, in its own short write. Never raises."""
     try:
         actor = getattr(who, "actor", None)
@@ -53,7 +55,7 @@ def count(store, who, action):
         LOG.warning("Files use count failed for %s", action, exc_info=True)
 
 
-def count_in(c, actor, action):
+def count_in(c: sqlite3.Connection, actor: str, action: str) -> None:
     """One use inside a write the request already holds (an OK given on a file). Never raises."""
     try:
         c.execute("SAVEPOINT file_use")
