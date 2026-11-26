@@ -738,11 +738,12 @@ fn compact_timeout() -> Duration {
     Duration::from_secs(600)
 }
 
-/// Whether the server takes `session` in a turn's result (`run_session`; an older one refuses the field).
+/// Whether the server takes `session` (`run_session`) or `notes` (`run_notes`) in a turn's result; an older one refuses
+/// the field.
 fn serves_session(name: &str) -> bool {
     #[cfg(test)]
     if let Some(on) = tests::RUN_SESSION.with(|on| on.get()) {
-        return on && name == "run_session";
+        return on && matches!(name, "run_session" | "run_notes");
     }
     crate::follow::feature(name)
 }
@@ -2561,6 +2562,8 @@ impl Runner {
         let mut source_saved = source_resume.clone();
         // How this turn's session began: resumed, or new and why (crate::continuity). Sent with the result.
         let mut session: Option<crate::continuity::Session> = None;
+        // What the prompt this turn sent did with the task's notes lists (crate::prompt::notes_sent), for the result.
+        let mut notes_report: Option<Value> = None;
         // A turn that ran in a side session (a task-model fallback) never saves its thread over the conversation's own:
         // it keeps its own, per model, under `side_conv` (crate::continuity::side_session).
         let mut side_run = false;
@@ -3372,6 +3375,7 @@ impl Runner {
             h.compaction_refresh(&th, Some(built.restore.clone()).filter(|r| prompt_turn && !r.is_empty()));
             // A compaction before this prompt (compact_first's own) is already accounted for above.
             let _ = h.compacted(&th);
+            notes_report = crate::prompt::notes_sent(&attempt, &prompt);
             let t = if let Some(_one) = cold_guard {
                 // Held only until the sign-in this turn triggers has landed, not for the length of the turn: the
                 // others follow a few seconds behind, warm.
@@ -3882,6 +3886,7 @@ impl Runner {
                         self.confirm_thread(fresh, &h.session_id(&th)).await?;
                     }
                 }
+                notes_report = crate::prompt::notes_sent(&attempt, &text);
                 let t = h.start_turn(&th, &text, hop.reasoning_effort.as_deref()).await?;
                 crate::flight::fact_once(&aid, "warm", json!(h.warm()));
                 turn = Some(t.clone());
@@ -4385,6 +4390,12 @@ impl Runner {
             session.as_ref().filter(|_| host.is_some()),
             serves_session,
         );
+        // Which notes lists the prompt gave, held back or retracted: how anyone checks that notes reach the bot, since
+        // the run's stored input is only its message. An older server refuses the field (`run_notes`).
+        if let Some(notes) = notes_report.filter(|_| host.is_some() && serves_session("run_notes"))
+        {
+            completion.insert("notes".into(), notes);
+        }
         // A ChatGPT login Codex refreshed in a subscription's home goes back, so the next computer starts from it.
         crate::model_subscriptions::send_back(&self.client, &aid, &vault.subscriptions).await;
         let profile_used = selected
@@ -7424,6 +7435,30 @@ mod tests {
             assert!(moved.prompts[0].contains("The parent asked for the revised figures."));
             assert!(!moved.prompts[0].contains("Release build 41 failed its smoke test."));
         }
+    }
+
+    #[tokio::test]
+    async fn a_turn_tells_tico_which_notes_lists_its_prompt_gave() {
+        let notes = json!({"pipeline_notes": {
+            "pipeline": "Notes for Engineering (what we learned; follow them):\n- Big test runs go to RunsOn. Why: a local run took the shared machine offline. Since 2026-11-18 (#4232).",
+            "stage": "Notes for QA (what we learned; follow them):\n- A pending approval is the ask. Why: approvers got two cards for one decision. Since 2026-11-18 (#4237)."}});
+        let turns = [("m4", json!({}), json!({"attempt": notes}))];
+        let ran = session_turns(true, true, &turns).await;
+        assert!(
+            ran.prompts[0].contains("Notes for QA"),
+            "{}",
+            ran.prompts[0]
+        );
+        assert_eq!(
+            ran.completions[0]["notes"],
+            json!({"pipeline": "given", "stage": "given"})
+        );
+        // A server from before `run_notes` would refuse the field, and so the whole result: it is not sent.
+        let older = session_turns(true, false, &turns).await;
+        assert!(older.completions[0].get("notes").is_none());
+        // A turn offered no notes reports none.
+        let plain = session_turns(true, true, &[("m4", json!({}), json!({}))]).await;
+        assert!(plain.completions[0].get("notes").is_none());
     }
 
     #[tokio::test]

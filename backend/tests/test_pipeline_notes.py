@@ -9,6 +9,7 @@ from backend.store import H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import assign, claim, get, post, ready, runner
 from backend.tests.helpers.org_rules import org
+from backend.tests.helpers.run_triggers import USAGE, start
 
 BUILD, QA = "eng-build", "eng-qa"
 HEAVY = {
@@ -134,6 +135,36 @@ def test_the_claim_carries_the_notes_beside_the_task_and_none_when_there_are_non
     assert second["pipeline_notes"]["pipeline"].startswith("Notes for ")
     # The notes ride beside the task, never in it, so the task's digest and its printed form stay as they were.
     assert "notes" not in second["task"] and "pipeline_notes" not in second["task"]
+
+
+def test_a_run_records_the_lists_its_claim_offered_and_what_the_runner_says_its_prompt_did_with_them(api):
+    # The run's stored input is only its message, so this is how anyone checks the notes reached the bot.
+    engineering(api)
+    r = runner(api)
+    for bot in ("ops", "cpo"):
+        assign(api, r, bot)
+    ready(api, r, ["ops", "cpo"])
+
+    def task_for(bot, title):
+        with api.app.state.store.transaction() as c:
+            return H.task_create(c, H.TICO_ACTOR, title, "Do it.", f"bot:{bot}", lint=False)
+
+    def run(attempt, sent=None):
+        start(api, r, attempt)
+        body = {"outcome": "completed", "last_seq": 0, "text": "", "usage": USAGE}
+        post(api, f"attempts/{attempt['id']}/complete", {**body, **({"notes": sent} if sent else {})}, r["token"])
+        with api.app.state.store.read() as c:
+            row = H.turn(c, attempt["id"])
+        return row["notes_offered"], row["notes_sent"]
+
+    plain = task_for("ops", "Tidy the export")
+    first = claim(api, r)
+    assert first["task"]["id"] == plain["id"]
+    assert run(first) == (None, None)
+    post(api, f"pipelines/{plain['pipeline_id']}/notes", HEAVY)
+    task_for("cpo", "Fix the smoke test")
+    second = claim(api, r)
+    assert run(second, {"pipeline": "given"}) == ("pipeline", '{"pipeline": "given"}')
 
 
 def test_a_bot_proposes_with_why_and_evidence_and_the_manager_decides_never_its_own(api):

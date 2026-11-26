@@ -391,6 +391,33 @@ fn assemble(
     }
 }
 
+/// What `text`, the prompt a turn sent, did with each notes list (backend/pipeline_notes.py), for the run's result
+/// (`notes`, feature `run_notes`): `given` when the list the claim offered is in it, `held` when it was left out because
+/// the session already holds it, `retracted` when the text says an earlier list no longer applies. None when the
+/// claim offered no list and nothing was retracted, so such a run reports nothing.
+pub fn notes_sent(attempt: &Value, text: &str) -> Option<Value> {
+    let mut out = Map::new();
+    for (key, retired) in [
+        ("pipeline", NOTES_RETIRED_PIPELINE),
+        ("stage", NOTES_RETIRED_STAGE),
+    ] {
+        let offered = attempt["pipeline_notes"][key].as_str().unwrap_or_default();
+        let what = if !offered.trim().is_empty() {
+            if text.contains(offered) {
+                "given"
+            } else {
+                "held"
+            }
+        } else if text.contains(retired) {
+            "retracted"
+        } else {
+            continue;
+        };
+        out.insert(key.into(), Value::from(what));
+    }
+    (!out.is_empty()).then_some(Value::Object(out))
+}
+
 /// `text` (a built prompt) with `notes` (the runner's own lines for this turn, each led by a blank line: a new
 /// session's, a fallback's, a background wait still running) put before the run header, which stays the turn's tail.
 pub fn before_header(attempt: &Value, text: &str, notes: &str) -> String {
@@ -1524,6 +1551,48 @@ mod tests {
     const ENG_NOTES: &str = "Notes for Engineering (what we learned; follow them):\n- Heavy checks run one at a time per machine. Why: a type check took the shared machine offline. Since 2026-11-18 (#4232).";
     const QA_NOTES: &str = "Notes for QA (what we learned; follow them):\n- A pending approval is the ask. Why: approvers got two cards for one decision. Since 2026-11-18 (#4237). A guard refuses it.";
     const MERGE_NOTES: &str = "Notes for Merge (what we learned; follow them):\n- Never enqueue by hand. Why: the queue tests the checked head. Since 2026-11-20 (#4300).";
+
+    #[test]
+    fn a_turn_reports_each_notes_list_as_given_held_or_retracted() {
+        let names = Names {
+            company: "Acme".into(),
+            app: "Tico".into(),
+            assistant: "assistant".into(),
+        };
+        let ctx = "claude opus agent-1";
+        let (mut first, mut next) = task_turns();
+        // No notes offered and none to retract: nothing to report, so the result reads as before.
+        let plain = build(&first, &names, None, false, "", &Seen::default(), ctx);
+        assert_eq!(notes_sent(&first, &plain.text), None);
+        // First turn in QA: both lists in the prompt.
+        first["pipeline_notes"] = json!({"pipeline": ENG_NOTES, "stage": QA_NOTES});
+        let given = build(&first, &names, None, false, "", &Seen::default(), ctx);
+        assert_eq!(
+            notes_sent(&first, &given.text),
+            Some(json!({"pipeline": "given", "stage": "given"}))
+        );
+        // The next turn of the same session holds both.
+        next["pipeline_notes"] = first["pipeline_notes"].clone();
+        let again = build(&next, &names, Some("m1"), true, "", &seen(&given), ctx);
+        assert_eq!(
+            notes_sent(&next, &again.text),
+            Some(json!({"pipeline": "held", "stage": "held"}))
+        );
+        // A move to Merge: the pipeline's list held, the new stage's given.
+        next["pipeline_notes"] = json!({"pipeline": ENG_NOTES, "stage": MERGE_NOTES});
+        let moved = build(&next, &names, Some("m1"), true, "", &seen(&given), ctx);
+        assert_eq!(
+            notes_sent(&next, &moved.text),
+            Some(json!({"pipeline": "held", "stage": "given"}))
+        );
+        // A stage with none: the session's earlier stage list is retracted.
+        next["pipeline_notes"] = json!({"pipeline": ENG_NOTES});
+        let bare = build(&next, &names, Some("m1"), true, "", &seen(&moved), ctx);
+        assert_eq!(
+            notes_sent(&next, &bare.text),
+            Some(json!({"pipeline": "held", "stage": "retracted"}))
+        );
+    }
 
     #[test]
     fn notes_come_on_entering_a_pipeline_or_stage_once_a_session_and_never_touch_the_cached_prefix()

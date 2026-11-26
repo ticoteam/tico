@@ -6356,6 +6356,9 @@ class Execution:
         runner_wire.conversation(c, conversation)  # the claim's copy (thread_payload) was made before
         wire_task = runner_wire.task(task)
         learned_here = pipeline_notes.for_task(c, task) if task and not relationship else {}
+        if learned_here:
+            # The run's record says which lists its claim carried (backend/run_triggers.py `notes_offered`).
+            c.execute("UPDATE attempts SET notes_offered=? WHERE id=?", (",".join(learned_here), aid))
         wire_config = runner_versions.wire_template(rooms.session_config(conv, row["bot_id"], config))
         session_fence = None
         moved_history = None
@@ -6930,6 +6933,7 @@ class Execution:
         run_triggers.pushed(c, row["id"], row["runner_id"], body.pushes)
         run_triggers.rotation(c, row["id"], body.rotated)
         run_triggers.session(c, row["id"], body.session)
+        run_triggers.notes(c, row["id"], body.notes)
         H.turn_finish(
             c,
             H.TICO_ACTOR,
@@ -8724,6 +8728,7 @@ class Execution:
         run_triggers.pushed(c, aid, row["runner_id"], body.pushes)
         run_triggers.rotation(c, aid, body.rotated)
         run_triggers.session(c, aid, body.session)
+        run_triggers.notes(c, aid, body.notes)
         # The runner's notices (a file left out of the commit) are shown beside the reply, not as the turn's summary.
         H.turn_finish(
             c,

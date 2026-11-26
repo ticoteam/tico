@@ -3141,6 +3141,15 @@ class RunSession(Contract):
     detail: str | None = Field(default=None, max_length=500)
 
 
+class RunNotes(Contract):
+    """What the turn's prompt did with each notes list its claim offered (backend/pipeline_notes.py, runner-rs/src/prompt.rs
+    notes_sent): `given` in full, `held` left out because the session already holds it, `retracted` an earlier list
+    said to no longer apply. A list neither offered nor retracted is left out."""
+
+    pipeline: Literal["given", "held", "retracted"] | None = None
+    stage: Literal["given", "held", "retracted"] | None = None
+
+
 class RunTimings(Contract):
     """Where a turn's time went on its computer, up to its result (runner-rs/src/flight.rs timings, feature
     `run_timings`): when the runner claimed it on its own clock (Unix seconds), each mark's milliseconds since then, and
@@ -3200,6 +3209,8 @@ class Completion(Contract):
     rotated: RunRotation | None = None
     # Whether the run resumed the thread's session or started a new one, and why (feature `run_session`).
     session: RunSession | None = None
+    # What the prompt did with the task's notes lists (feature `run_notes`): how anyone checks they reached the bot.
+    notes: RunNotes | None = None
     timings: RunTimings | None = None  # feature `run_timings`
 
 

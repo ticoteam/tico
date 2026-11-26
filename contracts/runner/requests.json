@@ -535,6 +535,17 @@
      ],
      "default": null
     },
+    "notes": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/RunNotes"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
     "outcome": {
      "enum": [
       "completed",
@@ -1570,6 +1581,48 @@
     "state"
    ],
    "title": "RepositoryStatus",
+   "type": "object"
+  },
+  "RunNotes": {
+   "additionalProperties": false,
+   "description": "What the turn's prompt did with each notes list its claim offered (backend/pipeline_notes.py, runner-rs/src/prompt.rs\nnotes_sent): `given` in full, `held` left out because the session already holds it, `retracted` an earlier list\nsaid to no longer apply. A list neither offered nor retracted is left out.",
+   "properties": {
+    "pipeline": {
+     "anyOf": [
+      {
+       "enum": [
+        "given",
+        "held",
+        "retracted"
+       ],
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Pipeline"
+    },
+    "stage": {
+     "anyOf": [
+      {
+       "enum": [
+        "given",
+        "held",
+        "retracted"
+       ],
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Stage"
+    }
+   },
+   "title": "RunNotes",
    "type": "object"
   },
   "RunPush": {

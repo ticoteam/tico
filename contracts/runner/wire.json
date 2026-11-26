@@ -67,6 +67,7 @@
     "complete.request.usage.cache_write_1h_tokens": "runner-rs/src/execute.rs served: sent only when the server's features say usage_cache_writes and usage_cache_write_1h; an older server guesses the split",
     "complete.request.usage.segments[].cache_write_1h_tokens": "runner-rs/src/execute.rs served: sent only when the server's features say usage_cache_writes and usage_cache_write_1h; an older server guesses the split",
     "complete.request.timings": "runner-rs/src/execute.rs: sent only when the server's features say run_timings",
+    "complete.request.notes": "runner-rs/src/execute.rs serves_session: sent only when the server's features say run_notes",
     "complete.request.parent_message_id": "echoed only from the claim's message.parent_message_id, which only a server with native threads sends; an older server's claim has none, so the runner never sends it there"
   },
   "$defs": {
