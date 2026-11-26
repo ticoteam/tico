@@ -2534,6 +2534,9 @@ def _install_features(
     assistant_share.install(
         app, store, auth, mutate
     )  # bots a person lets view their Assistant chat (docs/assistant.md)
+    from . import assistant_oks
+
+    assistant_oks.install(app, store, mutate)  # a person lets their Assistant give OKs on their word
     from .mcp import install_mcp
 
     install_mcp(app, settings)

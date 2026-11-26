@@ -148,12 +148,15 @@ def _may_answer(
     if value == OK and requirement.get("visit_id") and by == requirement.get("added_by_id"):
         if not own_click:
             _refuse(conn, by, "task_requirement", "Your own ask is OK'd only by your own click in Tico", task_id)
-    from . import task_asks
+    from . import assistant_oks, task_asks
 
-    # The Assistant and Agent Ops never answer OK to an OK, bound or plain, whichever caller brings it here: the value is
-    # already stripped (answer), so " ok " is "ok".
+    # The Assistant and Agent Ops never answer OK to an OK, bound or plain, whichever caller brings it here (the value is
+    # already stripped (answer), so " ok " is "ok"), except the person's own Assistant on their word, when they turned
+    # that on (backend/assistant_oks.py).
     if value == OK and task_asks.acting_for_people(by):
-        _refuse(conn, by, "task_requirement", task_asks.NOT_YOURS, task_id)
+        refused = assistant_oks.refusal(conn, by, row, requirement)
+        if refused:
+            _refuse(conn, by, "task_requirement", refused, task_id)
     # An OK bound to exact content is given only through its preview, with the hash of what was shown
     # (task_asks.give_ok). A send back stays a plain answer.
     refused = task_asks.refuses_plain_ok(conn, requirement["id"], value)
@@ -188,10 +191,12 @@ def _may_answer_page(
     task_id = row["id"]
     if value not in (OK, NO):
         _refuse(conn, by, "task_requirement", "A page takes ok or no. To change it, attach a new version.", task_id)
-    from . import task_asks
+    from . import assistant_oks, task_asks
 
     if value == OK and task_asks.acting_for_people(by):
-        _refuse(conn, by, "task_requirement", task_asks.NOT_YOURS, task_id)
+        refused = assistant_oks.refusal(conn, by, row, requirement)
+        if refused:
+            _refuse(conn, by, "task_requirement", refused, task_id)
     if R.shared(requirement) and is_human(by) and not own_click and not stale:
         # Its first answer settles it for every approver: only an approver's own click in Tico gives it. An agent's
         # review of new commits it was asked for (`R.asked_to_review`) settles nothing, and is written as before.
@@ -355,7 +360,12 @@ def _write(
             if page:
                 pages = P.current_pages(conn, str(page["visit_id"]), requirement_id)
         data["pages"] = [{"file_id": p["file_id"], "version": p["version"]} for p in pages]
-    # Through the task's history writer: an answer the Assistant or Agent Ops gave with the person's rights says so (via).
+    # Through the task's history writer: an answer the Assistant or Agent Ops gave with the person's rights says so (via),
+    # and one their Assistant gave on their word quotes it, with the message it cites (backend/assistant_oks.py).
+    from . import assistant_oks
+
+    if lent := assistant_oks.delegation(conn):
+        data["delegation"] = lent
     H._task_event(conn, row["id"], by, "answer", None, value, notes, data=data)
     return answer_id
 

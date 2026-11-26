@@ -159,16 +159,16 @@ ENTRIES = TEAM_RULES + [
         for page, spec in PAGE_OWNER_PAGES.items()
     ),
     S(
-        "me.assistant.decides_approvals",
-        "My Assistant decides my approvals",
+        "me.assistant.gives_oks",
+        "Give OKs for me when I tell you to",
         GENERAL + " > Assistant",
         "self",
         "person",
         "POST",
         "assistant/settings",
-        "decides_approvals",
+        "gives_oks",
         card=_card("general", "settings-assistant-pane"),
-        why="Who decides your approvals is yours to choose, in Settings",
+        why="Whether your Assistant gives OKs for you is yours to choose, in Settings",
     ),
     S(
         "assistant.on",

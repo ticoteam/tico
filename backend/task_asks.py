@@ -660,12 +660,16 @@ SHARED_OWN = "A page several people approve is answered only by your own click i
 SHARED_NOT_HELD = "A page several people approve takes its answer now, never sent later from a hold"
 
 
-def refuses_ok_by(conn: "sqlite3.Connection", who: object, requirement_id: str, value: object) -> str | None:
+def refuses_ok_by(
+    conn: "sqlite3.Connection", who: object, requirement_id: str, value: object, *, task_id: str | None = None
+) -> str | None:
     """For every answer path before the engine (the answer route, a batch decision): the refusal's words when `ok` to
     an OK requirement, bound or plain, on anyone's ask, does not come from the person's own session: the Assistant or
     Agent Ops (acting for a person, confirmed or not, or as itself), a personal token, or anything else acting for them.
     Else None. A send back stays theirs to give, except on a page several people approve: its first answer, OK or send
-    back, settles it for all of them, so either is only an approver's own click."""
+    back, settles it for all of them, so either is only an approver's own click. On the answer route (`task_id`), the
+    person's own Assistant giving a plain OK on their word, with their setting on, passes (backend/assistant_oks.py).
+    """
     said = str(value or "").strip().casefold()
     if said not in ("ok", "no"):
         return None
@@ -680,7 +684,24 @@ def refuses_ok_by(conn: "sqlite3.Connection", who: object, requirement_id: str, 
     if shared_page(conn, requirement_id):
         return SHARED_OWN
     found = conn.execute("SELECT kind FROM requirements WHERE id=?", (requirement_id,)).fetchone()
-    return words if found and found[0] == "ok" and said == "ok" else None
+    if not (found and found[0] == "ok" and said == "ok"):
+        return None
+    if via == "assistant" and task_id:
+        return _assistant_ok(conn, str(getattr(who, "actor", "")), task_id, requirement_id)
+    return words
+
+
+def _assistant_ok(conn: "sqlite3.Connection", person: str, task_id: str, requirement_id: str) -> str | None:
+    """The person's own Assistant's OK, read as the engine reads it (backend/assistant_oks.py `refusal`)."""
+    from . import assistant_oks
+    from . import task_engine as E
+    from . import task_requirements as R
+
+    row = E.task(conn, task_id)
+    requirement = R.get(conn, requirement_id)
+    if not row or not requirement or not row.get("visit"):
+        return NOT_YOURS
+    return assistant_oks.refusal(conn, person, row, requirement)
 
 
 def shared_page(conn: "sqlite3.Connection", requirement_id: str) -> bool:

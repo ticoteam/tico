@@ -137,7 +137,8 @@ class Any(dict):
 
 class Server:
     """The API a command calls: it answers every request with a task the bot may change (version 1, one ask of its
-    own to withdraw), and refuses nothing. Only the CLI's own refusals are left to see."""
+    own to withdraw, and one OK waiting on whoever runs it, as the Assistant acting for its person may answer one), and
+    refuses nothing. Only the CLI's own refusals are left to see."""
 
     def __init__(self, *args, **kwargs):
         self.calls = []
@@ -145,7 +146,11 @@ class Server:
     def _answer(self, *args, **kwargs):
         self.calls.append(args)
         task = Any(
-            id="T1", version=1, labels=[], title="Acme task", to_leave=[{"requirement_id": "r1", "may": ["withdraw"]}]
+            id="T1",
+            version=1,
+            labels=[],
+            title="Acme task",
+            to_leave=[{"requirement_id": "r1", "may": ["withdraw"]}, {"requirement_id": "r2", "may": ["ok", "no"]}],
         )
         return Any(task=task, tasks=[task], items=[])
 
