@@ -1804,9 +1804,10 @@ pub fn wip_branch(row: &Value) -> String {
 /// the next try. A cloud machine made again on a new disk keeps only what reached GitHub (task #3448).
 pub const BACKUP_EVERY: Duration = Duration::from_secs(600);
 pub const BACKUP_RETRY: Duration = Duration::from_secs(3600);
-/// Copies pushing at once on this computer. Each takes at most its two-minute git limit, so with four running even
-/// a round of stalled remotes leaves a due checkout waiting minutes, well inside BACKUP_EVERY.
-const BACKUP_AT_ONCE: usize = 4;
+/// Copies pushing at once on this computer, each given at most COPY_DEADLINE: behind 44 stalled ones (the Shared
+/// machine's 45 checkouts) a due copy starts within six minutes, inside BACKUP_EVERY.
+const BACKUP_AT_ONCE: usize = 8;
+const COPY_DEADLINE: Duration = Duration::from_secs(60);
 
 /// The last copy of a checkout's head to its wip/ branch: the head copied (empty before the first), when this
 /// computer last tried, and why that try failed.
@@ -2063,14 +2064,17 @@ pub async fn dropped(base: &Path) {
     }
 }
 
-/// After a clean removal whose head is on the task branch at origin, its wip/ copy holds nothing more: delete it so
-/// GitHub keeps no stale branch per task. A copy origin's task branch does not contain is kept. Runs from the base
-/// clone `base` once the checkout is gone (`remove_later`), so a slow remote never holds the removal itself.
+/// After a clean removal, a wip/ copy whose commits origin's default branch (`defaults`) already holds is redundant:
+/// delete it so GitHub keeps no stale branch per task. The default branch is the one branch Tico relies on not being
+/// rewritten (branch protection); a task branch can be, after the check and before the delete lands, and git cannot
+/// make an unchanged ref part of the delete's transaction (task #3448's review), so containment there is never
+/// enough: such a copy is kept. Runs from the base clone `base` once the checkout is gone, so a slow
+/// remote never holds the removal itself.
 async fn drop_backup(
     base: &Path,
     repo: &str,
     machine_git: bool,
-    branch: &str,
+    defaults: &[String],
     wip: &str,
     env: &Env,
 ) -> R<()> {
@@ -2080,47 +2084,39 @@ async fn drop_backup(
     let Some(copy) = remote_ref(base, env, &format!("refs/heads/{wip}")).await? else {
         return Ok(());
     };
-    let Some(task) = remote_ref(base, env, &format!("refs/heads/{branch}")).await? else {
-        return Ok(());
-    };
-    if !is_sha(&copy)
-        || !is_sha(&task)
-        || !git(
-            base,
-            env,
-            &["merge-base", "--is-ancestor", &copy, &task],
-            false,
-        )
-        .await?
-        .ok()
-    {
-        return Ok(());
+    for default in defaults {
+        let Some(landed) = remote_ref(base, env, &format!("refs/heads/{default}")).await? else {
+            continue;
+        };
+        if is_sha(&copy)
+            && is_sha(&landed)
+            && git(
+                base,
+                env,
+                &["merge-base", "--is-ancestor", &copy, &landed],
+                false,
+            )
+            .await?
+            .ok()
+        {
+            return delete_copy(base, wip, &copy, env).await;
+        }
     }
-    delete_copy(base, branch, &task, wip, &copy, env).await
+    Ok(())
 }
 
-/// Delete origin's wip/ branch `wip` at `copy` only while its task branch `branch` is still at `task`, the head
-/// shown to contain it: one atomic push that leases both and leaves the task branch where it is. A task branch
-/// deleted or rewritten since makes git refuse the whole push, so the copy stays.
-pub async fn delete_copy(
-    path: &Path,
-    branch: &str,
-    task: &str,
-    wip: &str,
-    copy: &str,
-    env: &Env,
-) -> R<()> {
+/// Delete origin's wip/ branch `wip` only while it is still at `copy`, the commit shown to be on the default branch:
+/// a copy moved since holds work nobody checked, and stays.
+pub async fn delete_copy(path: &Path, wip: &str, copy: &str, env: &Env) -> R<()> {
     git_remote(
         path,
         env,
         &[
             "push",
-            "--atomic",
             "origin",
             &format!("--force-with-lease=refs/heads/{wip}:{copy}"),
-            &format!("--force-with-lease=refs/heads/{branch}:{task}"),
-            &format!(":refs/heads/{wip}"),
-            &format!("{task}:refs/heads/{branch}"),
+            "--delete",
+            &format!("refs/heads/{wip}"),
         ],
         true,
     )
@@ -2463,8 +2459,16 @@ async fn upstreams(
         false,
     )
     .await?;
-    if upstream.ok() && upstream.stdout.trim().starts_with("refs/remotes/origin/") {
-        against.push(upstream.stdout.trim().to_string());
+    // A branch set to track its own fetched wip/ copy has published nothing (NOT_A_BACKUP).
+    let upstream = if upstream.ok() {
+        upstream.stdout.trim()
+    } else {
+        ""
+    };
+    if upstream.starts_with("refs/remotes/origin/")
+        && !upstream.starts_with("refs/remotes/origin/wip/")
+    {
+        against.push(upstream.to_string());
     }
     against.extend(defaults.iter().map(|d| format!("refs/remotes/origin/{d}")));
     Ok(against)
@@ -3365,9 +3369,11 @@ where
             // Best effort, after the checkout is gone and without holding up this removal or the next action: a copy
             // left on GitHub costs a branch, never work.
             let (env, machine_git) = (env.clone(), crate::util::truthy(row.get("machine_git")));
+            let mut defaults: Vec<String> = defaults.iter().cloned().collect();
+            defaults.sort();
             let at = base.clone();
             let dropping = tokio::spawn(async move {
-                let _ = drop_backup(&base, &repo, machine_git, &branch, &wip, &env).await;
+                let _ = drop_backup(&base, &repo, machine_git, &defaults, &wip, &env).await;
             });
             let mut running = DROPPING.lock().unwrap();
             running.retain(|(_, d)| !d.is_finished());
@@ -3517,8 +3523,10 @@ pub struct Worktrees {
     /// The copies to wip/ branches running beside the passes, by link (`start_backups`): a slow remote never holds
     /// an action, a report or another checkout's copy back.
     backing_up: Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
-    /// At most BACKUP_AT_ONCE copies talk to remotes at once.
+    /// At most BACKUP_AT_ONCE copies talk to remotes at once...
     copy_slots: Arc<tokio::sync::Semaphore>,
+    /// ...each for at most this long (COPY_DEADLINE; shorter in tests).
+    copy_deadline: Mutex<Duration>,
     /// Bots whose worktree maintenance is running: no claim names them meanwhile.
     pub maintaining: Mutex<HashSet<String>>,
     /// The disk is low (disk_clean.rs): the next pass removes every finished task's worktree the server asked to
@@ -3535,6 +3543,7 @@ impl Worktrees {
             pending: Mutex::new(None),
             backing_up: Mutex::new(HashMap::new()),
             copy_slots: Arc::new(tokio::sync::Semaphore::new(BACKUP_AT_ONCE)),
+            copy_deadline: Mutex::new(COPY_DEADLINE),
             maintaining: Mutex::new(HashSet::new()),
             urgent: Default::default(),
         }
@@ -3889,6 +3898,12 @@ impl Worktrees {
         }
     }
 
+    /// Give each copy at most `deadline` (tests).
+    #[cfg(test)]
+    pub fn set_copy_deadline(&self, deadline: Duration) {
+        *self.copy_deadline.lock().unwrap() = deadline;
+    }
+
     /// Whether any copy is still running (tests).
     #[cfg(test)]
     pub fn backing_up(&self) -> bool {
@@ -3945,20 +3960,27 @@ impl Worktrees {
         Some((head, known))
     }
 
-    /// Copy `head` of checkout `row`, recording the outcome (and on disk, `save_backup`); the next pass's reports
+    /// Copy `head` of checkout `row` within the copy deadline, recording the outcome (and on disk, `save_backup`); the next pass's reports
     /// carry it.
     async fn back_up_one(&self, row: &Value, head: String, known: &str) {
         let link = text_of(&row["id"]);
-        let outcome = match self
-            .repository_env(&link, &text_of(&row["repo"]), false)
-            .await
-        {
-            Ok((env, listed, _)) => {
-                let machine_git = listed.get("machine_git") == Some(&json!(true));
-                back_up(&self.workspace, row, &head, &env, machine_git, known).await
-            }
-            Err(e) => Err(e),
+        let deadline = *self.copy_deadline.lock().unwrap();
+        let attempt = async {
+            let (env, listed, _) = self
+                .repository_env(&link, &text_of(&row["repo"]), false)
+                .await?;
+            let machine_git = listed.get("machine_git") == Some(&json!(true));
+            back_up(&self.workspace, row, &head, &env, machine_git, known).await
         };
+        // A remote that stalls holds a slot no longer than this; its git is killed with the attempt (kill_on_drop).
+        let outcome = tokio::time::timeout(deadline, attempt)
+            .await
+            .unwrap_or_else(|_| {
+                Err(WtErr::msg(format!(
+                    "the remote did not answer within {} s",
+                    deadline.as_secs()
+                )))
+            });
         let error = outcome.err().map(|e| backup_error(&e));
         save_backup(&self.workspace, row, error.as_deref());
         let mut inner = self.inner.lock().unwrap();
