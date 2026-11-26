@@ -43,8 +43,8 @@ CUSTOMER_WAIT_DAYS = 30
 # Seconds after a change before the never-stuck check looks at the task, and its gap before retrying a run that was cut
 # off. A run that finished is not woken this soon (never_stuck._ladder).
 FIRST_TRY_S = 120
-# A reopen this soon after a close, by whoever closed, is its Undo (the toast's, its hover included): the visit the close
-# ended comes back as it was (`_undoes_close`).
+# How long after a close its Undo gives back the visit it ended (the toast's five seconds, its hover and a slow line
+# included). Later, or by anyone else, the Undo is an ordinary reopen (`_undoes_close`).
 UNDO_CLOSE_S = 120
 GUARDED = ("status", "stage_id", "owner_id", "pipeline_id")
 
@@ -598,8 +598,8 @@ def _open_visit(conn: "sqlite3.Connection", task_id: str, stage_id: str, how: st
 
 
 def _undoes_close(conn: "sqlite3.Connection", row: Row, target: Row, by: str) -> Row | None:
-    """The visit a reopen gives back, when the reopen is the Undo of a close (task #3678): the task was closed less than
-    UNDO_CLOSE_S ago by `by`, from `target`, and nothing was closed with it (a sub-task or a hand-off the close ended
+    """The visit an Undo of a close gives back (task #3678): the task was closed less than UNDO_CLOSE_S ago by `by`, from
+    `target`, and nothing was closed with it (a sub-task or a hand-off the close ended
     stays as it is, so such a reopen starts a new visit). Its attachments, its verdicts and the OK it waited on are the
     visit's own rows: they come back with it, and nobody has to submit anything again."""
     H = _h()
@@ -1243,11 +1243,15 @@ def move(
     *,
     cascade: bool = False,
     undone: str | None = None,
+    undo_close: bool = False,
 ) -> Row:
     """Move a task: forward, push past, back, done, close or reopen. `to` is a stage id or name, or NEXT, DONE, CLOSED
     or REOPEN. A forward move is held to what the stage needs and to room; with `why` it pushes past. Back, close and
     reopen are never held. `cascade` is the engine closing a task with the one that filed it. `undone` is the answer
-    whose taking back makes this move (answers.undo): its history row says so, so the move is not a second decision."""
+    whose taking back makes this move (answers.undo): its history row says so, so the move is not a second decision.
+    `undo_close` on a reopen is the Undo of the caller's own close a moment ago: the visit it ended comes back with what
+    was attached and the OK it waited on, and nobody is woken (`_undoes_close`). A reopen without it is a new decision:
+    a new visit, and its owner is told."""
     H = _h()
     row = task(conn, task_id)
     if not row:
@@ -1314,7 +1318,7 @@ def move(
         _need_why(conn, by, why, "reopen it", task_id, everyone=True)
     elif kind in ("back", "closed"):
         _need_why(conn, by, why, "close it" if kind == "closed" else "move it back", task_id)
-    restored = _undoes_close(conn, row, target, by) if kind == "reopen" else None
+    restored = _undoes_close(conn, row, target, by) if kind == "reopen" and undo_close else None
     if kind == "back" or (kind == "side" and row["stage"].get("side") and is_main_work(target)):
         _may_go_back_to(conn, by, row, target)
     if kind == "closed" and not cascade:

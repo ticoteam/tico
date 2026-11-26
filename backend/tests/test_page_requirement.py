@@ -1244,12 +1244,16 @@ def _waiting_on_ana(c, store):
     return rid, row, fid
 
 
+def _undo(c, row, by=ANA):
+    return E.move(c, row["id"], E.REOPEN, by, "Undid the close", undo_close=True)
+
+
 def test_undoing_a_close_brings_back_the_same_ok_waiting_and_wakes_nobody(c, store):
     rid, row, fid = _waiting_on_ana(c, store)
     visit = E.task(c, row["id"])["visit"]["id"]
     woken = X.wakes(c, row["id"])
     E.move(c, row["id"], E.CLOSED, ANA, "Not needed")
-    back = E.move(c, row["id"], E.REOPEN, ANA, "Undid the close")
+    back = _undo(c, row)
     assert (back["stage"]["name"], back["status"], back["visit"]["id"]) == ("Spec", "open", visit), (
         "the visit it closed"
     )
@@ -1260,7 +1264,21 @@ def test_undoing_a_close_brings_back_the_same_ok_waiting_and_wakes_nobody(c, sto
     assert done["stage"]["name"] == "Done"
 
 
-def test_a_reopen_later_than_the_undo_starts_a_new_visit(c, store):
+def test_a_reopen_that_is_no_undo_starts_a_new_visit_and_tells_the_owner(c, store):
+    _, row, _ = _waiting_on_ana(c, store)
+    visit = E.task(c, row["id"])["visit"]["id"]
+    E.move(c, row["id"], E.CLOSED, ANA, "Not needed")
+    back = E.move(c, row["id"], E.REOPEN, ANA, "It is needed after all")
+    assert back["visit"]["id"] != visit, "a reopen with a reason is a new decision, however soon"
+    assert (_standing(c, row).on, _standing(c, row).line) == (WRITER, "No page attached")
+    assert X.wakes(c, row["id"])[-1][1] == WRITER
+
+
+def test_an_undo_past_its_window_or_of_someone_elses_close_is_a_plain_reopen(c, store):
+    _, row, _ = _waiting_on_ana(c, store)
+    visit = E.task(c, row["id"])["visit"]["id"]
+    E.move(c, row["id"], E.CLOSED, ANA, "Not needed")
+    assert _undo(c, row, by=BEN)["visit"]["id"] != visit, "Ben did not close it"
     _, row, _ = _waiting_on_ana(c, store)
     visit = E.task(c, row["id"])["visit"]["id"]
     E.move(c, row["id"], E.CLOSED, ANA, "Not needed")
@@ -1268,9 +1286,7 @@ def test_a_reopen_later_than_the_undo_starts_a_new_visit(c, store):
     earlier = H.shift(closed["entered_at"], seconds=-E.UNDO_CLOSE_S - 1)
     c.execute("UPDATE visits SET entered_at=? WHERE id=?", (earlier, closed["id"]))
     c.execute("UPDATE visits SET left_at=? WHERE id=?", (earlier, visit))
-    back = E.move(c, row["id"], E.REOPEN, ANA, "It is needed after all")
-    assert back["visit"]["id"] != visit
-    assert (_standing(c, row).on, _standing(c, row).line) == (WRITER, "No page attached")
+    assert _undo(c, row)["visit"]["id"] != visit
 
 
 def test_undoing_a_close_that_closed_a_sub_task_reopens_as_before(c, store):
@@ -1279,8 +1295,25 @@ def test_undoing_a_close_that_closed_a_sub_task_reopens_as_before(c, store):
     sub = X.new_task(c, ANA, "Check the importer's limits", "product", parent=row["id"])
     E.move(c, row["id"], E.CLOSED, ANA, "Not needed")
     assert E.task(c, sub["id"])["status"] == "closed"
-    back = E.move(c, row["id"], E.REOPEN, ANA, "Undid the close")
-    assert back["visit"]["id"] != visit, "what the close ended stays ended, so the visit is not the one it was"
+    assert _undo(c, row)["visit"]["id"] != visit, "what the close ended stays ended, so the visit is not the one it was"
+
+
+def test_the_move_route_takes_undo_only_with_reopen(api):
+    store = api.app.state.store
+    store.blobs = store.blobs or Blobs(store.settings)
+    with store.transaction() as c:
+        for slug in ("writer", "manager"):
+            X.bot(c, slug)
+        _, row, _ = _waiting_on_ana(c, store)
+        visit = E.task(c, row["id"])["visit"]["id"]
+    path = f"/api/v2/tasks/{row['id']}/move"
+    closing = api.post(path, json={"to": "closed", "why": "Not needed", "undo": True}, headers=headers())
+    assert closing.status_code == 422, closing.text
+    assert api.post(path, json={"to": "closed", "why": "Not needed"}, headers=headers()).status_code == 200
+    undone = api.post(path, json={"to": "reopen", "why": "Undid the close", "undo": True}, headers=headers())
+    assert undone.status_code == 200, undone.text
+    with store.read() as c:
+        assert E.task(c, row["id"])["visit"]["id"] == visit
 
 
 # ----------------------------------------------------------------------------- the Jev step
