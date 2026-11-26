@@ -1277,7 +1277,7 @@ def install_media(
                 if derivative is None and request.method == "GET":
                     from . import file_use
 
-                    file_use.count(store, who, "open")
+                    file_use.open_file(store, who, bid, served)
                 return served
         if v not in (None, 1):
             raise Problem("not_found", "File version not found", 404)

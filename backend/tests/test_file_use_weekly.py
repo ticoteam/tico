@@ -7,6 +7,8 @@ bot the owner grants outcome stats (backend/outcome_stats.py); anyone else gets 
 
 import json
 
+import pytest
+
 from backend import file_use
 from backend.auth import Identity
 from backend.store import H
@@ -107,13 +109,22 @@ def ok(response):
     return response
 
 
-def test_each_files_action_counts_once_per_use_by_person_or_bot_and_refusals_count_nothing(api):
+@pytest.fixture
+def now(monkeypatch):
+    """The clock file_use reads for its open window, moved by hand: `now[0] += seconds`."""
+    at = [1000.0]
+    monkeypatch.setattr(file_use, "clock", lambda: at[0], raising=False)
+    return at
+
+
+def test_each_files_action_counts_once_per_use_by_person_or_bot_and_refusals_count_nothing(api, now):
     pdf = task_pdf(api)
     ops, finance = as_bot(api, "ops"), as_bot(api, "finance")
 
-    # 1. A person opens one file twice.
-    for _ in range(2):
-        ok(api.get(f"/api/v2/files/{pdf}", headers=headers()))
+    # 1. A person opens one file twice, an hour apart.
+    ok(api.get(f"/api/v2/files/{pdf}", headers=headers()))
+    now[0] += 3600
+    ok(api.get(f"/api/v2/files/{pdf}", headers=headers()))
     # 2. One bot lists files by the CLI's route, a second by the MCP tool.
     ok(api.get("/api/v2/files", headers=headers(ops)))
     failed, _ = call(api, "tico_file_list", {}, token=finance)
@@ -145,6 +156,36 @@ def test_each_files_action_counts_once_per_use_by_person_or_bot_and_refusals_cou
         ["person", "open", 1, 2],
         ["person", "review", 1, 1],
     ]
+
+
+def test_one_open_is_one_file_shown_however_many_requests_it_takes(api, now):
+    pdf = task_pdf(api)
+    ops = as_bot(api, "ops")
+    opens = "SELECT who, uses FROM files_use_weekly WHERE action = 'open' ORDER BY who"
+
+    # Its info alone is an open (a bot's file show).
+    ok(api.get(f"/api/v2/files/{pdf}/info", headers=headers(ops)))
+    # The app's open reads the info, then the bytes in Range parts: one open, the parts after byte 0 and a refused
+    # range nothing, by either byte route.
+    ok(api.get(f"/api/v2/files/{pdf}/info", headers=headers()))
+    first = api.get(f"/api/v2/files/{pdf}", headers={**headers(), "Range": "bytes=0-9"})
+    assert first.status_code == 206, first.text
+    assert api.get(f"/api/v2/files/{pdf}", headers={**headers(), "Range": "bytes=10-"}).status_code == 206
+    assert api.get(f"/api/v2/files/{pdf}/versions/1", headers=headers()).status_code == 200
+    assert query(api, opens, "ana-test")["rows"] == [["bot", 1], ["person", 1]]
+
+    # Past the window, a refused range and a later part are still no open; the next read from byte 0 is.
+    now[0] += file_use.OPEN_WINDOW_S
+    assert api.get(f"/api/v2/files/{pdf}", headers={**headers(), "Range": "bytes=99999-"}).status_code == 416
+    assert api.get(f"/api/v2/files/{pdf}", headers={**headers(), "Range": "bytes=10-"}).status_code == 206
+    assert query(api, opens, "ana-test")["rows"] == [["bot", 1], ["person", 1]]
+    assert api.get(f"/api/v2/files/{pdf}", headers={**headers(), "Range": "bytes=0-"}).status_code == 206
+    assert query(api, opens, "ana-test")["rows"] == [["bot", 1], ["person", 2]]
+
+
+def test_the_agent_pages_made_recently_list_is_a_list(api):
+    ok(api.get("/api/v2/bots/ops/files?media=1", headers=headers()))
+    assert rows(api) == [["person", "list", 1, 1]]
 
 
 def test_the_view_holds_counts_only_and_only_the_owner_and_a_granted_bot_read_it(api):

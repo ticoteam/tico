@@ -3287,7 +3287,9 @@ def install_files(app, store, auth, blobs, mutate):
         media: bool = False,
     ):
         if media:
-            return files.made_recently(request.state.identity, bot, max(1, min(limit, LIST_MAX)))
+            found = files.made_recently(request.state.identity, bot, max(1, min(limit, LIST_MAX)))
+            file_use.count(store, request.state.identity, "list")
+            return found
         found = files.listing(request.state.identity, bot, max(1, min(limit, LIST_MAX)), cursor, q=q, kind=kind)
         file_use.count(store, request.state.identity, "list")
         return found
@@ -3410,7 +3412,9 @@ def install_files(app, store, auth, blobs, mutate):
         ),
     )
     def info(request: Request, fid: str):
-        return files.info(request.state.identity, fid)
+        found = files.info(request.state.identity, fid)
+        file_use.open_file(store, request.state.identity, fid)
+        return found
 
     @app.get(
         "/api/v2/files/{fid}/versions",
@@ -3435,7 +3439,7 @@ def install_files(app, store, auth, blobs, mutate):
     def version_bytes(request: Request, fid: str, number: int):
         served = files.serve(request.state.identity, fid, number, request=request)
         if request.method == "GET":
-            file_use.count(store, request.state.identity, "open")
+            file_use.open_file(store, request.state.identity, fid, served)
         return served
 
     from . import file_signings
