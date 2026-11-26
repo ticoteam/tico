@@ -16,7 +16,8 @@ RETIRED_WITH_UI = (
     "scripts/tests/test_release_shots.py",
     "backend/tests/test_growth_page_fixtures.py",
 )
-# Case numbers in red_main_cases.json from the recorded PR replay.
+# Case numbers in red_main_cases.json that the merge queue plan must catch. Its time budget is wider than the PR plan's,
+# and the replay shows it catches every one; cases outside the PR plan's budget (23, 33) are caught only there.
 PINNED_CAUGHT = {
     1,
     2,
@@ -347,13 +348,15 @@ def test_red_main_replay_pinned_cases():
     results = runner.run(cases)
     caught = {row["case"] for row in results if row["caught"]}
     caught_at_pr = {row["case"] for row in results if row["caught_pr"]}
+    caught_at_queue = {row["case"] for row in results if row["caught_queue"]}
     # A case whose failing test was deleted (a retired migration's, say) can no longer be replayed. It counts as
     # stale, under the bound below, not as a lost catch.
     stale = {row["case"] for row in results if row["stale"]}
     replay.report(results)
     print("Newly caught case IDs:", sorted(caught - PINNED_CAUGHT))
-    lost = PINNED_CAUGHT - caught - stale
-    assert not lost, f"Lost caught cases: {sorted(lost)}"
+    # Checked against the queue alone: a PR-stage catch must not hide a case the queue stopped selecting.
+    lost = PINNED_CAUGHT - caught_at_queue - stale
+    assert not lost, f"Lost merge queue catches: {sorted(lost)}"
     missing_at_pr = PINNED_CAUGHT_AT_PR - caught_at_pr - stale
     assert not missing_at_pr, f"Lost PR-stage catches: {sorted(missing_at_pr)}"
     # The old web app's removal (#4660) deleted every ui/ browser script and the tests of its screenshot harness and
