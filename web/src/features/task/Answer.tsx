@@ -6,6 +6,7 @@ import { clock } from '@/conversation';
 import { meQuery } from '@/data';
 import { Button } from '@/kit/Button';
 import { Icon } from '@/kit/Icon';
+import { Menu, MenuItem } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { toast } from '@/kit/Toast';
 import { useFollow } from '@/live/follow';
@@ -14,7 +15,8 @@ import { AskCard, Docked, useAnswering } from './AskCard';
 import { HeldDecision, isRuleReview } from './Held';
 import { StoppedDecision } from './Stopped';
 import { followSend } from './sending';
-import { addressesOf, answerKey, decisionShownQuery, emailSendQuery, sendStateQuery, type AnswerKey, type BoundAction, type BoundRule, type TaskData } from './queries';
+import { snoozeChoices } from './Head';
+import { addressesOf, answerKey, decisionShownQuery, snoozeAsk, emailSendQuery, sendStateQuery, type AnswerKey, type BoundAction, type BoundRule, type TaskData } from './queries';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { ReadFault } from '@/pagekinds';
 
@@ -110,18 +112,37 @@ interface AnswerProps {
   hold?: (r: TaskRequirement | null, sending?: boolean) => void;
 }
 
-/** The decision itself: the thing's name, who asks, what Approve does, then Request changes and Approve. */
+/** Whether the person may close the task from its card: only a stage's own OK (an email's, a rule's or an action's OK
+    is about that one thing, not the task), on an open task they work (a person who moves tasks, its requester or its
+    owner; the server still decides, task_calls.can_work, so a manager it would let close sees the stage menu's Close). */
+function mayClose(t: TaskData, r: TaskRequirement, me: string | undefined): boolean {
+  if (t.status !== 'open' || r.shows?.some((s) => /^(email|rule|outbound):/.test(s))) return false;
+  return t.mover || (!!me && (t.requester_id === me || t.owner_id === me));
+}
+
+/** "until tomorrow", "until next week": Snooze's choice as the toast says it. */
+const untilWords = (label: string) => `until ${label.charAt(0).toLowerCase()}${label.slice(1)}`;
+
+/** The decision itself: the thing's name, who asks, what Approve does, then Snooze, Close, Request changes and Approve. */
 export function Answer({ t, r, onAsking, hold }: AnswerProps) {
   const approve = useAction('task.approve');
   const request = useAction('task.requestChanges');
+  const closing = useAction('task.move');
+  const me = useQuery(meQuery).data?.id;
   const { error, here, refused, moveOn, start } = useAnswering();
   const shown = useQuery(decisionShownQuery(t.id, r.requirement_id, t.version, emailOf(r), !!r.shows?.some((s) => s.startsWith('outbound:'))));
   const { name, effect, send, recipients, files } = useNamed(t, r);
-  const [asking, setAsking] = useState(false);
+  // Request changes and Close each open one line in the card: which one is open, if any.
+  const [open, setOpen] = useState<'changes' | 'close' | null>(null);
+  const asking = open === 'changes';
+  const setAsking = (on: boolean) => setOpen(on ? 'changes' : null);
+  const [why, setWhy] = useState('');
+  const [snoozing, setSnoozing] = useState(false);
   const [note, setNote] = useState('');
   const [askedOn, setAskedOn] = useState<AnswerKey | undefined>(undefined);
   const may = (v: 'ok' | 'no') => r.may.includes(v);
-  const busy = approve.pending || request.pending;
+  const busy = approve.pending || request.pending || closing.pending || snoozing;
+  const closable = mayClose(t, r, me);
 
   // What Approve binds to, and what the person first saw: when it moves while the box is open, it says Changed.
   const preview = shown.data;
@@ -134,10 +155,10 @@ export function Answer({ t, r, onAsking, hold }: AnswerProps) {
   const fault = !!error || shown.isError || (preview?.complete === false && !shown.isPlaceholderData);
 
   useEffect(() => {
-    if (!asking) return;
+    if (!open) return;
     onAsking?.(true);
     return () => onAsking?.(false);
-  }, [asking, onAsking]);
+  }, [open, onAsking]);
 
   const onApprove = async () => {
     start(t.id, r.requirement_id);
@@ -181,16 +202,62 @@ export function Answer({ t, r, onAsking, hold }: AnswerProps) {
     moveOn();
   };
 
+  // Close: the task ends here, with the person's note when they gave one. No answer is sent, so its owner is asked to
+  // rewrite nothing; Undo reopens it in the stage it left, the same OK waiting again.
+  const onClose = async () => {
+    start(t.id, r.requirement_id);
+    hold?.(r, true);
+    const note = why.trim();
+    const res = await closing.run({ task: t.id, to: 'closed', ...(note && { why: note }) });
+    hold?.(res.ok ? null : r);
+    if (!res.ok) return refused(res);
+    toast({
+      text: 'Closed',
+      name,
+      action: {
+        label: 'Undo',
+        run: () => void run('task.move', { task: t.id, to: 'reopen', why: 'Undid the close' }, { via: 'click' }).then((u) => (u.ok ? undefined : toast(failedToast(u)))),
+      },
+    });
+    setOpen(null);
+    setWhy('');
+    moveOn();
+  };
+
+  // Snooze: this one ask leaves the person's own Needs you until then. The task, its stage and its owner stay as they are.
+  const onSnooze = async (label: string, at: Date) => {
+    start(t.id, r.requirement_id);
+    setSnoozing(true);
+    try {
+      await snoozeAsk(t.id, r.requirement_id, t.visit_id ?? '', at.toISOString());
+    } catch {
+      setSnoozing(false);
+      return refused({ error: 'Couldn’t snooze it. Try again.' });
+    }
+    setSnoozing(false);
+    toast({ text: `Snoozed ${untilWords(label)}`, name });
+    moveOn();
+  };
+
   return (
     <AskCard
       name={name}
       note={!fault && (changed ? 'Changed' : effect)}
       who={askerOf(t, r)}
       pill={<ReviewPill t={t} />}
-      asking={asking}
+      asking={!!open}
       target={`task-answer:${t.id}`}
       actions={
-        asking ? (
+        open === 'close' ? (
+          <>
+            <Button disabled={closing.pending} onClick={() => setOpen(null)}>
+              Cancel
+            </Button>
+            <Button variant="primary" busy={closing.pending} disabled={closing.pending} onClick={() => onClose()}>
+              Close task
+            </Button>
+          </>
+        ) : asking ? (
           <>
             <Button disabled={request.pending} onClick={() => setAsking(false)}>
               Cancel
@@ -201,6 +268,32 @@ export function Answer({ t, r, onAsking, hold }: AnswerProps) {
           </>
         ) : (
           <>
+            {t.visit_id && (
+              <Menu
+                align="start"
+                trigger={
+                  <Button variant="quiet" disabled={busy}>
+                    Snooze
+                  </Button>
+                }
+              >
+                {snoozeChoices().map(([label, at]) => (
+                  <MenuItem key={label} label={label} onSelect={() => void onSnooze(label, at)} />
+                ))}
+              </Menu>
+            )}
+            {closable && (
+              <Button
+                variant="quiet"
+                disabled={busy}
+                onClick={() => {
+                  setWhy('');
+                  setOpen('close');
+                }}
+              >
+                Close
+              </Button>
+            )}
             {may('no') && (
               <Button
                 disabled={busy}
@@ -238,9 +331,9 @@ export function Answer({ t, r, onAsking, hold }: AnswerProps) {
         )
       }
     >
-      {!asking && preview?.rule && <RuleShown rule={preview.rule} />}
-      {!asking && preview?.action && <ActionShown action={preview.action} />}
-      {!asking && files.length > 0 && (
+      {!open && preview?.rule && <RuleShown rule={preview.rule} />}
+      {!open && preview?.action && <ActionShown action={preview.action} />}
+      {!open && files.length > 0 && (
         <span className="askcard-files">
           {files.map((f) => (
             <span key={f.part} className="file">
@@ -255,6 +348,12 @@ export function Answer({ t, r, onAsking, hold }: AnswerProps) {
         <label className="askcard-field">
           <span>What should change?</span>
           <textarea rows={2} maxLength={4000} autoFocus value={note} onChange={(e) => setNote(e.target.value)} />
+        </label>
+      )}
+      {open === 'close' && (
+        <label className="askcard-field">
+          <span>Why close? (optional)</span>
+          <textarea rows={2} maxLength={2000} autoFocus placeholder="e.g. not needed any more" value={why} onChange={(e) => setWhy(e.target.value)} />
         </label>
       )}
     </AskCard>

@@ -4,7 +4,7 @@ import type { OkPreview, PagePublished, PageShown, PipelineSettingsResult, Publi
 import { asksGone, keys, meQuery, queryClient, quietRoot, write } from '@/data';
 import { newId } from '@/lib/ids';
 import { timelineQuery } from '@/conversation';
-import { flowQuery, leaveNeedsYou, pipelinesQuery, settleNeedsYou } from '@/features/tasks/routing';
+import { flowQuery, flowSnoozedAsksQuery, leaveNeedsYou, pipelinesQuery, settleNeedsYou } from '@/features/tasks/routing';
 import type { FileLibrary, FileSearch, ReconcileTaskShotsBody, ReconcileTaskShotsResponse, TaskFileResult, TaskFileView } from '@/api/schema';
 
 /* One open task: its detail (GET /api/v2/tasks/{tid}, kept current by the stream under keys.tasks.detail), the files
@@ -193,6 +193,22 @@ export function moveTask(id: string, to: string, why?: string) {
     return {};
   };
   return change(id, shown, (idem) => post(`${taskPath(id)}/move`, why ? { to, why } : { to }, idem));
+}
+
+/** Snooze one ask for the person alone until `until` (POST /api/v2/needs-you/snooze, backend/ask_snoozes.py): it leaves
+    their Needs you and its count at once, and comes back then; the task, its stage and its bot do not change. The ask's
+    id in Needs you is its task's visit and the requirement (waiting_on.ask_id). */
+export async function snoozeAsk(id: string, rid: string, visit: string, until: string): Promise<void> {
+  const undo = leaveNeedsYou(id, rid);
+  try {
+    await api.post('/api/v2/needs-you/snooze', { id: `${visit}:${rid}`, until }, { idempotencyKey: newId() });
+  } catch (e) {
+    undo(); // refused: back as it was, then read again
+    settleNeedsYou();
+    throw e;
+  }
+  settleNeedsYou({ task: id, wait: rid });
+  void queryClient.invalidateQueries({ queryKey: flowSnoozedAsksQuery.queryKey });
 }
 
 export const giveTask = (id: string, owner: string, setAnyway?: boolean) =>
