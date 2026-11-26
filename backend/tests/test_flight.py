@@ -318,6 +318,11 @@ def test_owners_admins_and_bots_read_the_metrics(tmp_path):
         window = get("ana-test", "/api/v2/system/metrics?section=requests&since=100&until=160&routes=3").json()
         assert (window["since"], window["until"], window["requests"]["n"]) == (100, 160, 0)
         assert get("ana-test", "/api/v2/system/metrics?since=160&until=100").status_code == 422
+        # The live server recorded all of it in its own file: the server's database took no recorder row.
+        with app.state.store.read() as c:
+            assert {t: c.execute(f"SELECT count(*) FROM {t}").fetchone()[0] for t in flight.TABLES} == dict.fromkeys(
+                flight.TABLES, 0
+            )
 
 
 def test_a_client_that_hangs_up_during_the_body_read_is_a_499_not_a_5xx(tmp_path, caplog):

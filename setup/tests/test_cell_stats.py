@@ -837,7 +837,7 @@ def test_db_reads_read_only_and_flight_reads_the_files(box):
 
 def test_sql_top_reads_the_recorders_own_file_and_the_servers_database_on_a_cell_without_one(box):
     name = "tico-boatyard-server-1"
-    older = [r[0] for r in cs.sql_top(box, name, NOW)]  # no hub.flight.db yet: flight_sql in hub.sqlite
+    older = [r["shape"] for r in cs.sql_top(box, name, NOW)]  # no hub.flight.db yet: flight_sql in hub.sqlite
     assert "UPDATE jobs SET x = ? WHERE id = ?" in older
     target = box.cell_root / "companies" / "boatyard" / "data" / "hub.flight.db"
     with closing(sqlite3.connect(target)) as c:  # as the server leaves it between writes: WAL, no connection open
@@ -849,7 +849,7 @@ def test_sql_top_reads_the_recorders_own_file_and_the_servers_database_on_a_cell
             (int(NOW) // 3600 * 3600, "SELECT moved", 7, 70.0, 1, 9, "{}"),
         )
         c.commit()
-    assert [r[0] for r in cs.sql_top(box, name, NOW)] == ["SELECT moved"]
+    assert [r["shape"] for r in cs.sql_top(box, name, NOW)] == ["SELECT moved"]
 
 
 # --- SQLite: never on the host ----------------------------------------------------------------------------------------
