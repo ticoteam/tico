@@ -65,9 +65,14 @@ const listen = (on: () => void) => {
 /** The person (`<company>\0<person id>`) and the view open now (viewKey), as the root knows them. */
 export function setRecentHere(who: string, open: string): void {
   if (who === here.who && open === here.open) return;
+  const known = who && who !== here.who;
   here = { who, open };
+  // views found gone (or failing) before it was known whose list this is leave it now
+  if (known && (gone.size || fault)) write(who, (rows) => (rows.some(out) ? rows.filter((r) => !out(r)) : rows));
   for (const on of heard) on();
 }
+
+const out = (r: RecentView) => gone.has(r.key) || r.key === fault || (r.key.startsWith('task:') && gone.has(`task:${taskIn(r.to)}`));
 
 /** The address's path as one key: without the app's base and a closing slash. */
 export const pageKey = (path: string): string => `page:${path.replace(/^\/next(?=\/|$)/, '').replace(/(.)\/+$/, '$1') || '/'}`;
@@ -115,8 +120,13 @@ function drop(key: string, who: string): void {
 
 /** A task that is gone, by any of the ways its address names it (its number, its id). */
 export function forgetTask(...names: readonly (string | number | null | undefined)[]): void {
-  for (const n of names) if (n != null && n !== '') forgetView(`task:${n}`);
+  const said = names.filter((n) => n != null && n !== '').map(String);
+  // a row is keyed by the task's number, but its address may name the task by its id
+  for (const r of readRecentViews(here.who)) if (said.includes(taskIn(r.to))) forgetView(r.key);
+  for (const n of said) forgetView(`task:${n}`);
 }
+
+const taskIn = (to: string): string => new URL(to, 'http://x').searchParams.get('task') ?? '';
 
 /* The page whose route failed (PageFault): no visit to it is a view while it shows its fault. Read again and drawn, it
    is one again. */
@@ -151,7 +161,7 @@ export function forgetRecentViews(): void {
   gone.clear();
 }
 
-const shown = (rows: RecentView[], open: string) => rows.filter((r) => r.key !== open).slice(0, RECENT_VIEWS);
+const shown = (rows: RecentView[], open: string) => rows.filter((r) => r.key !== open && !gone.has(r.key)).slice(0, RECENT_VIEWS);
 
 /** The rows the list shows: the views before the open one, newest first, at most RECENT_VIEWS. */
 export function useRecentViews(): RecentView[] {

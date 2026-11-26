@@ -105,6 +105,24 @@ describe('recent views', () => {
     expect(keys()).toEqual(['page:/tasks/product']);
   });
 
+  it('drops a task gone by the address its row was saved under, though its row is keyed by its number', () => {
+    noteView({ key: 'task:12', to: '/tasks/product?task=t-abc&tab=files', trail: ['Tasks', 'Product', 'Fix the login bug'] });
+    noteView(view('page:/tasks/product', 'Tasks', 'Product'));
+    forgetTask('t-abc');
+    expect(keys()).toEqual(['page:/tasks/product']);
+  });
+
+  it('drops a view found gone before it knew whose list it was, once it knows', () => {
+    noteView(view('page:/library/docs/gone', 'Library', 'Docs', 'Gone'));
+    noteView(view('page:/tasks/product', 'Tasks', 'Product'));
+    setRecentHere('', '');
+    noteView({ key: 'task:12', to: '/tasks/product?task=t-abc', trail: ['Tasks', 'Product', 'Fix the login bug'] }, ME);
+    forgetView('page:/library/docs/gone');
+    forgetTask('t-abc');
+    setRecentHere(ME, '');
+    expect(keys()).toEqual(['page:/tasks/product']);
+  });
+
   it('counts no address that only passes on, and no view without a trail', () => {
     noteView(view('page:/', 'Tico Team'));
     noteView(view('page:/library', 'Library'));
