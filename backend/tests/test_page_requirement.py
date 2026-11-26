@@ -1292,23 +1292,46 @@ def test_an_undo_past_its_window_is_a_plain_reopen(c, store):
     assert _undo(c, row)["visit"]["id"] != visit
 
 
-def test_undoing_a_close_that_closed_a_sub_task_reopens_as_before(c, store):
+def test_undoing_a_close_brings_back_the_sub_tasks_it_closed_and_leaves_one_reopened_since(c, store):
     _, row, _ = _waiting_on_ana(c, store)
     visit = E.task(c, row["id"])["visit"]["id"]
     sub = X.new_task(c, ANA, "Check the importer's limits", "product", parent=row["id"])
+    deeper = X.new_task(c, ANA, "Measure a large file", "product", parent=sub["id"])
+    other = X.new_task(c, ANA, "Ask about formats", "product", parent=row["id"])
+    sub_visit = E.task(c, sub["id"])["visit"]["id"]
     E.move(c, row["id"], E.CLOSED, ANA, "Not needed")
-    assert E.task(c, sub["id"])["status"] == "closed"
-    E.move(c, sub["id"], E.REOPEN, ANA, "Still worth checking")  # its close stays on the record of the parent's
-    assert _undo(c, row)["visit"]["id"] != visit, "the close ended more than the visit, so the visit is not given back"
+    assert {E.task(c, t["id"])["status"] for t in (sub, deeper, other)} == {"closed"}
+    again = E.move(c, other["id"], E.REOPEN, ANA, "Still worth asking")["visit"]["id"]
+    woken = X.wakes(c, sub["id"]) + X.wakes(c, deeper["id"])
+    back = _undo(c, row)
+    assert back["visit"]["id"] == visit and _standing(c, row).on == ANA, "the same OK waits on Ana"
+    assert (E.task(c, sub["id"])["status"], E.task(c, sub["id"])["visit"]["id"]) == ("open", sub_visit)
+    assert E.task(c, deeper["id"])["status"] == "open", "what closed under a sub-task comes back with it"
+    assert X.wakes(c, sub["id"]) + X.wakes(c, deeper["id"]) == woken, "nobody is told"
+    assert E.task(c, other["id"])["visit"]["id"] == again, "one reopened since stays as it is"
 
 
-def test_undoing_a_close_from_a_stage_that_acts_on_entering_reopens_as_before(c, store):
+def test_undoing_a_close_brings_back_the_hand_off_its_stage_filed(c, store):
+    X.pipeline(c)
+    made = X.pipeline(c, "product", "Product", _stages(person=ANA), manager="bot:manager")
+    c.execute("UPDATE stages SET on_enter=? WHERE id=?", (json.dumps({"file_into": "general"}), made["stages"]["Spec"]))
+    row = _task(c)
+    visit = E.task(c, row["id"])["visit"]["id"]
+    (filed,) = c.execute("SELECT to_task_id FROM links WHERE visit_id=?", (visit,)).fetchone()
+    E.move(c, row["id"], E.CLOSED, ANA, "Not needed")
+    assert E.task(c, filed)["status"] == "closed"
+    assert _undo(c, row)["visit"]["id"] == visit
+    assert E.task(c, filed)["status"] == "open"
+    assert c.execute("SELECT count(*) FROM links WHERE visit_id=?", (visit,)).fetchone()[0] == 1, "none filed again"
+
+
+def test_undoing_a_close_from_a_stage_that_queues_prs_enters_it_again(c, store):
     made = X.pipeline(c, "product", "Product", _stages(person=ANA), manager="bot:manager")
     c.execute("UPDATE stages SET on_enter=? WHERE id=?", (json.dumps({"act": "github.queue"}), made["stages"]["Spec"]))
     row = _task(c)
     visit = E.task(c, row["id"])["visit"]["id"]
     E.move(c, row["id"], E.CLOSED, ANA, "Not needed")
-    assert _undo(c, row)["visit"]["id"] != visit, "the close undid what entering did, so the stage is entered again"
+    assert _undo(c, row)["visit"]["id"] != visit, "the close took its PRs out of the queue: a restored visit holds none"
 
 
 def test_the_move_route_takes_undo_only_with_reopen(api):

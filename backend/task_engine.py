@@ -599,15 +599,18 @@ def _open_visit(conn: "sqlite3.Connection", task_id: str, stage_id: str, how: st
 
 def _undoes_close(conn: "sqlite3.Connection", row: Row, target: Row, by: str) -> Row | None:
     """The visit an Undo of a close gives back (task #3678): the task was closed less than UNDO_CLOSE_S ago by `by`, from
-    `target`; the close closed no other task, at any depth (its history row's `cascaded`, kept however those tasks
-    change since); and `target` has no on-enter action (the close undid it, a PR queue's entry among them, and a
-    restored visit does not enter again). Anything else is a plain reopen. Its attachments, its verdicts and the OK it
-    waited on are the visit's own rows: they come back with it, and nobody has to submit anything again."""
+    `target`, and that close is still its newest move. Its attachments, its verdicts and the OK it waited on are the
+    visit's own rows: they come back with it, and nobody has to submit anything again. The tasks the close closed with
+    it come back too (`_undo_cascade`). A stage that acts on a source when entered (a PR queue's `github.queue`) is the
+    one exception, a plain reopen: the close owed that source its undo (the PR leaves the queue), and a restored visit
+    in Merge with nothing queued would wait for nothing; it is entered again, short of the queue (`short_of_queue`)."""
     H = _h()
     here = row.get("visit")
     if not here or row["stage"]["kind"] != "closed" or here.get("entered_how") != "closed":
         return None
-    if stage_effects.has_on_enter(target):
+    from . import source_actions
+
+    if source_actions.act_of(target):
         return None
     if H.shift(here["entered_at"], seconds=UNDO_CLOSE_S) < H.shift(H.now()):
         return None
@@ -619,23 +622,40 @@ def _undoes_close(conn: "sqlite3.Connection", row: Row, target: Row, by: str) ->
     )
     if not left:
         return None
-    closing = conn.execute(
-        "SELECT json_extract(data, '$.move'), coalesce(json_extract(data, '$.cascaded'), 0) FROM history_events "
-        "WHERE subject_type='task' AND subject_id=? AND kind='move' ORDER BY rowid DESC LIMIT 1",
-        (row["id"],),
+    closing = _last_move(conn, row["id"])
+    return left if closing.get("move") == CLOSED else None
+
+
+def _last_move(conn: "sqlite3.Connection", task_id: str) -> Row:
+    """The data of the task's newest move in its history, {} when it has none."""
+    found = conn.execute(
+        "SELECT data FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='move' "
+        "ORDER BY rowid DESC LIMIT 1",
+        (task_id,),
     ).fetchone()
-    return left if closing and closing[0] == CLOSED and not closing[1] else None
+    data = _h()._json(found[0], {}) if found and found[0] else {}
+    return cast("Row", data) if isinstance(data, dict) else {}
 
 
-def _cascades_since(conn: "sqlite3.Connection", mark: int) -> int:
-    """How many tasks a close closed with it, at any depth: each such close writes its own `cascade` move."""
-    return int(
-        conn.execute(
-            "SELECT count(*) FROM history_events WHERE rowid>? AND subject_type='task' AND kind='move' "
-            "AND json_extract(data, '$.consequence')='cascade'",
-            (mark,),
-        ).fetchone()[0]
-    )
+def _cascades_since(conn: "sqlite3.Connection", mark: int) -> list[str]:
+    """The tasks a close closed with it, at any depth, in the order they closed: each writes its own `cascade` move
+    (its sub-tasks, and the hand-offs its stage filed on entering). Kept on the close's history row as `closed_with`."""
+    rows = conn.execute(
+        "SELECT subject_id FROM history_events WHERE rowid>? AND subject_type='task' AND kind='move' "
+        "AND json_extract(data, '$.consequence')='cascade' AND json_extract(data, '$.move')='closed' ORDER BY rowid",
+        (mark,),
+    ).fetchall()
+    return [str(r[0]) for r in rows]
+
+
+def _undo_cascade(conn: "sqlite3.Connection", closed_with: list[str], by: str, why: str | None) -> None:
+    """An Undo gave a task its visit back: each task its close closed with it comes back too, the same way (its own
+    visit, nobody woken; or a plain reopen where that can't be, `_undoes_close`). One that moved since stays as it is."""
+    for other in reversed(closed_with):  # a task before what closed under it: its own Undo brings those back
+        row = task(conn, other)
+        then = _last_move(conn, other)
+        if row and row["status"] == "closed" and then.get("move") == CLOSED and then.get("consequence") == "cascade":
+            move(conn, other, REOPEN, by, why, cascade=True, undo_close=True)
 
 
 def _restore_visit(conn: "sqlite3.Connection", visit: Row) -> str:
@@ -1332,6 +1352,7 @@ def move(
     elif kind in ("back", "closed"):
         _need_why(conn, by, why, "close it" if kind == "closed" else "move it back", task_id)
     restored = _undoes_close(conn, row, target, by) if kind == "reopen" and undo_close else None
+    closed_with = [str(t) for t in _last_move(conn, task_id).get("closed_with") or ()] if restored else []
     if kind == "back" or (kind == "side" and row["stage"].get("side") and is_main_work(target)):
         _may_go_back_to(conn, by, row, target)
     if kind == "closed" and not cascade:
@@ -1354,7 +1375,7 @@ def move(
         stage_effects.undo(conn, row, by, closed_with)
     if kind == "closed":
         _close_under(conn, task_id, by, closed_with)
-    cascaded = _cascades_since(conn, mark) if kind == "closed" else 0  # its Undo is then a plain reopen
+    cascaded = _cascades_since(conn, mark) if kind == "closed" else []  # what its Undo gives back with it
     if row.get("snooze"):
         _end_snooze(conn, row["snooze"], by, ts)  # a snooze sets a task aside in one stage: it ends with the visit
     assignee = _feature_owner(row)
@@ -1409,7 +1430,7 @@ def move(
             **({"stage_rule": ruled["id"]} if ruled else {}),
             **({"undone_answer": undone} if undone else {}),
             **({"undone_close": entered_visit} if restored else {}),
-            **({"cascaded": cascaded} if cascaded else {}),  # the Undo of a close: the same visit, nobody told
+            **({"closed_with": cascaded} if cascaded else {}),  # the Undo of a close: the same visit, nobody told
             **({"consequence": "cascade"} if cascade else {}),  # closed with what filed it: no decision of its own
         },
     )
@@ -1442,6 +1463,8 @@ def move(
     # What a move causes beyond the task's own row: the events, a routine's day, stopping work on a closed task
     # (backend/task_effects.py). Last, and for every move, so nothing that moves a task can leave them out.
     task_effects.moved(conn, row, moved, "side" if side else kind, by, why, revision)
+    if closed_with:
+        _undo_cascade(conn, closed_with, by, why)
     return _task(conn, task_id)
 
 

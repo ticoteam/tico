@@ -47,11 +47,6 @@ def _on_enter(stage: Row | None) -> Row:
     return cast("Row", value) if isinstance(value, dict) else {}
 
 
-def has_on_enter(stage: Row | None) -> bool:
-    """Whether entering `stage` does something: files a task or acts for a source (a PR queue's entry among them)."""
-    return bool(_on_enter(stage))
-
-
 def _spec_page(conn: "sqlite3.Connection", task: Row) -> Row | None:
     """The page that counted on the task's newest visit to the nearest earlier stage with a page requirement
     (`requirement_pages` row: `file_id`, `version`, `visit_id`), or None when there is none."""
