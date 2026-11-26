@@ -53,6 +53,8 @@ def test_intros_seen_keeps_pages_with_times_for_people_only(api):
     assert get(api, "preferences/intros.seen", token="ben-test")["value"] is None
     r = api.post("/api/v2/preferences/intros.seen", json={"value": {}}, headers=headers(bot_token(api)))
     assert r.status_code == 403, r.text
+
+
 def test_assistant_look_keeps_a_name_one_of_eight_colors_and_the_sprite(api):
     # Each person names their own assistant and picks its Dot's look (web/src/tico/look.ts); only theirs changes.
     look = {"name": "Penny", "color": "violet", "sprite": "pixel"}

@@ -97,7 +97,7 @@ def check(who: Any, key: str, value: object) -> None:
             if not INTRO_PAGE.fullmatch(page) or when is None or when.tzinfo is None:
                 raise Problem("validation", "intros.seen maps a page to an ISO-8601 date/time with a timezone", 422)
     if key == ASSISTANT_LOOK:
-        check_look(value)
+        check_look(cast(object, value))
     # Hide from my chart on the Strategy Owner: a person's own view.
     if key == strategy_bot.HIDE_PREF:
         views.human_only(who)
