@@ -285,14 +285,13 @@ def session(conn, turn_id, session):
 
 
 def notes(conn, turn_id, notes):
-    """Record what the run's prompt did with its task's notes lists (`notes_sent`, JSON), while the run is open. A runner
-    that reports none (an older one, or a turn offered none) leaves the column NULL."""
+    """Record what the run's prompt did with its task's notes lists (`notes_sent`, JSON), a late result filed after its
+    lease expired included: it says what the prompt held, whenever it arrives. A runner that reports none (an older one,
+    or a turn offered none) leaves the column NULL."""
     sent = notes.model_dump(exclude_none=True) if notes is not None else {}
     if not sent:
         return 0
-    return conn.execute(
-        "UPDATE attempts SET notes_sent=? WHERE id=? AND settled_at IS NULL", (json.dumps(sent), turn_id)
-    ).rowcount
+    return conn.execute("UPDATE attempts SET notes_sent=? WHERE id=?", (json.dumps(sent), turn_id)).rowcount
 
 
 def turn_result(conn, actor, row, outcome, event, to=None):

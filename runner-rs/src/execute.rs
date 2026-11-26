@@ -3375,7 +3375,6 @@ impl Runner {
             h.compaction_refresh(&th, Some(built.restore.clone()).filter(|r| prompt_turn && !r.is_empty()));
             // A compaction before this prompt (compact_first's own) is already accounted for above.
             let _ = h.compacted(&th);
-            notes_report = crate::prompt::notes_sent(&attempt, &prompt);
             let t = if let Some(_one) = cold_guard {
                 // Held only until the sign-in this turn triggers has landed, not for the length of the turn: the
                 // others follow a few seconds behind, warm.
@@ -3391,6 +3390,8 @@ impl Runner {
             } else {
                 self.start_turn(&aid, &bot, h, &th, &prompt, effort.as_deref(), &refs, &attempt, &mut goal, &own).await?
             };
+            // Only once the harness took the prompt: a turn that never started it reports no notes as given.
+            notes_report = crate::prompt::notes_sent(&attempt, &prompt);
             mark("harness_spawned", &aid);
             crate::flight::fact_once(&aid, "warm", json!(h.warm()));
             if side_ran || after_interrupt {
@@ -3886,8 +3887,8 @@ impl Runner {
                         self.confirm_thread(fresh, &h.session_id(&th)).await?;
                     }
                 }
-                notes_report = crate::prompt::notes_sent(&attempt, &text);
                 let t = h.start_turn(&th, &text, hop.reasoning_effort.as_deref()).await?;
+                notes_report = crate::prompt::notes_sent(&attempt, &text);
                 crate::flight::fact_once(&aid, "warm", json!(h.warm()));
                 turn = Some(t.clone());
                 let d = Drive {
@@ -6846,6 +6847,46 @@ mod tests {
             .unwrap();
         assert_eq!(completion["outcome"], "interrupted");
         assert_eq!(completion["yielded"], true);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_turn_whose_harness_never_took_its_prompt_reports_no_notes_given() {
+        let _home = PrivateHome::claude(true);
+        let _controls = RunControls;
+        RUN_SESSION.with(|on| on.set(Some(true)));
+        let (url, seen, server) = recording_server().await;
+        let (runner, dir) = runner_at(&url, "notes-never-sent");
+        std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+        HOST_COMMANDS.with(|commands| {
+            commands.borrow_mut().insert(
+                "claude".into(),
+                vec![dir.join("missing-claude").display().to_string()],
+            )
+        });
+        runner.runtime_rows.lock().unwrap().insert(
+            "claude".into(),
+            json!({"installed": true, "authenticated": "ready"}),
+        );
+        let attempt = json!({"id": "unsent-1", "job_id": "j1", "bot": "ops", "token": "synthetic-turn",
+            "lease_seconds": 120, "conversation": {"id": "c1", "kind": "task"}, "task": {"id": "t1", "title": "Fix the smoke test"},
+            "message": {"id": "m1", "from_actor": "human:ana@acme.example", "body": "Next", "refs": {}},
+            "pipeline_notes": {"pipeline": "Notes for Engineering (what we learned; follow them):\n- Big test runs go to RunsOn."},
+            // The missing executable fails at spawn, before the harness has the prompt.
+            "history": [], "config": {"runtime": "claude", "harness": "claude", "model": "synthetic-primary", "background_wait_s": 0}});
+        tokio::time::timeout(Duration::from_secs(30), runner.clone().execute(attempt))
+            .await
+            .unwrap()
+            .unwrap();
+        server.abort();
+        let requests = seen.lock().unwrap();
+        let (_, _, completion) = requests
+            .iter()
+            .find(|(_, path, _)| path.ends_with("/attempts/unsent-1/complete"))
+            .expect("the failed turn reports");
+        assert_ne!(completion["outcome"], "completed", "{completion}");
+        assert!(completion.get("notes").is_none(), "{completion}");
+        drop(requests);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

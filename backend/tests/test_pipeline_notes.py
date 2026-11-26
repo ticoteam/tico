@@ -5,6 +5,8 @@ The org (backend/tests/helpers/org_rules.py): Ana owns the company, Ben and Cara
 bots. Engineering is managed by the bot Finance; Product by nobody."""
 
 from backend import pipeline_notes as N
+from backend import run_triggers as RT
+from backend.models import RunNotes
 from backend.store import H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import assign, claim, get, post, ready, runner
@@ -165,6 +167,31 @@ def test_a_run_records_the_lists_its_claim_offered_and_what_the_runner_says_its_
     task_for("cpo", "Fix the smoke test")
     second = claim(api, r)
     assert run(second, {"pipeline": "given"}) == ("pipeline", '{"pipeline": "given"}')
+
+
+def test_a_command_turn_is_offered_no_notes_and_a_late_result_still_records_its_report(api):
+    engineering(api)
+    r = runner(api)
+    assign(api, r, "ops")
+    ready(api, r, ["ops"])
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, H.TICO_ACTOR, "Fix the smoke test", "Do it.", "bot:ops", lint=False)
+    post(api, f"pipelines/{task['pipeline_id']}/notes", HEAVY)
+    assert turn_notes(api, task["id"])  # the task has notes a plain turn would be offered
+    with api.app.state.store.transaction() as c:
+        # The person typed a command (/compact) to the bot on its task: its prompt is only that.
+        c.execute(
+            "UPDATE messages SET refs=? WHERE conversation_id=?", ('{"command": "compact"}', task["conversation_id"])
+        )
+    typed = claim(api, r)
+    assert typed["task"]["id"] == task["id"] and "pipeline_notes" not in typed
+    start(api, r, typed)
+    with api.app.state.store.transaction() as c:
+        assert H.turn(c, typed["id"])["notes_offered"] is None
+        # A result filed after its lease expired settled the run: its report is still kept.
+        c.execute("UPDATE attempts SET settled_at=? WHERE id=?", (H.now(), typed["id"]))
+        assert RT.notes(c, typed["id"], RunNotes(pipeline="held")) == 1
+        assert H.turn(c, typed["id"])["notes_sent"] == '{"pipeline": "held"}'
 
 
 def test_a_bot_proposes_with_why_and_evidence_and_the_manager_decides_never_its_own(api):

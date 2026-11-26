@@ -394,8 +394,12 @@ fn assemble(
 /// What `text`, the prompt a turn sent, did with each notes list (backend/pipeline_notes.py), for the run's result
 /// (`notes`, feature `run_notes`): `given` when the list the claim offered is in it, `held` when it was left out because
 /// the session already holds it, `retracted` when the text says an earlier list no longer applies. None when the
-/// claim offered no list and nothing was retracted, so such a run reports nothing.
+/// claim offered no list and nothing was retracted, so such a run reports nothing, and for a command, whose prompt is
+/// only what the person wrote (`build`): it neither gives nor holds a list.
 pub fn notes_sent(attempt: &Value, text: &str) -> Option<Value> {
+    if crate::util::truthy(attempt["message"]["refs"].get("command")) {
+        return None;
+    }
     let mut out = Map::new();
     for (key, retired) in [
         ("pipeline", NOTES_RETIRED_PIPELINE),
@@ -1585,6 +1589,21 @@ mod tests {
             notes_sent(&next, &moved.text),
             Some(json!({"pipeline": "held", "stage": "given"}))
         );
+        // A command's prompt is only what the person wrote: it reports no list, not one held.
+        let mut command = next.clone();
+        command["message"]["refs"] = json!({"command": "compact"});
+        command["message"]["body"] = json!("/compact");
+        let typed = build(
+            &command,
+            &names,
+            Some("m1"),
+            false,
+            "",
+            &Seen::default(),
+            ctx,
+        );
+        assert!(!typed.text.contains("Notes for"), "{}", typed.text);
+        assert_eq!(notes_sent(&command, &typed.text), None);
         // A stage with none: the session's earlier stage list is retracted.
         next["pipeline_notes"] = json!({"pipeline": ENG_NOTES});
         let bare = build(&next, &names, Some("m1"), true, "", &seen(&moved), ctx);

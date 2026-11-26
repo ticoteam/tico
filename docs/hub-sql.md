@@ -275,8 +275,8 @@ Every run records what woke it (`attempts.trigger_kind`), its tokens, and whethe
   WHERE session_kind = 'new' AND session_why <> 'none_saved' AND created_at > date('now', '-1 day') GROUP BY bot_id`.
 - **`notes_offered`, `notes_sent`**: the task's pipeline and stage notes the claim handed the run (`pipeline`,
   `stage`, comma-joined) and what the runner says its prompt did with each (JSON: `given`, `held` or `retracted`).
-  NULL when the task had no notes; `notes_sent` NULL from an older runner. Turns that should have had notes and got
-  none: `SELECT id, bot_id, notes_offered FROM attempts WHERE notes_offered IS NOT NULL AND notes_sent IS NULL AND
+  NULL when the task had no notes; `notes_sent` NULL from an older runner, which may still have sent them. Finished
+  runs offered notes with no report of what their prompt did: `SELECT id, bot_id, notes_offered FROM attempts WHERE notes_offered IS NOT NULL AND notes_sent IS NULL AND
   settled_at IS NOT NULL`.
 
 `purpose` is a short label for what the run was for (`review PR`, `answer person message`): the place that wakes the bot may name it, otherwise it is the default for that bot and trigger, and runs from before it existed were filled the same way. A wake the map does not know reads `unknown`. Group by it: `SELECT purpose, sum(runs), sum(input_tokens) FROM run_weekly GROUP BY purpose`.

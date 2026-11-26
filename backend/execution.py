@@ -6355,7 +6355,9 @@ class Execution:
         runner_wire.conversation(c, conv)
         runner_wire.conversation(c, conversation)  # the claim's copy (thread_payload) was made before
         wire_task = runner_wire.task(task)
-        learned_here = pipeline_notes.for_task(c, task) if task and not relationship else {}
+        # A command's turn is only what the person wrote (runner-rs/src/prompt.rs build): it is offered no notes.
+        typed = bool((msg.get("refs") or {}).get("command")) if msg else False
+        learned_here = pipeline_notes.for_task(c, task) if task and not relationship and not typed else {}
         if learned_here:
             # The run's record says which lists its claim carried (backend/run_triggers.py `notes_offered`).
             c.execute("UPDATE attempts SET notes_offered=? WHERE id=?", (",".join(learned_here), aid))
