@@ -95,6 +95,7 @@ def ingest(c, runner_id, samples, now=None):
     stored = (
         c.execute("SELECT max(sampled_at) FROM runner_load_samples WHERE runner_id=?", (runner_id,)).fetchone()[0] or 0
     )
+    replaced = c.execute("SELECT 1 FROM runners WHERE id=? AND replaces IS NOT NULL", (runner_id,)).fetchone()
     for s in sorted(samples, key=lambda s: s.at):
         at = min(int(s.at), now)
         if now - at > 86400:
@@ -109,6 +110,17 @@ def ingest(c, runner_id, samples, now=None):
         # box with many agent turns idling on I/O reads far above its cores while it still has room to start more.
         # A retry replaces its minute, never duplicates it; delayed older samples cannot replace a newer one.
         cpu_pct = round(s.cpu, 1)
+        if (
+            replaced
+            and not c.execute(
+                "SELECT 1 FROM runner_load_samples WHERE runner_id=? AND created_at=?", (runner_id, ts)
+            ).fetchone()
+        ):
+            # This computer's first report for the minute: a reading already there was carried over from the computer
+            # it replaced (`carry_over`), and its own reading wins, process usage too (raw minutes live 48 hours in
+            # both tables, and only this computer's own reports write its load samples).
+            for table in ("perf_points", "perf_usage"):
+                c.execute(f"DELETE FROM {table} WHERE runner_id=? AND span=? AND created_at=?", (runner_id, MINUTE, ts))
         c.execute(
             "INSERT INTO runner_load_samples VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(runner_id,created_at) DO UPDATE SET "
             "sampled_at=excluded.sampled_at,cpu_pct=excluded.cpu_pct,mem_used=excluded.mem_used,"
@@ -461,7 +473,8 @@ def detect(c, runner_id, upto):
         return
     loaded = reasons(latest)
     # The minute that ended it can fill in later (its samples split across posts): loaded after all, it carries on.
-    if newest and latest["created_at"] == newest["ended_at"]:
+    # Not one carried over from a computer this one replaced: that one ended where the old computer stopped.
+    if newest and latest["created_at"] == newest["ended_at"] and not newest["carried_from"]:
         if not loaded:
             return
         c.execute("UPDATE perf_overloads SET ended_at=NULL WHERE id=?", (newest["id"],))
@@ -476,6 +489,8 @@ def detect(c, runner_id, upto):
         return
     if len(points) < SUSTAINED or points[0]["created_at"] - points[-1]["created_at"] > (SUSTAINED - 1) * MINUTE:
         return
+    if newest and points[-1]["created_at"] < newest["ended_at"]:
+        return  # a new overload starts where the last one ended, never inside it
     all_reasons = [reasons(p) for p in points]
     if all(all_reasons):
         started = points[-1]["created_at"]
@@ -911,23 +926,30 @@ def carry_over(c, old, new):
     if not old or old == new:
         return
     c.execute("UPDATE perf_overloads SET ended_at=last_seen_at+? WHERE runner_id=? AND ended_at IS NULL", (MINUTE, old))
-    c.execute("UPDATE perf_overloads SET runner_id=? WHERE runner_id=?", (new, old))
+    c.execute(
+        "UPDATE perf_overloads SET runner_id=?,carried_from=coalesce(carried_from,runner_id) WHERE runner_id=?",
+        (new, old),
+    )
     for table in ("perf_points", "perf_usage"):
         c.execute(f"UPDATE OR IGNORE {table} SET runner_id=? WHERE runner_id=?", (new, old))
         c.execute(f"DELETE FROM {table} WHERE runner_id=?", (old,))  # the minutes `new` reported itself
-    c.execute("UPDATE runners SET replaces=? WHERE id=? AND replaces IS NULL", (old, new))
+    # One chain per computer: `old` (and the computers it replaced) joins at its end, so a computer that took over
+    # two at once lists both ones' turns.
+    chain = [new, *earlier(c, new)]
+    if old not in chain:
+        c.execute("UPDATE runners SET replaces=? WHERE id=? AND replaces IS NULL", (old, chain[-1]))
 
 
-def earlier(c, runner_id, most=8):
-    """The computers `runner_id` replaced, newest first (`carry_over`)."""
-    out = []
-    while len(out) < most:
+def earlier(c, runner_id):
+    """Every computer `runner_id` replaced, newest first (`carry_over`)."""
+    out, seen = [], {runner_id}
+    while True:
         row = c.execute("SELECT replaces FROM runners WHERE id=?", (runner_id,)).fetchone()
         runner_id = row["replaces"] if row else None
-        if not runner_id or runner_id in out:
+        if not runner_id or runner_id in seen:
             return out
+        seen.add(runner_id)
         out.append(runner_id)
-    return out
 
 
 # ------------------------------------------------------------------------------------------------ retention
