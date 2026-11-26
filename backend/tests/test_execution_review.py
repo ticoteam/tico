@@ -2396,6 +2396,55 @@ def test_review_choice_survives_a_busy_lane_and_applies_once_idle(api, decision,
     post(api, path, body, expected=409)
 
 
+@pytest.mark.parametrize(
+    'saved', [False, True], ids=['uncertain-waiting-for-review', 'decision-saved-waiting-for-lane']
+)
+def test_a_late_report_settles_a_run_waiting_for_review_but_only_files_against_a_saved_decision(api, saved):
+    """Invariant 4 (E-1 route-level settlement). Two held runs, each behind a live run in its lane: one with no
+    decision yet, one whose person's decision was saved while the lane was busy. The lane frees, and before the sweep
+    runs each gets the same late completion under the runner's `complete:{aid}` key. Undecided, the late result is the
+    answer the review would have asked for: it settles the job and posts the reply. Decided, the saved decision fences
+    it: the result is only filed on the run, and the sweep then applies the decision. A replay under the same key
+    changes neither. (A run still live in the lane fences both: test_review_choice_survives_a_busy_lane_and_applies_once_idle.)"""
+    machine, message, attempt = interrupted(api)
+    aged(api, attempt['id'])
+    other = rival(api, machine, attempt)
+    if saved:
+        choice = {
+            'run_id': attempt['id'],
+            'decision': 'resume',
+            'note': 'Reviewed outside effects; run it again.',
+            'acknowledge_uncertain_effects': True,
+        }
+        deferred = post(api, f"jobs/{attempt['job_id']}/reconcile", choice)
+        assert deferred == {'job_id': attempt['job_id'], 'state': 'uncertain', 'deferred': True}
+    post(
+        api,
+        f"attempts/{other['id']}/complete",
+        {'outcome': 'completed', 'last_seq': 0, 'text': 'Other work done.'},
+        machine['token'],
+    )
+    assert job_state(api, attempt['job_id']) == 'uncertain'  # the lane is free; the sweep has not run
+    key = 'complete:' + attempt['id']
+    late = {'outcome': 'completed', 'last_seq': 1, 'text': 'The first run finished after all.'}
+    for _ in range(2):  # the answer, then the runner's replay of it under the same key
+        answer = post(api, f"attempts/{attempt['id']}/complete", late, machine['token'], key=key)
+        if saved:
+            assert answer['filed'] is True and answer['message'] is None
+            assert bot_replies(api, message) == [] and settled(api, attempt) == ('expired', 'uncertain')
+        else:
+            assert not answer.get('filed') and answer['outcome'] == 'completed'
+            assert answer['message']['body'] == 'The first run finished after all.'
+            assert bot_replies(api, message) == ['The first run finished after all.']
+            assert settled(api, attempt) == ('completed', 'completed')
+    with api.app.state.store.read() as c:
+        recovery = c.execute("SELECT decision FROM job_recovery WHERE job_id=?", (attempt['job_id'],)).fetchone()
+    assert (recovery and recovery['decision']) == ('resume' if saved else None)
+    assert [d['state'] for d in sweep(api)] == (['queued'] if saved else [])
+    assert job_state(api, attempt['job_id']) == ('queued' if saved else 'completed')
+    assert len(bot_replies(api, message)) == (0 if saved else 1)
+
+
 def test_a_busy_bots_stopped_run_records_dependency_until_task_and_lane_free(api):
     """A busy task or shared lane defers recovery; once free the sweep releases fenced queued work."""
     machine = runner(api)
