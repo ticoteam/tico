@@ -371,6 +371,9 @@ HISTORY = {
     "ci_runs": "created_at",
     # The pages each person opened (backend/page_history.py): kept 30 days anyway.
     "page_visits": "created_at",
+    # Files use counts per day, person or bot, action and actor (backend/file_use.py): `day` is a date, which sorts
+    # before any time on that day.
+    "file_use_daily": "day",
 }
 # Kept whole, except rows whose parent went (a pruned attempt's events). Tokens on runners are replaced.
 KEEP = (
