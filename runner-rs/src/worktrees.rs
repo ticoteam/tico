@@ -1830,6 +1830,7 @@ pub async fn back_up(
     head: &str,
     env: &Env,
     machine_git: bool,
+    known: &str,
 ) -> R<()> {
     let path = safe_path(workspace, &text_of(&row["path"]))?;
     if !is_sha(head) {
@@ -1841,32 +1842,45 @@ pub async fn back_up(
         .stdout
         .trim()
         .to_string();
-    let resolved = |push: bool| {
-        let path = path.clone();
-        async move {
-            let mut args = vec!["remote", "get-url"];
-            if push {
-                args.push("--push");
-            }
-            args.push("origin");
-            git(&path, env, &args, true)
-                .await
-                .map(|o| o.stdout.trim().to_string())
-        }
-    };
     if !repo_matches(&origin, &text_of(&row["repo"]), machine_git)
-        || resolved(true).await? != resolved(false).await?
+        || !pushes_where_fetches(&path, env).await?
     {
         return Err(WtErr::msg(
             "Origin is not this task's repository; nothing pushed",
         ));
     }
+    // Only move the copy forward from what is there: nothing yet, the head this computer copied last (`known`, which
+    // a rebase may have rewritten), or an older head of this history. Anything else is work another writer put there
+    // (a cleanup snapshot, say), which a copy must not replace.
+    let there = remote_ref(&path, env, &format!("refs/heads/{wip}")).await?;
+    let lease = match there.as_deref() {
+        None => String::new(),
+        Some(sha) if sha == head => return Ok(()),
+        Some(sha)
+            if sha == known
+                || git(
+                    &path,
+                    env,
+                    &["merge-base", "--is-ancestor", sha, head],
+                    false,
+                )
+                .await?
+                .ok() =>
+        {
+            sha.to_string()
+        }
+        Some(_) => {
+            return Err(WtErr::msg(
+                "its wip/ branch holds other work, kept as it is",
+            ))
+        }
+    };
     let pushed = git(
         &path,
         env,
         &[
             "push",
-            "--force",
+            &format!("--force-with-lease=refs/heads/{wip}:{lease}"),
             "origin",
             &format!("{head}:refs/heads/{wip}"),
         ],
@@ -1884,49 +1898,76 @@ pub async fn back_up(
     pushed.map(|_| ())
 }
 
-/// Where a checkout keeps its last failed copy (when, and why) so the hour's wait survives a restart of this
-/// computer's runner: a file in the worktree's own git folder, which goes with the worktree.
-fn failure_file(workspace: &Path, row: &Value) -> Option<PathBuf> {
+/// Whether origin's pushes go where its fetches come from: no push URL, nor a rewrite for pushes alone, sends them
+/// to another repository than the one checked.
+async fn pushes_where_fetches(path: &Path, env: &Env) -> R<bool> {
+    let url = |push: bool| async move {
+        let mut args = vec!["remote", "get-url"];
+        if push {
+            args.push("--push");
+        }
+        args.push("origin");
+        git(path, env, &args, true)
+            .await
+            .map(|o| o.stdout.trim().to_string())
+    };
+    Ok(url(true).await? == url(false).await?)
+}
+
+/// The commit origin's ref `name` (a full name, `refs/heads/...`) points at, if it exists: matched by its whole
+/// name, never by a suffix `ls-remote` would also accept.
+async fn remote_ref(path: &Path, env: &Env, name: &str) -> R<Option<String>> {
+    let out = git(path, env, &["ls-remote", "origin", name], true).await?;
+    Ok(out.stdout.lines().find_map(|line| {
+        let (sha, found) = line.split_once(char::is_whitespace)?;
+        (found.trim() == name && is_sha(sha)).then(|| sha.to_string())
+    }))
+}
+
+/// Where a checkout keeps its last copy's time (and why it failed, if it did), so the wait between copies survives
+/// a restart of this computer's runner: a file in the worktree's own git folder, which goes with the worktree. A
+/// folder outside this computer's workspace is never written.
+fn backup_file(workspace: &Path, row: &Value) -> Option<PathBuf> {
     let tree = safe_path(workspace, &text_of(&row["path"])).ok()?;
     let pointer = std::fs::read_to_string(tree.join(".git")).ok()?;
-    let gitdir = PathBuf::from(pointer.trim().strip_prefix("gitdir:")?.trim());
-    Some(tree.join(gitdir).join("tico-backup-failed"))
+    let gitdir = tree
+        .join(pointer.trim().strip_prefix("gitdir:")?.trim())
+        .canonicalize()
+        .ok()?;
+    gitdir
+        .starts_with(workspace.canonicalize().ok()?)
+        .then(|| gitdir.join("tico-backup"))
 }
 
-/// Keep (`Some(reason)`) or clear (`None`) checkout `row`'s last failed copy.
-pub fn save_failure(workspace: &Path, row: &Value, reason: Option<&str>) {
-    let Some(file) = failure_file(workspace, row) else {
+/// Keep checkout `row`'s last copy: now, and why it failed (`None`: it succeeded).
+pub fn save_backup(workspace: &Path, row: &Value, failure: Option<&str>) {
+    let Some(file) = backup_file(workspace, row) else {
         return;
     };
-    match reason {
-        Some(reason) => {
-            let at = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            let _ = std::fs::write(file, format!("{at}\n{reason}"));
-        }
-        None => {
-            let _ = std::fs::remove_file(file);
-        }
-    }
+    let at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let _ = std::fs::write(file, format!("{at}\n{}", failure.unwrap_or_default()));
 }
 
-/// What this computer knew of checkout `row`'s copies before a restart: the last failed one, if any, timed back to
-/// when it failed so `backup_due` keeps the hour's wait.
-pub fn saved_failure(workspace: &Path, row: &Value) -> Backup {
-    let saved = failure_file(workspace, row).and_then(|f| std::fs::read_to_string(f).ok());
+/// What this computer knew of checkout `row`'s copies before a restart: the last one's time, timed back to when it
+/// happened so `backup_due` keeps its wait, and its failure, if it failed.
+pub fn saved_backup(workspace: &Path, row: &Value) -> Backup {
+    let saved = backup_file(workspace, row).and_then(|f| std::fs::read_to_string(f).ok());
     let Some((at, reason)) = saved.as_deref().and_then(|t| t.split_once('\n')) else {
         return Backup::default();
     };
-    let failed = std::time::UNIX_EPOCH + Duration::from_secs(at.trim().parse().unwrap_or(0));
+    let then = std::time::UNIX_EPOCH + Duration::from_secs(at.trim().parse().unwrap_or(0));
     let ago = std::time::SystemTime::now()
-        .duration_since(failed)
+        .duration_since(then)
         .unwrap_or_default();
     Backup {
         head: String::new(),
         at: Instant::now().checked_sub(ago),
-        error: Some(reason.chars().take(300).collect()),
+        error: Some(reason.trim())
+            .filter(|r| !r.is_empty())
+            .map(|r| r.chars().take(300).collect()),
     }
 }
 
@@ -1947,31 +1988,13 @@ pub fn backup_error(e: &WtErr) -> String {
 /// After a clean removal whose head is on the task branch at origin, its wip/ copy holds nothing more: delete it so
 /// GitHub keeps no stale branch per task. A copy origin's task branch does not contain is kept.
 async fn drop_backup(path: &Path, branch: &str, wip: &str, env: &Env) -> R<()> {
-    let listed = |name: String| async move {
-        let out = git(
-            path,
-            env,
-            &[
-                "ls-remote",
-                "--exit-code",
-                "origin",
-                &format!("refs/heads/{name}"),
-            ],
-            false,
-        )
-        .await?;
-        R::Ok(out.ok().then(|| {
-            out.stdout
-                .split_whitespace()
-                .next()
-                .unwrap_or_default()
-                .to_string()
-        }))
-    };
-    let Some(copy) = listed(wip.to_string()).await? else {
+    if !pushes_where_fetches(path, env).await? {
+        return Ok(()); // the delete would go elsewhere than the lookups below: keep the copy
+    }
+    let Some(copy) = remote_ref(path, env, &format!("refs/heads/{wip}")).await? else {
         return Ok(());
     };
-    let Some(task) = listed(branch.to_string()).await? else {
+    let Some(task) = remote_ref(path, env, &format!("refs/heads/{branch}")).await? else {
         return Ok(());
     };
     if !is_sha(&copy)
@@ -3723,8 +3746,7 @@ impl Worktrees {
             .is_some_and(|r| !r.is_finished())
     }
 
-    /// Copy each checkout whose `backup_due`, one at a time, recording each outcome as it ends (and on disk when it
-    /// failed, `save_failure`); the next pass's reports carry them.
+    /// Copy each checkout whose `backup_due`, one at a time, recording each outcome as it ends (and on disk, `save_backup`); the next pass's reports carry them.
     async fn back_up_all(&self, rows: &[Value], reports: &[Value]) {
         for (row, report) in rows.iter().zip(reports) {
             let link = text_of(&row["id"]);
@@ -3732,7 +3754,7 @@ impl Worktrees {
             let last = match last {
                 Some(last) => last,
                 None if report["state"] == "present" => {
-                    let saved = saved_failure(&self.workspace, row);
+                    let saved = saved_backup(&self.workspace, row);
                     let mut inner = self.inner.lock().unwrap();
                     inner.backups.insert(link.clone(), saved.clone());
                     saved
@@ -3746,6 +3768,17 @@ impl Worktrees {
             let known = Some(last.head.clone())
                 .filter(|h| !h.is_empty())
                 .unwrap_or(recorded);
+            if last.error.is_some()
+                && report["state"] == "present"
+                && report["ahead"].as_i64() == Some(0)
+            {
+                // The work reached the task branch since: nothing is left to warn about.
+                save_backup(&self.workspace, row, None);
+                if let Some(entry) = self.inner.lock().unwrap().backups.get_mut(&link) {
+                    entry.error = None;
+                }
+                continue;
+            }
             let Some(head) = backup_due(report, &known, Some(&last), Instant::now()) else {
                 continue;
             };
@@ -3755,12 +3788,12 @@ impl Worktrees {
             {
                 Ok((env, listed, _)) => {
                     let machine_git = listed.get("machine_git") == Some(&json!(true));
-                    back_up(&self.workspace, row, &head, &env, machine_git).await
+                    back_up(&self.workspace, row, &head, &env, machine_git, &known).await
                 }
                 Err(e) => Err(e),
             };
             let error = outcome.err().map(|e| backup_error(&e));
-            save_failure(&self.workspace, row, error.as_deref());
+            save_backup(&self.workspace, row, error.as_deref());
             let mut inner = self.inner.lock().unwrap();
             let entry = inner.backups.entry(link).or_default();
             entry.at = Some(Instant::now());

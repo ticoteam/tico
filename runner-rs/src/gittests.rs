@@ -3851,7 +3851,7 @@ async fn an_unpushed_commit_is_copied_to_its_wip_branch_and_copied_again_only_on
     let report = worktrees::inspect(&workspace, &row, &env, None).await;
     assert_eq!(report["ahead"], 1, "{report}");
     assert_eq!(backup_due(&report, "", None, now), Some(head.clone()));
-    let copied = worktrees::back_up(&workspace, &row, &head, &env, false).await;
+    let copied = worktrees::back_up(&workspace, &row, &head, &env, false, "").await;
     assert!(copied.is_ok(), "{:?}", copied.err().map(|e| e.text()));
     assert_eq!(remote_head(&bare, &wip), Some(head.clone()));
     // The copy is not the task branch: the commit still counts as unpushed, and the task branch did not move.
@@ -3883,7 +3883,7 @@ async fn an_unpushed_commit_is_copied_to_its_wip_branch_and_copied_again_only_on
         backup_due(&moved, &head, Some(&last), now + BACKUP_EVERY),
         Some(newer.clone())
     );
-    worktrees::back_up(&workspace, &row, &newer, &env, false)
+    worktrees::back_up(&workspace, &row, &newer, &env, false, "")
         .await
         .unwrap();
     assert_eq!(remote_head(&bare, &wip), Some(newer));
@@ -3900,7 +3900,7 @@ async fn a_copy_that_cannot_be_pushed_says_why_keeps_the_checkout_and_is_retried
     // Origin refuses the push (here: the repository it leads to is gone).
     let gone = tmp.0.join("gone.git");
     lead_origin_to(&workspace, &bare, gone.to_str().unwrap());
-    let failed = worktrees::back_up(&workspace, &row, &head, &env, false)
+    let failed = worktrees::back_up(&workspace, &row, &head, &env, false, "")
         .await
         .unwrap_err();
     let shown = worktrees::backup_error(&failed);
@@ -3931,17 +3931,65 @@ async fn a_copy_that_cannot_be_pushed_says_why_keeps_the_checkout_and_is_retried
     );
     assert!(backup_due(&report, "", Some(&last), now + BACKUP_RETRY).is_some());
     // A restarted runner keeps the hour's wait and the reason: the failure is kept beside the worktree.
-    worktrees::save_failure(&workspace, &row, Some(&last.error.clone().unwrap()));
-    let restarted = worktrees::saved_failure(&workspace, &row);
+    worktrees::save_backup(&workspace, &row, Some(&last.error.clone().unwrap()));
+    let restarted = worktrees::saved_backup(&workspace, &row);
     assert_eq!(restarted.error, last.error);
     assert_eq!(
         backup_due(&report, "", Some(&restarted), Instant::now()),
         None
     );
     assert!(backup_due(&report, "", Some(&restarted), Instant::now() + BACKUP_RETRY).is_some());
-    // A copy that later succeeds clears it.
-    worktrees::save_failure(&workspace, &row, None);
-    assert_eq!(worktrees::saved_failure(&workspace, &row).error, None);
+    // A copy that later succeeds clears it, and a restart keeps the ten minutes after it.
+    worktrees::save_backup(&workspace, &row, None);
+    let copied = worktrees::saved_backup(&workspace, &row);
+    assert_eq!(copied.error, None);
+    assert_eq!(backup_due(&report, "", Some(&copied), Instant::now()), None);
+    assert!(backup_due(
+        &report,
+        "",
+        Some(&copied),
+        Instant::now() + worktrees::BACKUP_EVERY
+    )
+    .is_some());
+}
+
+#[tokio::test]
+async fn a_copy_never_replaces_other_work_on_its_wip_branch() {
+    let tmp = Tmp::new();
+    let env = turn_env(&tmp.0, &[]);
+    let (bare, workspace, tree, row) = backed_checkout(&tmp, &env).await;
+    let wip = worktrees::wip_branch(&row);
+    let first = commit(&tree, "one.txt");
+    // Another writer (a cleanup snapshot) put a commit outside this history on the wip/ branch.
+    sh(
+        &tree,
+        &["checkout", "-q", "-b", "elsewhere", "origin/tico/feature"],
+    );
+    let other = commit(&tree, "snapshot.txt");
+    sh(
+        &tree,
+        &["push", "-q", "origin", &format!("{other}:refs/heads/{wip}")],
+    );
+    sh(&tree, &["checkout", "-q", "tico/feature"]);
+    let refused = worktrees::back_up(&workspace, &row, &first, &env, false, "")
+        .await
+        .unwrap_err();
+    assert!(
+        refused.text().contains("holds other work"),
+        "{}",
+        refused.text()
+    );
+    assert_eq!(remote_head(&bare, &wip), Some(other.clone()));
+    // A copy of this history moves forward over the head it copied last, a rewrite included.
+    worktrees::back_up(&workspace, &row, &first, &env, false, &other)
+        .await
+        .unwrap();
+    assert_eq!(remote_head(&bare, &wip), Some(first.clone()));
+    let second = commit(&tree, "two.txt");
+    worktrees::back_up(&workspace, &row, &second, &env, false, "")
+        .await
+        .unwrap();
+    assert_eq!(remote_head(&bare, &wip), Some(second));
 }
 
 /// Send origin's fetches and pushes of github.com/org/product to `to` instead of the test remote `bare`.
@@ -3983,7 +4031,7 @@ async fn a_copy_goes_only_to_the_checkouts_own_repository() {
         &base,
         &["config", "remote.origin.pushurl", other.to_str().unwrap()],
     );
-    let refused = worktrees::back_up(&workspace, &row, &head, &env, true)
+    let refused = worktrees::back_up(&workspace, &row, &head, &env, true, "")
         .await
         .unwrap_err();
     assert!(
@@ -4004,7 +4052,7 @@ async fn a_copy_goes_only_to_the_checkouts_own_repository() {
             "https://github.com/org/other.git",
         ],
     );
-    assert!(worktrees::back_up(&workspace, &row, &head, &env, false)
+    assert!(worktrees::back_up(&workspace, &row, &head, &env, false, "")
         .await
         .is_err());
     assert_eq!(remote_head(&other, &wip), None);
@@ -4020,10 +4068,12 @@ async fn a_stalled_copy_holds_back_neither_the_next_pass_nor_its_reports() {
     // A remote that takes the push and never answers.
     let stalled = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let held = format!("http://{}/product.git", stalled.local_addr().unwrap());
+    let (reached, mut reached_rx) = tokio::sync::mpsc::unbounded_channel();
     let holder = tokio::spawn(async move {
         let mut open = vec![];
         while let Ok((socket, _)) = stalled.accept().await {
             open.push(socket);
+            let _ = reached.send(());
         }
     });
     lead_origin_to(&workspace, &bare, &held);
@@ -4047,6 +4097,12 @@ async fn a_stalled_copy_holds_back_neither_the_next_pass_nor_its_reports() {
         )
         .await
         .unwrap_or_else(|_| panic!("pass {pass} waited for the copy"));
+        if pass == 0 {
+            // The copy's push reached the remote, which holds it.
+            tokio::time::timeout(Duration::from_secs(60), reached_rx.recv())
+                .await
+                .expect("the copy never reached the remote");
+        }
         assert!(manager.backing_up(), "the copy is still pushing");
         let reports = manager.latest();
         assert_eq!(reports.len(), 1);
@@ -4073,7 +4129,7 @@ async fn removing_a_checkout_whose_head_is_on_its_task_branch_deletes_its_wip_co
     let (bare, workspace, tree, row) = backed_checkout(&tmp, &env).await;
     let wip = worktrees::wip_branch(&row);
     let head = commit(&tree, "one.txt");
-    worktrees::back_up(&workspace, &row, &head, &env, false)
+    worktrees::back_up(&workspace, &row, &head, &env, false, "")
         .await
         .unwrap();
     // The bot pushes its branch, then the task finishes and its checkout is removed.
@@ -4100,7 +4156,7 @@ async fn a_wip_copy_holding_work_the_task_branch_lacks_survives_removal() {
     let (bare, workspace, tree, row) = backed_checkout(&tmp, &env).await;
     let wip = worktrees::wip_branch(&row);
     let head = commit(&tree, "one.txt");
-    worktrees::back_up(&workspace, &row, &head, &env, false)
+    worktrees::back_up(&workspace, &row, &head, &env, false, "")
         .await
         .unwrap();
     // The bot drops that commit; the checkout is clean and has nothing unpushed, but the copy is the only record.
@@ -4125,7 +4181,7 @@ async fn a_checkout_rebuilt_on_a_fresh_disk_starts_from_its_wip_copy_not_the_old
     let env = turn_env(&tmp.0, &[]);
     let (bare, workspace, tree, row) = backed_checkout(&tmp, &env).await;
     let head = commit(&tree, "one.txt");
-    worktrees::back_up(&workspace, &row, &head, &env, false)
+    worktrees::back_up(&workspace, &row, &head, &env, false, "")
         .await
         .unwrap();
     assert_ne!(remote_head(&bare, "tico/feature"), Some(head.clone()));
