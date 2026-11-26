@@ -170,7 +170,7 @@ _REVIEW_RUBRIC_BEFORE_DESCRIPTION = (
     "and say what each checked. Give each real defect its own finding with file:line, severity, and why it matters. "
     "Skip style nits and diff summaries. Say when there are no findings."
 )
-# Every text the combined Review rubric has shipped with: asked whole, with its parts (pipeline_judges.EXPLAINED).
+# Every text the combined Review rubric has shipped with: asked as pipeline_judges.CHECKS["two_reviews"].
 COMBINED_REVIEW_RUBRICS = (REVIEW_RUBRIC, _REVIEW_RUBRIC_BEFORE_DESCRIPTION)
 # The single-review line the presets shipped before the one Review stage (still recognised, EARLIER).
 # Judged from the page alone (Jev is shown the linked PRs' newest commits beside it), and true of a good review of a
