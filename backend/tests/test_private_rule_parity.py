@@ -228,7 +228,8 @@ def world(api, monkeypatch):
         )
         # The page copy is cara's: Finance and CPO, named as more readers, are not in the page's audience.
         c.execute("UPDATE tasks SET readers=? WHERE id=?", ('["bot:finance","bot:cpo"]', copy))
-        X.pipeline(c, "eng", "Engineering", ({"name": "Build", "owner": "bot:ops", "requirements": []},))
+        # Not "Engineering": every company that builds software already has that preset pipeline, by its name.
+        X.pipeline(c, "eng", "Exports", ({"name": "Build", "owner": "bot:ops", "requirements": []},))
         # Given to Ben, held by Ops at Build: Ops is no party but the stage's, so it reads the task by the hold alone.
         tasks["stage"] = _make(c, "human:cara", "Build the export", "human:ben", pipeline="eng")
         entity = entities.upsert(c, "human:ana", "organization", name="North", match={})["id"]
