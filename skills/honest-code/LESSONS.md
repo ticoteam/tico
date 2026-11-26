@@ -99,6 +99,8 @@ Seeded 2026-11-18 from merged pull requests and commits on `origin/main` at `7e7
 | L35 | No new file goes in `runner_support/` outside its tests: build the runner side in `runner-rs`, and a server or CLI helper in `backend/` or `clients/`. | 2026-11-19 a00ce94d68 (`base_snapshot.py` added to `runner_support/` after the runner's move to `runner-rs` began) | script | 1 | encoded no-new-runner-support-module | `runner_support` |
 | L36 | `backend/` and `clients/` import `runner_support` in no new place; a helper both sides need moves out of it. | 2026-11-03 52e40f3bbb (six hub and CLI files kept importing `runner_support` when `runner/` moved) | script | 1 | encoded no-runner-support-import | `runner_support` |
 | L37 | Core never imports a Non-Core module (Finance, Growth, Market, Calendar, Calls, Meetings, Mail, Letters, Slack, Granola, the company page, lenses); the module registers itself with Core, and `finance.actions` is the one bridge. | 2026-11-04 fd9117f952 (`execution.py` began importing `mailbox_access`) | script | 1 | encoded core-imports-app | `backend` |
+| L38 | The flight recorder's tables (`flight_*`) are made and changed only in `backend/flight.py`, in `hub.flight.db`; a migration may only drop the old copies from `hub.sqlite` (`DROP TABLE IF EXISTS`). | 2026-11-26 #5387 (the tables moved out of `hub.sqlite`, whose writers they slowed) | script | 1 | encoded no-flight-in-hub | `backend/flight.py` |
+| L39 | `desktop/` (Electron) is the one desktop app: no Tauri config, crate, package, CLI, workflow or doc comes back, and a removed app's docs leave with it. | 2026-11-26 #5374 (`app/` was deleted while the README and docs still told readers to build it) | script | 1 | encoded no-tauri | `desktop` |
 
 ## Ids not used
 

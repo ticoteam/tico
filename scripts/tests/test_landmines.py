@@ -125,6 +125,240 @@ def test_each_architecture_rule_finds_its_bad_case_and_not_its_good_one(rule, pa
     assert rule not in hits(path, good)
 
 
+HUB_SQL = "backend/migrations/20261201000000_thing.sql"
+HUB_PY = "backend/migrations/20261201000000_thing.py"
+
+
+@pytest.mark.parametrize(
+    ("path", "bad", "good"),
+    [
+        (HUB_SQL, "CREATE TABLE flight_events(id INTEGER PRIMARY KEY);\n", "DROP TABLE IF EXISTS flight_events;\n"),
+        (HUB_SQL, 'create table if not exists "flight_sql"(n INTEGER);\n', "CREATE TABLE flights(id INTEGER);\n"),
+        (HUB_SQL, "CREATE TEMP TABLE main.flight_db(bytes INTEGER);\n", "SELECT bytes FROM flight_db;\n"),
+        (
+            HUB_SQL,
+            "ALTER TABLE flight_slow ADD COLUMN parts TEXT;\n",
+            "ALTER TABLE tasks ADD COLUMN flight_note TEXT;\n",
+        ),
+        (HUB_SQL, "ALTER TABLE perf RENAME TO flight_requests;\n", "ALTER TABLE perf RENAME TO perf_old;\n"),
+        (
+            HUB_SQL,
+            "CREATE INDEX flight_events_kind ON flight_events(kind);\n",
+            "DROP INDEX IF EXISTS flight_events_kind;\n",
+        ),
+        (
+            HUB_SQL,
+            "CREATE TRIGGER t AFTER INSERT ON flight_web BEGIN SELECT 1; END;\n",
+            "-- CREATE TABLE flight_web moved\n",
+        ),
+        (
+            HUB_PY,
+            'c.execute("CREATE TABLE flight_process(cpu REAL)")\n',
+            'c.execute("DROP TABLE IF EXISTS flight_process")\n',
+        ),
+        (
+            "backend/hubdb.py",
+            'SQL = "ALTER TABLE flight_db ADD COLUMN x"\n',
+            "# ALTER TABLE flight_db went to hub.flight.db\n",
+        ),
+        ("deploy/thing.sql", "CREATE TABLE flight_web(span INTEGER);\n", "CREATE TABLE web(span INTEGER);\n"),
+        (HUB_SQL, 'CREATE TABLE "main"."flight_db"(x INTEGER);\n', 'CREATE TABLE "main"."db_flight"(x INTEGER);\n'),
+        (
+            HUB_SQL,
+            "CREATE VIEW IF NOT EXISTS flight_recent AS SELECT 1;\n",
+            "CREATE VIEW recent AS SELECT * FROM flight_db;\n",
+        ),
+        (
+            HUB_SQL,
+            "CREATE UNIQUE INDEX IF NOT EXISTS k ON `main`.`flight_sql`(n);\n",
+            "CREATE INDEX k ON sql_log(n);\n",
+        ),
+        (
+            HUB_SQL,
+            "CREATE TABLE tasks2(id INTEGER); -- then\nALTER TABLE\n  flight_slow ADD COLUMN x;\n",
+            "CREATE TABLE tasks2(id INTEGER); -- CREATE TABLE flight_slow(x) moved to hub.flight.db\n",
+        ),
+        (
+            HUB_SQL,
+            "CREATE INDEX k ON tasks(id);\nCREATE TRIGGER t AFTER UPDATE OF kind\n  ON flight_events BEGIN SELECT 1; END;\n",
+            "CREATE INDEX k ON tasks(id);\nSELECT * FROM a JOIN b ON flight_events.id = b.id;\n",
+        ),
+        (
+            HUB_PY,
+            'SQL = """\nCREATE TABLE IF NOT EXISTS\n    flight_requests (span INTEGER)\n"""\n',
+            'SQL = """\nDROP TABLE IF EXISTS\n    flight_requests\n"""  # CREATE TABLE flight_requests moved\n',
+        ),
+        (
+            HUB_SQL,
+            "CREATE /* legacy */ TABLE flight_events(id INTEGER);\n",
+            "/* CREATE TABLE flight_events(id INTEGER);\n   moved to hub.flight.db */\nSELECT 1;\n",
+        ),
+        (HUB_SQL, "ALTER TABLE 'flight_events' ADD COLUMN x;\n", "ALTER TABLE 'events' ADD COLUMN flight_x;\n"),
+        (HUB_SQL, 'CREATE INDEX "by kind-2" ON flight_events(kind);\n', 'CREATE INDEX "by kind-2" ON events(kind);\n'),
+        (
+            HUB_PY,
+            'c.execute("-- setup\\nCREATE TABLE flight_events(id INTEGER)")\n',
+            'c.execute("-- CREATE TABLE flight_events(id) moved")\n',
+        ),
+        (
+            HUB_PY,
+            'c.execute("SELECT 1 -- x", "CREATE TABLE flight_events(id INTEGER)")\n',
+            'c.execute("SELECT 1 -- x", "CREATE TABLE events(id INTEGER)")\n',
+        ),
+        (
+            HUB_PY,
+            'SQL = "CREATE /* old */ TABLE \'main\'.\'flight_db\'(x)"\n',
+            'SQL = "/* CREATE TABLE flight_db(x) */ SELECT 1"\n',
+        ),
+    ],
+)
+def test_no_flight_in_hub_bans_a_flight_table_made_or_changed_and_allows_its_drop(path, bad, good):
+    assert hits(path, bad).get("no-flight-in-hub") == 1
+    assert "no-flight-in-hub" not in hits(path, good)
+
+
+def test_no_flight_in_hub_names_the_line_a_statement_starts_on():
+    text = "-- one\nCREATE TABLE\n  flight_events(id INTEGER);\nCREATE INDEX k\n  ON flight_events(id);\n"
+    found = landmines.hits_in(HUB_SQL, text, [landmines.BY_ID["no-flight-in-hub"]])["no-flight-in-hub"]
+    assert found == [(2, "CREATE TABLE"), (4, "CREATE INDEX k")]
+
+
+def test_no_flight_in_hub_keeps_line_numbers_past_a_block_comment_and_sees_past_globs():
+    text = "/* one\n   two */\nCREATE TABLE flight_events(id INTEGER);\n"
+    found = landmines.hits_in(HUB_SQL, text, [landmines.BY_ID["no-flight-in-hub"]])["no-flight-in-hub"]
+    assert [number for number, _ in found] == [3]
+    # A glob's /* in one Python string and */ in a later one are no comment hiding the DDL between them.
+    py = 'A = "docs/*.md"\nB = "CREATE TABLE flight_events(id INTEGER)"\nC = "src/**/x"\n'
+    assert hits(HUB_PY, py).get("no-flight-in-hub") == 1
+
+
+def test_no_flight_in_hub_leaves_the_flight_file_the_shipped_migrations_and_tests_alone():
+    sql = "CREATE TABLE flight_events(id INTEGER);\nALTER TABLE flight_slow ADD COLUMN parts TEXT;\n"
+    py = 'A = "CREATE TABLE flight_events(id INTEGER)"\nB = "ALTER TABLE flight_slow ADD COLUMN parts TEXT"\n'
+    rule = [landmines.BY_ID["no-flight-in-hub"]]
+    for path in (
+        "backend/flight.py",
+        "backend/migrations/baseline.sql",
+        "backend/migrations/20261126013526_flight_slow_parts.sql",
+        "backend/tests/fixtures/schema_floor.sql",
+        "backend/tests/test_flight_db.py",
+        "clients/thing.py",
+        "docs/observability.md",
+    ):
+        assert landmines.hits_in(path, py if path.endswith(".py") else sql, rule) == {}, path
+    for path in (HUB_SQL, HUB_PY, "backend/hubdb.py", "backend/flight_file.py"):
+        found = landmines.hits_in(path, py if path.endswith(".py") else sql, rule)
+        assert len(found["no-flight-in-hub"]) == 2, path
+
+
+@pytest.mark.parametrize(
+    ("path", "bad", "good"),
+    [
+        ("desktop/package.json", '    "@tauri-apps/api": "^2.0.0",\n', '    "electron-updater": "^6.6.2",\n'),
+        ("runner-rs/Cargo.toml", 'tauri = { version = "2", features = [] }\n', 'serde = "1"\n'),
+        ("app/Cargo.toml", 'tauri-plugin-updater = "2"\n', 'tokio = "1"\n'),
+        ("app/Cargo.toml", "[dependencies.tauri]\n", "[dependencies.serde]\n"),
+        ("scripts/build.sh", "cargo tauri build --target universal-apple-darwin\n", "npm run pack:mac\n"),
+        (
+            ".github/workflows/app.yml",
+            "      - uses: tauri-apps/tauri-action@v0\n",
+            "      - run: npx electron-builder\n",
+        ),
+        (".github/workflows/app.yml", "name: Tauri app\n", "# The Tauri app (app/, app.yml) was built beside it.\n"),
+        ("backend/downloads.py", 'CONF = "app/src-tauri/tauri.conf.json"\n', 'FEED = "latest-mac.yml"\n'),
+        (
+            "docs/desktop.md",
+            'config = json.loads(Path("app/tauri.conf.json").read_text())\n',
+            "Icons: `desktop/build/`.\n",
+        ),
+        ("docs/desktop.md", 'OVERRIDE="$BUILD_ROOT/tauri.override.json"\n', 'OUT="$BUILD_ROOT/app"\n'),
+        ("README.md", "One Rust crate (`app/`, Tauri 2) builds the app.\n", "The Electron app (`desktop/`).\n"),
+        ("CLAUDE.md", "- `app/` (Tauri) is the older desktop shell.\n", "- `desktop/` (Electron) is the shell.\n"),
+        ("docs/releasing.md", "`TAURI_SIGNING_PRIVATE_KEY` signs the updater.\n", "`DESKTOP_MAC_CERT` signs it.\n"),
+        (
+            "backend/assets/tico/README.md",
+            "- `app/icons/*`: the PNGs `tauri.conf.json` lists.\n",
+            "- Alpha Centauri.\n",
+        ),
+        (
+            "web/src/desktop/index.ts",
+            "import { invoke } from '@tauri-apps/api/core';\n",
+            "import { bridge } from './bridge';\n",
+        ),
+        ("clients/tico.py", 'HINT = "run cargo-tauri"\n', 'HINT = "run npm"\n'),
+        ("runner-rs/Cargo.toml", '"tauri" = "2"\n', '"serde" = "1"\n'),
+        (
+            "runner-rs/Cargo.toml",
+            'shell = { package = "tauri", version = "2" }\n',
+            'json = { package = "serde_json" }\n',
+        ),
+        ("runner-rs/Cargo.toml", '[target.x.dependencies."tauri"]\n', '[target.x.dependencies."tokio"]\n'),
+        ("app/bootstrap.sh", "cargo tauri build\n", "npm run build\n"),
+        ("README-build.md", "Build the Tauri shell first.\n", "Build the Electron app first.\n"),
+        ("scripts/build.sh", "cargo   tauri build\n", "cargo   build\n"),
+        ("app/Cargo.toml", "[dependencies . tauri]\n", "[dependencies . serde]\n"),
+        (
+            "app/Cargo.toml",
+            "[target.'cfg(target_os = \"macos\")'.dependencies.tauri]\n",
+            "[target.'cfg(target_os = \"macos\")'.dependencies.objc2]\n",
+        ),
+        (
+            "app/Cargo.toml",
+            '[target."cfg(unix)".build-dependencies."tauri"]\n',
+            '[target."cfg(unix)".dependencies.tokio]\n',
+        ),
+    ],
+)
+def test_no_tauri_bans_the_tauri_app_coming_back(path, bad, good):
+    assert hits(path, bad).get("no-tauri") == 1
+    assert "no-tauri" not in hits(path, good)
+
+
+def test_no_tauri_bans_a_file_named_for_tauri_whatever_it_holds():
+    for path in (
+        "app/src-tauri/src/main.rs",
+        ".github/workflows/tauri.yml",
+        "app/Tauri.toml",
+        "scripts/tauri_build.py",
+    ):
+        assert hits(path, "x = 1\n").get("no-tauri") == 1, path
+
+
+def test_no_tauri_counts_a_binary_file_at_a_tauri_path(tmp_path, monkeypatch):
+    git(tmp_path, "init", "-q")
+    icon = tmp_path / "app/src-tauri/icons/icon.png"
+    icon.parent.mkdir(parents=True)
+    icon.write_bytes(b"\x89PNG\r\n\x1a\n\xff\xfe\x00")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs/logo.png").write_bytes(b"\x89PNG\r\n\x1a\n\xff\xfe\x00")
+    git(tmp_path, "add", "-A")
+    monkeypatch.setattr(landmines, "ROOT", tmp_path)
+    tracked = landmines.tracked_files
+    monkeypatch.setattr(landmines, "tracked_files", lambda: tracked(tmp_path))
+    found = landmines.scan([landmines.BY_ID["no-tauri"]])
+    assert list(found) == ["app/src-tauri/icons/icon.png"]
+
+
+def test_no_tauri_leaves_history_tests_of_its_removal_and_customer_repositories_alone():
+    text = "Tauri 2 built app/ with cargo tauri build and app/tauri.conf.json.\n"
+    for path in (
+        "skills/honest-code/LESSONS.md",
+        "CHANGELOG.md",
+        "desktop/CHANGELOG.md",
+        "docs/plans/2026-11-core-simplification.md",
+        "runner-rs/src/worktrees.rs",
+        "templates/catalog/builder/README.md",
+    ):
+        assert "no-tauri" not in hits(path, text), path
+    # A name that only contains the letters is not named for Tauri.
+    for path in ("docs/alpha-centauri.md", "backend/centauri.py"):
+        assert "no-tauri" not in hits(path, "Alpha Centauri is the nearest star.\n"), path
+    # A Python comment or a test that names the retired app is not the app coming back.
+    removed = '# GLib left with app/ (the Tauri shell)\nTAURI = ["latest.json"]\ndef test_only_the_tauri_app(): pass\n'
+    assert "no-tauri" not in hits("backend/tests/test_downloads.py", removed)
+    assert "no-tauri" not in hits("scripts/tests/test_osv_gate.py", removed)
+
+
 def test_core_imports_app_counts_each_non_core_module_of_a_multi_line_import():
     text = "from . import (\n    mail,\n    tasks,  # Core\n    calendar_api,\n    growth_core as growth,\n)\n"
     found = landmines.hits_in(CORE, text, landmines.RULES)["core-imports-app"]
@@ -329,6 +563,8 @@ def test_a_true_lessons_table_passes():
         "L35",
         "L36",
         "L37",
+        "L38",
+        "L39",
     )  # the real rules cite rows this one-row table does not have
     assert [p for p in lesson_problems(text) if not any(i in p for i in cited_elsewhere)] == []
 

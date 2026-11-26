@@ -20,7 +20,9 @@ A rule the --base ref's copy of this script does not have yet may bring its own 
 Three rules hold the architecture rather than the tests (CLAUDE.md, "Refactor rules"): Core code in backend/ imports no
 Non-Core module, backend/ and clients/ import no more runner_support, and runner_support/ gets no new file. The import
 rules read import statements token by token (one hit per Non-Core module a statement imports). The new-file rule compares
-the tracked paths with the --base ref's tree, so it runs only with --base, as CI runs it.
+the tracked paths with the --base ref's tree, so it runs only with --base, as CI runs it. Two bans keep retired things
+out: no-flight-in-hub (the flight recorder's tables are made only in hub.flight.db) and no-tauri (desktop/, Electron, is
+the one desktop app).
 """
 
 import argparse
@@ -202,6 +204,97 @@ def runner_support_imports(path, text):
     return imports_matching(path, text, lambda parts: parts[0] if parts[0] == "runner_support" else None)
 
 
+# The flight recorder's tables live in their own file, hub.flight.db (backend/flight.py), not in hub.sqlite. Shipped
+# migrations are never edited (scripts/check_migration_order.py), so the ones that made or changed a flight table stay.
+FLIGHT_SCHEMA = "backend/flight.py"
+FLIGHT_SHIPPED = {"backend/migrations/baseline.sql", "backend/migrations/20261126013526_flight_slow_parts.sql"}
+_FLIGHT_TABLE = r"""(?:["'`\[]?main["'`\]]?\s*\.\s*)?["'`\[]?flight_\w"""
+# Read over the whole file, so a statement split over lines is one statement; a trigger's ON is looked for within its
+# statement (no `;`) and its first 300 characters.
+FLIGHT_IN_HUB = re.compile(
+    rf"\bCREATE\s+(?:(?:TEMP|TEMPORARY|VIRTUAL)\s+)?(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?{_FLIGHT_TABLE}"
+    rf"|\bALTER\s+TABLE\s+{_FLIGHT_TABLE}"
+    rf"|\bRENAME\s+TO\s+{_FLIGHT_TABLE}"
+    rf"""|\bCREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"[^"]*"|'[^']*'|`[^`]*`|\[[^\]]*\]|[\w.])+\s+ON\s+{_FLIGHT_TABLE}"""
+    rf"|\bCREATE\s+(?:(?:TEMP|TEMPORARY)\s+)?TRIGGER\b[^;]{{0,300}}?\bON\s+{_FLIGHT_TABLE}",
+    re.I,
+)
+SQL_COMMENT = re.compile(r"--[^\n]*|/\*.*?\*/", re.S)
+# In Python a comment sits inside one string, so it holds no quote: a glob's `/*` in one string and `*/` in a later one
+# are not a comment hiding the code between them, and a `--` ends at its string's end or an escaped `\n` too.
+PY_SQL_COMMENT = re.compile(r"""--(?:(?!\\n)[^\n"'])*|/\*[^"']*?\*/""")
+
+
+def hub_schema(path):
+    """Where hub.sqlite's tables are made: SQL files and the server's Python, outside tests and the flight file."""
+    if "/tests/" in f"/{path}" or path == FLIGHT_SCHEMA or path in FLIGHT_SHIPPED:
+        return False
+    return path.endswith(".sql") or (path.startswith("backend/") and py_prod(path))
+
+
+def flight_in_hub(path, text):
+    """The line each statement that makes or changes a flight_* table starts on. The whole file is read as written (the
+    SQL sits in Python strings, often over several lines), with Python's # comments and SQL's -- and /* */ comments
+    blanked in place, so line numbers hold. A DROP is not a hit: it is how the old tables leave hub.sqlite."""
+    if path.endswith(".py"):
+        lines = text.splitlines(keepends=True)
+        try:
+            for tok in tokenize.generate_tokens(io.StringIO(text).readline):
+                if tok.type == tokenize.COMMENT:
+                    (row, start), (_, end) = tok.start, tok.end
+                    lines[row - 1] = lines[row - 1][:start] + " " * (end - start) + lines[row - 1][end:]
+        except (tokenize.TokenError, SyntaxError, IndentationError):
+            lines = [line if not line.lstrip().startswith("#") else "\n" for line in text.splitlines(keepends=True)]
+        text = "".join(lines)
+    comment = PY_SQL_COMMENT if path.endswith(".py") else SQL_COMMENT
+    text = comment.sub(lambda m: re.sub(r"[^\n]", " ", m.group()), text)
+    if path.endswith(".py"):
+        text = re.sub(r"\\[nrt]", "  ", text)  # a string's escaped newline separates words as the real one does
+    return [text.count("\n", 0, m.start()) + 1 for m in FLIGHT_IN_HUB.finditer(text)]
+
+
+# The Tauri app (app/) is gone; desktop/ (Electron) is the one desktop app. History stays: changelogs and plans here,
+# and, outside the scope, the lessons and runner-rs/src/worktrees.rs, whose Tauri line is about customers' repositories.
+TAURI_ROOTS = ("app/", "docs/", "scripts/", "backend/", "clients/", "desktop/", "web/", ".github/workflows/")
+TAURI_BUILD = re.compile(
+    r"tauri[.-](?:conf|override|apps|action|cli|build|plugin|bundler|runtime|utils)|cargo(?:\s+|-)tauri|src-tauri", re.I
+)
+# In a Cargo.toml: `tauri = ...`, `"tauri" = ...`, a `[...dependencies.tauri]` table (a target's included, however its
+# cfg is quoted), or a renamed `x = { package = "tauri" }`.
+TAURI_CRATE = re.compile(
+    r"""^\s*["']?tauri["']?\s*=|^\s*\[.*\bdependencies\s*\.\s*["']?tauri["']?\s*\]|\bpackage\s*=\s*["']tauri["']"""
+)
+TAURI_WORD = re.compile(r"(?<![a-z])tauri", re.I)
+
+
+def tauri_scope(path):
+    name = path.rsplit("/", 1)[-1]
+    if name.upper().startswith("CHANGELOG") or path.startswith("docs/plans/"):
+        return False
+    return (
+        bool(TAURI_WORD.search(path))
+        or path.startswith(TAURI_ROOTS)
+        or ("/" not in path and path.endswith(".md"))
+        or name in ("Cargo.toml", "package.json")
+    )
+
+
+def tauri_lines(path, text):
+    """A file named for Tauri is a hit on its line 1. In any file a Tauri build input (its config, crates, npm packages,
+    CLI or action) is a hit on every line; in a Markdown page or a workflow the word itself is, a workflow's comment
+    lines aside (desktop.yml's header recalls the Tauri app)."""
+    if TAURI_WORD.search(path):
+        return [1]
+    word = path.endswith(".md") or path.startswith(".github/workflows/")
+    found = []
+    for number, line in enumerate(text.splitlines(), 1):
+        prose = word and not (path.endswith((".yml", ".yaml")) and line.lstrip().startswith("#"))
+        crate = path.endswith(".toml") and TAURI_CRATE.search(line)
+        if TAURI_BUILD.search(line) or crate or (prose and TAURI_WORD.search(line)):
+            found.append(number)
+    return found
+
+
 @dataclass
 class Rule:
     id: str
@@ -349,6 +442,27 @@ RULES = [
         "L37",
         find=core_imports_app,
     ),
+    Rule(
+        "no-flight-in-hub",
+        "ban",
+        hub_schema,
+        [],
+        "The flight recorder's tables (flight_*) live in hub.flight.db, made by backend/flight.py; hub.sqlite gets no "
+        "new or changed flight table. Change the table in backend/flight.py. DROP TABLE IF EXISTS flight_* is allowed: "
+        "it takes the old copies out of hub.sqlite.",
+        "L38",
+        find=flight_in_hub,
+    ),
+    Rule(
+        "no-tauri",
+        "ban",
+        tauri_scope,
+        [],
+        "The Tauri app (app/) is retired: desktop/ (Electron) is the one desktop app. No Tauri config, crate, npm "
+        "package, CLI, workflow or doc comes back; build and describe the Electron app instead (docs/desktop.md).",
+        "L39",
+        find=tauri_lines,
+    ),
 ]
 BY_ID = {rule.id: rule for rule in RULES}
 
@@ -391,16 +505,16 @@ def hits_in(path, text, rules):
     for rule in rules:
         if rule.new_file or not rule.scope(path):
             continue
+        if rule.find is not None:
+            for number in rule.find(path, text):
+                found[rule.id].append((number, raw[number - 1].strip() if number <= len(raw) else ""))
+            continue
         if rule.view == "raw":
             lines = views.setdefault("raw", script_lines(text) if not path.endswith(".py") else _no_comment_lines(raw))
         elif path.endswith(".py"):
             lines = views.setdefault("code", code_lines(text))
         else:
             lines = views.setdefault("script", script_lines(text))
-        if rule.find is not None:
-            for number in rule.find(path, text):
-                found[rule.id].append((number, raw[number - 1].strip() if number <= len(raw) else ""))
-            continue
         for number, line in enumerate(lines, 1):
             if any(pattern.search(line) for pattern in rule.skip):
                 continue
@@ -452,7 +566,9 @@ def scan(rules=RULES):
             continue
         try:
             text = file.read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError):
+        except UnicodeDecodeError:
+            text = ""  # a binary file still counts by its path (an icon under src-tauri/)
+        except OSError:
             continue
         found = hits_in(path, text, rules)
         if found:
