@@ -240,12 +240,20 @@ CHECKS: dict[str, tuple[Part, ...]] = {
             "Has two reviews, each naming its model.",
             no_at=PRESENT_NO_AT,
         ),
+        # Task #3970 (Chris's builder rule, Nov 26): was "models", the two reviews' models differ. The second review
+        # needs only a maker other than the builder's; the first may share it. A page that names no builder cannot
+        # show that, so it does not have this part.
         Part(
-            "models",
-            "names a different model for each of its two reviews, so a reader can see the two models differ",
-            "No second review from a different model.",
-            "Can't tell if the two reviews are by different models.",
-            "The two reviews are by different models.",
+            "maker",
+            "names the model that built the change, and the second review's model (Reviewer 2's, the second opinion) "
+            "is by a different maker than the builder's (a model's maker is the company that makes it, such as "
+            "Anthropic for Claude or OpenAI for GPT and Codex); the first review may share the builder's maker; a page "
+            "that does not name the model that built the change, or whose second review is by the builder's maker, "
+            "does not have this part",
+            "The page doesn't name the model that built the change, or the second review is by the builder's maker.",
+            "Can't tell if the second review is by a different maker than the model that built the change (the "
+            "builder).",
+            "The second review is by a different maker than the builder's.",
             needs="two",
             no_at=PRESENT_NO_AT,
         ),

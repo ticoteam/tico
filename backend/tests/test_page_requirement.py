@@ -1472,14 +1472,14 @@ def test_a_review_page_sent_back_names_the_unmet_rubric_item_on_the_task_and_in_
         return row
 
     def ask(model, state, questions, label):
-        answers = {q: {"noul": {"met": 0.05, "part_models": 0.05}.get(q, 0.95)} for q in questions if q != PJ.READ}
+        answers = {q: {"noul": {"met": 0.05, "part_maker": 0.05}.get(q, 0.95)} for q in questions if q != PJ.READ}
         answers[PJ.READ] = {"choice": PJ.NO_LINE, "confidence": 0.9}
         return PJ._read({"answers": answers, "model": "tico-decide-low"}, list(questions), model)
 
     row = seeded(build)
     monkeypatch.setattr(PJ, "ENGINE", ask)
     V.run(store, H.shift(H.now(), seconds=1))
-    item = "No second review from a different model."
+    item = "The page doesn't name the model that built the change, or the second review is by the builder's maker."
     with store.read() as r:
         bodies = [
             m[0]

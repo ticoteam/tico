@@ -256,13 +256,29 @@ def test_an_unedited_combined_review_rubric_follows_to_the_one_a_page_with_no_bl
     """A page with no blocking findings meets the check when each review names the commit and says what it read. A
     Review page on either earlier combined rubric moves to it; an edited one stays."""
     c = one_review
-    assert "no blocking findings" in PS.REVIEW_RUBRIC
+    assert "no blocking findings" in PS._REVIEW_RUBRIC_BEFORE_BUILDER
     for before in (PS._REVIEW_RUBRIC_BEFORE_NO_BLOCKERS, PS._REVIEW_RUBRIC_BEFORE_DESCRIPTION):
         assert before != PS.REVIEW_RUBRIC
         _rubric(c, "engineering-review-1", before)
         PS.ensure_presets(c)
         assert _page(PS.read(c, "engineering"), "engineering-review-1")["settings"]["rubric"] == PS.REVIEW_RUBRIC
     own = "Our own check: " + PS._REVIEW_RUBRIC_BEFORE_NO_BLOCKERS
+    _rubric(c, "engineering-review-1", own)
+    PS.ensure_presets(c)
+    assert _page(PS.read(c, "engineering"), "engineering-review-1")["settings"]["rubric"] == own
+
+
+def test_an_unedited_review_rubric_follows_to_the_one_with_the_builder_rule(one_review):
+    """Task #3970: Tico's Review bar names the model that built the change and asks for a second review by a different
+    maker. A Review page still on Tico's text before it moves to it, so its bar says what the check asks; an edited one
+    stays."""
+    c = one_review
+    before = PS._REVIEW_RUBRIC_BEFORE_BUILDER
+    _rubric(c, "engineering-review-1", before)
+    PS.ensure_presets(c)
+    assert _page(PS.read(c, "engineering"), "engineering-review-1")["settings"]["rubric"] == PS.REVIEW_RUBRIC
+    assert "model that built the change" in PS.REVIEW_RUBRIC
+    own = "Our own check: " + before
     _rubric(c, "engineering-review-1", own)
     PS.ensure_presets(c)
     assert _page(PS.read(c, "engineering"), "engineering-review-1")["settings"]["rubric"] == own

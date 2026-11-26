@@ -479,7 +479,11 @@ def test_each_shipped_check_is_asked_as_its_parts_now_and_as_it_read_before():
 
     assert P.check_of(PS.SPEC_RUBRIC) == "spec" and P.check_of(PS.LEGACY_REVIEW_RUBRIC) == "review"
     assert P.check_of(PS.REVIEW_RUBRIC) == "two_reviews", "the one Review stage's two reviews are asked as parts"
-    for before in (PS._REVIEW_RUBRIC_BEFORE_DESCRIPTION, PS._REVIEW_RUBRIC_BEFORE_NO_BLOCKERS):
+    for before in (
+        PS._REVIEW_RUBRIC_BEFORE_BUILDER,
+        PS._REVIEW_RUBRIC_BEFORE_DESCRIPTION,
+        PS._REVIEW_RUBRIC_BEFORE_NO_BLOCKERS,
+    ):
         assert P.check_of(before) == "two_reviews", "and its earlier texts too"
     assert P.check_of(PS.QA_RUBRIC) == "qa" and P.check_of(PS.VALIDATE_RUBRIC) == "validate"
     assert P.check_of(PS.EARLIER["product-spec/page/rubric"][0]) == "spec", "an unedited older line is the same check"
@@ -513,15 +517,53 @@ def test_a_good_review_page_is_met_on_its_parts_and_one_review_alone_is_told_it_
     good = P.judge_once(None, req, page, engine=_parts_engine(dict.fromkeys(("two", "commit", "findings"), 0.6), asked))
     assert sorted(asked[-1]) == sorted(f"part_{part.key}" for part in P.CHECKS["two_reviews"]), "only the parts"
     assert (good["verdict"], good["reason"]) == ("met", "Every part is there."), "0.6 is a yes on the 0.5 bar"
-    one = P.judge_once(None, req, page, engine=_parts_engine({"two": 0.05, "models": 0.05}))
+    one = P.judge_once(None, req, page, engine=_parts_engine({"two": 0.05, "maker": 0.05}))
     assert (one["verdict"], one["reason"]) == ("not_met", "No second review that names its model.")
-    hedged = P.judge_once(None, req, page, engine=_parts_engine({"models": 0.45}))
-    assert (hedged["verdict"], hedged["reason"]) == ("unsure", "Can't tell if the two reviews are by different models.")
-    low = P.judge_once(None, req, page, engine=_parts_engine({"models": 0.4}))
-    assert (low["verdict"], low["reason"]) == ("not_met", "No second review from a different model."), "no at 0.4"
     old = P.judge_once(None, req, page, engine=_parts_engine({"commit": 0.1}))
     assert (old["verdict"], old["reason"]) == ("not_met", "A review doesn't name the PR's newest commit.")
     assert all(part.found for part in P.CHECKS["two_reviews"]), "a passed page's OK lists each part found"
+
+
+# The Engineering pipeline's Review bar as Tico Team runs it since Nov 26 (settings v22, Chris's builder rule on #2913).
+LIVE_REVIEW_BAR = (
+    "Two reviews of the newest commit of every linked PR, each naming that commit and its model, and the page names "
+    "the model that built the change: the second review's model is by a different maker than the builder's (it may "
+    "share a maker with the first review), and say what each checked. Give each real defect its own finding with "
+    "file:line, severity, and why it matters; a finding on the PR description may cite the file:line of the guideline "
+    "it breaks. Skip style nits and diff summaries. Say when there are no findings."
+)
+
+
+def test_the_live_review_bar_with_the_builder_rule_is_asked_as_five_parts_one_of_them_the_builders_maker():
+    """Task #3970: since the builder rule went into Engineering's Review bar, the check did not know the text and asked
+    it whole (8 of 12 pages unsure). It is Tico's Review bar now, asked as its five parts, whose reason names a part,
+    and the part that said the two reviews' models differ asks the builder's maker instead."""
+    req = {"id": "r", "name": "Review page", "rubric": LIVE_REVIEW_BAR}
+    page = {**ATTACHMENT, "text": REVIEW_TEXT}
+    assert P.check_of(LIVE_REVIEW_BAR) == "two_reviews"
+    asked = []
+    good = P.judge_once(None, req, page, engine=_parts_engine({}, asked))
+    assert sorted(asked[-1]) == sorted(["part_two", "part_maker", "part_commit", "part_checked", "part_findings"])
+    assert (good["verdict"], good["reason"]) == ("met", "Every part is there.")
+    maker = asked[-1]["part_maker"]["instructions"]
+    assert "model that built the change" in maker and "different maker" in maker, maker
+    hedged = P.judge_once(None, req, page, engine=_parts_engine({"maker": 0.45}))
+    assert hedged["verdict"] == "unsure" and "builder" in hedged["reason"], hedged
+
+
+def test_a_second_review_by_the_builders_maker_or_no_builder_named_is_not_met_and_says_so():
+    """Task #3970: a page whose second review is by the builder's maker, or that never names the model that built the
+    change, reads low on the maker part: it is not met, never met, and the reason says what to fix."""
+    req = {"id": "r", "name": "Review page", "rubric": LIVE_REVIEW_BAR}
+    page = {**ATTACHMENT, "text": REVIEW_TEXT}
+    same = P.judge_once(None, req, page, engine=_parts_engine({"maker": 0.1}))
+    assert same["verdict"] == "not_met", same
+    assert "second review is by the builder's maker" in same["reason"], same["reason"]
+    assert "doesn't name the model that built the change" in same["reason"], same["reason"]
+    at_no_line = P.judge_once(None, req, page, engine=_parts_engine({"maker": P.PRESENT_NO_AT}))
+    assert at_no_line["verdict"] == "not_met", "a part asking whether a thing is there is no at 0.4"
+    one = P.judge_once(None, req, page, engine=_parts_engine({"two": 0.05, "maker": 0.05}))
+    assert one["reason"] == "No second review that names its model.", "the maker is not named while there is no second"
 
 
 def test_a_qa_page_passes_its_parts_at_0_6_but_its_checks_only_at_0_75():
