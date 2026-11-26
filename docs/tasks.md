@@ -45,6 +45,20 @@ A side stage such as **Rejected** sits beside a main stage. Automatic moves skip
 without giving a reason. In a side stage, **Send back** returns the task to the last main stage it visited.
 Reopening a task that ended in a side stage returns it there.
 
+### Pipeline and stage notes
+A pipeline and each of its stages can carry notes: what the team learned there, each with why, since when and its
+evidence (a task, a pull request or a run). They sit in the pipeline editor next to each stage's rules, and
+`tico pipeline show` lists them. A bot's first turn after its task enters a pipeline reads that pipeline's notes, and its
+first turn after the task enters a stage reads the stage's, in the turn's own message (never its instructions, so a
+resumed session keeps its cached start). A later turn in the same session does not repeat them; a fresh session, an edit
+to a list, or a compaction during the turn sends them again.
+
+People who may change the pipeline add, edit and retire notes; an edit or a retire says in one line what changed and
+why, shown under the note. A bot proposes one with `tico pipeline note propose <pipeline> [--stage <stage>] --note ...
+--why ... --evidence ...`: it reaches no turn until the pipeline's manager or such a person accepts it, and the proposer
+receives the reason either way. Nobody decides their own proposal. A note may name a guard (`approval_first`): that
+guard's refusal then quotes the note's why.
+
 ### Moving a task to another pipeline
 
 Task ⋯ › **Move to…** lists every pipeline's stages ("Backlog › On ice"); typing finds by each word ("back ice"). The

@@ -289,8 +289,12 @@ fn assemble(
             crate::gitrun::sha256_hex(text.as_bytes())
         }
     };
-    let (pipeline_notes, stage_notes) = (notes_digest(Part::PipelineNotes), notes_digest(Part::StageNotes));
-    let short_pipeline_notes = !seen.pipeline_notes.is_empty() && seen.pipeline_notes == pipeline_notes;
+    let (pipeline_notes, stage_notes) = (
+        notes_digest(Part::PipelineNotes),
+        notes_digest(Part::StageNotes),
+    );
+    let short_pipeline_notes =
+        !seen.pipeline_notes.is_empty() && seen.pipeline_notes == pipeline_notes;
     let short_stage_notes = !seen.stage_notes.is_empty() && seen.stage_notes == stage_notes;
     let left_out = |part: Part| match part {
         Part::Standing => short_standing,
@@ -696,7 +700,10 @@ fn parts(
         }
     }
     // The task's pipeline and stage notes (backend/pipeline_notes.py), just before the message they bear on.
-    for (key, part) in [("pipeline", Part::PipelineNotes), ("stage", Part::StageNotes)] {
+    for (key, part) in [
+        ("pipeline", Part::PipelineNotes),
+        ("stage", Part::StageNotes),
+    ] {
         let text = attempt["pipeline_notes"][key].as_str().unwrap_or_default();
         if !text.trim().is_empty() {
             put(&mut lines, part, text.to_string());
@@ -1413,7 +1420,8 @@ mod tests {
     const MERGE_NOTES: &str = "Notes for Merge (what we learned; follow them):\n- Never enqueue by hand. Why: the queue tests the checked head. Since 2026-11-20 (#4300).";
 
     #[test]
-    fn notes_come_on_entering_a_pipeline_or_stage_once_a_session_and_never_touch_the_cached_prefix() {
+    fn notes_come_on_entering_a_pipeline_or_stage_once_a_session_and_never_touch_the_cached_prefix()
+    {
         let names = Names {
             company: "Acme".into(),
             app: "Tico".into(),
@@ -1426,7 +1434,11 @@ mod tests {
         let given = build(&first, &names, None, false, "", &Seen::default(), ctx);
         let t = &given.text;
         // First turn in QA, new to the pipeline too: both lists, pipeline first, just before the message.
-        let (eng, qa, msg) = (t.find(ENG_NOTES), t.find(QA_NOTES), t.find("Current message from"));
+        let (eng, qa, msg) = (
+            t.find(ENG_NOTES),
+            t.find(QA_NOTES),
+            t.find("Current message from"),
+        );
         assert!(eng.is_some() && eng < qa && qa < msg, "{t}");
         // The standing part, which a resumed thread keeps as its cached prefix, is the same with notes or without.
         assert_eq!(given.standing, plain.standing);
@@ -1437,11 +1449,19 @@ mod tests {
         let again = build(&next, &names, Some("m1"), true, "", &seen(&given), ctx);
         assert!(!again.text.contains("Notes for"), "{}", again.text);
         assert!(again.full.contains(ENG_NOTES) && again.full.contains(QA_NOTES));
-        assert!(again.restore.contains(ENG_NOTES) && again.restore.contains(QA_NOTES), "{}", again.restore);
+        assert!(
+            again.restore.contains(ENG_NOTES) && again.restore.contains(QA_NOTES),
+            "{}",
+            again.restore
+        );
         // A move to Merge, same session: Merge's notes only, not Engineering's again.
         next["pipeline_notes"] = json!({"pipeline": ENG_NOTES, "stage": MERGE_NOTES});
         let moved = build(&next, &names, Some("m1"), true, "", &seen(&given), ctx);
-        assert!(moved.text.contains(MERGE_NOTES) && !moved.text.contains(ENG_NOTES), "{}", moved.text);
+        assert!(
+            moved.text.contains(MERGE_NOTES) && !moved.text.contains(ENG_NOTES),
+            "{}",
+            moved.text
+        );
         assert!(moved.restore.contains(ENG_NOTES) && !moved.restore.contains(MERGE_NOTES));
         // A fresh session holds nothing: both lists again.
         let fresh = build(&next, &names, Some("m1"), false, "", &Seen::default(), ctx);
@@ -1449,7 +1469,11 @@ mod tests {
         // A stage with no notes: nothing of them, and the stage digest is empty, so a later stage's list is sent.
         next["pipeline_notes"] = json!({"pipeline": ENG_NOTES});
         let bare = build(&next, &names, Some("m1"), true, "", &seen(&moved), ctx);
-        assert!(!bare.text.contains("Notes for") && bare.stage_notes.is_empty(), "{}", bare.text);
+        assert!(
+            !bare.text.contains("Notes for") && bare.stage_notes.is_empty(),
+            "{}",
+            bare.text
+        );
     }
 
     #[test]

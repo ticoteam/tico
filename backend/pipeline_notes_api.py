@@ -79,7 +79,11 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
         who: Any = request.state.identity
         auth.domain(who)
         data = fields(body)
-        return mutate(request, body, lambda c: N.add(c, who.actor, pipeline_id, data.get("stage"), data))
+
+        def work(c: Any) -> Row:
+            return N.add(c, who.actor, pipeline_id, data.get("stage"), data)
+
+        return mutate(request, body, work)
 
     @app.post(
         "/api/v2/pipelines/{pipeline_id}/notes/propose",
@@ -94,7 +98,11 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
         who: Any = request.state.identity
         auth.domain(who)
         data = fields(body)
-        return mutate(request, body, lambda c: N.propose(c, who.actor, pipeline_id, data.get("stage"), data))
+
+        def work(c: Any) -> Row:
+            return N.propose(c, who.actor, pipeline_id, data.get("stage"), data)
+
+        return mutate(request, body, work)
 
     @app.post(
         "/api/v2/pipeline-notes/{note_id}",
@@ -105,7 +113,11 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
         who: Any = request.state.identity
         auth.domain(who)
         data = fields(body)
-        return mutate(request, body, lambda c: N.edit(c, who.actor, note_id, data, data.get("line", ""), body.revision))
+
+        def work(c: Any) -> Row:
+            return N.edit(c, who.actor, note_id, data, data.get("line", ""), body.revision)
+
+        return mutate(request, body, work)
 
     @app.post(
         "/api/v2/pipeline-notes/{note_id}/retire",
@@ -115,7 +127,11 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
         """Retire a note: it reaches no turn and stays readable with its lines."""
         who: Any = request.state.identity
         auth.domain(who)
-        return mutate(request, body, lambda c: N.retire(c, who.actor, note_id, body.reason))
+
+        def work(c: Any) -> Row:
+            return N.retire(c, who.actor, note_id, body.reason)
+
+        return mutate(request, body, work)
 
     @app.post(
         "/api/v2/pipeline-notes/{note_id}/accept",
@@ -124,7 +140,11 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
     def notes_accept(request: Request, note_id: str, body: NoteDecide) -> Row:  # pyright: ignore[reportUnusedFunction]
         who: Any = request.state.identity
         auth.domain(who)
-        return mutate(request, body, lambda c: N.decide(c, who.actor, note_id, True, body.reason))
+
+        def work(c: Any) -> Row:
+            return N.decide(c, who.actor, note_id, True, body.reason)
+
+        return mutate(request, body, work)
 
     @app.post(
         "/api/v2/pipeline-notes/{note_id}/decline",
@@ -133,4 +153,8 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
     def notes_decline(request: Request, note_id: str, body: NoteDecide) -> Row:  # pyright: ignore[reportUnusedFunction]
         who: Any = request.state.identity
         auth.domain(who)
-        return mutate(request, body, lambda c: N.decide(c, who.actor, note_id, False, body.reason))
+
+        def work(c: Any) -> Row:
+            return N.decide(c, who.actor, note_id, False, body.reason)
+
+        return mutate(request, body, work)
