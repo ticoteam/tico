@@ -191,7 +191,7 @@ export function Billing() {
   );
 }
 
-const SAY: Record<string, string> = { ok: 'Fine', info: 'Note', warn: 'Look', bad: 'Broken' };
+const SAY: Record<string, string> = { ok: 'Fine', info: 'Note', warn: 'Look', bad: 'Broken', unknown: "Can't tell" };
 
 /** A link where the new app has the page, else the fix's words. */
 function Fix({ f }: { f: HealthFix }) {

@@ -213,6 +213,25 @@ describe('Settings › Health @s1082', () => {
     expect(within(region).getByTitle('Dev on QA box').textContent).toContain('2 worktrees, 1.5 GB');
     expect(within(region).queryByText(/Spare/)).toBeNull();
   });
+
+  it("puts a check that can't tell under Needs a look and never says every part is fine", async () => {
+    const health = {
+      checked: new Date().toISOString(),
+      attention: 0,
+      unknown: 1,
+      checks: [
+        { id: 'slack', label: 'Slack', status: 'unknown', summary: 'The Slack service has not reported since 14:02 UTC. Is it running?' },
+        { id: 'claimed_oks', label: "OK'd sends", status: 'ok', summary: "Nothing OK'd waits to be sent." },
+      ],
+    };
+    serve((url) => (url === '/api/v2/health' ? ok(health) : undefined));
+    queryClient.setQueryData(healthQuery.queryKey, health as never);
+    show(<SettingsPage section="health" />, '/settings/health');
+    const bad = await screen.findByRole('region', { name: 'Needs a look' });
+    expect(within(within(bad).getByTitle('Slack')).getByText("Can't tell")).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Every part is fine' })).toBeNull();
+    expect(within(screen.getByRole('region', { name: 'Fine' })).getByTitle("OK'd sends")).toBeTruthy();
+  });
 });
 
 describe('Settings › Account', () => {

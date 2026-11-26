@@ -94,7 +94,7 @@ def test_backup_notifications_follow_active_implementation_without_rewriting_his
     monkeypatch.delenv("TICO_BACKUP_MODE", raising=False)
     assert {i["title"] for i in issues()} == {"backup needs attention", "restore-check needs attention"}
     monkeypatch.setenv("TICO_BACKUP_MODE", "remote")
-    current = {"mode": "remote", "target_kind": "s3", "last_replicated_at": H.now()}
+    current = {"mode": "remote", "checked_at": H.now(), "target_kind": "s3", "last_replicated_at": H.now()}
     monkeypatch.setattr(replication, "status", lambda: current)
     assert issues() == []
     current["last_replicated_at"] = old  # an old copy with nothing behind it is a quiet database, not a problem

@@ -319,6 +319,10 @@ def _page_findings(c, ctx, notes, stuck=frozenset()):
     out = []
     for check in page.get("checks", []):
         base = str(check.get("id", "")).split(":", 1)[0]
+        if check.get("status") == "unknown":
+            # It could not read what it checks: its finding, if one is open, neither files again nor clears.
+            _unread(notes, f"page:{check.get('id')}")
+            continue
         if check.get("status") not in ("warn", "bad") or base in PAGE_LEFT_OUT:
             continue
         summary = str(check.get("summary", ""))

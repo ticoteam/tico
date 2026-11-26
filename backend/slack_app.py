@@ -21,6 +21,10 @@ from .credentials import SERVICE, Vault, legacy_key
 from .store import Problem
 
 HEALTH = "slack:gateway"
+# The gateway rewrites "connected" this often while it stays up (slack_gateway.beat); Health says it cannot tell once three
+# beats are missed (health._slack).
+BEAT_SECONDS = 5 * 60
+SILENT_SECONDS = 3 * BEAT_SECONDS
 MANIFEST = Path(__file__).resolve().parent.parent / "connectors" / "slack-app-manifest.json"
 BOT_TOKEN = re.compile(r"^xoxb-[A-Za-z0-9-]{10,}$")
 APP_TOKEN = re.compile(r"^xapp-[A-Za-z0-9-]{10,}$")
@@ -155,7 +159,7 @@ def forget(store):
 
 def report(store, state, message="", team=""):
     """The gateway's line on the Health page: `connected`, `waiting` (no tokens yet) or `disconnected`
-    with the last error. Written on a change only."""
+    with the last error. Written on a change, and "connected" again every BEAT_SECONDS while it lasts."""
     now = H.now()
     detail = json.dumps({"state": state, "message": message, "team": team})
     with store.transaction() as c:

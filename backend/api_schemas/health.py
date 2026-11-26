@@ -31,7 +31,7 @@ SCHEMAS.update(
             }
         ),
         "Health": obj(
-            {"audience": "s", "checks": "a", "attention": "i", "checked": "s"},
+            {"audience": "s", "checks": "a", "attention": "i", "unknown": "i", "checked": "s"},
             computers=items(obj({"id": "s", "turn_counts": ref("TurnCounts"), "turn_summary": "s"}, required=["id"])),
             stalled_runs=items(
                 obj(
@@ -46,7 +46,7 @@ SCHEMAS.update(
                     }
                 )
             ),
-            required=["audience", "checks", "attention", "checked"],
+            required=["audience", "checks", "attention", "unknown", "checked"],
             storage={
                 **ref("Storage"),
                 "description": "Read-only file storage usage and copy progress; Team owners only",

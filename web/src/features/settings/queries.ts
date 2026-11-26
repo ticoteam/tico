@@ -408,7 +408,7 @@ export const historyQuery = historyPage();
 export interface HealthCheck {
   id: string;
   label: string;
-  status: 'ok' | 'info' | 'warn' | 'bad' | string;
+  status: 'ok' | 'info' | 'warn' | 'bad' | 'unknown' | string;
   summary: string;
   /** What to do about it: the old app's address (`#/settings` + `tab`), an outside page, or only a label. */
   fixes?: HealthFix[];

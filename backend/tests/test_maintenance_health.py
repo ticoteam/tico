@@ -2003,3 +2003,19 @@ def test_the_live_health_step_skips_rehearsal_and_demo_copies(environment, reade
     assert step["status"] == "skipped" and step["reason"] == "rehearsal or demo copy"
     with store.read() as c:
         assert c.execute("SELECT cursor_at FROM maintenance_steps WHERE key='check_health'").fetchone()[0] is None
+
+
+def test_a_check_that_cannot_tell_neither_files_nor_clears_its_finding(environment, readers, monkeypatch):
+    """Slack's finding is open; Slack then turns Can't tell (its service stopped reporting). The finding stays open and
+    no second task is filed: an unread check says nothing about whether the problem went away."""
+    api, _ = built(environment)
+    slack = {"id": "slack", "label": "Slack", "status": "bad", "summary": "Slack is disconnected.", "fixes": []}
+    page = {"checks": [slack]}
+    monkeypatch.setattr(health, "view", lambda c, *a, **k: page)
+    run(api)
+    assert finding(api, "page:slack")["present"] == 1
+    tasks = task_count(api)
+    page["checks"] = [dict(slack, status="unknown", summary="The Slack service has not reported since 14:02 UTC.")]
+    result = run(api)
+    assert finding(api, "page:slack")["present"] == 1
+    assert "page:slack" not in result["details"]["cleared"] and task_count(api) == tasks
