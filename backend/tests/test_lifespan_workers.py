@@ -418,7 +418,7 @@ def test_the_way_out_waits_for_a_thread_without_the_default_pool_it_fills(monkey
         release.set()
 
 
-def test_a_start_up_batch_that_fails_is_logged_but_never_a_dead_worker(tmp_path, monkeypatch, caplog):
+def test_a_start_up_batch_that_fails_is_logged_but_never_a_dead_worker(tmp_path, monkeypatch):
     from backend import start_jobs
 
     app, closed = built(tmp_path, monkeypatch)
@@ -430,11 +430,22 @@ def test_a_start_up_batch_that_fails_is_logged_but_never_a_dead_worker(tmp_path,
     monkeypatch.setattr(start_jobs, "run", fails)
     recorded = []
     monkeypatch.setattr(lifespan_workers, "record", lambda *args: recorded.append(args))
-    with caplog.at_level(logging.ERROR, logger="tico.lifespan_workers"):
+    failed = threading.Event()
+
+    class Seen(logging.Handler):
+        def emit(self, record):
+            if "Start-up job start_jobs failed" in record.getMessage() and record.exc_info:
+                failed.set()
+
+    seen = Seen()
+    logging.getLogger("tico.lifespan_workers").addHandler(seen)
+    try:
         with served(app):
-            pass  # the way out waits for the job
-    assert any("Start-up job start_jobs failed" in r.getMessage() and r.exc_info for r in caplog.records)
-    assert recorded == [], "no worker_died record: nothing needs a restart"
+            # Seen while still serving, so the job guard decides, not the way out (which records no death).
+            assert failed.wait(WAY_OUT_SECONDS), "the job's failure was logged with its traceback"
+    finally:
+        logging.getLogger("tico.lifespan_workers").removeHandler(seen)
+    assert recorded == [], "no worker_died record: nothing needs a restart (the way out waits for any record)"
     assert len(closed) == 1
 
 
