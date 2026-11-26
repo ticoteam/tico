@@ -194,6 +194,17 @@ HUB_PY = "backend/migrations/20261201000000_thing.py"
             "/* CREATE TABLE flight_events(id INTEGER);\n   moved to hub.flight.db */\nSELECT 1;\n",
         ),
         (HUB_SQL, "ALTER TABLE 'flight_events' ADD COLUMN x;\n", "ALTER TABLE 'events' ADD COLUMN flight_x;\n"),
+        (HUB_SQL, 'CREATE INDEX "by kind-2" ON flight_events(kind);\n', 'CREATE INDEX "by kind-2" ON events(kind);\n'),
+        (
+            HUB_PY,
+            'c.execute("-- setup\\nCREATE TABLE flight_events(id INTEGER)")\n',
+            'c.execute("-- CREATE TABLE flight_events(id) moved")\n',
+        ),
+        (
+            HUB_PY,
+            'c.execute("SELECT 1 -- x", "CREATE TABLE flight_events(id INTEGER)")\n',
+            'c.execute("SELECT 1 -- x", "CREATE TABLE events(id INTEGER)")\n',
+        ),
         (
             HUB_PY,
             'SQL = "CREATE /* old */ TABLE \'main\'.\'flight_db\'(x)"\n',
@@ -285,6 +296,7 @@ def test_no_flight_in_hub_leaves_the_flight_file_the_shipped_migrations_and_test
         ("app/bootstrap.sh", "cargo tauri build\n", "npm run build\n"),
         ("README-build.md", "Build the Tauri shell first.\n", "Build the Electron app first.\n"),
         ("scripts/build.sh", "cargo   tauri build\n", "cargo   build\n"),
+        ("app/Cargo.toml", "[dependencies . tauri]\n", "[dependencies . serde]\n"),
         (
             "app/Cargo.toml",
             "[target.'cfg(target_os = \"macos\")'.dependencies.tauri]\n",

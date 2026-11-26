@@ -215,14 +215,14 @@ FLIGHT_IN_HUB = re.compile(
     rf"\bCREATE\s+(?:(?:TEMP|TEMPORARY|VIRTUAL)\s+)?(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?{_FLIGHT_TABLE}"
     rf"|\bALTER\s+TABLE\s+{_FLIGHT_TABLE}"
     rf"|\bRENAME\s+TO\s+{_FLIGHT_TABLE}"
-    rf"""|\bCREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?[\w."'`\[\]]+\s+ON\s+{_FLIGHT_TABLE}"""
+    rf"""|\bCREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"[^"]*"|'[^']*'|`[^`]*`|\[[^\]]*\]|[\w.])+\s+ON\s+{_FLIGHT_TABLE}"""
     rf"|\bCREATE\s+(?:(?:TEMP|TEMPORARY)\s+)?TRIGGER\b[^;]{{0,300}}?\bON\s+{_FLIGHT_TABLE}",
     re.I,
 )
 SQL_COMMENT = re.compile(r"--[^\n]*|/\*.*?\*/", re.S)
-# In Python a block comment sits inside one string, so it holds no quote: a glob's `/*` in one string and `*/` in a later
-# one are not a comment hiding the code between them.
-PY_SQL_COMMENT = re.compile(r"""--[^\n]*|/\*[^"']*?\*/""")
+# In Python a comment sits inside one string, so it holds no quote: a glob's `/*` in one string and `*/` in a later one
+# are not a comment hiding the code between them, and a `--` ends at its string's end or an escaped `\n` too.
+PY_SQL_COMMENT = re.compile(r"""--(?:(?!\\n)[^\n"'])*|/\*[^"']*?\*/""")
 
 
 def hub_schema(path):
@@ -248,6 +248,8 @@ def flight_in_hub(path, text):
         text = "".join(lines)
     comment = PY_SQL_COMMENT if path.endswith(".py") else SQL_COMMENT
     text = comment.sub(lambda m: re.sub(r"[^\n]", " ", m.group()), text)
+    if path.endswith(".py"):
+        text = re.sub(r"\\[nrt]", "  ", text)  # a string's escaped newline separates words as the real one does
     return [text.count("\n", 0, m.start()) + 1 for m in FLIGHT_IN_HUB.finditer(text)]
 
 
@@ -260,7 +262,7 @@ TAURI_BUILD = re.compile(
 # In a Cargo.toml: `tauri = ...`, `"tauri" = ...`, a `[...dependencies.tauri]` table (a target's included, however its
 # cfg is quoted), or a renamed `x = { package = "tauri" }`.
 TAURI_CRATE = re.compile(
-    r"""^\s*["']?tauri["']?\s*=|^\s*\[.*\bdependencies\.["']?tauri["']?\s*\]|\bpackage\s*=\s*["']tauri["']"""
+    r"""^\s*["']?tauri["']?\s*=|^\s*\[.*\bdependencies\s*\.\s*["']?tauri["']?\s*\]|\bpackage\s*=\s*["']tauri["']"""
 )
 TAURI_WORD = re.compile(r"(?<![a-z])tauri", re.I)
 
