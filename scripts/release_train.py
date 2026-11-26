@@ -268,7 +268,8 @@ def reason_ok(reason):
 def fail_fast_cancelled(job):
     """Whether a cancelled gate part was cut short by fail fast rather than stopped by its own 45-minute timeout, which
     GitHub also reports as cancelled: a part that ran out its time hung, a failure nobody can name, and stays one."""
-    if job.get("conclusion") != "cancelled":
+    # The web journeys are outside the gate's matrix: fail fast never cancels them, so their cancel is their own.
+    if job.get("conclusion") != "cancelled" or job.get("name") == increment.WEB:
         return False
     started, completed = parse_time(job.get("started_at")), parse_time(job.get("completed_at"))
     return started is None or completed is None or completed - started < FAIL_FAST_UNDER

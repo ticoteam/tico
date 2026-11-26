@@ -41,6 +41,18 @@ PRODUCT_INPUTS = (
     "runner_support/tests/test_isolation_docker.py",
     "scripts/journey-test.sh",
 )
+# The web app's journeys (ci.yml web-journeys): every validation runs them, outside the gate's matrix. What they run is
+# the app's build and the server it talks to, so a change to either selects them: a fix to a red journey wakes the train.
+WEB = "web-journeys"
+WEB_INPUTS = (
+    "web/",
+    "backend/",
+    "evals/redesign/",
+    "scripts/ci_install.sh",  # its install: the root's npm and Playwright, the browser's system packages
+    "scripts/playwright-system-packages.json",
+    "package.json",
+    "package-lock.json",
+)
 IGNORED_JOBS = {"release-check", "test-timings"}  # a consequence of a failed part, or optional
 FAILED = {"failure", "cancelled", "timed_out", "startup_failure", "action_required"}
 RUNNER = "4cpu-linux-x64"
@@ -61,7 +73,7 @@ def failed_tokens(jobs):
     for name, log in jobs:
         if name in IGNORED_JOBS:
             continue
-        if name in (PRODUCT, DESKTOP):
+        if name in (PRODUCT, DESKTOP, WEB):
             tokens.add(name)
         elif re.fullmatch(r"python-\d+", name):
             found = failure_tokens(log)
@@ -270,6 +282,8 @@ def selection_tokens(selected, changed):
         tokens.add(PRODUCT)
     if any(name.startswith(DESKTOP_INPUTS) for name in changed):
         tokens.add(DESKTOP)
+    if any(name.startswith(WEB_INPUTS) for name in changed):
+        tokens.add(WEB)
     return tokens
 
 
@@ -372,7 +386,7 @@ def plan_for(
     dropped = []
     carried_python = set()
     for token in sorted(carried):
-        if token in (PRODUCT, DESKTOP):
+        if token in (PRODUCT, DESKTOP, WEB):  # their own VMs; the web journeys run in every validation
             continue
         if token == pr_checks.CONFORMANCE:
             conformance = True
