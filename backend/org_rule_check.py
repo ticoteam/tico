@@ -2044,8 +2044,16 @@ def answer(gate):
 # A late check with every call slot busy is not lost to a burst of other writes: it waits by age, not by passes, and is
 # tried again every LATE_RETRY_SECONDS until LATE_BUSY_SECONDS have passed since its write; only then is it recorded
 # unchecked (reason `busy`). `tries` counts the waits.
+# A bot's ❓ to a person has a deadline: its warning reaches the bot within 10 s of the save (spec "Bots' questions
+# checked after save"). Its check goes before every other one waiting, and it waits for a busy slot only so long that a
+# call started at the end of the wait still ends within the 10 s (LATE_QUESTION_BUSY_SECONDS); then it is recorded
+# unchecked, as a check before the save was when every slot was busy. Late checks run side by side, up to half the
+# call slots (`_late_width`), so a backlog clears in a fraction of the time and checks before a write still find a slot.
 LATE_BUSY_SECONDS = 60
 LATE_RETRY_SECONDS = 1.0
+LATE_QUESTIONS = ("question", "chat_question")
+LATE_QUESTION_SECONDS = 10
+LATE_QUESTION_BUSY_SECONDS = LATE_QUESTION_SECONDS - DEADLINES[RULE_LEVEL] - int(LATE_RETRY_SECONDS)
 LATE_KEYS = (
     "author",
     "sender",
@@ -2140,23 +2148,63 @@ def _late_waiting(store):
         return c.execute("SELECT 1 FROM org_rule_late WHERE tries>0 LIMIT 1").fetchone() is not None
 
 
+def _late_width(store):
+    """How many late checks run at once: half the call slots, so a write checked before it saves (a Block rule) still
+    finds one free while a backlog drains."""
+    return max(1, calls_for(store).size // 2)
+
+
+def _late_question(row):
+    """Whether a waiting late check is a ❓'s, which has a deadline (LATE_QUESTIONS)."""
+    try:
+        return json.loads(row["verdict"]).get("operation") in LATE_QUESTIONS
+    except (TypeError, ValueError, AttributeError):
+        return False
+
+
+def _run_late_safely(store, primary, row):
+    try:
+        run_late(store, primary, row)
+    except Exception:  # one check's fault never stops the rest; it stays for the next pass
+        LOG.exception("A late rule check failed")
+
+
+def _run_side_by_side(store, primary, rows):
+    """Run these late checks at once, one thread each past the first, and wait for them all."""
+    others = []
+    for row in rows[1:]:
+        worker = threading.Thread(
+            target=_run_late_safely, args=(store, primary, row), name="org-rule-late", daemon=True
+        )
+        try:
+            worker.start()
+        except RuntimeError:  # no thread to be had: this one runs here, after the first
+            others.append(None)
+            _run_late_safely(store, primary, row)
+            continue
+        others.append(worker)
+    _run_late_safely(store, primary, rows[0])
+    for worker in others:
+        if worker is not None:
+            worker.join()
+
+
 def drain_late(store, primary):
-    """Run every late check waiting, oldest first, each once in this pass. Returns how many ran."""
+    """Run every late check waiting, each once in this pass: ❓s first, then oldest first, up to `_late_width` at a
+    time. The queue is read again before each group, so a ❓ saved meanwhile goes next. Returns how many ran."""
     _, _, draining = _late_lane(store)
     ran, tried = 0, set()
     with draining:
         while True:
             with store.read() as c:
                 rows = [dict(r) for r in c.execute("SELECT * FROM org_rule_late ORDER BY created_at, rowid LIMIT 200")]
-            row = next((r for r in rows if r["id"] not in tried), None)
-            if row is None:
+            waiting = sorted((r for r in rows if r["id"] not in tried), key=lambda r: not _late_question(r))
+            group = waiting[: _late_width(store)]
+            if not group:
                 return ran
-            tried.add(row["id"])
-            try:
-                run_late(store, primary, row)
-            except Exception:  # one check's fault never stops the rest; it stays for the next pass
-                LOG.exception("A late rule check failed")
-            ran += 1
+            tried.update(r["id"] for r in group)
+            _run_side_by_side(store, primary, group)
+            ran += len(group)
 
 
 def _late_failed(store, saved):
@@ -2210,7 +2258,8 @@ def run_late(store, primary, row):
         # (backend/task_rule_gate.py `held_locally`).
         verdict = {**verdict, "outcome": "too_large", "local": "day_cap", "broken": [r["id"] for r in verdict["rules"]]}
     busy = bool(verdict) and verdict.get("error") == "busy"
-    if busy and row["created_at"] > H.shift(H.now(), seconds=-LATE_BUSY_SECONDS):
+    waits = LATE_QUESTION_BUSY_SECONDS if saved.get("operation") in LATE_QUESTIONS else LATE_BUSY_SECONDS
+    if busy and row["created_at"] > H.shift(H.now(), seconds=-waits):
         with store.transaction() as c:
             c.execute("UPDATE org_rule_late SET tries=tries+1 WHERE id=?", (row["id"],))
         return None

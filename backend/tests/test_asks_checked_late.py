@@ -4,6 +4,7 @@ judge. A Block or Escalate rule is still checked first and refuses it, nothing w
 no check (backend/task_comments_routes.py task_question, backend/task_rule_gate.py check)."""
 
 import json
+import threading
 
 from backend import org_rule_check
 from backend import org_rules as OR
@@ -21,6 +22,20 @@ from backend.tests.helpers.org_rule_check import (  # noqa: F401 - fixtures
 
 def question(api, task, text, to="ana", token="ops-test"):
     return api.post(f"/api/v2/tasks/{task['id']}/questions", json={"to": to, "text": text}, headers=headers(token))
+
+
+def comment(api, task, text, token="ops-test"):
+    r = api.post(f"/api/v2/tasks/{task['id']}/comments", json={"text": text}, headers=headers(token))
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def age_late_checks(api, seconds):
+    """Every waiting late check's write made `seconds` ago."""
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE org_rule_late SET created_at=?", (org_rule_check.H.shift(org_rule_check.H.now(), seconds=-seconds),)
+        )
 
 
 def settle(api):
@@ -128,3 +143,65 @@ def test_an_older_clients_question_on_the_asks_route_is_checked_after_save_too(r
     settle(api)
     assert len(events(api, "rules.warned")) == 1
     assert [n for n in notes_to(api) if COLOR in n]
+
+
+def test_a_questions_late_check_stops_waiting_for_a_busy_slot_in_time_for_its_10_seconds(ruled, monkeypatch):
+    """Criterion 2 with every call slot busy: a ❓'s check waits for a slot only so long that a call started then still
+    ends within 10 s of the save; past that it is recorded unchecked (reason `busy`), as a check before the save was.
+    A comment's check of the same age keeps waiting (its own LATE_BUSY_SECONDS)."""
+    K = org_rule_check
+    assert K.LATE_QUESTION_BUSY_SECONDS + K.DEADLINES[K.RULE_LEVEL] + K.LATE_RETRY_SECONDS <= 10
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    task = task_for_ops(api)
+    monkeypatch.setattr(K, "kick_late", lambda store, primary: None)
+    monkeypatch.setattr(K, "_ask", lambda *a, **k: (None, "busy"))
+    assert question(api, task, "May I say our favorite color is red in the launch note?").status_code == 200
+    comment(api, task, "Fun fact: our favorite color is red.")
+    checked_after(api)
+    assert sql(api, "SELECT count(*) AS n FROM org_rule_late")[0]["n"] == 2, "both wait for a slot at first"
+    age_late_checks(api, K.LATE_QUESTION_BUSY_SECONDS + 1)
+    checked_after(api)
+    [unchecked] = events(api, "rules.unchecked")
+    assert unchecked["operation"] == "question" and unchecked["reason"] == "busy" and unchecked["late"] is True
+    assert sql(api, "SELECT count(*) AS n FROM question_marks")[0]["n"] == 1, "the ❓ stays asked"
+    assert sql(api, "SELECT count(*) AS n FROM org_rule_late")[0]["n"] == 1, "the comment's check still waits"
+
+
+def test_a_question_queued_behind_other_late_checks_is_checked_first(ruled, monkeypatch):
+    """A backlog of other writes' late checks never holds a ❓'s back: the ❓, saved last, is in the first group judged."""
+    api, judge = ruled
+    color_rule(api, if_broken="warn")
+    task = task_for_ops(api)
+    monkeypatch.setattr(org_rule_check, "kick_late", lambda store, primary: None)
+    for n in range(12):
+        comment(api, task, f"Step {n} is done.")
+    asked = "Which of the two launch note drafts goes out first?"
+    assert question(api, task, asked).status_code == 200
+    settle(api)
+    said = [c["state"]["output"] for c in judge.calls]
+    assert len(said) == 13
+    first = said[: org_rule_check._late_width(api.app.state.store)]  # one group, judged side by side
+    assert any(asked in s for s in first), said
+
+
+def test_late_checks_run_side_by_side(ruled, monkeypatch):
+    """A backlog drains several checks at a time, not one by one: two calls are in the judge at once. One by one, the
+    first would wait for a second that never comes, fail, and be recorded unchecked."""
+    api, judge = ruled
+    color_rule(api, if_broken="warn")
+    task = task_for_ops(api)
+    monkeypatch.setattr(org_rule_check, "kick_late", lambda store, primary: None)
+    for n in range(4):
+        comment(api, task, f"Fun fact {n}: our favorite color is red.")
+    together = threading.Barrier(2, timeout=4)
+    answer = judge.__call__
+
+    def side_by_side(state, questions, label=None):
+        together.wait()
+        return answer(state, questions, label)
+
+    api.app.state.judge = side_by_side
+    settle(api)
+    assert events(api, "rules.unchecked") == []
+    assert len(events(api, "rules.warned")) == 4
