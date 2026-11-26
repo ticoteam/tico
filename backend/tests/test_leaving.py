@@ -1,0 +1,127 @@
+"""Removing a person: the preview says what moves before anything changes, Remove applies and records the same, and
+Restore moves the reports back and names the plans that went (backend/leaving.py)."""
+
+import json
+
+from backend import access as Access
+from backend import directory as D
+from backend import views
+from backend.store import H
+from backend.tests.helpers.api import get, post
+from backend.tests.helpers.credentials import setup
+from backend.tests.helpers.model_subscriptions import add, company, pick
+
+
+def chart(api, **reports_to):
+    """Put Dee on the roster and set who reports to whom (person id -> manager id)."""
+    with api.app.state.store.transaction() as c:
+        roster = views.roster(c)
+        people = [dict(p) for p in roster["people"]]
+        if not any(p["id"] == "dee" for p in people):
+            people.append({"id": "dee", "name": "Dee", "email": "dee@acme.example"})
+        people = [{**p, "reports_to": reports_to.get(p["id"], p.get("reports_to") or "")} for p in people]
+        Access._save_roster(c, {**roster, "people": people})
+        for p in people:
+            Access._sync_human(c, {"name": p.get("name") or p["id"], **p})
+
+
+def manager(api, pid):
+    with api.app.state.store.read() as c:
+        return next(p for p in views.roster(c)["people"] if p["id"] == pid).get("reports_to") or ""
+
+
+def bot_id(api, slug):
+    with api.app.state.store.read() as c:
+        return H.resolve_bot(c, slug)["id"]
+
+
+def ben_leaves_with_a_plan_and_two_reports(api):
+    """Ben owns a Claude plan that Ops and CPO run on; Cara and Dee report to Ben, and Ben reports to Ana."""
+    setup(api)
+    company(api)
+    plan = add(api, token="ben-test", name="Ben's Claude")["id"]
+    for bot in ("ops", "cpo"):
+        pick(api, bot, "claude", plan)
+    chart(api, ben="ana", cara="ben", dee="ben")
+    return plan
+
+
+def test_the_preview_names_the_plan_its_bots_and_the_reports_and_changes_nothing(api):
+    plan = ben_leaves_with_a_plan_and_two_reports(api)
+    seen = get(api, "humans/ben/leaving")
+    assert [(p["name"], sorted(b["slug"] for b in p["bots"])) for p in seen["plans"]] == [
+        ("Ben's Claude", ["cpo", "ops"])
+    ]
+    assert sorted(b["slug"] for b in seen["bots"]) == ["cpo", "ops"]
+    assert sorted(r["id"] for r in seen["reports"]) == ["cara", "dee"] and seen["to"]["id"] == "ana"
+    # Nothing moved: the plan, the bots' model and the reports are as they were (Cancel changes nothing).
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT 1 FROM model_subscriptions WHERE id=?", (plan,)).fetchone()
+        assert c.execute("SELECT count(*) FROM agent_subscriptions WHERE subscription_id=?", (plan,)).fetchone()[0] == 2
+        assert not c.execute("SELECT 1 FROM events WHERE action='person.left'").fetchone()
+    assert manager(api, "cara") == manager(api, "dee") == "ben"
+
+
+def test_someone_with_nothing_to_move_gets_empty_lists(api):
+    chart(api)
+    seen = get(api, "humans/dee/leaving")
+    assert (seen["plans"], seen["bots"], seen["reports"], seen["to"], seen["groups"], seen["message_bot"]) == (
+        [],
+        [],
+        [],
+        None,
+        [],
+        None,
+    )
+    assert seen["tasks"] == seen["asks"] == 0
+
+
+def test_a_member_may_not_see_the_preview_as_they_may_not_remove(api):
+    chart(api)
+    get(api, "humans/dee/leaving", token="cara-test", expected=403)
+    post(api, "humans/dee", {"left": True}, token="cara-test", expected=403)
+
+
+def test_remove_records_the_bots_the_preview_listed(api):
+    ben_leaves_with_a_plan_and_two_reports(api)
+    seen = get(api, "humans/ben/leaving")
+    post(api, "humans/ben", {"left": True})
+    with api.app.state.store.read() as c:
+        kept = json.loads(
+            c.execute("SELECT detail FROM events WHERE action='person.left' AND target='ben'").fetchone()[0]
+        )
+        lost = {r[0] for r in c.execute("SELECT target FROM events WHERE action='agent_subscription.owner_left'")}
+    assert set(kept["bots"]) == {b["id"] for b in seen["bots"]} == lost
+    assert sorted(kept["reports"]) == ["cara", "dee"] and kept["to"] == "ana"
+    assert [p["name"] for p in kept["plans"]] == ["Ben's Claude"]
+    assert manager(api, "cara") == manager(api, "dee") == "ana"
+
+
+def test_restore_moves_the_reports_back_except_one_moved_by_hand_and_names_the_plan(api):
+    ben_leaves_with_a_plan_and_two_reports(api)
+    post(api, "humans/ben", {"left": True})
+    post(api, "humans/dee", {"reports_to": "cara"})  # moved by hand after the removal: stays
+    back = post(api, "access/humans/ben", {"left": False})["restored"]
+    assert manager(api, "cara") == "ben" and manager(api, "dee") == "cara"
+    assert [r["id"] for r in back["reports"]] == ["cara"]
+    assert [p["name"] for p in back["plans"]] == ["Ben's Claude"]
+    assert sorted(b["slug"] for b in back["bots"]) == ["cpo", "ops"]
+
+
+def test_restore_after_a_directory_sync_moves_the_reports_back(api):
+    ben_leaves_with_a_plan_and_two_reports(api)
+    settings = api.app.state.store.settings
+    with api.app.state.store.transaction() as c:
+        plan = {
+            "adds": [],
+            "updates": [],
+            "restores": [],
+            "leaves": [{"id": "ben", "email": "ben@acme.example", "reason": "gone"}],
+        }
+        D.apply(c, H.TICO_ACTOR, "google", plan, views.roster(c), settings=settings)
+    assert manager(api, "cara") == manager(api, "dee") == "ana"
+    with api.app.state.store.transaction() as c:
+        plan = {"adds": [], "updates": [], "restores": [{"id": "ben", "email": "ben@acme.example"}], "leaves": []}
+        D.apply(c, H.TICO_ACTOR, "google", plan, views.roster(c), settings=settings)
+    assert manager(api, "cara") == manager(api, "dee") == "ben"
+    assert bot_id(api, "ops")  # the bots are still there, without Ben's plan

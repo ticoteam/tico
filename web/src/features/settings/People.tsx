@@ -150,6 +150,12 @@ export function Joining({ v }: { v: AccessFull }) {
   );
 }
 
+/** Restore, then say what came back and the plans the person must reconnect (the action's did line, backend/leaving.py). */
+async function restore(p: AccessPerson) {
+  const r = await run('settings.restorePerson', { person: p.id }, { via: 'click' });
+  toast(r.ok ? { text: r.did ?? 'Restored', kind: 'done' } : refusal(r, "Couldn't save"));
+}
+
 /** People who left: the owner brings them back, or removes one with no history for good. */
 export function LeftPeople({ v }: { v: AccessFull }) {
   const [forgetting, setForgetting] = useState<AccessPerson | null>(null);
@@ -164,7 +170,7 @@ export function LeftPeople({ v }: { v: AccessFull }) {
           <span className="row-title">{p.name}</span>
           <span className="row-sub">{p.email}</span>
           <span className="row-cell">{owner && p.removable && <Verb quiet onClick={() => setForgetting(p)}>Remove</Verb>}</span>
-          <span className="row-age">{owner && <Verb onClick={() => void act('settings.restorePerson', { person: p.id })}>Restore</Verb>}</span>
+          <span className="row-age">{owner && <Verb onClick={() => void restore(p)}>Restore</Verb>}</span>
         </div>
       ))}
       <Dialog

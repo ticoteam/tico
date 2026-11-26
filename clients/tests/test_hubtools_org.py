@@ -294,6 +294,28 @@ def test_human_remove_needs_the_exact_name_or_email():
     assert api.writes() == [("POST", "humans/u2", {}, {"left": True}, None, False)]
 
 
+def test_human_leaving_lists_what_removing_would_move_and_writes_nothing():
+    seen = {
+        "plans": [{"name": "Claude plan", "bots": [{"name": "Builder"}, {"name": "Support"}]}],
+        "reports": [{"id": "u3", "name": "Sam"}, {"id": "u4", "name": "Ari"}],
+        "to": {"id": "u1", "name": "Lee"},
+        "tasks": 5,
+        "asks": 1,
+        "message_bot": {"name": "Mailbot", "address": "ben@acme.example"},
+        "groups": [],
+    }
+    api = FakeAPI(company({("GET", "humans/u2/leaving"): seen}))
+    out = tool("tico_human_leaving", api, human="Ben Ortiz")
+    assert out["would"] == [
+        "remove Claude plan; Builder, Support lose their model",
+        "move 2 reports to Lee: Sam, Ari",
+        "put 5 open tasks and 1 ask in the company's Needs you",
+        "stop Mailbot reading ben@acme.example",
+    ]
+    assert out["changed"] is False and api.writes() == []
+    assert "botops" in hubtools.offered_to(hubtools.BY_NAME["tico_human_leaving"])
+
+
 def test_human_remove_delete_reaches_someone_already_left():
     api = FakeAPI(company())
     out = tool("tico_human_remove", api, human="gone@acme.example", confirm="Gone Person", delete=True)

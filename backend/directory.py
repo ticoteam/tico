@@ -233,6 +233,9 @@ def apply(c, actor, source, p, roster, now=None, *, settings=None):
         i = index.get(r["id"])
         if i is not None:
             people[i] = {**people[i], "hidden": False, "directory_left": False}
+            from . import leaving
+
+            leaving.restore(c, people, r["id"])  # their reports come back, as a restore in Settings does
             H.event(c, actor, "directory.person_restored", r["id"], {"email": r["email"], "source": source})
             done["restores"] += 1
     for lv in p["leaves"]:

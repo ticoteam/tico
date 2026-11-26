@@ -28,6 +28,7 @@ import type {
 import { configQuery, keys, pageOwnersQuery, queryClient, quietRoot, QUIET_STALE_MS, write, type PageOwnerRow, type PageOwners } from '@/data';
 import type { TaskCaps } from '@/api/schema';
 import type { ProductRepositoryPreview, ProductRepositoryResult, Repository, RepositoryList } from '@/api/schema';
+import type { Restored } from './leaving';
 
 /* Settings and Usage have no live topic: both are read again after the person's own writes, on reconnect, and when a
    section opens with data older than a minute. Model sign-ins and provider holds also refresh while they wait. */
@@ -1180,7 +1181,8 @@ export const restorePerson = (pid: string) =>
   write({
     key: accessQuery.queryKey,
     optimistic: patchPerson(pid, { left: false }),
-    send: (idempotencyKey) => api.post(`/api/v2/access/humans/${enc(pid)}`, { left: false }, { idempotencyKey }),
+    // The answer says what came back and which plans the person must reconnect (backend/leaving.py restore).
+    send: (idempotencyKey) => api.post<{ person: string; restored?: Restored }>(`/api/v2/access/humans/${enc(pid)}`, { left: false }, { idempotencyKey }),
   });
 
 /** Remove a left person with no history, for good (owner; backend/people_remove.py). */

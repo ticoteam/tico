@@ -502,6 +502,10 @@ def check_may_add(c, settings, who_person, role, email, domains_):
 def leave(c, people, row, *, actor=H.TICO_ACTOR, settings=None):
     """Take one person off the chart: end their tokens, sessions and providers and move their reports up.
     Mutates `people` (the caller's list) and returns the person's new row."""
+    from . import leaving
+
+    # What moves, kept so Restore can move the reports back and say which plans went (backend/leaving.py).
+    kept = leaving.record(c, people, row)
     row = {**row, "hidden": True}
     # Their API tokens outlive a browser session by up to a year.
     c.execute("UPDATE human_tokens SET revoked_at=? WHERE human=? AND revoked_at IS NULL", (H.now(), row["id"]))
@@ -513,6 +517,7 @@ def leave(c, people, row, *, actor=H.TICO_ACTOR, settings=None):
     for j, other in enumerate(people):
         if other.get("reports_to") == row["id"]:
             people[j] = {**other, "reports_to": row.get("reports_to") or ""}
+    H.event(c, actor, leaving.LEFT, row["id"], kept)
     return row
 
 
@@ -584,8 +589,13 @@ def edit_person(c, actor, roster, pid, body, access, owner_email):
     admins = list(access["admins"])
     if row["email"] != old_email and old_email in admins:
         admins = [row["email"] if e == old_email else e for e in admins]
+    people = list(roster["people"])
     if body.left is False and row.get("hidden"):
+        from . import leaving
+
         row["hidden"], changed["restored"] = False, True
+        # Their reports come back, except those moved by hand since; the plans that went are named, not restored.
+        changed["back"] = leaving.restore(c, people, pid)
     if body.sign_in is not None:
         if row["email"] and row["email"] == owner_email:
             raise Problem("owner", "The owner can always sign in", 409)
@@ -613,7 +623,7 @@ def edit_person(c, actor, roster, pid, body, access, owner_email):
         row["add_people"] = None if body.add_people == "default" else bool(body.add_people)
         changed["add_people"] = body.add_people
     row = P._person(row)
-    _save_roster(c, {**roster, "people": [row if p["id"] == pid else p for p in roster["people"]]})
+    _save_roster(c, {**roster, "people": [row if p["id"] == pid else p for p in people]})
     _sync_human(c, row)
     return row, admins, changed
 
@@ -625,7 +635,7 @@ def rename_person(c, roster, pid, name):
     if not person or not name or name == person["name"]:
         return False
     row = P._person({**person, "name": name})
-    _save_roster(c, {**roster, "people": [row if p["id"] == pid else p for p in roster["people"]]})
+    _save_roster(c, {**roster, "people": [row if p["id"] == pid else p for p in people]})
     _sync_human(c, row)
     return True
 
@@ -816,7 +826,7 @@ def change_email(c, actor, roster, pid, new_email, *, now, settings, via="app"):
     if old:
         _keep_mailbox(c, person, old)
     row = P._person({**person, "email": new})
-    _save_roster(c, {**roster, "people": [row if p["id"] == pid else p for p in roster["people"]]})
+    _save_roster(c, {**roster, "people": [row if p["id"] == pid else p for p in people]})
     _sync_human(c, row)
     access = _load_json(c, ACCESS)
     if access is not None and old:

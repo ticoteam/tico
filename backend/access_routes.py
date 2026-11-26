@@ -274,6 +274,22 @@ def register_people(admin_only, app, auth, delegated_identity, mutate, propose_c
             H.event(c, who.actor, "person.account_created", pid, {})
         return {"person": pid, "email": person["email"], "password": password}
 
+    @app.get("/api/v2/humans/{pid}/leaving")
+    def person_leaving(request: Request, pid: str):
+        """What removing this person would do, changing nothing: the plans that go and the bots on each, the reports
+        that move and to whom, their open tasks and asks, their message bot and the groups they lead
+        (backend/leaving.py). Owners and admins, and an agent acting for one; Remove itself stays the owner's press."""
+        who = request.state.identity
+        admin_only(who, "sees what removing someone moves")
+        with store.read() as c:
+            roster = views.roster(c)
+            person = P.person(pid, roster)
+            if not person or person.get("hidden"):
+                raise Problem("not_found", "Person not found", 404)
+            from . import leaving
+
+            return leaving.preview(c, roster, pid)
+
     @app.post("/api/v2/access/humans/{pid}")
     @app.post("/api/v2/access/people/{pid}", deprecated=True)  # rc.1 playbooks and mail setup text
     def access_person_edit(request: Request, pid: str, body: M.AccessPersonEdit):
@@ -332,7 +348,8 @@ def register_people(admin_only, app, auth, delegated_identity, mutate, propose_c
                     settings=settings,
                 )
             H.event(c, who.actor, "person.access_edited", pid, changed)
-            return {"person": row["id"]}
+            # A restore says what came back and what the person must reconnect (backend/leaving.py).
+            return {"person": row["id"], **({"restored": changed["back"]} if "back" in changed else {})}
 
         result = mutate(request, body, work)
         with store.read() as c:

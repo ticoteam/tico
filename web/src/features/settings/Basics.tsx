@@ -22,6 +22,7 @@ import { CompanyName } from './CompanyName';
 import { AllTokens, EXPIRES } from './CompanyTokens';
 import { TicoSection } from './Desktop';
 import { NoticeSwitch } from './Notices';
+import { leavingQuery, movesAnything, otherLines, removeLabel } from './leaving';
 import { Joining, LeftPeople } from './People';
 import { ScreeningMore, SupportAccess } from './SecurityMore';
 import { Foot, Line, SwitchLine, Verb, act, useAgentFaces, useFaces } from './parts';
@@ -278,30 +279,70 @@ function PersonOpen({ p, mayEdit, youOwn, ownerName }: { p: AccessPerson; mayEdi
       )}
       {handing === 'owner' && <OwnerDialog p={p} ownerName={ownerName} onClose={() => setHanding(null)} />}
       {handing === 'email' && <EmailDialog p={p} onClose={() => setHanding(null)} />}
-      <Dialog
-        open={confirm}
-        onOpenChange={setConfirm}
-        alert
-        title={`Remove ${p.name}?`}
-        description="They can no longer sign in. Their tasks and messages stay."
-        actions={
-          <>
-            <Button variant="quiet" onClick={() => setConfirm(false)}>
-              Cancel
-            </Button>
-            <Button
-              variant="primary"
-              onClick={() => {
-                setConfirm(false);
-                void act('settings.removePerson', { person: p.id });
-              }}
-            >
-              Remove
-            </Button>
-          </>
-        }
-      />
+      {confirm && <RemoveDialog p={p} onClose={() => setConfirm(false)} />}
     </>
+  );
+}
+
+/** Remove, saying first what else it does (backend/leaving.py): the plans that go and the bots that lose their model,
+    then the reports, the waits, the message bot and the groups. A person with nothing to move sees the plain dialog. */
+function RemoveDialog({ p, onClose }: { p: AccessPerson; onClose: () => void }) {
+  const seen = useQuery(leavingQuery(p.id));
+  const v = seen.data;
+  const moves = movesAnything(v);
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => !open && onClose()}
+      alert
+      title={`Remove ${p.name}?`}
+      description={moves ? 'They can no longer sign in. This also happens:' : 'They can no longer sign in. Their tasks and messages stay.'}
+      actions={
+        <>
+          <Button variant="quiet" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            disabled={seen.isPending}
+            onClick={() => {
+              onClose();
+              void act('settings.removePerson', { person: p.id });
+            }}
+          >
+            {removeLabel(v)}
+          </Button>
+        </>
+      }
+    >
+      {v && moves && (
+        <div className="leaving" data-testid="leaving">
+          {v.plans.map((plan) => (
+            <p key={plan.id || plan.kind}>
+              <b>{plan.kind === 'pool' ? `${p.name}'s pooled plans are removed.` : `${plan.name} (${plan.kind} plan, ${p.name}'s login) is removed.`}</b>
+              {plan.bots.length > 0 && (
+                <>
+                  {' '}
+                  {plan.bots.length === 1 ? '1 bot loses its model: ' : `${plan.bots.length} bots lose their model: `}
+                  {plan.bots.map((b, i) => (
+                    <span key={b.id}>
+                      {i > 0 && ', '}
+                      <Link to="/settings/$section" params={{ section: 'agents' }} search={{ open: b.slug }} onClick={onClose}>
+                        {b.name}
+                      </Link>
+                    </span>
+                  ))}
+                  .
+                </>
+              )}
+            </p>
+          ))}
+          {otherLines(v, p.name).map((line) => (
+            <p key={line}>{line}</p>
+          ))}
+        </div>
+      )}
+    </Dialog>
   );
 }
 
