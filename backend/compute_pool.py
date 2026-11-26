@@ -551,7 +551,10 @@ def settle(c: Connection, attempt: Any) -> None:
 def return_guests(c: Connection, runner: str) -> bool:
     guests = c.execute(
         """SELECT g.bot,coalesce(shared.id,base.id,own.id),g.return_pending,g.generation FROM burst_guests g
+        -- A shared machine being deleted is no home (an HQ refusal can leave the intent with its computer still
+        -- enrolled): treat it as no shared machine, so the fallbacks below apply.
         LEFT JOIN cloud_machines m ON m.bot='_shared'
+                                  AND NOT EXISTS (SELECT 1 FROM cloud_machine_deletions d WHERE d.machine_id=m.machine_id)
         LEFT JOIN runners shared ON shared.id=m.runner_id AND m.state NOT IN ('deleted','failed')
                                 AND shared.revoked_at IS NULL AND shared.id<>g.runner_id
         -- No usable shared computer (no shared machine, or its computer is gone): the computer the guest left,

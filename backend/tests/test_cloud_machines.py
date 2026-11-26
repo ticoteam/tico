@@ -4646,3 +4646,37 @@ def test_a_shared_machine_made_again_moves_its_open_checkouts_to_the_new_compute
     assert events(cloud, "cloud_machine.checkouts_moved")[0]["target"] == CM.SHARED
     moved = json.loads(events(cloud, "cloud_machine.checkouts_moved")[0]["detail"])
     assert (moved["moved"], moved["closed"]) == (2, 1)
+
+
+def test_a_burst_return_never_goes_to_a_shared_computer_being_deleted(cloud):
+    """#3767: removing the shared machine records its deletion before HQ answers, so a refusal can leave the intent
+    with the shared computer still enrolled. A guest coming back from a burst computer then goes home to the computer
+    it left, never to the shared computer about to be deleted."""
+    from backend import compute_pool
+
+    computer = own_computer(cloud, "ops")["runner_id"]
+    shared = runner(cloud.api, label="Shared")["runner_id"]
+    burst = runner(cloud.api, label="Burst")["runner_id"]
+    with cloud.store.transaction() as c:
+        c.execute(
+            "INSERT INTO cloud_machines(bot,mode,placement,machine_id,runner_id,state) VALUES(?,?,?,?,?,?)",
+            (CM.SHARED, "cloud", "shared", "m-shared", shared, "running"),
+        )
+        CM.intend_delete(c, CM.row(c, CM.SHARED), "manual")
+        guest_on_burst(c, burst, computer)
+        assert compute_pool.return_guests(c, burst)
+        assert c.execute("SELECT runner_id FROM assignments WHERE bot='ops'").fetchone()[0] == computer
+
+
+def test_a_burst_return_waits_when_the_computer_it_left_is_the_shared_one_being_deleted(cloud):
+    """#3767: a guest that left the shared computer is not sent back to it while its deletion is pending; it waits
+    on the burst computer."""
+    from backend import compute_pool
+
+    shared = shared_for(cloud, "ops")["runner_id"]
+    burst = runner(cloud.api, label="Burst")["runner_id"]
+    with cloud.store.transaction() as c:
+        CM.intend_delete(c, CM.row(c, CM.SHARED), "manual")
+        guest_on_burst(c, burst, shared)
+        assert not compute_pool.return_guests(c, burst)
+        assert c.execute("SELECT runner_id FROM assignments WHERE bot='ops'").fetchone()[0] == burst
