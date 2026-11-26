@@ -1274,11 +1274,14 @@ def test_a_reopen_that_is_no_undo_starts_a_new_visit_and_tells_the_owner(c, stor
     assert X.wakes(c, row["id"])[-1][1] == WRITER
 
 
-def test_an_undo_past_its_window_or_of_someone_elses_close_is_a_plain_reopen(c, store):
+def test_an_undo_of_someone_elses_close_is_a_plain_reopen(c, store):
     _, row, _ = _waiting_on_ana(c, store)
     visit = E.task(c, row["id"])["visit"]["id"]
     E.move(c, row["id"], E.CLOSED, ANA, "Not needed")
     assert _undo(c, row, by=BEN)["visit"]["id"] != visit, "Ben did not close it"
+
+
+def test_an_undo_past_its_window_is_a_plain_reopen(c, store):
     _, row, _ = _waiting_on_ana(c, store)
     visit = E.task(c, row["id"])["visit"]["id"]
     E.move(c, row["id"], E.CLOSED, ANA, "Not needed")
@@ -1295,7 +1298,17 @@ def test_undoing_a_close_that_closed_a_sub_task_reopens_as_before(c, store):
     sub = X.new_task(c, ANA, "Check the importer's limits", "product", parent=row["id"])
     E.move(c, row["id"], E.CLOSED, ANA, "Not needed")
     assert E.task(c, sub["id"])["status"] == "closed"
-    assert _undo(c, row)["visit"]["id"] != visit, "what the close ended stays ended, so the visit is not the one it was"
+    E.move(c, sub["id"], E.REOPEN, ANA, "Still worth checking")  # its close stays on the record of the parent's
+    assert _undo(c, row)["visit"]["id"] != visit, "the close ended more than the visit, so the visit is not given back"
+
+
+def test_undoing_a_close_from_a_stage_that_acts_on_entering_reopens_as_before(c, store):
+    made = X.pipeline(c, "product", "Product", _stages(person=ANA), manager="bot:manager")
+    c.execute("UPDATE stages SET on_enter=? WHERE id=?", (json.dumps({"act": "github.queue"}), made["stages"]["Spec"]))
+    row = _task(c)
+    visit = E.task(c, row["id"])["visit"]["id"]
+    E.move(c, row["id"], E.CLOSED, ANA, "Not needed")
+    assert _undo(c, row)["visit"]["id"] != visit, "the close undid what entering did, so the stage is entered again"
 
 
 def test_the_move_route_takes_undo_only_with_reopen(api):
@@ -1307,8 +1320,9 @@ def test_the_move_route_takes_undo_only_with_reopen(api):
         _, row, _ = _waiting_on_ana(c, store)
         visit = E.task(c, row["id"])["visit"]["id"]
     path = f"/api/v2/tasks/{row['id']}/move"
-    closing = api.post(path, json={"to": "closed", "why": "Not needed", "undo": True}, headers=headers())
-    assert closing.status_code == 422, closing.text
+    for wrong in ({"to": "closed"}, {"to": "reopen", "to_pipeline": "product"}, {"to": "next", "let_see": [BEN]}):
+        refused = api.post(path, json={**wrong, "why": "Not needed", "undo": True}, headers=headers())
+        assert refused.status_code == 422, refused.text
     assert api.post(path, json={"to": "closed", "why": "Not needed"}, headers=headers()).status_code == 200
     undone = api.post(path, json={"to": "reopen", "why": "Undid the close", "undo": True}, headers=headers())
     assert undone.status_code == 200, undone.text

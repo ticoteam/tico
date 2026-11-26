@@ -352,6 +352,8 @@ def register(
         return checked(request, tid, body, "task_done")
 
     def move_call(c: Any, who: Any, task_id: str, body: Any, gate: Any, params: Any, ingest: Any) -> Any:
+        if body.undo and (body.to_pipeline or body.let_see or str(body.to or "").strip().lower() != "reopen"):
+            raise Problem("bad_request", "Undo takes back a close: to is reopen, alone", 422)
         if body.to_pipeline:
             if body.let_see:
                 raise Problem(
@@ -377,8 +379,6 @@ def register(
 
             H.task_let_see(c, who.actor, task_id, body.let_see, version, mover=mover(c, who) or None, check=check)
             return
-        if body.undo and str(body.to).strip().lower() != "reopen":
-            raise Problem("bad_request", "Undo takes back a close: to is reopen", 422)
         H.task_move(
             c, who.actor, task_id, body.to, why, version, mover=mover(c, who) or None, undo_close=bool(body.undo)
         )
