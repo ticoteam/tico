@@ -1,3 +1,4 @@
+# pyright: strict
 """Pipeline and stage notes: what the team learned on a pipeline or one of its stages, each with what we tried, when and
 why, served to the bot doing the work in its first turn there (runner-rs/src/prompt.rs, the Notes parts).
 
