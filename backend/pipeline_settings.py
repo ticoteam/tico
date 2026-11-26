@@ -161,7 +161,18 @@ def _people_only(requirement: Row) -> Row:
 # A page with no blocking findings has nothing to place: the judge was unsure of ten such pages in one week (Nov 16 to
 # 23), each of which the manager OK'd unchanged. It meets the check when each review names the commit and says what
 # it read; its non-blocking notes need no file:line.
+# Task #3970 (Chris, Nov 26, on #2913 and #3588): the second review needs only a different maker from the model that
+# built the change, and the page names that model; the text Tico Team's Engineering Review stage runs, word for word.
+# What a page with no blocking findings needs is asked in the findings part (pipeline_judges.CHECKS["two_reviews"]).
 REVIEW_RUBRIC = (
+    "Two reviews of the newest commit of every linked PR, each naming that commit and its model, and the page names "
+    "the model that built the change: the second review's model is by a different maker than the builder's (it may "
+    "share a maker with the first review), and say what each checked. Give each real defect its own finding with "
+    "file:line, severity, and why it matters; a finding on the PR description may cite the file:line of the guideline "
+    "it breaks. Skip style nits and diff summaries. Say when there are no findings."
+)
+# The combined Review rubric before the builder rule: the two reviews' models differ (EARLIER, `_follow`).
+_REVIEW_RUBRIC_BEFORE_BUILDER = (
     "Two reviews of the newest commit of every linked PR, each naming that commit and its model: use different models "
     "and say what each checked. Give each real defect its own finding with file:line, severity, and why it matters; "
     "a finding on the PR description may cite the file:line of the guideline it breaks. Skip style nits and diff "
@@ -182,7 +193,12 @@ _REVIEW_RUBRIC_BEFORE_DESCRIPTION = (
     "Skip style nits and diff summaries. Say when there are no findings."
 )
 # Every text the combined Review rubric has shipped with: asked as pipeline_judges.CHECKS["two_reviews"].
-COMBINED_REVIEW_RUBRICS = (REVIEW_RUBRIC, _REVIEW_RUBRIC_BEFORE_NO_BLOCKERS, _REVIEW_RUBRIC_BEFORE_DESCRIPTION)
+COMBINED_REVIEW_RUBRICS = (
+    REVIEW_RUBRIC,
+    _REVIEW_RUBRIC_BEFORE_BUILDER,
+    _REVIEW_RUBRIC_BEFORE_NO_BLOCKERS,
+    _REVIEW_RUBRIC_BEFORE_DESCRIPTION,
+)
 # The single-review line the presets shipped before the one Review stage (still recognised, EARLIER).
 # Judged from the page alone (Jev is shown the linked PRs' newest commits beside it), and true of a good review of a
 # correct change: one with nothing to fix says so. "What is wrong" alone made a clean review read as incomplete, and
@@ -302,7 +318,8 @@ def _review(sid: str) -> Row:
         "Review",
         "Review the newest commit of every linked PR. File a subtask here with tico task child <id> --check-model "
         "<runtime>:<model> --role review --title \"Review: second opinion\", with the PRs and commits in --body. "
-        "Choose a different model and attach both reviews in one Review page.",
+        "Choose a model by a different maker than the model that built the change, name the builder's model, and "
+        "attach both reviews in one Review page.",
         120,
         [_page("Review page", REVIEW_RUBRIC, at_head=True), {"kind": "linked_done"}],
     )
@@ -571,6 +588,12 @@ _FIXES_2_RUBRICS = (
     "to OK it without opening the code.",
     _FIXES_2_RUBRIC_QA,
 )
+# The Review stage's purpose before the builder rule (task #3970): a second review by any different model.
+_REVIEW_PURPOSE_BEFORE_BUILDER = (
+    "Review the newest commit of every linked PR. File a subtask here with tico task child <id> --check-model "
+    "<runtime>:<model> --role review --title \"Review: second opinion\", with the PRs and commits in --body. "
+    "Choose a different model and attach both reviews in one Review page."
+)
 _REVIEW_PURPOSE_BEFORE_BODY = (
     "Review the newest commit of every linked PR. File a subtask here with tico task child <id> --check-model "
     "<runtime>:<model> --role review --title \"Review: second opinion\", with the PRs and commits in its message. "
@@ -586,14 +609,24 @@ EARLIER: dict[str, tuple[str, ...]] = {
         _REVIEW_RC3,
         _REVIEW_RUBRIC_BEFORE_DESCRIPTION,
         _REVIEW_RUBRIC_BEFORE_NO_BLOCKERS,
+        _REVIEW_RUBRIC_BEFORE_BUILDER,
     ),
     "product-review-1/page/rubric": (
         LEGACY_REVIEW_RUBRIC,
         _REVIEW_RUBRIC_BEFORE_DESCRIPTION,
         _REVIEW_RUBRIC_BEFORE_NO_BLOCKERS,
+        _REVIEW_RUBRIC_BEFORE_BUILDER,
     ),
-    "engineering-review-1/purpose": ("Review the newest commit and attach a Review page.", _REVIEW_PURPOSE_BEFORE_BODY),
-    "product-review-1/purpose": ("Review the newest commit and attach a Review page.", _REVIEW_PURPOSE_BEFORE_BODY),
+    "engineering-review-1/purpose": (
+        "Review the newest commit and attach a Review page.",
+        _REVIEW_PURPOSE_BEFORE_BODY,
+        _REVIEW_PURPOSE_BEFORE_BUILDER,
+    ),
+    "product-review-1/purpose": (
+        "Review the newest commit and attach a Review page.",
+        _REVIEW_PURPOSE_BEFORE_BODY,
+        _REVIEW_PURPOSE_BEFORE_BUILDER,
+    ),
     "engineering-fixes-2/purpose": (
         "Fix what the second review found and attach a Review page that shows what was built.",
         "Fix what the second review found and attach a Review page that shows what was built, the checks at the "

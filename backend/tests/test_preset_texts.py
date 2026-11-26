@@ -256,7 +256,7 @@ def test_an_unedited_combined_review_rubric_follows_to_the_one_a_page_with_no_bl
     """A page with no blocking findings meets the check when each review names the commit and says what it read. A
     Review page on either earlier combined rubric moves to it; an edited one stays."""
     c = one_review
-    assert "no blocking findings" in PS.REVIEW_RUBRIC
+    assert "no blocking findings" in PS._REVIEW_RUBRIC_BEFORE_BUILDER
     for before in (PS._REVIEW_RUBRIC_BEFORE_NO_BLOCKERS, PS._REVIEW_RUBRIC_BEFORE_DESCRIPTION):
         assert before != PS.REVIEW_RUBRIC
         _rubric(c, "engineering-review-1", before)
@@ -266,6 +266,37 @@ def test_an_unedited_combined_review_rubric_follows_to_the_one_a_page_with_no_bl
     _rubric(c, "engineering-review-1", own)
     PS.ensure_presets(c)
     assert _page(PS.read(c, "engineering"), "engineering-review-1")["settings"]["rubric"] == own
+
+
+def test_an_unedited_review_rubric_follows_to_the_one_with_the_builder_rule(one_review):
+    """Task #3970: Tico's Review bar names the model that built the change and asks for a second review by a different
+    maker. A Review page still on Tico's text before it moves to it, so its bar says what the check asks; an edited one
+    stays."""
+    c = one_review
+    before = PS._REVIEW_RUBRIC_BEFORE_BUILDER
+    _rubric(c, "engineering-review-1", before)
+    PS.ensure_presets(c)
+    assert _page(PS.read(c, "engineering"), "engineering-review-1")["settings"]["rubric"] == PS.REVIEW_RUBRIC
+    assert "model that built the change" in PS.REVIEW_RUBRIC
+    own = "Our own check: " + before
+    _rubric(c, "engineering-review-1", own)
+    PS.ensure_presets(c)
+    assert _page(PS.read(c, "engineering"), "engineering-review-1")["settings"]["rubric"] == own
+
+
+def test_an_unedited_review_purpose_follows_to_the_one_that_asks_for_a_different_maker_than_the_builders(one_review):
+    """Review of #5395: a Review stage that follows to the builder rule is also told to pick the second review's model by
+    a different maker than the builder's and to name the builder, so a page that obeys its purpose meets its bar. An
+    edited purpose stays."""
+    c = one_review
+    before = PS._REVIEW_PURPOSE_BEFORE_BUILDER
+    _purpose(c, "engineering-review-1", before)
+    PS.ensure_presets(c)
+    now = _stage(PS.read(c, "engineering"), "engineering-review-1")["purpose"]
+    assert now != before and "different maker" in now and "builder's model" in now, now
+    _purpose(c, "engineering-review-1", "Our own: " + before)
+    PS.ensure_presets(c)
+    assert _stage(PS.read(c, "engineering"), "engineering-review-1")["purpose"] == "Our own: " + before
 
 
 # ----------------------------------------------------------------------------- QA, added to a company made before it
