@@ -1,0 +1,5 @@
+{
+  "backend/inbound.py": {
+    "core-imports-app": 3
+  }
+}

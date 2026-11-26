@@ -1,0 +1,5 @@
+{
+  "backend/gcal_live.py": {
+    "core-imports-app": 1
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "backend/maintenance_steps/clean_up.py": {
+    "core-imports-app": 1
+  }
+}

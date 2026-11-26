@@ -1,0 +1,5 @@
+{
+  "clients/botcopy.py": {
+    "no-runner-support-import": 1
+  }
+}

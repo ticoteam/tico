@@ -1,0 +1,5 @@
+{
+  "backend/thread_api.py": {
+    "core-imports-app": 1
+  }
+}

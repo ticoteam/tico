@@ -1,0 +1,5 @@
+{
+  "backend/outside_intake.py": {
+    "core-imports-app": 2
+  }
+}

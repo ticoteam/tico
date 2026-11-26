@@ -2,7 +2,7 @@
 
 Tico is a source-available operating system for a team of humans and bots (PolyForm Perimeter 1.0.1): a FastAPI
 server in `backend/`, the web app in `web/` (React, built by Vite into build/web and served at `/`), the runner in `runner-rs/` (Python helpers in `runner_support/`), the `tico`
-CLI and MCP tool table in `clients/`, and a Tauri desktop shell in `app/`. `README.md` says how to
+CLI and MCP tool table in `clients/`, and the Electron desktop shell in `desktop/`. `README.md` says how to
 run it and `docs/how-it-works.md` describes the system.
 
 ## Work queue
@@ -107,7 +107,7 @@ reviewed work through the merge queue.
 ## Hit every surface
 The commonest defect in Tico is a change that works where it was tested and is missing everywhere else. Before
 calling a change done, walk this list and say in the PR which entries applied:
-- **Clients**: the web app at desktop and phone widths, the Tauri app, Slack, the `tico` CLI and the MCP tool table
+- **Clients**: the web app at desktop and phone widths, the Electron desktop app, Slack, the `tico` CLI and the MCP tool table
   (`clients/hubtools.py`), API v2 and its spec (`backend/openapi_v2.py`).
 - **Runners**: the Rust runner, on a Mac and in the Docker image.
 - **Harnesses**: every harness, through the capabilities in its `runner-rs/harnesses/*.toml`, never by comparing names.
@@ -129,6 +129,20 @@ calling a change done, walk this list and say in the PR which entries applied:
 
 When the server is slow or stuck, read `python -m backend.flight summary --since 30m` before guessing: it reads the
 flight file, not the database.
+
+## Refactor rules
+- `desktop/` (Electron) is the single desktop shell.
+- New routes use `routing.router()` and `Depends(get_deps)` once they land; no new `install(app, ...)` closures.
+- New background work registers in the lifespan worker list; no new ad-hoc `asyncio.create_task` loops.
+- `runner_support/` is frozen: no new file in it outside its tests, and no new import of it from `backend/` or
+  `clients/`. Prefer `runner-rs`.
+- Core never imports a Non-Core module (Finance, Growth, Market, Calendar, Calls, Meetings, Mail, Letters, Slack,
+  Granola, the company page, lenses); `finance.actions` is the one bridge.
+- Never add `flight_*` tables to `hub.db`.
+
+`scripts/landmines.py` enforces the `runner_support/` and Core rules (`skills/honest-code/LESSONS.md` L35 to L37). The
+new-file rule needs a base: run `python3 scripts/landmines.py --check --base origin/main` (`scripts/lint.sh` passes
+`LINT_BASE_REF`, as CI does).
 
 ## Conventions
 - Create persistent schema changes with `python3 scripts/new_migration.py name` (`--py` for `up(conn)`):

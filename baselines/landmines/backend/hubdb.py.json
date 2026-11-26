@@ -1,0 +1,5 @@
+{
+  "backend/hubdb.py": {
+    "core-imports-app": 3
+  }
+}

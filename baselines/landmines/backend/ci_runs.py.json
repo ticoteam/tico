@@ -1,0 +1,5 @@
+{
+  "backend/ci_runs.py": {
+    "core-imports-app": 1
+  }
+}

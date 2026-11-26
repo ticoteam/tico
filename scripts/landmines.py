@@ -16,6 +16,11 @@ baselines/ruff (scripts/baseline_files.py), and the count of each (file, rule) m
 Python files are read with tokenize, so a pattern inside a string or a comment is not a hit (rules that need the raw
 line say so). There is no inline opt-out: a line a rule should not match is fixed in the rule, with a test case.
 A rule the --base ref's copy of this script does not have yet may bring its own baseline: that is how a rule starts.
+
+Three rules hold the architecture rather than the tests (CLAUDE.md, "Refactor rules"): Core code in backend/ imports no
+Non-Core module, backend/ and clients/ import no more runner_support, and runner_support/ gets no new file. The import
+rules read import statements token by token (one hit per Non-Core module a statement imports). The new-file rule compares
+the tracked paths with the --base ref's tree, so it runs only with --base, as CI runs it.
 """
 
 import argparse
@@ -69,6 +74,134 @@ def big_t(match):
     return int(match.group(1).replace("_", "")) >= 40_000
 
 
+# Product areas outside Tico's Core. Core backend code may not import them; they may import Core and each other. Matched
+# against the first name under backend/ (a module or a package). finance.actions is the one bridge Core may import: the
+# agent budget's hold and settle on a run (execution.finance_run_hold) and Finance's setup and grants go through it.
+NON_CORE = re.compile(
+    r"finance\w*|bookkeeper|bills_address|growth\w*|market\w*|company_page|lenses|calendar_\w+|call\w*"
+    r"|live_meetings|meeting\w*|mail\w*|email_\w+|letters|postal_mail|slack_\w+|granola_mcp"
+)
+CORE_BRIDGE = ("finance", "actions")
+
+
+def py_prod(path):
+    """Shipped Python: not under a tests/ folder and not a conftest.py. A module named test_*.py elsewhere ships
+    (backend/test_receipts.py)."""
+    return path.endswith(".py") and "/tests/" not in f"/{path}" and path.rsplit("/", 1)[-1] != "conftest.py"
+
+
+def core_backend(path):
+    """Core's own backend code: a backend/ Python file, not a test, outside every Non-Core module and package."""
+    parts = path.split("/")
+    return (
+        len(parts) >= 2
+        and parts[0] == "backend"
+        and py_prod(path)
+        and not NON_CORE.fullmatch(parts[1].removesuffix(".py"))
+    )
+
+
+def runner_support_source(path):
+    return path.startswith("runner_support/") and "/tests/" not in path and not py_test(path)
+
+
+def import_statements(text):
+    """(statement index, line number, dotted target) for each name a Python file imports, read token by token so a string,
+    a comment and a multi-line `from . import (...)` are read as Python reads them. A relative target keeps its leading
+    dots ("..mail" from `from .. import mail`); resolve() makes it absolute."""
+    out = []
+    try:
+        tokens = [
+            t
+            for t in tokenize.generate_tokens(io.StringIO(text).readline)
+            if t.type not in (tokenize.NL, tokenize.COMMENT, tokenize.INDENT, tokenize.DEDENT)
+        ]
+    except (tokenize.TokenError, SyntaxError, IndentationError):
+        return out
+    statement, index = [], 0
+    for tok in [*tokens, None]:
+        if (
+            tok is None
+            or tok.type in (tokenize.NEWLINE, tokenize.ENDMARKER)
+            or (tok.type == tokenize.OP and tok.string in ";:")
+        ):
+            if statement and statement[0].type == tokenize.NAME and statement[0].string in ("import", "from"):
+                out += [(index, statement[0].start[0], target) for target in _targets(statement)]
+            statement, index = [], index + 1
+            continue
+        statement.append(tok)
+    return out
+
+
+def _dotted(words):
+    """Split `words` (strings of one import clause) into dotted names separated by commas, dropping `as x` aliases."""
+    names, current, skip = [], "", False
+    for word in [*words, ","]:
+        if word == ",":
+            if current:
+                names.append(current)
+            current, skip = "", False
+        elif word == "as":
+            skip = True
+        elif not skip and word not in "()":
+            current += word
+    return names
+
+
+def _targets(statement):
+    words = [t.string for t in statement]
+    if words[0] == "import":
+        return _dotted(words[1:])
+    if "import" not in words:
+        return []
+    split = words.index("import")
+    module = "".join(words[1:split])
+    names = _dotted(words[split + 1 :])
+    if names == ["*"] or not names:
+        return [module]
+    joiner = "" if module.endswith(".") else "."
+    return [f"{module}{joiner}{name}" for name in names]
+
+
+def resolve(path, target):
+    """The absolute dotted name of `target`, imported by the file at `path` (`..mail` in backend/entities/x.py is
+    backend.mail)."""
+    level = len(target) - len(target.lstrip("."))
+    if not level:
+        return target
+    package = path.split("/")[:-1]
+    base = package[: len(package) - (level - 1)] if level > 1 else package
+    rest = target[level:]
+    return ".".join([*base, rest] if rest else base)
+
+
+def imports_matching(path, text, wanted):
+    """The line numbers of `path`'s import statements, one per distinct module `wanted` maps an absolute target to."""
+    lines, seen = [], set()
+    for index, number, target in import_statements(text):
+        key = wanted(resolve(path, target).split("."))
+        if key is not None and (index, key) not in seen:
+            seen.add((index, key))
+            lines.append(number)
+    return lines
+
+
+def non_core_module(parts):
+    if len(parts) < 2 or parts[0] != "backend" or not NON_CORE.fullmatch(parts[1]):
+        return None
+    if tuple(parts[1:3]) == CORE_BRIDGE:
+        return None
+    return parts[1]
+
+
+def core_imports_app(path, text):
+    return imports_matching(path, text, non_core_module)
+
+
+def runner_support_imports(path, text):
+    return imports_matching(path, text, lambda parts: parts[0] if parts[0] == "runner_support" else None)
+
+
 @dataclass
 class Rule:
     id: str
@@ -80,6 +213,8 @@ class Rule:
     view: str = "code"  # "code": strings and comments blanked (Python); "raw": the line as written
     keep: object = None  # match -> bool, to drop a match the pattern cannot exclude
     skip: list = field(default_factory=list)  # patterns that make a line not a hit
+    find: object = None  # (path, text) -> [line number, ...]: the hits when a pattern per line cannot find them
+    new_file: bool = False  # a hit is a file in scope that the --base ref's tree does not have (new_files)
 
     def text(self):
         see = f" See {LESSONS}#{self.lesson}." if self.lesson else ""
@@ -183,6 +318,37 @@ RULES = [
         "def _sleep(seconds): time.sleep(seconds).",
         "L31",
     ),
+    Rule(
+        "no-new-runner-support-module",
+        "ban",
+        runner_support_source,
+        [],
+        "runner_support/ is frozen: no new file goes in it (tests excepted). Build the runner side in runner-rs; a "
+        "server or CLI helper goes in backend/ or clients/.",
+        "L35",
+        new_file=True,
+    ),
+    Rule(
+        "no-runner-support-import",
+        "ratchet",
+        lambda path: path.startswith(("backend/", "clients/")) and py_prod(path),
+        [],
+        "backend/ and clients/ import runner_support in no new place: it is frozen and its jobs move to runner-rs. Ask "
+        "the hub's API for what the runner knows, or move the helper you need into backend/ or clients/.",
+        "L36",
+        find=runner_support_imports,
+    ),
+    Rule(
+        "core-imports-app",
+        "ratchet",
+        core_backend,
+        [],
+        "Core imports a Non-Core module (Finance, Growth, Market, Calendar, Calls, Meetings, Mail, Letters, Slack, "
+        "Granola, the company page, lenses). Core never imports Non-Core: the module registers itself with Core "
+        "(a route, a worker, an event handler) or Core calls it through finance.actions, the one bridge.",
+        "L37",
+        find=core_imports_app,
+    ),
 ]
 BY_ID = {rule.id: rule for rule in RULES}
 
@@ -223,7 +389,7 @@ def hits_in(path, text, rules):
     views = {}
     found = collections.defaultdict(list)
     for rule in rules:
-        if not rule.scope(path):
+        if rule.new_file or not rule.scope(path):
             continue
         if rule.view == "raw":
             lines = views.setdefault("raw", script_lines(text) if not path.endswith(".py") else _no_comment_lines(raw))
@@ -231,6 +397,10 @@ def hits_in(path, text, rules):
             lines = views.setdefault("code", code_lines(text))
         else:
             lines = views.setdefault("script", script_lines(text))
+        if rule.find is not None:
+            for number in rule.find(path, text):
+                found[rule.id].append((number, raw[number - 1].strip() if number <= len(raw) else ""))
+            continue
         for number, line in enumerate(lines, 1):
             if any(pattern.search(line) for pattern in rule.skip):
                 continue
@@ -245,16 +415,37 @@ def _no_comment_lines(raw):
     return ["" if line.lstrip().startswith("#") else line for line in raw]
 
 
-def tracked_files():
-    done = subprocess.run(["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, check=True)
+def tracked_files(root=ROOT):
+    done = subprocess.run(["git", "ls-files", "-z"], cwd=root, capture_output=True, check=True)
     return sorted(name for name in done.stdout.decode().split("\0") if name)
+
+
+def new_files(root, base, rules=RULES):
+    """{path: {rule id: [(1, ...)]}} for each tracked file a new-file rule takes that the branch added: one the tree at
+    the merge base of HEAD and `base` does not have (or `base` itself when there is none), so a file `base` deleted
+    after the branch point is not new."""
+    rules = [rule for rule in rules if rule.new_file]
+    if not rules:
+        return {}
+    fork = baseline_files.git(root, "merge-base", "HEAD", base)
+    tree = fork.stdout.strip() if fork.returncode == 0 and fork.stdout.strip() else base
+    listed = baseline_files.git(root, "ls-tree", "-r", "-z", "--name-only", tree, text=False)
+    if listed.returncode != 0:
+        raise SystemExit(f"landmines: cannot list the tree at {base}: {listed.stderr.decode().strip()}")
+    before = set(listed.stdout.decode().split("\0"))
+    found = {}
+    for path in tracked_files(root):
+        for rule in rules:
+            if path not in before and rule.scope(path):
+                found.setdefault(path, {})[rule.id] = [(1, f"{path} is new (not in {base})")]
+    return found
 
 
 def scan(rules=RULES):
     """{path: {rule id: [(line number, line), ...]}} over every tracked file some rule takes."""
     result = {}
     for path in tracked_files():
-        if path in SELF or not any(rule.scope(path) for rule in rules):
+        if path in SELF or not any(rule.scope(path) for rule in rules if not rule.new_file):
             continue
         file = ROOT / path
         if not file.is_file():
@@ -451,6 +642,9 @@ def check_lessons():
 
 def check(base):
     found = scan()
+    if base:
+        for path, rules in new_files(ROOT, base).items():
+            found.setdefault(path, {}).update(rules)
     baseline = read_baseline()
     problems = compare(found, baseline)
     if base:

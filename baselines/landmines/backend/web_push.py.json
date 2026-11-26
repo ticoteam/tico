@@ -1,0 +1,5 @@
+{
+  "backend/web_push.py": {
+    "core-imports-app": 1
+  }
+}

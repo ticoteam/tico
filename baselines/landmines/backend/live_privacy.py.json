@@ -1,0 +1,5 @@
+{
+  "backend/live_privacy.py": {
+    "core-imports-app": 1
+  }
+}

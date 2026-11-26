@@ -1,0 +1,5 @@
+{
+  "backend/outbound_slack.py": {
+    "core-imports-app": 1
+  }
+}
