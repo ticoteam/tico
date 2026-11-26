@@ -1969,7 +1969,8 @@ BRIEF_FIELDS = (
 
 def _briefs(c, auth, who, ids, visible, viewer):
     """The brief task (docs/dev/pipelines-v3-cutover.md, "The task as JSON") of each id, read together, its turn as
-    `viewer` sees it (task_reads.brief)."""
+    `viewer` sees it (task_reads.brief), with each task's Directory link (`entity_id`): needs_items takes out, for
+    each caller, the Help links that caller may not see (_hide_help_links)."""
     from . import task_reads
 
     if not ids:
@@ -1977,12 +1978,23 @@ def _briefs(c, auth, who, ids, visible, viewer):
     rows = H.tasks(c, ids=sorted(ids), limit=None, order="finished", visible=visible)
     task_reads.brief(c, rows, visible, viewer)
     briefs = {row["id"]: {k: row.get(k) for k in BRIEF_FIELDS} for row in rows}
-    linked = {row["id"]: row["entity_id"] for row in rows if row.get("entity_id")}
-    hidden = task_reads.hidden_help_links(c, auth, who, linked)
-    for task_id, entity_id in linked.items():
-        if task_id not in hidden:
-            briefs[task_id]["entity_id"] = entity_id
+    for row in rows:
+        if row.get("entity_id"):
+            briefs[row["id"]]["entity_id"] = row["entity_id"]
     return briefs
+
+
+def _hide_help_links(c, auth, who, items):
+    """`items` without the Directory link of each Help task whose record `who` may not see now. Read for each caller,
+    never kept in a shared build: a record's sources and readers move no part of the share's change mark."""
+    from . import task_reads
+
+    linked = {task["id"]: task["entity_id"] for item in items if (task := item.get("task")) and task.get("entity_id")}
+    hidden = task_reads.hidden_help_links(c, auth, who, linked)
+    for item in items:
+        if (task := item.get("task")) and task.get("id") in hidden:
+            task.pop("entity_id", None)
+    return items
 
 
 def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
@@ -1999,7 +2011,8 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
     eight requests at once. A shared build is the whole list, which a `count_only` caller counts as it counts its own.
     The requests (access, key, key_drop: `request_items`) are read for each caller and never shared: who may settle
     them follows the credential administrators in the server's settings and the tools' and keys' rows, none of which
-    moves the share's change mark, so a kept list would list a request its reader just lost."""
+    moves the share's change mark, so a kept list would list a request its reader just lost. So is each Help task's
+    Directory link (_hide_help_links)."""
     from . import ask_snoozes, needs_cache, needs_share
 
     if not H.is_human(who.actor):
@@ -2012,6 +2025,7 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
         alone=lambda: _needs_items(c, auth, who, count_only, snoozed),
         wakes=lambda: ask_snoozes.next_end(c, who),
     )
+    items = _hide_help_links(c, auth, who, items)
     if snoozed == "only":
         return items
     # Sorted again with the requests in: the same order as one sort over the whole list (a stable sort).
