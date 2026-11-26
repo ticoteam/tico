@@ -253,3 +253,32 @@ def test_two_apps_each_answer_from_their_own_store(tmp_path, api_database, monke
     finally:
         for b in built:
             b.close()
+
+
+def test_report_order_writes_are_registered_before_the_org_rule_seal(tmp_path, api_database, monkeypatch):
+    """org_rule_check.seal gives the built app every write registered while it was built; a route added after it
+    could not be sent from a hold. Both report order routes are on the app when the seal runs, and the sealed tables
+    are the whole of what the modules registered. Report order registers no replay of its own, so a held order is
+    refused "can't be sent from here", as on main."""
+    from backend import org_rule_check
+    from backend.tests.helpers.api_app import api_client
+
+    at_seal = []
+    sealed = org_rule_check.seal
+
+    def spy(app):
+        at_seal.extend((r.path, m) for r in app.routes if isinstance(r, APIRoute) for m in r.methods)
+        sealed(app)
+
+    monkeypatch.setattr(org_rule_check, "seal", spy)
+    (tmp_path / "app").mkdir()
+    built = api_client(tmp_path / "app", api_database)
+    client = next(built)
+    try:
+        assert (ORDER, "GET") in at_seal and (ORDER, "PUT") in at_seal
+        table, prepare, audience = client.app.state.rule_tables
+        assert set(table) == set(org_rule_check.REPLAY) and set(prepare) == set(org_rule_check.PREPARE)
+        assert set(audience) == set(org_rule_check.AUDIENCE)
+        assert not any("org/order" in str(op) or "order_set" in str(op) for op in table)
+    finally:
+        built.close()
