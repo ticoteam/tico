@@ -549,7 +549,12 @@ jobs:
           print("\n".join(sorted(set(os.listdir(f"{web}/assets")) - set(carried))))'
           }
           new="ghcr.io/ticoteam/tico@$(cat "$d/tico-amd64")"
-          missing="$(comm -23 <(own "ghcr.io/ticoteam/tico:$PREVIOUS_RELEASE") <(docker run --rm --entrypoint ls "$new" /opt/tico/build/web/assets | sort))"
+          # Listed to files first: a failed listing stops the step instead of comparing nothing.
+          own "ghcr.io/ticoteam/tico:$PREVIOUS_RELEASE" > "$RUNNER_TEMP/previous-own" || { echo "::error::Could not list the page files of $PREVIOUS_RELEASE"; exit 1; }
+          docker run --rm --entrypoint ls "$new" /opt/tico/build/web/assets > "$RUNNER_TEMP/new-assets" || { echo "::error::Could not list the server image's page files"; exit 1; }
+          [ -s "$RUNNER_TEMP/previous-own" ] || { echo "::error::$PREVIOUS_RELEASE lists no page files of its own"; exit 1; }
+          sort -o "$RUNNER_TEMP/new-assets" "$RUNNER_TEMP/new-assets"
+          missing="$(comm -23 "$RUNNER_TEMP/previous-own" "$RUNNER_TEMP/new-assets")"
           [ -z "$missing" ] || { echo "::error::Page files of $PREVIOUS_RELEASE missing from the server image (was PREVIOUS_RELEASE passed to its build?): $missing"; exit 1; }
       - name: Write the python part's junit report (xunit1), for the shard timings
         if: matrix.part == 'python'
