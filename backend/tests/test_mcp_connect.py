@@ -350,6 +350,9 @@ def test_an_administrator_marks_an_unhinted_read_only_reads_and_a_read_bot_calls
     items, servers = runtime(api, run(api))
     token = next(i["value"] for i in items if i["env"] == "ACME_ERRORS_MCP_TOKEN")
     assert mcp_call(api, servers[0], token, "tools/call", {"name": "count_errors", "arguments": {}}).status_code == 200
+    # A mark counts only at the tool's exact MCP address: the same call sent elsewhere on its host is refused at Read.
+    elsewhere = servers[0] | {"url": servers[0]["url"].rstrip("/") + "/other"}
+    assert mcp_call(api, elsewhere, token, "tools/call", {"name": "count_errors", "arguments": {}}).status_code == 403
     r = mcp_call(api, servers[0], token, "tools/call", {"name": "resolve_error", "arguments": {}})
     assert r.status_code == 403 and r.json()["error"]["detail"].endswith(
         "is Read, and the MCP tool resolve_error is not marked read-only by its server. If it only reads, an "

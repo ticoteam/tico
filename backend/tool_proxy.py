@@ -664,17 +664,22 @@ def install(app, store):
         # What the gate takes of that parse is `gate_calls`, below.
         small = total <= rule_links.MAX_JUDGED
         calls = rpc_calls(b''.join(chunks)) if method == 'POST' and (small or ready['reads_only']) else None
+        url = tool['base_url'].rstrip('/') + '/' + rest.lstrip('/')
+        query = outgoing_query(query, tool, key, auth['query'] if auth else None)
+        url += ('?' + query) if query else ''
+        # The gate's MCP read exemption, and the read-only hints it trusts, need the final address (the key's own query
+        # parameters included) to be exactly the tool's MCP address.
+        mcp = rule_links.mcp_endpoint(tool, url)
+        # An administrator's Only reads marks count as reads only there, at Read and at the gate alike.
+        marked = ready['marked'] if mcp else frozenset()
         if ready['reads_only'] and method == 'POST':
             # A POST passes at Read only as MCP calls that only read.
-            write = mcp_write(tool_id, calls, marked=ready['marked']) if calls is not None else 'not MCP'
+            write = mcp_write(tool_id, calls, marked=marked) if calls is not None else 'not MCP'
             if write:
                 detail = read_only_detail(ready['who'], ready['name'], '' if calls is None else write)
                 await log(403, 'refused', detail)
                 return refused(403, 'forbidden', detail)
         listing = bool(calls) and any(m == 'tools/list' for m, _ in calls)
-        url = tool['base_url'].rstrip('/') + '/' + rest.lstrip('/')
-        query = outgoing_query(query, tool, key, auth['query'] if auth else None)
-        url += ('?' + query) if query else ''
         if method != 'GET' and tool.get('record_owner'):
             from . import outbound_sms
 
@@ -682,14 +687,9 @@ def install(app, store):
                 detail = outbound_sms.SMS_PROXY_REFUSAL
                 await log(403, 'refused', detail)
                 return refused(403, 'outbound_required', detail)
-        # The gate's MCP read exemption, and the read-only hints it trusts, need the final address (the key's own query
-        # parameters included) to be exactly the tool's MCP address.
-        mcp = rule_links.mcp_endpoint(tool, url)
         # The gate's hints belong to this MCP address of this tool as made: a tool made again under the same id starts
         # with none.
         hinted = (tool_id, tool.get('mcp_url') or '', tool.get('created_at') or '')
-        # An administrator's Only reads marks count as reads for the gate only there too, as the vendor's hints do.
-        marked = got['marked'] if mcp else frozenset()
         # The gate reads a parse up to 1 MB, and at the tool's MCP address Read authorization's parse whatever its size;
         # a large POST anywhere else keeps the name-only check.
         gate_calls = calls if small or mcp else None
