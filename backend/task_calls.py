@@ -289,9 +289,11 @@ def task_move(
     seen_version: int | str | None = None,
     *,
     mover: bool | None = None,
+    undo_close: bool = False,
 ) -> Row:
     """Move a task: forward, push past, back, done, close or reopen. `to` is a stage id or name, or NEXT, DONE, CLOSED
-    or REOPEN. A bot does not reopen a task a person closed."""
+    or REOPEN. A bot does not reopen a task a person closed. `undo_close` on a reopen: the Undo of the caller's own
+    close a moment ago (task_engine.move)."""
     from . import task_engine as E
 
     H = _h()
@@ -306,7 +308,7 @@ def task_move(
             task_id,
         )
     with task_effects.because(actor):
-        return E.move(conn, task_id, str(to), actor, why, seen_version)
+        return E.move(conn, task_id, str(to), actor, why, seen_version, undo_close=undo_close)
 
 
 @_task_write()

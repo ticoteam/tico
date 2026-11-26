@@ -209,7 +209,7 @@ export function Answer({ t, r, onAsking, hold }: AnswerProps) {
       name,
       action: {
         label: 'Undo',
-        run: () => void run('task.move', { task: t.id, to: 'reopen', why: 'Undid the close' }, { via: 'click' }).then((u) => (u.ok ? undefined : toast(failedToast(u)))),
+        run: () => void run('task.move', { task: t.id, to: 'reopen', why: 'Undid the close', undo: true }, { via: 'click' }).then((u) => (u.ok ? undefined : toast(failedToast(u)))),
       },
     });
     setOpen(null);

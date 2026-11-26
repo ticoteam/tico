@@ -1056,7 +1056,7 @@ describe('Close and Snooze beside Approve', () => {
     expect(within(box).getAllByRole('button').filter((b) => b.classList.contains('btn-fill')).map((b) => b.textContent)).toEqual(['Approve']);
   });
 
-  it('Close with an empty note closes the task, answers nothing and offers Undo, which reopens it @approvals', async () => {
+  it('Close with an empty note closes the task, answers nothing and offers Undo, which gives back the visit it closed @approvals', async () => {
     shown = specTask();
     reply = (url, method) => (method === 'POST' && url.endsWith('/move') ? { body: { task: specTask({ status: sent.at(-1)?.body.to === 'reopen' ? 'open' : 'closed' }) } } : quietReads(url));
     show(<TaskPage task="12" />, '/tasks/p1/12');
@@ -1068,7 +1068,7 @@ describe('Close and Snooze beside Approve', () => {
     // no send-back: the owner is not asked to rewrite it
     expect(sent.some((x) => x.url.includes('/asks/'))).toBe(false);
     fireEvent.click(await screen.findByRole('button', { name: 'Undo' }));
-    await waitFor(() => expect(sent.at(-1)?.body).toMatchObject({ to: 'reopen' }));
+    await waitFor(() => expect(sent.at(-1)?.body).toMatchObject({ to: 'reopen', undo: true }));
   });
 
   it('Close carries the note the person typed, and Cancel goes back to the four choices @approvals', async () => {
