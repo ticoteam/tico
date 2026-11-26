@@ -13,8 +13,10 @@ import os
 import re
 import uuid
 
+import pytest
 
 from backend import models as M
+from backend import task_privacy as privacy
 from backend.store import H
 from backend.tests.helpers.api import assign, headers, post, runner  # noqa: F401  (the api fixture)
 from backend.tests.helpers.events import live  # noqa: F401  (a listening server for the event stream)
@@ -326,8 +328,9 @@ def complete(api, token, aid, body, key):
     return api.post("/api/v2/attempts/%s/complete" % aid, json=body, headers=headers(token, key))
 
 
-def settlement(api, aid, key):
-    """What one completion leaves behind: the run, its job, the bot's replies, the event log, the saved receipt."""
+def settlement(api, aid):
+    """What one completion leaves behind: the run, its job, the bot's replies, the event log, the run's turn.finish
+    events, and every receipt saved for the run's completion route under any key."""
     with api.app.state.store.read() as c:
         run = c.execute("SELECT state, exit, summary, finished_at, job_id FROM attempts WHERE id=?", (aid,)).fetchone()
         return {
@@ -336,10 +339,13 @@ def settlement(api, aid, key):
             "replies": [
                 tuple(r) for r in c.execute("SELECT id, body FROM messages WHERE sender_id='bot:ops' ORDER BY rowid")
             ],
-            "events": c.execute("SELECT count(*) FROM events").fetchone()[0],
+            # The rule check's own record of its model call (judge.call, judge.spend) is the check's, not the settlement's.
+            "events": c.execute("SELECT count(*) FROM events WHERE action NOT LIKE 'judge.%'").fetchone()[0],
+            "finishes": c.execute(
+                "SELECT count(*) FROM events WHERE action='turn.finish' AND target=?", (aid,)
+            ).fetchone()[0],
             "receipts": c.execute(
-                "SELECT count(*) FROM idempotency WHERE operation=? AND key=?",
-                ("/api/v2/attempts/%s/complete" % aid, key),
+                "SELECT count(*) FROM idempotency WHERE operation=?", ("/api/v2/attempts/%s/complete" % aid,)
             ).fetchone()[0],
         }
 
@@ -361,16 +367,16 @@ def test_a_completion_whose_answer_was_lost_replays_its_receipt_and_settles_once
     body = {"outcome": "completed", "text": "Acme's summary is ready", "last_seq": 1}
     first = complete(api, token, aid, body, key)
     assert first.status_code == 200, first.text
-    after_first = settlement(api, aid, key)
+    after_first = settlement(api, aid)
     assert after_first["run"][:3] == ("completed", "completed", "Acme's summary is ready")
-    assert after_first["job"] == "completed" and after_first["receipts"] == 1
+    assert after_first["job"] == "completed" and after_first["receipts"] == 1 and after_first["finishes"] == 1
     assert [text for _, text in after_first["replies"]] == ["Acme's summary is ready"]
+    assert first.json()["message"]["id"] == after_first["replies"][0][0]
 
     replay = complete(api, token, aid, body, key)
     assert replay.status_code == 200, replay.text
-    assert replay.json()["attempt_id"] == aid and replay.json()["outcome"] == "completed"
-    assert replay.json()["message"]["id"] == first.json()["message"]["id"] == after_first["replies"][0][0]
-    assert settlement(api, aid, key) == after_first
+    assert replay.json() == first.json()
+    assert settlement(api, aid) == after_first
 
     # The key binds this body: other content under it is refused, and nothing moves.
     changed = complete(api, token, aid, {**body, "text": "A different answer"}, key)
@@ -379,7 +385,7 @@ def test_a_completion_whose_answer_was_lost_replays_its_receipt_and_settles_once
     fresh = complete(api, token, aid, body, "complete:%s:again" % aid)
     assert fresh.status_code == 409, fresh.text
     assert fresh.json()["error"]["code"] == "stale_lease" and fresh.json()["error"]["retryable"] is False
-    assert settlement(api, aid, key) == after_first
+    assert settlement(api, aid) == after_first
 
 
 def test_an_event_gap_is_not_saved_under_the_key_and_the_same_key_settles_once_the_events_are_in(api):
@@ -388,18 +394,18 @@ def test_an_event_gap_is_not_saved_under_the_key_and_the_same_key_settles_once_t
     computer, attempt = started_with_one_event(api)
     token, aid, key = computer["token"], attempt["id"], "complete:" + attempt["id"]
     body = {"outcome": "completed", "text": "Acme's summary is ready", "last_seq": 2}
-    before = settlement(api, aid, key)
+    before = settlement(api, aid)
     gap = complete(api, token, aid, body, key)
     assert gap.status_code == 409 and gap.json()["error"]["code"] == "event_gap"
     assert "idempotency_refused" not in gap.json()["error"]
-    assert settlement(api, aid, key) == before and before["run"][0] == "running" and before["receipts"] == 0
+    assert settlement(api, aid) == before and before["run"][0] == "running" and before["receipts"] == 0
     assert complete(api, token, aid, body, key).json()["error"]["code"] == "event_gap"  # still missing: same answer
 
     second = {"events": [{"seq": 2, "kind": "status", "payload": {"state": "idle"}}]}
     post(api, "attempts/%s/events" % aid, second, token, key="events:%s:2:2" % aid)
     done = complete(api, token, aid, body, key)
     assert done.status_code == 200 and done.json()["outcome"] == "completed", done.text
-    after = settlement(api, aid, key)
+    after = settlement(api, aid)
     assert after["run"][0] == "completed" and after["receipts"] == 1 and len(after["replies"]) == 1
 
 
@@ -411,46 +417,52 @@ def test_a_permanent_refusal_is_the_same_answer_on_every_retry_and_settles_nothi
     token, aid, key = computer["token"], attempt["id"], "complete:" + attempt["id"]
     body = {"outcome": "completed", "text": "Acme's summary is ready", "last_seq": 1}
     intruder = runner(api, "ana", label="Another Mac")
-    before = settlement(api, aid, key)
+    before = settlement(api, aid)
     for retry_key in (key, key, "complete:%s:again" % aid):
         foreign = complete(api, intruder["token"], aid, body, retry_key)
         assert foreign.status_code == 403, foreign.text
         assert foreign.json()["error"]["retryable"] is False and "idempotency_refused" not in foreign.json()["error"]
-    assert settlement(api, aid, key) == before
+    assert settlement(api, aid) == before
     assert before["run"][0] == "running" and before["replies"] == [] and before["receipts"] == 0
     owned = complete(api, token, aid, body, key)
     assert owned.status_code == 200 and owned.json()["outcome"] == "completed", owned.text
-    assert settlement(api, aid, key)["receipts"] == 1
+    assert settlement(api, aid)["receipts"] == 1
 
 
-class JudgeThatNarrowsAccess(Judge):
-    """The rule-check model, answering as usual; while it is asked, `then` runs as a concurrent write would: after the
-    completion's rule check began and before its settlement write."""
-
-    def __init__(self, store, then):
-        super().__init__(store)
-        self.then = then
-
-    def __call__(self, state, questions, label=None):
-        answer = super().__call__(state, questions, label)
-        if not str(label or "").startswith("rule-part@") and self.then:
-            then, self.then = self.then, None
-            with self.store.transaction() as c:
-                then(c)
-        return answer
-
-
-def test_a_run_that_loses_access_to_what_it_read_during_the_rule_check_is_refused_before_it_settles(ruled):
-    """Invariant 3. A private task the bot cannot read joins the run's inputs while its reply's rule check is out (the
-    check passed). The settlement write checks access again under its lock: it refuses, writes nothing, saves no
-    receipt, and the same key gets the same refusal. The runner is told to stop."""
-    api, _ = ruled
-    color_rule(api)
+def test_a_completion_after_the_bots_assignment_moved_on_is_refused_while_its_lease_is_live(api):
+    """The assignment-generation fence. The run's lease is live and its computer is still the bot's computer, but the
+    assignment was renewed under it (a new generation on the same runner: what a restore from backup or a revoked
+    computer's pending return writes; the transfer route itself refuses a bot with a live run). The run's own computer
+    no longer speaks for it: its completion is refused, nothing settles, and no receipt is saved under any key."""
     computer, attempt = started_with_one_event(api)
     token, aid, key = computer["token"], attempt["id"], "complete:" + attempt["id"]
+    with api.app.state.store.transaction() as c:
+        moved = c.execute(
+            "UPDATE assignments SET generation=generation+1 WHERE bot=(SELECT bot_id FROM attempts WHERE id=?) "
+            "AND runner_id=? RETURNING generation",
+            (aid, computer["runner_id"]),
+        ).fetchone()
+        live = c.execute("SELECT state, generation, lease_until>? FROM attempts WHERE id=?", (H.now(), aid)).fetchone()
+    assert moved and tuple(live) == ("running", moved[0] - 1, 1)  # same runner, lease live, one generation behind
+    body = {"outcome": "completed", "text": "Acme's summary is ready", "last_seq": 1}
+    before = settlement(api, aid)
+    for retry_key in (key, key, "complete:%s:again" % aid):
+        refused = complete(api, token, aid, body, retry_key)
+        assert refused.status_code == 409, refused.text
+        assert refused.json()["error"] == {
+            "code": "stale_lease",
+            "detail": "Execution ownership expired; stop this attempt",
+            "retryable": False,
+        }
+    assert settlement(api, aid) == before
+    assert before["run"][0] == "running" and before["replies"] == [] and before["receipts"] == 0
 
-    def read_a_private_task(c):
-        plan = H.task_create(c, "human:ben", "Private plan", "Secret.", "human:ben", lint=False, private=True)
+
+def a_public_task_the_run_read(api, attempt):
+    """A company task (readable by ops) that the run read: a notice naming it, in the run's room, is one of its
+    inputs."""
+    with api.app.state.store.transaction() as c:
+        plan = H.task_create(c, "human:ana", "Launch plan", "Dates for the launch.", "human:ben", lint=False)
         room = c.execute(
             "SELECT m.conversation_id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.id=?",
             (attempt["job_id"],),
@@ -466,40 +478,110 @@ def test_a_run_that_loses_access_to_what_it_read_during_the_rule_check_is_refuse
             None,
             None,
         )
-        c.execute("INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", (aid, note["id"]))
-
-    judge = api.app.state.judge = JudgeThatNarrowsAccess(api.app.state.store, read_a_private_task)
-    body = {"outcome": "completed", "text": "Acme's summary is ready", "last_seq": 1}
-    before = settlement(api, aid, key)
-    refused = complete(api, token, aid, body, key)
-    assert len(judge.calls) == 1 and judge.then is None  # checked once, and the access changed meanwhile
-    assert refused.status_code == 409, refused.text
-    expected = {"code": "stale_lease", "detail": "Task access expired; stop this attempt", "retryable": False}
-    assert refused.json()["error"] == expected
-    again = complete(api, token, aid, body, key)
-    assert again.status_code == 409 and again.json()["error"] == expected
-    after = settlement(api, aid, key)
-    assert after["run"] == before["run"] and after["run"][0] == "running" and after["job"] == "running"
-    assert after["replies"] == [] and after["receipts"] == 0
+        c.execute("INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", (attempt["id"], note["id"]))
+        assert plan["id"] in privacy.attempt_tasks(c, attempt["id"])
+    return plan["id"]
 
 
-def test_a_replayed_completion_is_checked_for_who_may_read_it_now_not_when_it_was_saved(api):
-    """Invariant 3, the answer's own check. The completion settled and its answer was lost; then ops moved to
-    another computer. The same key does not hand the saved answer (the reply's words) back to the old computer: it
-    is refused, and the reply that was posted stays the only one."""
+def made_private(api, task_id):
+    """The task's requester makes it private (ops is none of its parties), as the task route's write does."""
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, "human:ana", task_id, private=True)
+
+
+class JudgeThatNarrowsAccess(Judge):
+    """The rule-check model, answering as usual; while it is asked, `then` runs as a concurrent write would: after the
+    completion's rule check began and before its settlement write."""
+
+    def __init__(self, store, then):
+        super().__init__(store)
+        self.then = then
+
+    def __call__(self, state, questions, label=None):
+        answer = super().__call__(state, questions, label)
+        if not str(label or "").startswith("rule-part@") and self.then:
+            then, self.then = self.then, None
+            then()
+        return answer
+
+
+@pytest.mark.parametrize("revoked", [False, True], ids=["access-kept", "access-revoked-mid-check"])
+def test_a_run_that_loses_access_to_what_it_read_during_the_rule_check_is_refused_before_it_settles(ruled, revoked):
+    """Invariant 3. The run read a company task, and the reply's rule check passed while ops could still read it.
+    Revoked: the task's requester makes that same task private while the check is out. The settlement write checks
+    access again under its lock: it refuses, writes nothing, saves no receipt, and the same key gets the same refusal.
+    Kept: the same completion settles, so the refusal is the revocation's and nothing else's."""
+    api, _ = ruled
+    color_rule(api)
     computer, attempt = started_with_one_event(api)
     token, aid, key = computer["token"], attempt["id"], "complete:" + attempt["id"]
+    plan = a_public_task_the_run_read(api, attempt)
+    before = settlement(api, aid)
+
+    def revoke():
+        made_private(api, plan)
+        before["events"] = settlement(api, aid)["events"]  # the privacy change logs its own; the completion none
+
+    judge = api.app.state.judge = JudgeThatNarrowsAccess(api.app.state.store, revoke if revoked else None)
+    body = {"outcome": "completed", "text": "Acme's summary is ready", "last_seq": 1}
+    answer = complete(api, token, aid, body, key)
+    assert len(judge.calls) == 1 and judge.then is None  # checked once, and (revoked) the access changed meanwhile
+    if not revoked:
+        assert answer.status_code == 200 and answer.json()["outcome"] == "completed", answer.text
+        assert settlement(api, aid)["receipts"] == 1
+        return
+    assert answer.status_code == 409, answer.text
+    expected = {"code": "stale_lease", "detail": "Task access expired; stop this attempt", "retryable": False}
+    assert answer.json()["error"] == expected
+    again = complete(api, token, aid, body, key)
+    assert again.status_code == 409 and again.json()["error"] == expected
+    after = settlement(api, aid)
+    assert after == before
+    assert after["run"][0] == "running" and after["job"] == "running"
+    assert after["replies"] == [] and after["receipts"] == 0 and after["finishes"] == 0
+
+
+def bump_generation_in_place(api, computer):
+    with api.app.state.store.transaction() as c:
+        assert c.execute(
+            "UPDATE assignments SET generation=generation+1 WHERE bot=? AND runner_id=?",
+            (H.resolve_bot(c, "ops")["id"], computer["runner_id"]),
+        ).rowcount
+
+
+@pytest.mark.parametrize(
+    "change, detail",
+    [
+        ("another-computer", "This execution is no longer assigned to this computer"),
+        ("same-computer-new-generation", "This execution is no longer assigned to this computer"),
+        ("access-revoked", "This execution is no longer available"),
+    ],
+    ids=["another-computer", "same-computer-new-generation", "access-revoked"],
+)
+def test_a_replayed_completion_is_checked_for_who_may_read_it_now_not_when_it_was_saved(api, change, detail):
+    """Invariant 3, the answer's own check. The completion settled and its answer was lost; then something changed:
+    ops moved to another computer, its assignment was renewed on the same computer, or (assignment intact) a task the
+    run read went private. The same key does not hand the saved answer (the reply's words) back: it is refused, and
+    the reply that was posted stays the only one."""
+    computer, attempt = started_with_one_event(api)
+    token, aid, key = computer["token"], attempt["id"], "complete:" + attempt["id"]
+    plan = a_public_task_the_run_read(api, attempt)
     body = {"outcome": "completed", "text": "Acme's summary is ready", "last_seq": 1}
     assert complete(api, token, aid, body, key).status_code == 200
-    settled = settlement(api, aid, key)
-    assign(api, runner(api, "ana", label="Another Mac"), "ops", generation=1)
+    settled = settlement(api, aid)
+    if change == "another-computer":
+        assign(api, runner(api, "ana", label="Another Mac"), "ops", generation=1)
+    elif change == "same-computer-new-generation":
+        bump_generation_in_place(api, computer)
+    else:
+        made_private(api, plan)
     replay = complete(api, token, aid, body, key)
     assert replay.status_code == 403, replay.text
     assert replay.json()["error"]["code"] == "privacy" and "Acme's summary" not in replay.text
-    assert replay.json()["error"]["detail"] == "This execution is no longer assigned to this computer"
-    after = settlement(api, aid, key)
-    assert {k: after[k] for k in ("run", "job", "replies", "receipts")} == {
-        k: settled[k] for k in ("run", "job", "replies", "receipts")
+    assert replay.json()["error"]["detail"] == detail
+    after = settlement(api, aid)
+    assert {k: after[k] for k in ("run", "job", "replies", "receipts", "finishes")} == {
+        k: settled[k] for k in ("run", "job", "replies", "receipts", "finishes")
     }
 
 

@@ -2427,16 +2427,31 @@ def test_a_late_report_settles_a_run_waiting_for_review_but_only_files_against_a
     assert job_state(api, attempt['job_id']) == 'uncertain'  # the lane is free; the sweep has not run
     key = 'complete:' + attempt['id']
     late = {'outcome': 'completed', 'last_seq': 1, 'text': 'The first run finished after all.'}
+    answers = []
     for _ in range(2):  # the answer, then the runner's replay of it under the same key
         answer = post(api, f"attempts/{attempt['id']}/complete", late, machine['token'], key=key)
+        answers.append(answer)
         if saved:
-            assert answer['filed'] is True and answer['message'] is None
+            assert answer == {'attempt_id': attempt['id'], 'outcome': 'completed', 'message': None, 'filed': True}
             assert bot_replies(api, message) == [] and settled(api, attempt) == ('expired', 'uncertain')
+            with api.app.state.store.read() as c:
+                run = c.execute("SELECT final_text, result FROM attempts WHERE id=?", (attempt['id'],)).fetchone()
+                receipts = c.execute(
+                    "SELECT count(*) FROM idempotency WHERE operation=?",
+                    (f"/api/v2/attempts/{attempt['id']}/complete",),
+                ).fetchone()[0]
+                filings = c.execute(
+                    "SELECT count(*) FROM events WHERE action='attempt.late-result' AND target=?", (attempt['id'],)
+                ).fetchone()[0]
+            assert run['final_text'] == 'The first run finished after all.'
+            assert json.loads(run['result'])['outcome'] == 'completed'
+            assert receipts == 1 and filings == 1
         else:
             assert not answer.get('filed') and answer['outcome'] == 'completed'
             assert answer['message']['body'] == 'The first run finished after all.'
             assert bot_replies(api, message) == ['The first run finished after all.']
             assert settled(api, attempt) == ('completed', 'completed')
+    assert answers[1] == answers[0]
     with api.app.state.store.read() as c:
         recovery = c.execute("SELECT decision FROM job_recovery WHERE job_id=?", (attempt['job_id'],)).fetchone()
     assert (recovery and recovery['decision']) == ('resume' if saved else None)
