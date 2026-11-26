@@ -214,7 +214,7 @@ describe("An agent's own sidebar", () => {
 
   it('runs a pinned page as a widget: its small card view, live from the signed address its pin carries', async () => {
     queryClient.setQueryData(['config'], { visual_origin: 'https://visuals.acme.example' });
-    const live = (v: number) => ({ ...pins, pins: [{ ...pins.pins[0], page: { ...pins.pins[0].page, version: v, src: `https://visuals.acme.example/visuals/tok${v}` } }] });
+    const live = (v: number) => ({ ...pins, pins: [{ ...pins.pins[0], page: { ...pins.pins[0]?.page, version: v, src: `https://visuals.acme.example/visuals/tok${v}` } }] });
     open([w('page:f1'), w('tasks')], pinsReply(live(2)));
     const card = await screen.findByRole('region', { name: 'Videos by stage' });
     const frame = await waitFor(() => within(card).getByTitle('Videos by stage') as HTMLIFrameElement);
