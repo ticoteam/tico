@@ -1,0 +1,5 @@
+{
+  "backend/librarian.py": {
+    "core-imports-app": 2
+  }
+}

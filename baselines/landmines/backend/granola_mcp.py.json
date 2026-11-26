@@ -1,0 +1,5 @@
+{
+  "backend/granola_mcp.py": {
+    "no-runner-support-import": 4
+  }
+}

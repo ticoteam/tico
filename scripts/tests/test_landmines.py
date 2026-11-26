@@ -1,5 +1,6 @@
 """scripts/landmines.py: each rule finds its bad case and not its good one, and the counts only go down."""
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -89,6 +90,99 @@ def hits(path, text):
 def test_each_rule_finds_its_bad_case_and_not_its_good_one(rule, path, bad, good):
     assert hits(path, bad).get(rule) == 1
     assert rule not in hits(path, good)
+
+
+CORE = "backend/tasks.py"
+
+
+@pytest.mark.parametrize(
+    ("rule", "path", "bad", "good"),
+    [
+        (
+            "no-runner-support-import",
+            "clients/thing.py",
+            "from runner_support.op import resolve_op_refs\n",
+            '"""Runners fetch it per turn (runner_support/git_credentials.py)."""\nfrom . import op\n',
+        ),
+        (
+            "no-runner-support-import",
+            "backend/thing.py",
+            "def f():\n    import runner_support.engine as engine\n",
+            "def f():\n    import runner_rs_bridge\n",
+        ),
+        ("core-imports-app", CORE, "from .mail import send\n", "from .people import roster\n"),
+        ("core-imports-app", CORE, "from .finance.reads import bills_email\n", "from .finance import actions as FA\n"),
+        ("core-imports-app", CORE, "from .finance import reads as FR\n", "from .finance.actions import run_hold\n"),
+        ("core-imports-app", CORE, "from .mail_lib.parse import parts\n", "from .tasks_lib import parts\n"),
+        ("core-imports-app", CORE, "from backend import calls\n", "from backend import callbacks\n"),
+        ("core-imports-app", CORE, "import backend.slack_app\n", "import backend.slack\n"),
+        ("core-imports-app", "backend/app.py", "from . import live_meetings\n", "from . import routing\n"),
+        ("core-imports-app", "backend/entities/person.py", "from .. import bookkeeper\n", "from . import bookkeeper\n"),
+    ],
+)
+def test_each_architecture_rule_finds_its_bad_case_and_not_its_good_one(rule, path, bad, good):
+    assert hits(path, bad).get(rule) == 1
+    assert rule not in hits(path, good)
+
+
+def test_core_imports_app_counts_each_non_core_module_of_a_multi_line_import():
+    text = "from . import (\n    mail,\n    tasks,  # Core\n    calendar_api,\n    growth_core as growth,\n)\n"
+    found = landmines.hits_in(CORE, text, landmines.RULES)["core-imports-app"]
+    assert found == [(1, "from . import ("), (1, "from . import ("), (1, "from . import (")]
+
+
+def test_core_imports_app_names_every_non_core_family():
+    families = (
+        "finance bookkeeper bills_address growth growth_sync market marketing_tasks market_sources company_page lenses "
+        "calendar_api call_notes calls live_meetings meetings meeting_items mail mail_lib mailboxes mailbox_access "
+        "email_sending letters postal_mail slack_app granola_mcp"
+    ).split()
+    assert hits(CORE, "".join(f"from . import {name}\n" for name in families)) == {"core-imports-app": len(families)}
+    core = "tasks people entities turn_budgets calendar emails callback settings_admin finance_routes".split()
+    assert hits(CORE, "".join(f"from . import {name}\n" for name in core)) == {}
+
+
+def test_core_imports_app_reads_only_core_backend_code():
+    text = "from .mail import send\nfrom . import calls\n"
+    for path in (
+        "backend/mail_compose.py",
+        "backend/finance/actions.py",
+        "backend/tests/test_tasks.py",
+        "clients/x.py",
+    ):
+        assert "core-imports-app" not in hits(path, text), path
+
+
+def test_an_import_inside_a_string_is_not_an_import():
+    text = 'HELP = """\nfrom .mail import send\nimport runner_support\n"""\n'
+    assert hits(CORE, text) == {}
+
+
+def git(root, *args):
+    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+
+
+def test_a_new_file_under_runner_support_is_banned_and_an_old_or_test_file_is_not(tmp_path):
+    git(tmp_path, "init", "-q")
+    git(tmp_path, "config", "user.email", "t@example.com")
+    git(tmp_path, "config", "user.name", "t")
+    (tmp_path / "runner_support").mkdir()
+    (tmp_path / "runner_support/engine.py").write_text("x = 1\n")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "commit", "-qm", "base")
+    git(tmp_path, "branch", "base")
+    (tmp_path / "runner_support/tests").mkdir()
+    for name in ("runner_support/new_job.py", "runner_support/shell_init/zsh-x", "runner_support/tests/test_job.py"):
+        (tmp_path / name).parent.mkdir(exist_ok=True)
+        (tmp_path / name).write_text("x = 2\n")
+    (tmp_path / "runner_support/engine.py").write_text("x = 3\n")
+    git(tmp_path, "add", "-A")
+
+    found = landmines.new_files(tmp_path, "base")
+    assert sorted(found) == ["runner_support/new_job.py", "runner_support/shell_init/zsh-x"]
+    problems = landmines.compare(found, {})
+    assert len(problems) == 2
+    assert all("no-new-runner-support-module" in p and "runner-rs" in p for p in problems)
 
 
 def test_a_pattern_inside_a_string_or_a_comment_is_not_a_hit():
@@ -185,7 +279,15 @@ def test_a_true_lessons_table_passes():
         seen="2",
         status="encoded no-retry",
     )
-    cited_elsewhere = ("L02", "L03", "L26", "L31")  # the real rules cite rows this one-row table does not have
+    cited_elsewhere = (
+        "L02",
+        "L03",
+        "L26",
+        "L31",
+        "L35",
+        "L36",
+        "L37",
+    )  # the real rules cite rows this one-row table does not have
     assert [p for p in lesson_problems(text) if not any(i in p for i in cited_elsewhere)] == []
 
 

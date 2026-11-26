@@ -1,0 +1,5 @@
+{
+  "backend/hook_relay.py": {
+    "core-imports-app": 1
+  }
+}

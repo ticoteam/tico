@@ -1,0 +1,5 @@
+{
+  "backend/gcal_watch.py": {
+    "core-imports-app": 1
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "backend/config.py": {
+    "core-imports-app": 1
+  }
+}

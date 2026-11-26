@@ -1,0 +1,5 @@
+{
+  "backend/sleep_idle.py": {
+    "core-imports-app": 2
+  }
+}

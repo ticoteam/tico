@@ -130,6 +130,17 @@ calling a change done, walk this list and say in the PR which entries applied:
 When the server is slow or stuck, read `python -m backend.flight summary --since 30m` before guessing: it reads the
 flight file, not the database.
 
+## Refactor rules
+- `desktop/` (Electron) is the single desktop shell.
+- New routes use `routing.router()` and `Depends(get_deps)` once they land; no new `install(app, ...)` closures.
+- New background work registers in the lifespan worker list; no new ad-hoc `asyncio.create_task` loops.
+- `runner_support/` is frozen: no new file in it and no new import of it from `backend/` or `clients/`. Prefer `runner-rs`.
+- Core never imports a Non-Core module (Finance, Growth, Market, Calendar, Calls, Meetings, Mail, Letters, Slack,
+  Granola, the company page, lenses); `finance.actions` is the one bridge.
+- Never add `flight_*` tables to `hub.db`.
+
+`scripts/landmines.py` enforces the `runner_support/` and Core rules (`skills/honest-code/LESSONS.md` L35 to L37).
+
 ## Conventions
 - Create persistent schema changes with `python3 scripts/new_migration.py name` (`--py` for `up(conn)`):
   `YYYYMMDDHHMMSS_name.sql|py`, UTC. Keep applied files and checksums unchanged; never edit `baseline.sql`. Each migration
