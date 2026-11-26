@@ -269,14 +269,15 @@ export function loadMoreOf(params: Record<string, string | number>): Promise<boo
   const have = queryClient.getQueryData<TaskPage>(key);
   const running = loading.get(id);
   if (running) return running;
-  if (!have?.next_after) return Promise.resolve(true);
+  const after = have?.next_after;
+  if (!after) return Promise.resolve(true);
   const read = (async () => {
     try {
-      const page = await api.get<TaskPage>(`/api/v2/tasks?${query({ ...params, after: have.next_after })}`);
+      const page = await api.get<TaskPage>(`/api/v2/tasks?${query({ ...params, after })}`);
       queryClient.setQueryData<TaskPage>(key, (cur) => {
         // read again from its first page meanwhile (a live insert resets a list in made order): this page no longer
         // starts where the list ends, so it is dropped rather than leave a hole
-        if (!cur || cur.next_after !== have.next_after) return cur;
+        if (!cur || cur.next_after !== after) return cur;
         const seen = new Set(cur.tasks.map((t) => t.id));
         const fresh = page.tasks.filter((t) => !seen.has(t.id));
         // the server counted these already: they are not a change
