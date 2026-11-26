@@ -596,6 +596,38 @@ describe('the page it sits beside', () => {
     }
   });
 
+  it("on a phone, Tico's button brings the keyboard up with the starters still showing; a tap or typing puts them away", async () => {
+    const style = document.createElement('style');
+    style.textContent = ['../shell/Menu.css', '../shell/phone/phone.css'].map((f) => fs.readFileSync(new URL(f, here), 'utf8')).join('\n');
+    document.head.append(style);
+    try {
+      seed([]);
+      serve(() => ({ status: 200, body: {} }));
+      // the phone shell as PhoneCards leaves it once the keyboard is measured up over Tico's focused box
+      render(<Conversation id={T} variant="side" title="Ana" actor="bot:qa" from={FROM} starters={['What needs me on Tasks?']} />, {
+        wrapper: ({ children }) => (
+          <QueryClientProvider client={queryClient}>
+            <div className="phone" data-typing="tico">
+              <div className="ly-tico">{children}</div>
+            </div>
+          </QueryClientProvider>
+        ),
+      });
+      const box = (await screen.findByRole('textbox', { name: 'Message Ana' })) as HTMLTextAreaElement;
+      const shown = () => getComputedStyle(document.querySelector('.qchips')!).display !== 'none';
+      act(() => box.focus());
+      expect(shown()).toBe(true);
+      fireEvent.pointerDown(box);
+      expect(shown()).toBe(false);
+      act(() => box.blur());
+      act(() => box.focus());
+      fireEvent.change(box, { target: { value: 'Hi' } });
+      expect(shown()).toBe(false);
+    } finally {
+      style.remove();
+    }
+  });
+
   it("a starter's words stay in the chat they were pressed in: another chat shown in its place neither takes them nor the focus", async () => {
     seed([]);
     queryClient.setQueryData(['thread', 't2', 'timeline'], { pages: [{ messages: [], next_cursor: null, read_marks: {} }], pageParams: [null] });
