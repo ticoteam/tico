@@ -668,7 +668,7 @@ class PipelineRetire(Contract):
 
 
 class PipelineFromPreset(Contract):
-    """Add a preset the company does not have (pipeline_settings.add_preset): Product beside the pair it replaced.
+    """Add a preset the company does not have (pipeline_settings.add_preset): Engineering and Product beside Features.
     `name` and `prefix` default to the preset's; give others while a pipeline in use has them."""
 
     preset: str

@@ -1,0 +1,398 @@
+{
+ "engineering": {
+  "closed": {
+   "id": "engineering-closed",
+   "name": "Closed",
+   "side": false
+  },
+  "done": {
+   "id": "engineering-done",
+   "name": "Done",
+   "side": false
+  },
+  "factory_id": "product",
+  "goal": "From a task to a published release.",
+  "id": "engineering",
+  "manager_id": "bot:engineering-manager",
+  "name": "Engineering",
+  "owner_id": null,
+  "prefix": "E",
+  "preset": "engineering",
+  "private": false,
+  "settings_version": 22,
+  "stages": [
+   {
+    "by_hand": false,
+    "id": "engineering-on-deck",
+    "name": "On deck",
+    "on_enter": {},
+    "owner": "pick",
+    "pick": {
+     "bots": [
+      "bot:builder",
+      "bot:builder-2"
+     ],
+     "families": {
+      "bot:builder": "Claude",
+      "bot:builder-2": "Claude"
+     },
+     "how": "turns",
+     "limit_each": null,
+     "owns_task": true,
+     "prefer": "anyone"
+    },
+    "pick_next": "The next task goes to Builder 2, after Builder had the last one.",
+    "purpose": "Waits for room in Build, oldest first.",
+    "requests_move_on": false,
+    "requirements": [],
+    "side": false,
+    "task_limit": null
+   },
+   {
+    "by_hand": false,
+    "id": "engineering-build",
+    "name": "Build",
+    "on_enter": {},
+    "owner": "assignee",
+    "purpose": "Build it in its own thread, open a PR and link it, and get the checks green.",
+    "requests_move_on": false,
+    "requirements": [
+     {
+      "can_push_past": true,
+      "condition": "pr_open",
+      "id": null,
+      "kind": "item",
+      "line": "",
+      "person_id": null,
+      "settings": {},
+      "source": "github",
+      "who_oks": "none"
+     },
+     {
+      "can_push_past": true,
+      "condition": "checks_pass",
+      "id": null,
+      "kind": "item",
+      "line": "",
+      "person_id": null,
+      "settings": {},
+      "source": "github",
+      "who_oks": "none"
+     }
+    ],
+    "side": false,
+    "task_limit": 18
+   },
+   {
+    "by_hand": false,
+    "id": "engineering-review-1",
+    "name": "Review",
+    "on_enter": {},
+    "owner": "pick",
+    "pick": {
+     "bots": [
+      "bot:rev-a",
+      "bot:rev-b"
+     ],
+     "families": {
+      "bot:rev-a": "GPT",
+      "bot:rev-b": "GPT"
+     },
+     "how": "turns",
+     "limit_each": null,
+     "owns_task": false,
+     "prefer": "family"
+    },
+    "pick_next": "The next task goes to Reviewer 1, after Reviewer 2 had the last one, or to one of a different model family from everyone who worked on it.",
+    "purpose": "Review the newest commit yourself, get a second review from a model by a different maker than the model that built the change (skill second-opinion; it may share your maker, docs-only changes included), name the builder's model, and attach one Review page with both.",
+    "requests_move_on": false,
+    "requirements": [
+     {
+      "can_push_past": true,
+      "condition": null,
+      "id": null,
+      "kind": "page",
+      "line": "Review page",
+      "person_id": null,
+      "settings": {
+       "at_head": true,
+       "rubric": "Two reviews of the newest commit of every linked PR, each naming that commit and its model, and the page names the model that built the change: the second review's model is by a different maker than the builder's (it may share a maker with the first review), and say what each checked. Give each real defect its own finding with file:line, severity, and why it matters; a finding on the PR description may cite the file:line of the guideline it breaks. Skip style nits and diff summaries. Say when there are no findings."
+      },
+      "source": null,
+      "who_oks": "people_with_exceptions"
+     },
+     {
+      "can_push_past": true,
+      "condition": null,
+      "id": null,
+      "kind": "linked_done",
+      "line": "The second review finished",
+      "person_id": null,
+      "settings": {},
+      "source": null,
+      "who_oks": "none"
+     }
+    ],
+    "side": false,
+    "task_limit": null
+   },
+   {
+    "by_hand": false,
+    "id": "engineering-fixes-1",
+    "name": "Fixes",
+    "on_enter": {},
+    "owner": "assignee",
+    "purpose": "Fix what Review found (both reviews' taken findings), push, and say done once the checks are green; if nothing blocks, say done at once (skill fix-review-findings).",
+    "requests_move_on": false,
+    "requirements": [
+     {
+      "can_push_past": true,
+      "condition": null,
+      "id": null,
+      "kind": "owner_done",
+      "line": "",
+      "person_id": null,
+      "settings": {},
+      "source": null,
+      "who_oks": "none"
+     },
+     {
+      "can_push_past": true,
+      "condition": "checks_pass",
+      "id": null,
+      "kind": "item",
+      "line": "",
+      "person_id": null,
+      "settings": {},
+      "source": "github",
+      "who_oks": "none"
+     }
+    ],
+    "side": false,
+    "task_limit": null
+   },
+   {
+    "by_hand": false,
+    "id": "engineering-qa",
+    "name": "QA",
+    "on_enter": {},
+    "owner": "assignee",
+    "purpose": "Write the QA report: what changed, before and after screenshots of the running app (or the output that proves a change with nothing to see), the checks at the newest commit and what both reviewers found. When it meets the bar the task goes to Release; no person signs it (the person's sign-off was the spec's Approval). To change it, write the next version.",
+    "requests_move_on": false,
+    "requirements": [
+     {
+      "can_push_past": true,
+      "condition": "checks_pass",
+      "id": null,
+      "kind": "item",
+      "line": "",
+      "person_id": null,
+      "settings": {},
+      "source": "github",
+      "who_oks": "none"
+     },
+     {
+      "can_push_past": true,
+      "condition": null,
+      "id": null,
+      "kind": "page",
+      "line": "QA report",
+      "person_id": null,
+      "settings": {
+       "document": "QA report",
+       "rubric": "A QA page a person approves before the change ships. Shows seven things: a verdict to read first (criteria passed, the checks, open findings, the risk); what changed (the work's title and spec say what was asked, so naming the work or its PR is enough); proof it works: screenshots of the running app, or output from how it was checked (test counts, command output, a log line, numbers before and after; a line that only says it passed is not proof); how it works: a diagram of the parts it touches with the changed ones marked, and the files changed (one file may be named instead); the risk and the rollback: how to undo it and whether stored data changes; the checks at the newest commit: passing, or still running or re-running when the page was written (fine, Tico waits for them), but not failed; and what Reviewer 1 and Reviewer 2 each found on the commit they reviewed, or that they found nothing to fix. Only these seven count. A page that leaves any of them out, such as one reviewer's findings or the rollback, or that reports a check failed at the newest commit, does not meet it. A page with all seven meets it even when it reports a target missed, asks the person to decide something (whether to keep the change, a spec question), lists what was not checked, or says commits were made after the reviews and a reviewer has not read them yet: the person and Tico handle those. A page may tell only what changed since the reviews when it names the work or its PR."
+      },
+      "source": null,
+      "who_oks": "none"
+     }
+    ],
+    "side": false,
+    "task_limit": null
+   },
+   {
+    "by_hand": false,
+    "id": "engineering-release",
+    "name": "Release",
+    "on_enter": {
+     "act": "github.queue"
+    },
+    "owner": "bot:rm",
+    "owner_name": "Release Owner",
+    "purpose": "Entering Release queues the PRs to merge. If GitHub takes one out, queue it again, fix it on its branch, or send the task back to QA. The task leaves when a published release holds the merge.",
+    "requests_move_on": false,
+    "requirements": [
+     {
+      "can_push_past": false,
+      "condition": "pr_merged",
+      "id": null,
+      "kind": "item",
+      "line": "",
+      "person_id": null,
+      "settings": {},
+      "source": "github",
+      "who_oks": "none"
+     },
+     {
+      "can_push_past": false,
+      "condition": "in_release",
+      "id": null,
+      "kind": "item",
+      "line": "",
+      "person_id": null,
+      "settings": {
+       "prereleases": true
+      },
+      "source": "github",
+      "who_oks": "none"
+     }
+    ],
+    "side": false,
+    "task_limit": null
+   }
+  ]
+ },
+ "product": {
+  "closed": {
+   "id": "product-closed",
+   "name": "Closed",
+   "side": false
+  },
+  "done": {
+   "id": "product-done",
+   "name": "Done",
+   "side": false
+  },
+  "factory_id": "product",
+  "goal": "Discerning, high-quality specs that ship",
+  "id": "product",
+  "manager_id": "bot:product-manager",
+  "name": "Product",
+  "owner_id": null,
+  "prefix": "P",
+  "preset": "product",
+  "private": false,
+  "settings_version": 21,
+  "stages": [
+   {
+    "by_hand": true,
+    "id": "product-ideas-2",
+    "name": "Bot ideas",
+    "on_enter": {},
+    "owner": "assignee",
+    "purpose": "One line: what and why. Ideas rest here; the owner moves one to Spec when they pick it up.",
+    "requests_move_on": false,
+    "requirements": [],
+    "side": false,
+    "task_limit": null
+   },
+   {
+    "by_hand": false,
+    "id": "product-spec",
+    "name": "Spec",
+    "on_enter": {},
+    "owner": "assignee",
+    "purpose": "Write the spec page and attach it (skill write-a-spec). Then 1-2 related owners comment, and a person OKs it.",
+    "requests_move_on": false,
+    "requirements": [
+     {
+      "can_push_past": true,
+      "condition": null,
+      "id": null,
+      "kind": "page",
+      "line": "Spec",
+      "person_id": null,
+      "settings": {
+       "document": "Spec",
+       "rubric": "States the goal, the scope (what is in and what is out), and what done looks like as acceptance criteria someone can check. Only these three count: a page with all three meets it however long it is and whatever else it holds."
+      },
+      "source": null,
+      "who_oks": "none"
+     }
+    ],
+    "side": false,
+    "task_limit": null
+   },
+   {
+    "by_hand": false,
+    "id": "product-spec-ok",
+    "name": "Approval",
+    "on_enter": {},
+    "owner": "assignee",
+    "purpose": "A person approves the spec. This is the only person sign-off; after it, Engineering builds, QAs and releases without asking again.",
+    "requests_move_on": false,
+    "requirements": [
+     {
+      "can_push_past": true,
+      "condition": null,
+      "id": null,
+      "kind": "page",
+      "line": "Spec",
+      "person_id": "human:ana",
+      "settings": {
+       "document": "Spec",
+       "rubric": "States the goal, the scope (what is in and what is out), and what done looks like as acceptance criteria someone can check. Only these three count: a page with all three meets it however long it is and whatever else it holds."
+      },
+      "source": null,
+      "who_oks": "people_only"
+     }
+    ],
+    "side": false,
+    "task_limit": null
+   },
+   {
+    "by_hand": false,
+    "id": "product-in-development",
+    "name": "In development",
+    "on_enter": {
+     "file_into": "engineering"
+    },
+    "owner": "assignee",
+    "purpose": "Tico files one Engineering ticket; this waits until it is released.",
+    "requests_move_on": false,
+    "requirements": [
+     {
+      "can_push_past": true,
+      "condition": null,
+      "id": null,
+      "kind": "linked_done",
+      "line": "",
+      "person_id": null,
+      "settings": {},
+      "source": null,
+      "who_oks": "none"
+     }
+    ],
+    "side": false,
+    "task_limit": null
+   },
+   {
+    "by_hand": false,
+    "id": "product-validate",
+    "name": "Validate",
+    "on_enter": {},
+    "owner": "assignee",
+    "purpose": "Prove it works in production with a proof page, or send it back to Build (skill validate-in-production).",
+    "requests_move_on": false,
+    "requirements": [
+     {
+      "can_push_past": true,
+      "condition": null,
+      "id": null,
+      "kind": "page",
+      "line": "Checked in production",
+      "person_id": null,
+      "settings": {
+       "document": "Checked in production",
+       "rubric": "Names the version production runs and shows the change working in that version: what was run or looked at there, and what it gave. If that version is older than the release that holds this work, it is not yet.",
+       "with_release": true
+      },
+      "source": null,
+      "who_oks": "people_with_exceptions"
+     }
+    ],
+    "side": false,
+    "task_limit": null
+   }
+  ]
+ }
+}

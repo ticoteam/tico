@@ -446,7 +446,9 @@ def test_the_declared_answers_match_the_live_ones(api):
     from backend import pipeline_settings as PS
 
     with api.app.state.store.transaction() as c:
-        product = PS.add_preset(c, PS.SYSTEM, PS.PRODUCT)["id"]
+        if not PS._made_from(c, "engineering"):
+            PS.add_preset(c, PS.SYSTEM, "engineering")
+        product = PS.add_preset(c, PS.SYSTEM, "product")["id"]
     feature = api.post(
         "/api/v2/tasks", headers=headers(), json={"title": "Add exports", "owner": "human:ana", "pipeline": product}
     ).json()["task"]

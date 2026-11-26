@@ -41,7 +41,7 @@ def _now():
     """Every preset line by where it sits. Product's lines are under `features:`: it has the ids of the pair's Product
     it replaced (`product/goal`, `product-spec/purpose`), whose own lines keep their paths."""
     return {
-        f"{key}:{path}" if key == PS.PRODUCT else path: text
+        f"{key}:{path}" if key == PS.FEATURES else path: text
         for key in PS.PRESETS
         for path, text in PS.preset_texts(key).items()
     }
@@ -197,6 +197,20 @@ def test_the_qa_upgrade_does_not_recreate_a_removed_review_stage(c):
     assert _stage(new, "engineering-fixes-2")["purpose"] == FIXES_2_PURPOSE_RC3
 
 
+def test_merge_keeps_sending_a_task_back_to_fixes_2_where_the_company_removed_qa(c):
+    """A company that removed QA: its unedited Merge line still names Fixes 2, and moving it to the line that names QA
+    would send a task back to a stage it does not have."""
+    record = PS.read(c, "engineering")
+    record["stages"] = [s for s in record["stages"] if s["id"] != PS.QA_STAGE]
+    PS.save(c, ANA, record)
+    _purpose(c, "engineering-merge", MERGE_PURPOSE_RC3)
+    before = PS.read(c, "engineering")
+    PS.ensure_presets(c)
+    assert PS.read(c, "engineering") == before
+    assert _stage(before, "engineering-merge")["purpose"] == MERGE_PURPOSE_RC3
+    assert _follows(c) == []
+
+
 def test_a_stage_whose_requirements_changed_keeps_its_purpose_and_a_retired_pipeline_is_left_alone(c):
     record = PS.read(c, "engineering")
     _stage(record, "engineering-fixes-2")["requirements"].append(PS.github("pr_open"))
@@ -215,7 +229,7 @@ def test_a_stage_whose_requirements_changed_keeps_its_purpose_and_a_retired_pipe
 
 @pytest.fixture
 def one_review(company):
-    """A company set up with today's presets: Product's one Review stage asks its page the combined rubric."""
+    """A company set up with today's presets: Engineering's one Review stage asks its page the combined rubric."""
     with company.transaction() as conn:
         _team(conn)
         _answers(conn, software="yes")
@@ -229,13 +243,13 @@ def test_an_unedited_combined_review_rubric_follows_to_the_one_that_places_a_pr_
     c = one_review
     before = PS._REVIEW_RUBRIC_BEFORE_DESCRIPTION
     assert "PR description" in PS.REVIEW_RUBRIC and before != PS.REVIEW_RUBRIC
-    _rubric(c, "product-review-1", before)
+    _rubric(c, "engineering-review-1", before)
     PS.ensure_presets(c)
-    assert _page(PS.read(c, "product"), "product-review-1")["settings"]["rubric"] == PS.REVIEW_RUBRIC
-    assert "product-review-1/page/rubric" in _follows(c)[-1]["newer_preset_text"]
-    _rubric(c, "product-review-1", "Our own check: " + before)
+    assert _page(PS.read(c, "engineering"), "engineering-review-1")["settings"]["rubric"] == PS.REVIEW_RUBRIC
+    assert "engineering-review-1/page/rubric" in _follows(c)[-1]["newer_preset_text"]
+    _rubric(c, "engineering-review-1", "Our own check: " + before)
     PS.ensure_presets(c)
-    assert _page(PS.read(c, "product"), "product-review-1")["settings"]["rubric"] == "Our own check: " + before
+    assert _page(PS.read(c, "engineering"), "engineering-review-1")["settings"]["rubric"] == "Our own check: " + before
 
 
 def test_an_unedited_combined_review_rubric_follows_to_the_one_a_page_with_no_blocking_findings_meets(one_review):
@@ -245,13 +259,13 @@ def test_an_unedited_combined_review_rubric_follows_to_the_one_a_page_with_no_bl
     assert "no blocking findings" in PS.REVIEW_RUBRIC
     for before in (PS._REVIEW_RUBRIC_BEFORE_NO_BLOCKERS, PS._REVIEW_RUBRIC_BEFORE_DESCRIPTION):
         assert before != PS.REVIEW_RUBRIC
-        _rubric(c, "product-review-1", before)
+        _rubric(c, "engineering-review-1", before)
         PS.ensure_presets(c)
-        assert _page(PS.read(c, "product"), "product-review-1")["settings"]["rubric"] == PS.REVIEW_RUBRIC
+        assert _page(PS.read(c, "engineering"), "engineering-review-1")["settings"]["rubric"] == PS.REVIEW_RUBRIC
     own = "Our own check: " + PS._REVIEW_RUBRIC_BEFORE_NO_BLOCKERS
-    _rubric(c, "product-review-1", own)
+    _rubric(c, "engineering-review-1", own)
     PS.ensure_presets(c)
-    assert _page(PS.read(c, "product"), "product-review-1")["settings"]["rubric"] == own
+    assert _page(PS.read(c, "engineering"), "engineering-review-1")["settings"]["rubric"] == own
 
 
 # ----------------------------------------------------------------------------- QA, added to a company made before it
@@ -338,6 +352,16 @@ def test_a_task_past_fixes_2_when_qa_is_added_keeps_the_persons_ok_for_its_relea
     assert [GR.unsigned(c, E.task(c, t)) for t in tasks] == [None, "Fixes 2"]
     PS.ensure_presets(c)
     assert [GR.unsigned(c, E.task(c, t)) for t in tasks] == [None, "QA"]
+
+
+def test_every_changed_preset_line_keeps_its_old_text_and_the_record_is_current():
+    """A preset line whose shipped text changed has that text in EARLIER, or a company still on it would keep it; and the
+    record holds every line the presets ship now (`--write` after a change)."""
+    shipped, now = json.loads(SHIPPED.read_text()), _now()
+    assert _lost(shipped, now) == []
+    assert {path: _hash(text) for path, text in now.items()} == shipped, (
+        "run python -m backend.tests.test_preset_texts --write"
+    )
 
 
 def _write():

@@ -236,7 +236,9 @@ def _product(api):
     from backend import pipeline_settings as PS
 
     with api.app.state.store.transaction() as c:
-        return PS.add_preset(c, PS.SYSTEM, PS.PRODUCT)['id']
+        if not PS._made_from(c, 'engineering'):
+            PS.add_preset(c, PS.SYSTEM, 'engineering')
+        return PS.add_preset(c, PS.SYSTEM, 'product')['id']
 
 
 def _ranked(api, query='', token='ana-test'):
@@ -261,7 +263,7 @@ def test_the_roadmap_ranks_the_product_pipelines_tasks_by_who_asked(api):
     rows = _ranked(api)['tasks']
     assert [r['id'] for r in rows] == [exports, imports, filters]
     first = rows[0]
-    assert (first['pipeline_id'], first['stage_name'], first['status']) == (product, 'Spec', 'open')
+    assert (first['pipeline_id'], first['stage_name'], first['status']) == (product, 'Ideas', 'open')
     assert {k: first[k] for k in R.EMPTY_STATS} == {
         'requester_count': 2,
         'external_requesters': 2,
@@ -287,7 +289,8 @@ def test_the_roadmap_ranks_the_product_pipelines_tasks_by_who_asked(api):
 def test_the_roadmap_shows_a_reader_only_what_they_may_read_and_only_editors_publish(api):
     product = _product(api)
     shared = post(api, 'tasks', {'owner': 'cpo', 'title': 'Add exports', 'pipeline': product})
-    secret = post(api, 'tasks', {'owner': 'cpo', 'title': 'Add payroll', 'pipeline': product, 'private': True})['task']
+    secret = post(api, 'tasks', {'owner': 'cpo', 'title': 'Add payroll', 'pipeline': product, 'private': True})
+    secret = secret.get('task', secret)  # the task, or the task beside a warning when its first stage gives one
     post(api, f"tasks/{secret['id']}/requesters", {'email': 'cfo@acme.example', 'organization': 'Initech'})
     assert {r['id'] for r in _ranked(api)['tasks']} == {shared['id'], secret['id']}
     seen = _ranked(api, token='priya-test')

@@ -2,8 +2,8 @@
 """Product: Acme builds software (a blank answer is yes), so it has the default Product pipeline (docs/dev/pipelines-v3.md,
 "Product"), with a few tasks across its first stages.
 
-Eli files them, each starting in Spec (a feature starts as a chat; its first approval is the Spec). Acme has no
-feature owner yet, so nothing has reached Build.
+Eli files them, each starting in Ideas, where an idea waits until someone moves it on to Spec. Nothing has been
+approved yet, so Engineering has no work.
 """
 
 import sqlite3
