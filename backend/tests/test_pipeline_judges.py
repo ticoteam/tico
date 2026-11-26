@@ -479,8 +479,8 @@ def test_each_shipped_check_is_asked_as_its_parts_now_and_as_it_read_before():
 
     assert P.check_of(PS.SPEC_RUBRIC) == "spec" and P.check_of(PS.LEGACY_REVIEW_RUBRIC) == "review"
     assert P.check_of(PS.REVIEW_RUBRIC) == "two_reviews", "the one Review stage's two reviews are asked as parts"
-    before = PS._REVIEW_RUBRIC_BEFORE_DESCRIPTION
-    assert P.check_of(before) == "two_reviews", "and its text before the PR-description line too"
+    for before in (PS._REVIEW_RUBRIC_BEFORE_DESCRIPTION, PS._REVIEW_RUBRIC_BEFORE_NO_BLOCKERS):
+        assert P.check_of(before) == "two_reviews", "and its earlier texts too"
     assert P.check_of(PS.QA_RUBRIC) == "qa" and P.check_of(PS.VALIDATE_RUBRIC) == "validate"
     assert P.check_of(PS.EARLIER["product-spec/page/rubric"][0]) == "spec", "an unedited older line is the same check"
     assert P.check_of("  " + PS.SPEC_RUBRIC.replace(" ", "\n", 3)) == "spec", "spacing does not matter"

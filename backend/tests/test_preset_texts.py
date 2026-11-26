@@ -238,6 +238,22 @@ def test_an_unedited_combined_review_rubric_follows_to_the_one_that_places_a_pr_
     assert _page(PS.read(c, "product"), "product-review-1")["settings"]["rubric"] == "Our own check: " + before
 
 
+def test_an_unedited_combined_review_rubric_follows_to_the_one_a_page_with_no_blocking_findings_meets(one_review):
+    """A page with no blocking findings meets the check when each review names the commit and says what it read. A
+    Review page on either earlier combined rubric moves to it; an edited one stays."""
+    c = one_review
+    assert "no blocking findings" in PS.REVIEW_RUBRIC
+    for before in (PS._REVIEW_RUBRIC_BEFORE_NO_BLOCKERS, PS._REVIEW_RUBRIC_BEFORE_DESCRIPTION):
+        assert before != PS.REVIEW_RUBRIC
+        _rubric(c, "product-review-1", before)
+        PS.ensure_presets(c)
+        assert _page(PS.read(c, "product"), "product-review-1")["settings"]["rubric"] == PS.REVIEW_RUBRIC
+    own = "Our own check: " + PS._REVIEW_RUBRIC_BEFORE_NO_BLOCKERS
+    _rubric(c, "product-review-1", own)
+    PS.ensure_presets(c)
+    assert _page(PS.read(c, "product"), "product-review-1")["settings"]["rubric"] == own
+
+
 # ----------------------------------------------------------------------------- QA, added to a company made before it
 def test_an_edited_engineering_pipeline_gets_qa_with_the_page_its_person_oks_as_it_was_set(c):
     _before_qa(c)
