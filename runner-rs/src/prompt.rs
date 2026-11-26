@@ -742,11 +742,18 @@ fn parts(
         && !setup
         && (person || truthy(&attempt["task"]))
     {
-        put(&mut lines, Part::Standing, "Plain English in chat: your reply goes to a person. Put the answer in the first sentence, in plain words a busy person reads in seconds, then only what they must decide or do: about 90 words unless they asked for more (a full list, a draft, every open task) or the reply quotes a draft they must read whole. A fact they need beats the word count. Leave out task IDs, commit hashes, message IDs, s3:// URIs, file paths, tool names and how you checked; that evidence belongs in the task note or a report. Offer it instead of pasting it. Name things as the person would: the vendor, the amount, the date. When you correct an earlier answer, say what changed in one sentence.".into());
+        put(&mut lines, Part::Standing, "Plain English in chat: your reply goes to a person. Answer first, in plain words a busy person reads in seconds, then only what they must decide or do. Leave out task IDs, commit hashes, message IDs, s3:// URIs, file paths, tool names and how you checked; that evidence belongs in the task note or a report. Offer it instead of pasting it. Name things as the person would: the vendor, the amount, the date. When you correct an earlier answer, say what changed in one sentence.".into());
+    }
+    // The length a person reads at a glance, for a reply to a person's own written words. It is this turn's own line: a
+    // bot's hand-off on the same task gets no length rule, a spoken turn keeps its own (the "Spoken turn" line), and the
+    // standing part a resumed session holds stays the same across all three.
+    let spoken = truthy(&message["refs"]["voice"]);
+    if (kind == "chat" || kind == "task") && !setup && person && !spoken {
+        put(&mut lines, Part::Turn, "Reply length: put the answer in the first sentence and keep the reply to about 90 words, unless the person asked for more (a full list, a draft, every open task) or it quotes a draft they must read whole; then give all of it. A fact they need beats the word count. On a spoken turn the spoken rule wins over this one.".into());
     }
     // The Assistant's replies and lookups follow its rulebook (templates/catalog/assistant/AGENTS.md), not this contract.
     if kind == "chat" && !setup && person && !assistant {
-        put(&mut lines, Part::Standing, "Human chat response contract: lead with the answer or outcome. Give the whole list, comparison or draft when the person asks for it; otherwise keep to about 90 words. If the person asks for one thing, focus on that thing; do not substitute the standing backlog or add unrelated tasks. For a next-priority question, first run `tico health check` and use its current open, doing, waiting, and needs-human state; never repeat an item that current state shows is done merely because it appears in conversation history. Check the current external source, such as a PR's actual state, when the Hub note may be stale. Use the task's attached URL for that check; do not guess a repository from its title. If the first lookup fails, inspect the attached URL and retry the exact source. Never call work blocked until you verify the missing permission or dependency. Carry forward the person's scoped authorization instead of asking again.".into());
+        put(&mut lines, Part::Standing, "Human chat response contract: lead with the answer or outcome. Give the whole list, comparison or draft when the person asks for it in writing; a spoken turn keeps its own rule. If the person asks for one thing, focus on that thing; do not substitute the standing backlog or add unrelated tasks. For a next-priority question, first run `tico health check` and use its current open, doing, waiting, and needs-human state; never repeat an item that current state shows is done merely because it appears in conversation history. Check the current external source, such as a PR's actual state, when the Hub note may be stale. Use the task's attached URL for that check; do not guess a repository from its title. If the first lookup fails, inspect the attached URL and retry the exact source. Never call work blocked until you verify the missing permission or dependency. Carry forward the person's scoped authorization instead of asking again.".into());
     }
     // The card (and the person's snapshot), read as the run starts (backend/run_header.py), at the turn's tail: after
     // the room and the current message, last of all. It changes from turn to turn, so it is this turn's own part: the
@@ -1272,33 +1279,66 @@ mod tests {
     }
 
     #[test]
-    fn a_reply_to_a_person_is_the_answer_first_in_about_90_words_unless_they_asked_for_more() {
+    fn a_reply_to_a_persons_written_words_is_the_answer_first_in_about_90_words_unless_they_asked_for_more(
+    ) {
         let names = Names {
             company: "Acme".into(),
             app: "Tico".into(),
             assistant: "assistant".into(),
         };
-        let ana = json!({"id": "m1", "from_actor": "human:ana", "body": "Is the release out?", "refs": {}});
-        let chat = |bot: &str| json!({"id": "a1", "bot": bot, "conversation": {"id": "c1", "kind": "chat"}, "message": ana, "history": [ana]});
-        let task = json!({"id": "a2", "bot": "ops", "conversation": {"id": "c2", "kind": "task"},
-            "task": {"id": "t2", "title": "Ship v1"}, "message": ana, "history": [ana]});
-        // Every bot a person wakes, on a task or in a chat, the Assistant included, gets the one number.
+        let said = |from: &str, refs: Value| json!({"id": "m1", "from_actor": from, "body": "Every open task, please", "refs": refs});
+        let chat = |bot: &str, message: Value| json!({"id": "a1", "bot": bot, "conversation": {"id": "c1", "kind": "chat"}, "message": message, "history": [message]});
+        let task = |message: Value| {
+            json!({"id": "a2", "bot": "ops", "conversation": {"id": "c2", "kind": "task"},
+                "task": {"id": "t2", "title": "Ship v1"}, "message": message, "history": [message]})
+        };
+        let ana = said("human:ana", json!({}));
+        // Every bot a person writes to, on a task or in a chat, the Assistant included, gets the one number.
         for (who, attempt) in [
-            ("chat", chat("ops")),
-            ("task", task),
-            ("assistant", chat("assistant")),
+            ("chat", chat("ops", ana.clone())),
+            ("task", task(ana.clone())),
+            ("assistant", chat("assistant", ana.clone())),
         ] {
             let text = prompt(&attempt, &names, None, false);
             for rule in [
                 "the answer in the first sentence",
                 "about 90 words",
-                "unless they asked for more",
+                "unless the person asked for more",
                 "quotes a draft",
             ] {
                 assert!(text.contains(rule), "{who}: {rule} is missing: {text}");
             }
             // No line asks for "enough" in a reply to a person without the "unless they asked" condition.
             assert!(!text.contains("Use enough explanation"), "{who}: {text}");
+        }
+        // A bot's hand-off on a task sets no length: bot-to-bot messages are not limited.
+        let handoff = prompt(&task(said("bot:qa", json!({}))), &names, None, false);
+        assert!(!handoff.contains("about 90 words"), "{handoff}");
+        // A spoken request keeps the spoken rule alone, even for a whole list.
+        for (who, attempt) in [
+            (
+                "chat",
+                chat("ops", said("human:ana", json!({"voice": true}))),
+            ),
+            (
+                "assistant",
+                chat(
+                    "assistant",
+                    said("human:ana", json!({"assistant": true, "voice": true})),
+                ),
+            ),
+        ] {
+            let text = prompt(&attempt, &names, None, false);
+            assert!(
+                text.contains("one to three short plain sentences"),
+                "{who}: {text}"
+            );
+            assert!(!text.contains("about 90 words"), "{who}: {text}");
+            assert!(
+                !text.contains("Give the whole list")
+                    || text.contains("a spoken turn keeps its own rule"),
+                "{who}: {text}"
+            );
         }
     }
 

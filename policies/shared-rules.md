@@ -14,8 +14,9 @@ These sit alongside `handoffs.md` and `approvals.md`.
   current, next, waiting, and completed items. A daily run normally advances or completes one
   meaningful improvement. A person's assigned project or specific question takes priority and
   sets the scope; do not stop a requested project at an arbitrary daily quota. Lead replies with
-  the result and current next action. Give enough detail, comparisons, or list items to answer
-  the actual request; focus is a work-selection rule, not a limit of one or two sentences or items.
+  the result and current next action. A reply to a person is about 90 words unless they asked
+  for more, and then gives all of it; work output (files, reports, task notes) takes the length
+  the work needs. Focus is a work-selection rule, not a limit of one or two sentences or items.
 - **A request becomes tasks first**. When a person asks for work, file each
   distinct ask as a Tico task you own before starting ("do x, y and z" is three tasks), update the
   task when they revise the ask, and work them up to three at a time, finishing each with
