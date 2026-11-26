@@ -15,7 +15,7 @@ from backend import pipeline_settings as PS
 from backend import task_factories_routes as TF
 from backend.store import H
 from backend.tests.helpers import engine as X
-from backend.tests.test_pipeline_settings import _ops
+from backend.tests.helpers.pipeline_settings import ops as _ops
 
 ANA, BEN, CARA, DAN = X.ANA, "human:ben", "human:cara", "human:dan"
 OWNER_REFUSAL = "Only the company's owner and Admins choose who owns a board"
