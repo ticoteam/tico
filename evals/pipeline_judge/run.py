@@ -1,6 +1,6 @@
 """Pipeline judge matrix: python -m evals.pipeline_judge.run --models jev [--dry-run] [--out DIR].
 
-cases.json holds 101 labeled cases for the requirement judge (backend/pipeline_judges.py): a requirement, the attachment
+cases.json holds 103 labeled cases for the requirement judge (backend/pipeline_judges.py): a requirement, the attachment
 as text (what a caption or OCR and the metadata say), the work's current version, and the right answer: met, not_met or
 unsure. 60 are Dev (tests pass, screenshots match spec, review done, spec, pre-release and Checked in production pages)
 and 32 Marketing (lead has company and contact, campaign brief approved, landing page live, Growth go-live and results

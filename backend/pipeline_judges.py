@@ -268,12 +268,12 @@ CHECKS: dict[str, tuple[Part, ...]] = {
         ),
         Part(
             "findings",
-            "gives each real defect its own finding with file:line, a severity and why it matters, or says there are "
-            "no blocking findings (its non-blocking notes need no file:line); a finding on the PR description may cite "
-            "the guideline line it breaks as its file:line",
-            "A finding lacks file:line, a severity or why it matters, or there is no line saying there are none.",
-            "Can't tell if each finding has file:line, a severity and why it matters.",
-            "Each finding has file:line, a severity and why, or it says none block.",
+            "gives each blocking finding its own file:line, a severity and why it matters; a page with no blocking "
+            "finding meets this whether it says so or lists only non-blocking notes, and those notes need no "
+            "file:line; a finding on the PR description may cite the guideline line it breaks as its file:line",
+            "A blocking finding lacks file:line, a severity or why it matters.",
+            "Can't tell if each blocking finding has file:line, a severity and why it matters.",
+            "Each blocking finding has file:line, a severity and why, or none block.",
         ),
     ),
     "validate": (
