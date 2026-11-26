@@ -407,6 +407,7 @@ KEEP = (
             "attempt_event_briefs",  # an event's status-line fields: its triggers drop it with its event
             "attempt_load_snapshots",
             "attempt_inputs",
+            "attempt_notes",  # which notes lists a run was offered and what its prompt did with them
             "backup_verified_blobs",
             "batches",
             "blob_locations",
@@ -725,7 +726,9 @@ KEEP = (
 )
 # Work still to do: a job or attempt in any other state is finished and kept as history.
 # Rows that belong to their attempt: they go with it and never hold an old attempt back.
-OWNED = frozenset(("attempt_events", "attempt_conversations", "attempt_inputs", "attempt_load_snapshots"))
+OWNED = frozenset(
+    ("attempt_events", "attempt_conversations", "attempt_inputs", "attempt_load_snapshots", "attempt_notes")
+)
 OPEN_JOBS = ("queued", "leased", "running", "input", "uncertain")
 OPEN_ATTEMPTS = ("queued", "leased", "running", "input")
 

@@ -1,10 +1,12 @@
-"""A run's pipeline and stage notes, as its record shows them (backend/pipeline_notes.py): `notes_offered`, the lists
-its claim carried ("pipeline", "stage" or "pipeline,stage"), and `notes_sent`, what the runner says the turn's prompt
-did with each (JSON, runner-rs/src/prompt.rs notes_sent). Both NULL on runs from before, and on runs with no notes."""
+"""A run's pipeline and stage notes, as its record shows them (backend/pipeline_notes.py), in a table of its own so the
+change adds no column to `attempts` (another pending migration adds one there, and two such migrations would order its
+columns by which ran first): `offered`, the lists the claim carried ("pipeline", "stage" or "pipeline,stage"), and
+`sent`, what the runner says the turn's prompt did with each (JSON, runner-rs/src/prompt.rs notes_sent). A run with no
+row had no notes, or came before this."""
 
 
 def up(conn):
-    have = {row[1] for row in conn.execute("PRAGMA table_info(attempts)")}
-    for column in ("notes_offered", "notes_sent"):
-        if column not in have:
-            conn.execute(f"ALTER TABLE attempts ADD COLUMN {column} TEXT")
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS attempt_notes(attempt_id TEXT PRIMARY KEY REFERENCES attempts(id), offered TEXT, "
+        "sent TEXT)"
+    )

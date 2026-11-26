@@ -78,7 +78,8 @@ turn that already holds it leaves it out, and a compaction during that turn give
 and an older runner ignores it.
 Once the server's features say `run_notes`, the turn's result carries `notes`: for each list the claim offered (or
 the session had and is now told no longer applies), `given`, `held` or `retracted`. The server keeps it on the run
-(`attempts.notes_sent`), beside the lists the claim offered (`attempts.notes_offered`).
+(`attempt_notes.sent`), beside the lists the claim offered (`attempt_notes.offered`); a run's record reads them as
+`notes_sent` and `notes_offered`.
 
 Claim attempts may include `run_header`: at most 2,000 characters on where the turn's card stands now (stage, time in
 it, version, whose turn, what is met and missing, what others changed since the bot's last run there, the stage's rules

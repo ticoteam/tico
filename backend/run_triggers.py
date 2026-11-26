@@ -28,7 +28,8 @@ Every run (its `attempts` row) records three things, all in plain code, none ask
 - `notes_offered`, `notes_sent`: the task's notes lists the claim carried (`pipeline`, `stage`, comma-joined;
   backend/pipeline_notes.py) and what the runner says the prompt did with each (`notes`: given, held or retracted).
   NULL when none were offered and none retracted, and `notes_sent` NULL from an older runner. The run's stored input is
-  only its message, so this is how anyone checks the notes reached the bot.
+  only its message, so this is how anyone checks the notes reached the bot. Both are kept in `attempt_notes`, one row
+  per run that had any, and read into the run's record.
 - `purpose`: a short stable label for the work (`review PR`, `answer person message`), so a week of runs can be
   grouped by what they were for. The place that writes a wake may name it (`stamp(..., purpose=)`); a run nobody
   named gets `purpose_for(bot, trigger_kind)`, the same map that fills the label on runs from before it existed. A
@@ -285,13 +286,16 @@ def session(conn, turn_id, session):
 
 
 def notes(conn, turn_id, notes):
-    """Record what the run's prompt did with its task's notes lists (`notes_sent`, JSON), a late result filed after its
+    """Record what the run's prompt did with its task's notes lists (`attempt_notes.sent`, JSON), a late result filed after its
     lease expired included: it says what the prompt held, whenever it arrives. A runner that reports none (an older one,
-    or a turn offered none) leaves the column NULL."""
+    or a turn offered none) writes nothing."""
     sent = notes.model_dump(exclude_none=True) if notes is not None else {}
     if not sent:
         return 0
-    return conn.execute("UPDATE attempts SET notes_sent=? WHERE id=?", (json.dumps(sent), turn_id)).rowcount
+    return conn.execute(
+        "INSERT INTO attempt_notes(attempt_id, sent) VALUES(?,?) ON CONFLICT(attempt_id) DO UPDATE SET sent=excluded.sent",
+        (turn_id, json.dumps(sent)),
+    ).rowcount
 
 
 def turn_result(conn, actor, row, outcome, event, to=None):

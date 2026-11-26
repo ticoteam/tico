@@ -6360,7 +6360,11 @@ class Execution:
         learned_here = pipeline_notes.for_task(c, task) if task and not relationship and not typed else {}
         if learned_here:
             # The run's record says which lists its claim carried (backend/run_triggers.py `notes_offered`).
-            c.execute("UPDATE attempts SET notes_offered=? WHERE id=?", (",".join(learned_here), aid))
+            c.execute(
+                "INSERT INTO attempt_notes(attempt_id, offered) VALUES(?,?) "
+                "ON CONFLICT(attempt_id) DO UPDATE SET offered=excluded.offered",
+                (aid, ",".join(learned_here)),
+            )
         wire_config = runner_versions.wire_template(rooms.session_config(conv, row["bot_id"], config))
         session_fence = None
         moved_history = None
