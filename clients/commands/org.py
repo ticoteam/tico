@@ -819,8 +819,14 @@ HUMAN = (
         example="tico human availability-set me --availability async --until 2030-01-01T09:00:00Z",
     ),
     Command(
+        "human leaving",
+        "what removing someone would move, changing nothing (`human remove <person> --preview` runs it too)",
+        example="tico human leaving ben",
+    ),
+    Command(
         "human remove",
-        "mark someone as left; --delete removes someone with no history for good (the owner)",
+        "mark someone as left; --preview lists what it would move first; --delete removes someone with no history for "
+        "good (the owner)",
         args=(Arg("confirm", "--confirm"), Arg("delete", default=None)),
         example='tico human remove ben --confirm "Ben Ortiz"',
     ),
