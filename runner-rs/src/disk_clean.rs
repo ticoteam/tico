@@ -13,7 +13,7 @@
 //!    repack of a large clone outlives the runner's Git time limit, leaves partial packs when stopped, and holds
 //!    the clone's lock while other bots' worktree steps wait;
 //! 5. last, idle task checkouts of a bot's own repository (`sessions/bot-<bot>/<task>`, sessions.rs), oldest first: one
-//!    nothing touched for SESSION_IDLE_S, with no turn of its bot or on its task, no file waiting to upload from it
+//!    nothing touched for SESSION_IDLE_S, with no turn in its bot's main checkout or on its task, no file waiting to upload from it
 //!    and no other checkout inside it, goes through sessions.rs `remove`, which keeps any tree holding uncommitted
 //!    work or a commit no remote has on it or its task branch. Its task may still be open (a ticket waiting in a later stage): its next turn
 //!    checks the tree out again. What goes with it is what its repository ignores (test videos, traces, builds).
@@ -487,7 +487,7 @@ pub fn idle_sessions(scope: &Scope) -> Vec<IdleSession> {
 }
 
 /// Take one idle task checkout away (`idle_sessions`) under its bot's checkout and task-lane locks and its repository's
-/// git lock, none of them waited for, once no turn of its bot or on its task runs and no file waits to upload from it
+/// git lock, none of them waited for, once no turn in its bot's main checkout or on its task runs and no file waits to upload from it
 /// (`pending`); sessions.rs `remove` then keeps it when it holds uncommitted work or a commit no remote has. The bytes
 /// freed.
 pub async fn remove_session(

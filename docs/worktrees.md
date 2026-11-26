@@ -92,7 +92,7 @@ anyone. It removes only what nothing can still need, in this order, and stops on
    clone. It never runs `git gc`: repacking a large clone takes longer than the computer's Git time limit, leaves
    partial packs when stopped, and holds the clone while other bots' worktree steps wait.
 5. Last, idle task checkouts of a bot's own repository (`sessions/bot-<bot>/<task>`, where a bot's turns on a task work),
-   oldest first: one nothing has touched for 2 hours, with no turn of its bot or on its task running and no file
+   oldest first: one nothing has touched for 2 hours, with no turn in its bot's main checkout or on its task running and no file
    waiting to upload from it, and no other checkout inside it. It goes only when Git shows nothing uncommitted or
    untracked in it and every commit on it and on its task branch is on a remote; its branch goes with it. Its task may still be open (a
    ticket waiting in a later stage): the next turn on it checks the tree out again. What its repository ignores
