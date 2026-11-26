@@ -2,6 +2,7 @@
 
 Benchmarks, the rollback check and query tests that need more than one company call api_client directly."""
 
+import dataclasses
 import sqlite3
 from contextlib import closing
 
@@ -12,10 +13,11 @@ from backend.tests.helpers.api import api_settings
 from backend.tests.helpers.company import seed
 
 
-def api_client(tmp_path, api_database=None):
+def api_client(tmp_path, api_database=None, *, flight_recorder=False):
     """Yield a test client on a new database in `tmp_path` (a copy of `api_database`, the worker's schema snapshot, when
-    given): seven bots, three people, Ben an admin, the inbox bot Ana's alone, and onboarding done."""
-    settings = api_settings(tmp_path)
+    given): seven bots, three people, Ben an admin, the inbox bot Ana's alone, and onboarding done. `flight_recorder`
+    turns the flight recorder on, for a test of what it keeps of a request."""
+    settings = dataclasses.replace(api_settings(tmp_path), flight_recorder=flight_recorder)
     if api_database is not None:
         with closing(sqlite3.connect(api_database.as_uri() + "?mode=ro", uri=True)) as source:
             with closing(sqlite3.connect(settings.db_path)) as target:

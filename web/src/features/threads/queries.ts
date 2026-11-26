@@ -73,24 +73,27 @@ export const threadQuery = (id: string) =>
     queryFn: ({ signal }) => readThread(id, signal),
   });
 
-export interface CatchUpItem {
-  thread: Thread;
-  messages: ChatMessage[];
-  new_count: number;
-  more?: boolean;
-  mention?: boolean;
+/** A Catch up item that mentions or asks the viewer: what the menu needs to mark it (`asksOf`). `with` is a DM's other
+    member. */
+export interface CatchUpMention {
+  id: string;
+  audience: string;
+  task_id?: string | null;
+  with?: string | null;
 }
+/** Catch up counted, without its cards: the badge, the roots it counts, and the mentions among them, in its order. */
 export interface CatchUp {
   count: number;
-  items: CatchUpItem[];
-  next_cursor?: string | null;
+  ids: string[];
+  mentions: CatchUpMention[];
 }
 
 /** What is new, thread by thread, mentions first: which conversations ask you (the Dot), and whether Tico has
-    something to catch you up on. */
+    something to catch you up on. The count route only: nothing in the app shows Catch up's cards, and the page with
+    them cost every page 120 KB (spec: the menu counts Catch up without loading it). */
 export const catchUpQuery = queryOptions({
   queryKey: threadKeys.catchUp,
-  queryFn: ({ signal }) => api.get<CatchUp>('/api/v2/threads/catch-up?limit=20', { signal }),
+  queryFn: ({ signal }) => api.get<CatchUp>('/api/v2/threads/catch-up/count', { signal }),
 });
 
 /**
@@ -173,8 +176,9 @@ export function readAll(ids: string[]) {
       if (!d) return d;
       if ('pages' in d)
         return { ...d, pages: d.pages.map((p) => ({ ...p, rows: p.rows.map((t) => (ids.includes(t.id) ? { ...t, me: { ...t.me, unread: 0 } } : t)) })) };
-      const items = d.items.filter((i) => !ids.includes(i.thread.id));
-      return { ...d, items, count: Math.max(0, d.count - (d.items.length - items.length)) };
+      const left = d.ids.filter((i) => !ids.includes(i));
+      const mentions = d.mentions.filter((m) => !ids.includes(m.id));
+      return { ...d, ids: left, mentions, count: Math.max(0, d.count - (d.ids.length - left.length)) };
     },
     send: async (idempotencyKey) => {
       for (const id of ids) await api.post(`/api/v2/threads/${enc(id)}/read-all`, {}, { idempotencyKey: `${idempotencyKey}:${id}` });

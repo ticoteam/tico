@@ -175,8 +175,26 @@ SCHEMAS.update(
                     "items": {"type": "string"},
                     "description": "The root of each item counted, in Catch up's order",
                 },
+                "mentions": {
+                    "type": "array",
+                    "items": obj(
+                        {
+                            "id": "s",
+                            "audience": "s",
+                            "task_id": "n",
+                            "with": {
+                                "type": ["string", "null"],
+                                "description": "For a DM, the other member (an actor id), as the thread's dm_with "
+                                "names first; else null",
+                            },
+                        },
+                        ["id", "audience", "task_id", "with"],
+                    ),
+                    "description": "The items among `ids` that mention or ask the viewer (an @mention, an ask, an "
+                    "assignment, a person's reply), in the same order",
+                },
             },
-            ["count", "ids"],
+            ["count", "ids", "mentions"],
         ),
         "ThreadSearch": obj(
             {

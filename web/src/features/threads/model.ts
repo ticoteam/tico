@@ -112,20 +112,24 @@ export interface Asks {
 /**
  * A conversation asks you when Catch up flags it `mention` (an @mention, an ask, an assignment, or a person's reply to
  * you, past your read mark), or when it is a DM from a person with something you have not read. An agent's DM counts
- * only through the flag: its unread status lines ask nothing. `catchUp` is Catch up's first page (mentions come first
- * in it); `rows` the loaded list. A task's thread is the task's, not a conversation's.
+ * only through the flag: its unread status lines ask nothing. `catchUp` is Catch up's count, whose `mentions` are its
+ * mention items among the first 99 (a DM's with its other member); `rows` the loaded list. A task's thread is the
+ * task's, not a conversation's.
  */
-export function asksOf(catchUp: { items: { thread: Thread; mention?: boolean }[] } | undefined, rows: readonly Thread[], me: string | undefined): Asks {
+export function asksOf(
+  catchUp: { mentions: readonly { id: string; audience: string; task_id?: string | null; with?: string | null }[] } | undefined,
+  rows: readonly Thread[],
+  me: string | undefined,
+): Asks {
   const threads = new Set<string>();
   const mates = new Set<string>();
-  const add = (t: Thread) => {
+  const add = (t: Pick<Thread, 'id' | 'task_id' | 'audience' | 'kind'>, other: string | undefined) => {
     if (isTaskThread(t)) return;
     threads.add(t.id);
-    const other = t.audience === 'personal' ? othersOf(t, me)[0] : undefined;
-    if (other) mates.add(other);
+    if (t.audience === 'personal' && other) mates.add(other);
   };
-  for (const it of catchUp?.items ?? []) if (it.mention) add(it.thread);
-  for (const t of rows) if (t.audience === 'personal' && unreadOf(t) > 0 && othersOf(t, me)[0]?.startsWith('human:')) add(t);
+  for (const m of catchUp?.mentions ?? []) add({ id: m.id, task_id: m.task_id ?? undefined, audience: m.audience as Thread['audience'] }, m.with ?? undefined);
+  for (const t of rows) if (t.audience === 'personal' && unreadOf(t) > 0 && othersOf(t, me)[0]?.startsWith('human:')) add(t, othersOf(t, me)[0]);
   return { threads, mates };
 }
 

@@ -15,6 +15,8 @@ import orjson
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, Response
 
+from . import flight
+
 OPTIONS = orjson.OPT_NON_STR_KEYS
 
 
@@ -60,9 +62,10 @@ def answering_json(endpoint, status_code=None):
         if not isinstance(out, (dict, list)):
             return out
         given = kwargs.get(sub) if sub else None
-        response = OrjsonResponse(
-            out, status_code=(given.status_code if given is not None and given.status_code else code)
-        )
+        with flight.part("encode"):  # a slow sample names its encoding (backend/flight.py)
+            response = OrjsonResponse(
+                out, status_code=(given.status_code if given is not None and given.status_code else code)
+            )
         if given is not None:
             response.headers.raw.extend((k, v) for k, v in given.headers.raw if k != b"content-length")
         return response

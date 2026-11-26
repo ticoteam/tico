@@ -68,21 +68,28 @@ describe('names', () => {
 });
 
 describe('what asks you', () => {
-  it('is a thread Catch up flags as a mention, or a person\'s DM not read; an agent\'s DM only when flagged; never a task', () => {
+  it('is a thread Catch up counts as a mention, or a person\'s DM not read; an agent\'s DM only when flagged; never a task', () => {
     const dm = row('d1', 3, { audience: 'personal', dm_with: [{ actor: 'human:me' }, { actor: 'human:ana' }], me: { unread: 1 } });
     const read = row('d2', 4, { audience: 'personal', dm_with: [{ actor: 'human:jo' }], me: { unread: 0 } });
     const agent = row('d3', 5, { audience: 'personal', dm_with: [{ actor: 'bot:gm' }], me: { unread: 4 } });
-    const asking = row('d4', 6, { audience: 'personal', dm_with: [{ actor: 'bot:qa' }], me: { unread: 1 } });
-    const team = row('h1', 5, { audience: 'home', home: { actor: 'group:g1' } });
-    const task = row('k1', 6, { task_id: 'k1' });
     const quiet = row('q1', 7);
-    const a = asksOf(
-      { items: [{ thread: team, mention: true }, { thread: task, mention: true }, { thread: quiet, mention: false }, { thread: asking, mention: true }] },
-      [dm, read, quiet, agent, asking],
-      'human:me',
-    );
+    // The count route's mentions: a team's room, a task's room, and an agent's DM that asks (its view not loaded).
+    const mentions = [
+      { id: 'h1', audience: 'home', task_id: null, with: null },
+      { id: 'k1', audience: 'members', task_id: 'k1', with: null },
+      { id: 'd4', audience: 'personal', task_id: null, with: 'bot:qa' },
+    ];
+    const a = asksOf({ mentions }, [dm, read, quiet, agent], 'human:me');
     expect([...a.threads].sort()).toEqual(['d1', 'd4', 'h1']);
     expect([...a.mates].sort()).toEqual(['bot:qa', 'human:ana']);
+  });
+
+  it('marks every thread Catch up counts as asking, not only those its first page of cards held', () => {
+    const mentions = Array.from({ length: 25 }, (_, n) => ({ id: `m${n}`, audience: 'members', task_id: null, with: null }));
+    const dm = row('d1', 3, { audience: 'personal', dm_with: [{ actor: 'human:ana' }], me: { unread: 2 } });
+    const a = asksOf({ mentions }, [dm], 'human:me');
+    expect(a.threads.size).toBe(26);
+    expect([...a.mates]).toEqual(['human:ana']);
   });
 });
 

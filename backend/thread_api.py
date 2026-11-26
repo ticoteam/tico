@@ -783,17 +783,18 @@ def install(app, store, auth, mutate, rule_check):
         **api_v2(
             "Threads",
             "countThreadCatchUp",
-            "Catch up's badge alone: `count`, how many items GET /api/v2/threads/catch-up lists (at most 99), and `ids`, their roots, in its order; no thread views, cards or shown messages",
+            "Catch up's badge alone: `count`, how many items GET /api/v2/threads/catch-up lists (at most 99), `ids`, their roots, in its order, and `mentions`, those of them that mention or ask the viewer, each with its audience, task and, for a DM, the other member; no thread views, cards or shown messages",
             "ThreadCatchUpCount",
         ),
     )
     def catch_up_count(request: Request):
-        """Catch up's `count` and the roots it counts (`ids`): the menu's badge. It makes the same checks Catch up does
-        to decide which roots count, and builds no thread view or card and reads no message to show."""
+        """Catch up's `count`, the roots it counts (`ids`) and the mentions among them: the menu's badge and the threads
+        that ask the reader. It makes the same checks Catch up does to decide which roots count, and builds no thread
+        view or card and reads no message to show."""
         v = threads.viewer(auth, request.state.identity)
         with store.read_transaction() as c:
-            count, ids = thread_rail.catch_up_count(c, v)
-            return {"count": count, "ids": ids}
+            count, ids, mentions = thread_rail.catch_up_count(c, v)
+            return {"count": count, "ids": ids, "mentions": mentions}
 
     @app.get(
         "/api/v2/threads/home/{actor}",

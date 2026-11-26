@@ -43,7 +43,7 @@ const { gate, q, catchUpRead, lists, pages, ranked, rankFails, listFails, owners
   /** How many of the next pipeline list reads fail (a 503, not tried again). */
   listFails: { n: 0 },
   q: <T,>(key: string, data: T) => ({ queryKey: [key], queryFn: async () => data, staleTime: Infinity }),
-  catchUpRead: vi.fn(async () => ({ count: 0, items: [] })),
+  catchUpRead: vi.fn(async () => ({ count: 0, ids: [], mentions: [] })),
   /** How many times the shell drew itself (it asks whether a file is open, once a draw). */
   shellDraws: { n: 0 },
 }));
@@ -200,7 +200,7 @@ vi.mock('@/features/threads/exports', () => ({
 vi.mock('@/features/threads/routing', async () => ({
   asksOf: (await vi.importActual<{ asksOf: unknown }>('@/features/threads/routing')).asksOf,
   threadQuery: (id: string) => q(`thread:${id}`, null),
-  catchUpQuery: { ...q('catch-up', { count: 0, items: [] }), queryFn: catchUpRead },
+  catchUpQuery: { ...q('catch-up', { count: 0, ids: [], mentions: [] }), queryFn: catchUpRead },
   threadListQuery: { queryKey: ['threads-list'], queryFn: async () => ({ rows: [], next: null }), initialPageParam: null, getNextPageParam: () => undefined, staleTime: Infinity },
 }));
 vi.mock('@/features/support/exports', () => ({ SupportChat: () => <p>support chat</p> }));

@@ -18,7 +18,7 @@ import base64
 import json
 import logging
 
-from . import task_privacy
+from . import flight, task_privacy
 from . import threads as T
 from .store import H, Problem
 
@@ -1021,12 +1021,37 @@ def _first(items, n):
 
 
 def catch_up_count(c, v):
-    """(how many Catch up items the reader has, at most CATCH_UP_SHOWN; their root ids): the sidebar's badge, and the
-    set a client keeps from the live stream. It stops at CATCH_UP_SHOWN, and reads a message whole only where the walk's
-    per-message check needs it: no card, thread view or message to show."""
+    """(how many Catch up items the reader has, at most CATCH_UP_SHOWN; their root ids; the mentions among them): the
+    menu's badge, the set a client keeps from the live stream, and the threads that ask the reader. It stops at
+    CATCH_UP_SHOWN, and reads a message whole only where the walk's per-message check needs it: no card, thread view or
+    message to show. Each mention is {id, audience, task_id, with}: `with` is the other member of a DM (`dm_with`'s
+    first, as the thread's view gives it), else None. The walk's checks passed for each, so a root the reader may not
+    read, or a DM they left, is not among them and none of its members is named."""
     v = _viewer(v)
-    found = _first(_walk(c, v, _flags(c, v)), CATCH_UP_SHOWN)
-    return len(found), [it["row"]["id"] for it in found]
+    with flight.part("flags"):
+        flags = _flags(c, v)
+    with flight.part("walk"):
+        found = _first(_walk(c, v, flags), CATCH_UP_SHOWN)
+    with flight.part("mentions"):
+        mentions = _mentions(c, v, [it["row"] for it in found if it["mention"]])
+    return len(found), [it["row"]["id"] for it in found], mentions
+
+
+def _mentions(c, v, rows):
+    """The count route's `mentions`: these roots, in order, with what the menu needs to mark them (`catch_up_count`)."""
+    dms = T.dm_with(c, v, [r for r in rows if T.audience_of(r) == "personal"]) if rows else {}
+    out = []
+    for r in rows:
+        people = (dms.get(r["id"]) or {}).get("dm_with") or []
+        out.append(
+            {
+                "id": r["id"],
+                "audience": T.audience_of(r),
+                "task_id": r.get("task_id"),
+                "with": people[0]["actor"] if people else None,
+            }
+        )
+    return out
 
 
 def catch_up(c, v, *, cursor=None, limit=CATCH_UP_LIMIT):
@@ -1044,13 +1069,21 @@ def catch_up(c, v, *, cursor=None, limit=CATCH_UP_LIMIT):
         if not all(isinstance(after[i], int) and not isinstance(after[i], bool) for i in (0, 1, 3)):
             raise Problem("cursor", "Unknown cursor", 422)
         after[3] = max(0, min(after[3], CATCH_UP_SCAN))
-    flags = _flags(c, v)
-    if after:
-        found = _first(_walk(c, v, flags, after), limit + 1)
-        count = len(_first(_walk(c, v, flags), CATCH_UP_SHOWN))
-    else:
-        found = _first(_walk(c, v, flags), max(limit + 1, CATCH_UP_SHOWN))
-        count = min(len(found), CATCH_UP_SHOWN)
+    with flight.part("flags"):
+        flags = _flags(c, v)
+    with flight.part("walk"):
+        if after:
+            found = _first(_walk(c, v, flags, after), limit + 1)
+            count = len(_first(_walk(c, v, flags), CATCH_UP_SHOWN))
+        else:
+            found = _first(_walk(c, v, flags), max(limit + 1, CATCH_UP_SHOWN))
+            count = min(len(found), CATCH_UP_SHOWN)
+    with flight.part("cards"):
+        return _cards(c, v, found, limit, count)
+
+
+def _cards(c, v, found, limit, count):
+    """Catch up's page from the walk's items (`catch_up`): the first `limit` as cards, within the page's byte budget."""
     page, more = found[:limit], len(found) > limit
     _count_exact(c, v, page)
     v._members = {}
