@@ -289,6 +289,13 @@ def _check_trigger(trigger):
     _need(isinstance(trigger, dict), "trigger", "is a map with a type")
     kind = trigger.get("type")
     _need(kind in TRIGGERS, "trigger", f"type is one of {', '.join(TRIGGERS)}")
+    # A listening trigger chooses what it sends with its own rules, and has scored and reserved its posts before a run
+    # is claimed: a skip there would undo half of that.
+    _need(
+        kind != "listening" or trigger.get("only_if") is None,
+        "trigger only_if",
+        "is not on a listening trigger: its rules choose what it sends",
+    )
     for key in TRIGGERS[kind]:
         _text(trigger.get(key), "trigger", key, cap=300)
     if kind == "schedule":
@@ -312,6 +319,19 @@ def _check_trigger(trigger):
             "inbox is an email address, slack:dm or slack:#<channel>",
         )
     check_conds(trigger.get("filters") or [], "trigger filters")
+    if trigger.get("only_if") is not None:
+        check_only_if(trigger["only_if"])
+
+
+def check_only_if(only_if, where="trigger only_if"):
+    """`{read, at_least: N}` or `{read, none: true}`: `read` one of the sources backend/automation_only_if.py counts,
+    with that source's filters only."""
+    from . import automation_only_if
+
+    try:
+        automation_only_if.check(only_if)
+    except automation_only_if.Refused as e:
+        raise Invalid(f"{where}: {e}") from None
 
 
 def _check_listening(trigger):
@@ -1017,6 +1037,14 @@ def shape_text():
         "Triggers (`trigger.type`, each with its fields; any may carry `filters`, conditions that drop a message before a run):",
     ]
     lines += [f"- `{kind}` {TRIGGER_WORDS[kind]}: {TRIGGER_FIELDS[kind]}" for kind in TRIGGERS]
+    lines += [
+        "",
+        "Any trigger but listening may carry `only_if` (`{\"read\", \"at_least\": N}` or `{\"read\", \"none\": true}`): "
+        "when it fires, Tico counts `read` (`tasks` with stage, status, owner, requester, label, lane or q; `prs` with "
+        "repo, state or idle_hours) as whoever last changed what the automation does; a miss skips the run with the "
+        "reason. The run reads `only_if.count` and `only_if.items`. Example: "
+        "`\"only_if\": {\"read\": \"tasks?stage=Release ready&status=open\", \"at_least\": 1}`.",
+    ]
     lines += ["", "Steps (each has `id`, `type` and `enabled`; ids are unique):"]
     lines += [f"- `{kind}`: {STEP_WORDS[kind]}" for kind in STEP_TYPES]
     lines += [

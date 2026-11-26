@@ -1873,6 +1873,64 @@ def test_work_its_tasks_snooze_holds_is_work_queueing_not_a_stuck_bot(environmen
         ]
 
 
+def _refused_for_13_hours(c, settings, bot):
+    """The bot's claim refusal as the scheduler records it, with its start moved back 13 hours: what Health's 12-hour
+    queued-work check (queue_refused) reports, or [] when its claim refuses nothing it should."""
+    from backend import queue_refusals as Q
+
+    Q.observe(c, settings)
+    row = Q.state(c, bot)
+    if row:
+        c.execute(
+            "UPDATE registry_metadata SET value=? WHERE key=?",
+            (H._dump({**row, "since": H.shift(H.now(), hours=-13)}), Q.KEY + bot),
+        )
+    return [(value["bot"], value["reason"]) for value in Q.aged(c, settings)]
+
+
+def test_work_its_tasks_snooze_holds_is_never_refused_for_12_hours(environment):
+    """Acme, Nov 17: Health's 12-hour queued-work check opened a task on its Product Manager every hour for a job
+    its task's snooze held on purpose (task_wait), while the slow-queue check called the same job resting. Only
+    ending the snooze cleared it. A snoozed task's notice is now never an aged refusal; any other refusal of the same
+    job still is."""
+    from backend.tests.helpers.run_failures import failing
+
+    api = environment()
+    runner = enrolled(api)
+    heartbeat(api, runner)
+    add_bot(api, "ops")
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('ops',?,1,?,'t')",
+            (runner, H.now()),
+        )
+        claimable(c, runner, "ops")
+        owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
+        task = H.task_create(c, owner, "Wait for a decision", "", "bot:ops", private=False, lint=False)
+        c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops' AND state='queued'")
+        notice = H._wake(c, H.task(c, task["id"]), "bot:ops", "A related task moved.", {"wake": "update"})
+        H.task_snooze(c, owner, task["id"], "Approve the plan first.")
+        c.execute(
+            "UPDATE jobs SET state='queued', created_at=? WHERE message_id=?",
+            (H.shift(H.now(), hours=-14), notice["id"]),
+        )
+        assert _refused_for_13_hours(c, api.app.state.store.settings, "ops") == []
+        online = {r["id"] for r in runner_online.online_rows(c)}
+        _, slow, stuck = health._waiting(c, online)
+        assert stuck == [] and [(row["bot"], row["reason"], row.get("resting")) for row in slow] == [
+            ("ops", "task_wait", True)
+        ]
+        # The snooze ends and the same job is refused for another reason: the bot is held for its failed runs. That
+        # is still reported after 12 hours.
+        H.task_unsnooze(c, owner, task["id"])
+        failing(c, "ops", 3, held_at=H.shift(H.now(), hours=-14), probe_at=H.shift(H.now(), days=2))
+        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (notice["id"],)).fetchone()[0] == "queued"
+        assert [
+            (bot, reason != "task_wait")
+            for bot, reason in _refused_for_13_hours(c, api.app.state.store.settings, "ops")
+        ] == [("ops", True)]
+
+
 def test_a_rejected_sign_in_says_when_in_clock_time_never_an_iso_stamp():
     from backend import health
 

@@ -239,6 +239,22 @@ def test_only_a_mover_changes_lane_or_labels_on_someone_elses_task(api):
 # ----------------------------------------------------------------------------- preferences
 
 
+def test_can_close_is_the_close_the_server_takes_from_this_reader(api):
+    """The approval card shows Close from `can_close`: whoever may work the task (task_calls.can_work), a manager of
+    its pipeline who neither moves tasks nor is a party to it included, and nobody once it is closed."""
+    task = post(api, "tasks", {"owner": "cmo", "title": "Draft the newsletter", "body": "x"})
+    assert get(api, "tasks/" + task["id"], token="priya-test")["can_close"] is False
+    assert get(api, "tasks/" + task["id"], token="ben-test")["can_close"] is True
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE pipelines SET manager_id='human:priya' WHERE id=?", (task["pipeline_id"],))
+    assert get(api, "tasks/" + task["id"], token="priya-test")["can_close"] is True
+    closed = post(
+        api, "tasks/" + task["id"] + "/move", {"to": "closed", "version": task["version"]}, token="priya-test"
+    )
+    assert closed["status"] == "closed"
+    assert get(api, "tasks/" + task["id"], token="priya-test")["can_close"] is False
+
+
 def test_related_tasks_list_each_other_hide_private_ones_and_survive_a_restore(api):
     api_half = post(api, "tasks", {"owner": "ops", "title": "Add the refund endpoint", "body": "x"})
     ui_half = post(api, "tasks", {"owner": "ben", "title": "Show the refund button", "body": "x"})

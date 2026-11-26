@@ -155,11 +155,34 @@ def _people_only(requirement: Row) -> Row:
     return {**requirement, "who_oks": "people_only"}
 
 
+# A finding on the PR description has no line of the diff to point at: the guideline line it breaks (CONTRIBUTING.md
+# for a missing Spec, Demo steps or Risk) is its place. Without saying so, the judge is unsure of a page whose one
+# finding is that, though it has a place, a severity and why.
+# A page with no blocking findings has nothing to place: the judge was unsure of ten such pages in one week (Nov 16 to
+# 23), each of which the manager OK'd unchanged. It meets the check when each review names the commit and says what
+# it read; its non-blocking notes need no file:line.
 REVIEW_RUBRIC = (
+    "Two reviews of the newest commit of every linked PR, each naming that commit and its model: use different models "
+    "and say what each checked. Give each real defect its own finding with file:line, severity, and why it matters; "
+    "a finding on the PR description may cite the file:line of the guideline it breaks. Skip style nits and diff "
+    "summaries. Say when there are no findings: a page with no blocking findings meets this when each review names "
+    "the commit and says what it read, and its non-blocking notes need no file:line."
+)
+# The combined Review rubric before a page with no blocking findings was said to meet it (EARLIER, `_follow`).
+_REVIEW_RUBRIC_BEFORE_NO_BLOCKERS = (
+    "Two reviews of the newest commit of every linked PR, each naming that commit and its model: use different models "
+    "and say what each checked. Give each real defect its own finding with file:line, severity, and why it matters; "
+    "a finding on the PR description may cite the file:line of the guideline it breaks. Skip style nits and diff "
+    "summaries. Say when there are no findings."
+)
+# The combined Review rubric before a PR-description finding could cite its guideline line (EARLIER, `_follow`).
+_REVIEW_RUBRIC_BEFORE_DESCRIPTION = (
     "Two reviews of the newest commit of every linked PR, each naming that commit and its model: use different models "
     "and say what each checked. Give each real defect its own finding with file:line, severity, and why it matters. "
     "Skip style nits and diff summaries. Say when there are no findings."
 )
+# Every text the combined Review rubric has shipped with: asked as pipeline_judges.CHECKS["two_reviews"].
+COMBINED_REVIEW_RUBRICS = (REVIEW_RUBRIC, _REVIEW_RUBRIC_BEFORE_NO_BLOCKERS, _REVIEW_RUBRIC_BEFORE_DESCRIPTION)
 # The single-review line the presets shipped before the one Review stage (still recognised, EARLIER).
 # Judged from the page alone (Jev is shown the linked PRs' newest commits beside it), and true of a good review of a
 # correct change: one with nothing to fix says so. "What is wrong" alone made a clean review read as incomplete, and
@@ -521,8 +544,17 @@ _REVIEW_PURPOSE_BEFORE_BODY = (
 )
 EARLIER: dict[str, tuple[str, ...]] = {
     "product-ideas/purpose": ("Ideas wait here. Move one to Spec when it is worth a spec. Snooze one to park it.",),
-    "engineering-review-1/page/rubric": (LEGACY_REVIEW_RUBRIC, _REVIEW_RC3),
-    "product-review-1/page/rubric": (LEGACY_REVIEW_RUBRIC,),
+    "engineering-review-1/page/rubric": (
+        LEGACY_REVIEW_RUBRIC,
+        _REVIEW_RC3,
+        _REVIEW_RUBRIC_BEFORE_DESCRIPTION,
+        _REVIEW_RUBRIC_BEFORE_NO_BLOCKERS,
+    ),
+    "product-review-1/page/rubric": (
+        LEGACY_REVIEW_RUBRIC,
+        _REVIEW_RUBRIC_BEFORE_DESCRIPTION,
+        _REVIEW_RUBRIC_BEFORE_NO_BLOCKERS,
+    ),
     "engineering-review-1/purpose": ("Review the newest commit and attach a Review page.", _REVIEW_PURPOSE_BEFORE_BODY),
     "product-review-1/purpose": ("Review the newest commit and attach a Review page.", _REVIEW_PURPOSE_BEFORE_BODY),
     "engineering-fixes-2/purpose": (
@@ -1688,6 +1720,41 @@ def save(
         after = read(conn, pid)
         assert after is not None
     return after
+
+
+NEAR_BAR = (
+    "The {line} bar on {stage} is close to Tico's {bar} bar but not the same, so it is now judged as one whole question, "
+    "not as Tico's {parts} calibrated parts. To keep the calibrated check, save Tico's text for this bar: tico "
+    "requirement update {requirement} --rubric {text}"
+)
+
+
+def near_bar_notes(record: Row) -> list[str]:
+    """What a save says, and never refuses, about each page bar that is close to one of Tico's bars but not the same
+    (pipeline_judges.near_bar): it is judged whole from now on, and how to put Tico's text back. Nothing is changed."""
+    from . import pipeline_judges as PJ
+
+    notes: list[str] = []
+    for stage in cast("list[Row]", record.get("stages") or []):
+        for req in cast("list[Row]", stage.get("requirements") or []):
+            if req.get("kind") != "page":
+                continue
+            settings = cast(Row, req.get("settings") or {})
+            near = PJ.near_bar(settings.get("rubric"))
+            if near is None:
+                continue
+            check = near[0]
+            notes.append(
+                NEAR_BAR.format(
+                    line=req.get("line") or "page",
+                    stage=stage.get("name") or "a stage",
+                    bar=PJ.BAR_NAMES[check],
+                    parts=len(PJ.CHECKS[check]),
+                    requirement=req.get("id") or "<requirement>",
+                    text=json.dumps(near[1], ensure_ascii=False),
+                )
+            )
+    return notes
 
 
 def _add_late_rules(conn: "sqlite3.Connection", pipeline_id: str, record: Row) -> None:

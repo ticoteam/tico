@@ -6339,7 +6339,7 @@ class Execution:
         subscriptions = model_subscriptions.hand_out(c, aid, subscribed, who.runner_id)
         parked = c.execute("SELECT onboarding_state FROM bot_config WHERE bot=?", (row["bot_id"],)).fetchone()
         from .chat_goals import current
-        from . import task_context
+        from . import pipeline_notes, task_context
         from .finance import brief as finance_brief
 
         make_page_task = self.auth.task(c, acting or bot_who, making_page["task"]) if making_page else None
@@ -6355,6 +6355,7 @@ class Execution:
         runner_wire.conversation(c, conv)
         runner_wire.conversation(c, conversation)  # the claim's copy (thread_payload) was made before
         wire_task = runner_wire.task(task)
+        learned_here = pipeline_notes.for_task(c, task) if task and not relationship else {}
         wire_config = runner_versions.wire_template(rooms.session_config(conv, row["bot_id"], config))
         session_fence = None
         moved_history = None
@@ -6491,6 +6492,9 @@ class Execution:
                     # bot (backend/finance/brief.py). Standing lines in the prompt, so a resumed thread gets them when they change.
                     "finance": None if relationship else finance_brief.for_turn(c, (acting or bot_who).actor),
                     "task_context": task_context.for_turn(c, self.auth, acting or bot_who, make_page_task or task),
+                    # The task's pipeline and stage notes, each a text the runner sends once per session (backend/pipeline_notes.py,
+                    # runner-rs/src/prompt.rs): in the turn's message, never the instructions, so the cached prefix stays.
+                    **({"pipeline_notes": learned_here} if learned_here else {}),
                     **({"make_page": {"task": runner_wire.task(make_page_task)}} if making_page else {}),
                     # place "updates": the recent updates that person may read and open, read now as them
                     # (backend/updates_chat.py). None for every other turn.

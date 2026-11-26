@@ -33,12 +33,13 @@ afterEach(() => vi.unstubAllGlobals());
 type Reply = { status: number; body: unknown };
 type Sent = { url: string; method: string; body: unknown };
 /** Answers every read with `reply`, and keeps each write. */
-function serve(reply: (url: string, method: string) => Reply): Sent[] {
+function serve(reply: (url: string, method: string, body: unknown) => Reply): Sent[] {
   const sent: Sent[] = [];
   vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET';
-    if (method !== 'GET') sent.push({ url: String(url), method, body: init?.body ? JSON.parse(String(init.body)) : null });
-    const r = reply(String(url), method);
+    const body: unknown = init?.body ? JSON.parse(String(init.body)) : null;
+    if (method !== 'GET') sent.push({ url: String(url), method, body });
+    const r = reply(String(url), method, body);
     return new Response(JSON.stringify(r.body), { status: r.status, headers: { 'Content-Type': 'application/json' } });
   });
   return sent;
@@ -235,6 +236,119 @@ describe('Org teammate sheet @s362', () => {
     const panel = await screen.findByRole('complementary', { name: 'builder' });
     expect(within(panel).getByRole('button', { name: 'Call builder' })).toBeTruthy();
     expect(within(panel).queryByRole('button', { name: 'Move' })).toBeNull();
+  });
+});
+
+describe('Org leads', () => {
+  const groups: Team[] = [
+    g('growth', 'Growth', { order: 1, people: ['ana', 'lee'], lead: 'person:lee' }),
+    g('product', 'Product', { order: 2, people: ['bo'] }),
+    g('competitors', 'Competitors', { parent: 'product', order: 3, people: ['cy'], lead: 'person:cy' }),
+    g('features', 'Features', { parent: 'product', order: 4, people: ['di'], bots: ['agent-id'], bot_slugs: ['builder'] }),
+    g('built-in', 'General', { order: 5, bots: ['librarian'], bot_slugs: ['librarian'] }),
+  ];
+  const sheet = (who: string) => `${ORG}?panel=mate:${who}`;
+  /** Accepts each change and answers with the group as the server keeps it. */
+  const accept = (url: string, method: string, body: unknown): Reply => {
+    if (method !== 'PATCH') return nothing();
+    const gid = url.split('/').pop() ?? '';
+    return { status: 200, body: { ...groups.find((x) => x.id === gid), ...(body as object) } };
+  };
+  const leadIn = (gid: string) => queryClient.getQueryData<Team[]>(groupsQuery.queryKey)?.find((x) => x.id === gid)?.lead;
+  beforeEach(() => {
+    directory(
+      actor('human:ana', 'Ana Ruiz'),
+      actor('human:lee', 'Lee Park'),
+      actor('human:bo', 'Bo Chen'),
+      actor('human:cy', 'Cy Diaz'),
+      actor('human:di', 'Di Ng'),
+      actor('bot:agent-id', 'Builder', 'agent'),
+      actor('bot:librarian', 'Librarian', 'agent'),
+    );
+    queryClient.setQueryData(groupsQuery.queryKey, groups);
+    queryClient.setQueryData(['me'], owner);
+  });
+
+  it('makes a teammate the lead in place of the old one, shown on the chart at once', async () => {
+    const sent = serve(accept);
+    show(sheet('human:ana'));
+    const panel = await screen.findByRole('complementary', { name: 'Ana Ruiz' });
+    const row = within(panel).getByRole('region', { name: 'Lead' });
+    expect(row.textContent).toContain('Replaces Lee Park');
+    fireEvent.click(within(row).getByRole('button', { name: 'Make lead of Growth' }));
+    const growth = screen.getByRole('region', { name: 'Growth' });
+    await waitFor(() => expect(href(within(growth).getByRole('link', { name: 'Growth lead' }))).toBe('/company/strategy/org?panel=mate:human:ana'));
+    await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/groups/growth', method: 'PATCH', body: { lead: 'person:ana' } }]));
+    expect(within(growth).getAllByText('Ana Ruiz')).toHaveLength(1);
+    expect(within(growth).getByText('Lee Park')).toBeTruthy();
+  });
+
+  it('stops a lead leading, and the team says it has no lead', async () => {
+    const sent = serve(accept);
+    show(sheet('human:lee'));
+    const row = within(await screen.findByRole('complementary', { name: 'Lee Park' })).getByRole('region', { name: 'Lead' });
+    expect(row.textContent).toContain('Leads Growth');
+    fireEvent.click(within(row).getByRole('button', { name: 'Stop leading' }));
+    const growth = screen.getByRole('region', { name: 'Growth' });
+    expect(await within(growth).findByText('No lead')).toBeTruthy();
+    await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/groups/growth', method: 'PATCH', body: { lead: '' } }]));
+    expect(leadIn('growth')).toBe('');
+  });
+
+  it('sends an agent lead by its ID when its sheet is opened by slug', async () => {
+    const sent = serve(accept);
+    show(sheet('bot:agent-id'));
+    const panel = await screen.findByRole('complementary', { name: 'Builder' });
+    fireEvent.click(within(panel).getByRole('button', { name: 'Make lead of Features' }));
+    await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/groups/features', method: 'PATCH', body: { lead: 'bot:agent-id' } }]));
+  });
+
+  it('shows a nested team its lead, and a new one at once', async () => {
+    serve(accept);
+    show(sheet('human:di'));
+    const product = await screen.findByRole('region', { name: 'Product' });
+    expect(href(within(product).getByRole('link', { name: 'Competitors lead' }))).toBe('/company/strategy/org?panel=mate:human:cy');
+    expect(within(product).getAllByText('Cy Diaz')).toHaveLength(1);
+    expect(within(product).getAllByText('No lead')).toHaveLength(2); // Product and Features
+    const panel = await screen.findByRole('complementary', { name: 'Di Ng' });
+    fireEvent.click(within(panel).getByRole('button', { name: 'Make lead of Features' }));
+    await waitFor(() => expect(href(within(product).getByRole('link', { name: 'Features lead' }))).toBe('/company/strategy/org?panel=mate:human:di'));
+    expect(within(product).getAllByText('No lead')).toHaveLength(1);
+  });
+
+  it('keeps the chart and says the reason in the sheet when the server refuses', async () => {
+    serve((_url, method) => (method === 'PATCH' ? { status: 422, body: { error: { code: 'validation', detail: 'The lead must be in the group' } } } : nothing()));
+    show(sheet('human:ana'));
+    const panel = await screen.findByRole('complementary', { name: 'Ana Ruiz' });
+    fireEvent.click(within(panel).getByRole('button', { name: 'Make lead of Growth' }));
+    expect((await within(panel).findByRole('alert')).textContent).toBe('The lead must be in the group');
+    expect(leadIn('growth')).toBe('person:lee');
+  });
+
+  it('offers an Admin the same, and nobody a lead for the built-in team or no team', async () => {
+    serve(nothing);
+    queryClient.setQueryData(['me'], person);
+    queryClient.setQueryData(accessQuery.queryKey, { you: 'admin', owner: null });
+    queryClient.setQueryData(groupsQuery.queryKey, [...groups, g('east', 'East')]);
+    directory(actor('human:ana', 'Ana Ruiz'), actor('bot:librarian', 'Librarian', 'agent'), actor('human:zed', 'Zed Ko'));
+    const router = show(sheet('human:ana'));
+    expect(within(await screen.findByRole('complementary', { name: 'Ana Ruiz' })).getByRole('button', { name: 'Make lead of Growth' })).toBeTruthy();
+    await router.navigate({ to: '.', search: { panel: 'mate:bot:librarian' } as never });
+    expect(within(await screen.findByRole('complementary', { name: 'Librarian' })).queryByRole('region', { name: 'Lead' })).toBeNull();
+    expect(within(screen.getByRole('region', { name: 'General' })).queryByText('No lead')).toBeNull();
+    await router.navigate({ to: '.', search: { panel: 'mate:human:zed' } as never });
+    expect(within(await screen.findByRole('complementary', { name: 'Zed Ko' })).queryByRole('region', { name: 'Lead' })).toBeNull();
+  });
+
+  it('shows a member no Lead button and no "No lead"', async () => {
+    serve(nothing);
+    queryClient.setQueryData(['me'], person);
+    queryClient.setQueryData(accessQuery.queryKey, { you: 'member', owner: null });
+    show(sheet('human:ana'));
+    const panel = await screen.findByRole('complementary', { name: 'Ana Ruiz' });
+    expect(within(panel).queryByRole('region', { name: 'Lead' })).toBeNull();
+    expect(screen.queryByText('No lead')).toBeNull();
+    expect(href(within(screen.getByRole('region', { name: 'Product' })).getByRole('link', { name: 'Competitors lead' }))).toBe('/company/strategy/org?panel=mate:human:cy');
   });
 });
 

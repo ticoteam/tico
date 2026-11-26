@@ -1,9 +1,8 @@
 import { infiniteQueryOptions, keepPreviousData, queryOptions, type InfiniteData } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import type { SearchThreadsResponse } from '@/api/schema';
-import type { ChatMessage } from '@/conversation';
 import { keys, queryClient, quietRoot, write } from '@/data';
-import { toPage, type Letter, type ListPage, type Member, type Text, type Thread, type ThreadList, type Update } from './model';
+import { toPage, type Letter, type ListPage, type Member, type Mention, type Text, type Thread, type ThreadList, type Update } from './model';
 import { chatActor } from '@/lib';
 
 const enc = encodeURIComponent;
@@ -73,24 +72,18 @@ export const threadQuery = (id: string) =>
     queryFn: ({ signal }) => readThread(id, signal),
   });
 
-export interface CatchUpItem {
-  thread: Thread;
-  messages: ChatMessage[];
-  new_count: number;
-  more?: boolean;
-  mention?: boolean;
-}
-export interface CatchUp {
+/** Catch up's badge alone: how many threads have something new, their roots, and those that mention you. */
+export interface CatchUpCount {
   count: number;
-  items: CatchUpItem[];
-  next_cursor?: string | null;
+  ids: string[];
+  mentions: Mention[];
 }
 
-/** What is new, thread by thread, mentions first: which conversations ask you (the Dot), and whether Tico has
-    something to catch you up on. */
+/** Whether Tico has something to catch you up on, and which conversations ask you (the Dot). Read from Catch up's
+    count, not its cards: the menu shows none, and the cards cost the server most of the read. */
 export const catchUpQuery = queryOptions({
   queryKey: threadKeys.catchUp,
-  queryFn: ({ signal }) => api.get<CatchUp>('/api/v2/threads/catch-up?limit=20', { signal }),
+  queryFn: ({ signal }) => api.get<CatchUpCount>('/api/v2/threads/catch-up/count', { signal }),
 });
 
 /**
@@ -169,12 +162,12 @@ export async function addPeople(id: string, actors: string[]) {
 export function readAll(ids: string[]) {
   return write({
     key: [threadKeys.catchUp, threadKeys.list],
-    optimistic: (d: CatchUp | ThreadList | undefined) => {
+    optimistic: (d: CatchUpCount | ThreadList | undefined) => {
       if (!d) return d;
       if ('pages' in d)
         return { ...d, pages: d.pages.map((p) => ({ ...p, rows: p.rows.map((t) => (ids.includes(t.id) ? { ...t, me: { ...t.me, unread: 0 } } : t)) })) };
-      const items = d.items.filter((i) => !ids.includes(i.thread.id));
-      return { ...d, items, count: Math.max(0, d.count - (d.items.length - items.length)) };
+      const kept = d.ids.filter((id) => !ids.includes(id));
+      return { count: Math.max(0, d.count - (d.ids.length - kept.length)), ids: kept, mentions: d.mentions.filter((m) => !ids.includes(m.id)) };
     },
     send: async (idempotencyKey) => {
       for (const id of ids) await api.post(`/api/v2/threads/${enc(id)}/read-all`, {}, { idempotencyKey: `${idempotencyKey}:${id}` });

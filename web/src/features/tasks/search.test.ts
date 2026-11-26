@@ -84,10 +84,11 @@ describe('the tasks address', () => {
 });
 
 describe('a list’s sort', () => {
-  it('is the list’s own, newest or oldest; Priority is the default and names none; a board’s address never takes one', () => {
+  it('is the list’s own, Priority, newest or oldest; the board’s order is the default and names none; a board’s address never takes one', () => {
     expect(sortOf({ sort: 'newest' })).toBe('newest');
     expect(sortOf({ sort: 'oldest' })).toBe('oldest');
-    expect(sortOf({ sort: 'priority' })).toBeUndefined();
+    expect(sortOf({ sort: 'priority' })).toBe('priority');
+    expect(sortOf({ sort: 'board' })).toBeUndefined();
     expect(sortOf({ sort: 'sideways' })).toBeUndefined();
     expect(validateTasksSearch({ sort: 'newest' })).not.toHaveProperty('sort');
   });

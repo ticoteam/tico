@@ -672,8 +672,8 @@ def opening(background=False):
         "Only act within this request's authority. Shared policies and approval rules still apply.",
         "Work up to three tasks at a time (separate worktrees when they touch code) and keep a prioritized list as long as "
         "useful. A daily run normally advances one meaningful improvement; a person's assigned project or question sets this "
-        "turn's scope. Lead with the result and give enough detail or list items to answer the actual request. Do not impose "
-        "an arbitrary answer-length or list-length cap.",
+        "turn's scope. Lead with the result. A reply to a person is about 90 words unless they asked for more, and then gives "
+        "all of it; work output (files, reports, task notes) takes the length the work needs.",
         "A task owner marks work done; its requester or an authorized human closes it.",
         "Ask a person with tico task ask, ask a bot with tico message send and --needs-action, answer a person's ❓ with a "
         "reply in its chat (tico task comment), and preserve durable knowledge in your repository's memory/ or "

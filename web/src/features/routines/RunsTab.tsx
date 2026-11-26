@@ -82,11 +82,13 @@ export function RunsTab({ head, status, range, panel, href }: { head: Head; pane
 
 function RunRow({ run, href, selected }: { run: AnyRun; href: (panel: string) => string; selected: boolean }) {
   const name = run.automation_name || 'Routine';
-  const what = [run.outcome || runWords(run.status), run.cost ? fmtMoney(run.cost, { cents: true }) : ''].filter(Boolean).join(' · ');
+  // A skipped run (its Only if, or dropped mid-run): dim, "Skipped", its reason on hover; a cost only when work was done.
+  const skipped = run.status === 'skipped';
+  const what = [skipped ? runWords(run.status) : run.outcome || runWords(run.status), run.cost ? fmtMoney(run.cost, { cents: true }) : ''].filter(Boolean).join(' · ');
   // Tico's own jobs have no page; a watch opens on Listening.
   const to = run.trigger === 'system' ? undefined : run.trigger === 'listening' ? `${LISTENING}?watch=${encodeURIComponent(run.automation_id)}` : href(`routine:${run.automation_id}`);
   return (
-    <Row className="auto" title={name} href={to} selected={selected} target={`run:${run.id}`}>
+    <Row className={skipped ? 'auto is-skipped' : 'auto'} title={skipped && run.reason ? `${name}: ${run.reason}` : name} href={to} selected={selected} target={`run:${run.id}`}>
       <span className="row-title">{name}</span>
       <span className="row-sub">{what}</span>
       <span className="row-state">{MARKED.has(run.status) && <Word>{runWords(run.status)}</Word>}</span>

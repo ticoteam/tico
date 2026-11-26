@@ -37,6 +37,9 @@
 .co .widget b a{color:inherit}
 
 /* ---------- a panel: a stage, a goal, a KPI, a product, a matter ---------- */
+.pnl .oc-lead{display:flex;flex-direction:column;align-items:flex-start;gap:var(--s-1)}
+.pnl .oc-lead-note{font-size:var(--t-sm);color:var(--ink-2)}
+.pnl .oc-lead-err{font-size:var(--t-sm);color:var(--ink)}
 .pnl .rail-sec h3{display:flex;align-items:center;justify-content:space-between}
 .pnl .rail-sec h3>span{font-size:var(--t-sm);font-weight:var(--w-text);color:var(--muted);font-variant-numeric:tabular-nums}
 .pnl .rail-sec h3 .sec-fold{height:24px}
@@ -88,6 +91,8 @@
 .pnl .kf-c{display:flex;gap:var(--s-2);min-width:0}
 .pnl .kf-c>*{min-width:0;flex:1}
 .pnl .kf-c>.kf-num{width:92px;flex:none}
+/* the Lead row stacks its button and notes in a column: each keeps its own height */
+.pnl .kf-c.oc-lead>*{flex:none}
 .pnl .kf-c .kf-num input{text-align:right;font-variant-numeric:tabular-nums}
 .pnl .kf-rename{margin-bottom:var(--s-2)}
 /* a panel form of stacked fields: the forms' field gap (calls.css .ev-form, task.css .tv-new) */
@@ -222,6 +227,10 @@
 .co .oc-sub h3{font-size:var(--t-base);font-weight:var(--w-title);line-height:var(--lh-tight);color:var(--ink)}
 .co .oc-who{display:flex;align-items:center;gap:var(--s-2);font-size:var(--t-sm);line-height:18px;color:var(--ink-2)}
 .co .oc-who:hover{color:var(--ink)}
+.co .oc-none{color:var(--muted)}
+.co .oc-sub-face{display:grid;flex:none;margin-left:var(--s-3);border-radius:var(--r-row)}
+.co .oc-sub .oc-who{margin-left:var(--s-2)}
+.co .oc-sub .oc-none{margin-left:var(--s-3)}
 .co .oc-kids{position:relative;margin-left:calc(var(--s-18) + var(--s-1));padding-top:var(--s-3h)}
 .co .oc-kids::before{left:-14px;top:6px;width:1px;height:8px}
 .co .oc-kids.has-subs{padding-top:var(--s-1h)}

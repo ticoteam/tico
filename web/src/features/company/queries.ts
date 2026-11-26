@@ -427,6 +427,24 @@ export function moveTeammate(who: string, from: string, to: string) {
   });
 }
 
+/** A teammate becomes its group's one lead (the old one stops), or the group has none when `who` is empty. The server
+    names a person `person:<id>` and an agent `bot:<id>`; the chart shows it at once and keeps the server's answer. */
+export function setTeamLead(gid: string, who: string) {
+  const group = queryClient.getQueryData<Team[]>(groupsQuery.queryKey)?.find((g) => g.id === gid);
+  let lead = '';
+  if (who.startsWith('bot:')) {
+    const bare = who.slice(4);
+    const index = group?.bots.findIndex((id, i) => id === bare || group.bot_slugs[i] === bare) ?? -1;
+    lead = `bot:${group?.bots[index] ?? bare}`;
+  } else if (who) lead = `person:${who.slice(who.indexOf(':') + 1)}`;
+  return write<Team>({
+    key: groupsQuery.queryKey,
+    optimistic: (gs: Team[] | undefined) => gs?.map((g) => (g.id === gid ? { ...g, lead } : g)),
+    send: (idempotencyKey) => api.patch<Team>(`/api/v2/groups/${enc(gid)}`, { lead }, { idempotencyKey }),
+    settle: (gs: Team[] | undefined, saved: Team) => (saved?.id ? gs?.map((g) => (g.id === saved.id ? { ...g, ...saved } : g)) : gs),
+  });
+}
+
 // Brand: the published book, its versions, and for an owner or admin the draft (backend/brand.py view).
 export interface BrandBody {
   name?: string | null;

@@ -15,11 +15,12 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from backend import cloud_access, cloud_machines as CM, placement, readiness
+from backend import cloud_access, cloud_machines as CM, performance, placement, readiness
 from backend.cloud_machine_health import file_card as file_health_card
 from backend.store import H, Problem
 from backend.tests.helpers.api import assign, get, headers, post, ready, runner  # noqa: F401
 from backend.tests.helpers.cloud_access import signals
+from backend.tests.helpers.performance import sample
 from backend.tests.helpers.credentials import setup
 from backend.tests.helpers.model_subscriptions import OTHER, TOKEN, add, codex_file, company, on, pick
 from backend.tests.helpers.member_bots import agent_ops  # noqa: F401 - fixture for settings confirmation
@@ -4209,6 +4210,31 @@ def test_a_replaced_machine_keeps_a_persons_plans_when_its_bot_left_the_old_comp
     new = enroll_made(cloud, "ops")
     assert placed(cloud)["ops"] == new["runner_id"]
     assert payer(cloud, "ops")["person"] == "human:ana"
+
+
+def test_a_replaced_machine_keeps_its_overloads_and_points_through_a_clean_up_before_the_new_one_signs_in(cloud):
+    """Tico Team, 18 Nov: the Shared cloud machine was made again and its overnight overload left Health seven hours
+    after it ended instead of 24. The old computer's history moves to the new one, and the hourly clean-up that runs
+    while the new machine boots does not delete it first."""
+    setup(cloud.api)
+    company(cloud.api)
+    old = own_computer(cloud)
+    start = (int(time.time()) // 60 - 30) * 60
+    busy = [sample(start + 60 * i, cpu=97.0, procs=[("cargo", 400.0)]) for i in range(10)]
+    post(cloud.api, "runners/performance", {"samples": [*busy, sample(start + 600)]}, token=old["token"])
+    was = get(cloud.api, f"computers/{old['runner_id']}/performance?hours=168")
+    assert len(was["overloads"]) == 1 and was["overloads"][0]["ended_at"] == start + 600
+    assert cloud.api.post("/api/v2/bots/ops/cloud-machine/replace", headers=headers()).status_code == 200
+    with cloud.store.read() as c:
+        assert c.execute("SELECT revoked_at FROM runners WHERE id=?", (old["runner_id"],)).fetchone()[0]
+    performance.sweep(cloud.store)  # the hourly clean-up, while the new machine is still on its way
+    new = enroll_made(cloud, "ops")
+    now = get(cloud.api, f"computers/{new['runner_id']}/performance?hours=168")
+    assert now["overloads"] == was["overloads"]
+    assert now["points"] == was["points"] and now["busiest"]["processes"] == was["busiest"]["processes"]
+    assert now["summary"].startswith("Overloaded once")
+    load = next(x for x in get(cloud.api, "health")["checks"] if x["id"] == "performance:" + new["runner_id"])
+    assert "was overloaded" in load["summary"]
 
 
 def test_a_machine_deleted_for_good_leaves_the_agents_pool_pick(cloud):

@@ -15,6 +15,7 @@ _RUN = obj(
         "status": {"enum": ["queued", "running", "waiting", "ok", "partial", "failed", "empty", "skipped", "held"]},
         "cost": "f",
         "summary": "n",
+        "reason": {"type": "string", "description": "Why a skipped run did not start: its trigger's Only if missed"},
         "steps": {
             "type": ["array", "null"],
             "items": {"type": "object"},
@@ -140,6 +141,7 @@ SCHEMAS.update(
                             "cost": "f",
                             "started_by": "s",
                             "outcome": "s",
+                            "reason": {"type": "string", "description": "Why a skipped run did not start"},
                             "step_count": {"type": ["integer", "null"]},
                             "count": {"type": "integer", "description": "Quiet system-job runs folded into this row"},
                         },

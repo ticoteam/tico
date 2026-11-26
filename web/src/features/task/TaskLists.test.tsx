@@ -59,28 +59,45 @@ describe("a pipeline's list", () => {
     tasks = (p) => (p.get('sort') === 'priority' ? { tasks: rows.filter((t) => t.stage_id === p.get('stage')).reverse() } : { tasks: rows });
   });
 
-  it("shows the open task's stage in Tico's order, the task chosen; another stage from its head", async () => {
+  it("shows the open task's stage in the board's order, the task chosen; another stage from its head", async () => {
     show({ list: 'eng', open: '7', current: cur(row(7, 'Bulk edit stock', 'review')) });
-    await waitFor(() => expect(titles()).toEqual(['Rate fallback', 'Bulk edit stock']));
+    await waitFor(() => expect(titles()).toEqual(['Bulk edit stock', 'Rate fallback']));
     expect(head().textContent).toBe('EngineeringReview2');
     expect(screen.getByRole('link', { name: /Bulk edit stock/ }).getAttribute('aria-current')).toBe('true');
-    expect(calls.some((c) => c.includes('stage=review') && c.includes('sort=priority'))).toBe(true);
+    // the board's own read, never Tico's per-person order unless it is picked
+    expect(calls.some((c) => c.includes('sort=priority'))).toBe(false);
     fireEvent.click(within(head()).getByRole('button', { name: /^Engineering/ }));
     fireEvent.click(await screen.findByRole('menuitem', { name: /^QA/ }));
     await waitFor(() => expect(titles()).toEqual(['Postal codes']));
   });
 
-  it('goes on past a stage’s last row to the next stage’s first; a sort changes the order it goes on in', async () => {
+  it('goes on in the board’s order, past a stage’s last row to the next stage’s first; a sort changes the order it goes on in', async () => {
+    show({ list: 'eng', open: '7', current: cur(row(7, 'Bulk edit stock', 'review')) });
+    await waitFor(() => expect(titles()).toEqual(['Bulk edit stock', 'Rate fallback']));
+    expect(nextInList('t7', 'eng')).toBe('5');
+    expect(nextInList('t5', 'eng')).toBe('8');
+    expect(nextInList('t8', 'eng')).toBeNull();
+    act(() => changeBoardSearch('eng', { sort: 'priority' }));
+    await waitFor(() => expect(titles()).toEqual(['Rate fallback', 'Bulk edit stock']));
+    expect(calls.some((c) => c.includes('stage=review') && c.includes('sort=priority'))).toBe(true);
+    expect(nextInList('t5', 'eng')).toBe('7');
+    expect(nextInList('t7', 'eng')).toBe('8');
+    act(() => changeBoardSearch('eng', { sort: null }));
+    await waitFor(() => expect(titles()).toEqual(['Bulk edit stock', 'Rate fallback']));
+  });
+
+  it('puts what waits on the person first in its stage, as the board does, and goes on in that order', async () => {
+    queryClient.setQueryData(['flow'], { count: 1, items: [], task_ids: ['t5'] });
     show({ list: 'eng', open: '7', current: cur(row(7, 'Bulk edit stock', 'review')) });
     await waitFor(() => expect(titles()).toEqual(['Rate fallback', 'Bulk edit stock']));
     expect(nextInList('t5', 'eng')).toBe('7');
     expect(nextInList('t7', 'eng')).toBe('8');
-    expect(nextInList('t8', 'eng')).toBeNull();
-    act(() => changeBoardSearch('eng', { sort: 'oldest' }));
-    await waitFor(() => expect(calls.some((c) => c.includes('sort=oldest'))).toBe(true));
+    // filtered, the same: what is left of the stage, waiting first
+    act(() => changeBoardSearch('eng', { owner: 'bot:qa' }));
+    await waitFor(() => expect(calls.some((c) => c.includes('owner=bot%3Aqa'))).toBe(true));
     await waitFor(() => expect(titles()).toEqual(['Rate fallback', 'Bulk edit stock']));
-    expect(nextInList('t7', 'eng')).toBe('8');
   });
+
   it('sorted, a failed read says why, though the open task names its stage', async () => {
     changeBoardSearch('eng', { sort: 'oldest' });
     vi.stubGlobal('fetch', async (url: string) => {

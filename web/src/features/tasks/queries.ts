@@ -140,20 +140,21 @@ export interface Filters {
   /** Who asked for it: an actor id. */
   asked?: string;
   due?: Due;
-  /** The order drawn, only in the list beside an open task (search sortOf); none is Priority. Not a filter: it narrows
-      nothing. */
+  /** The order drawn, only in the list beside an open task (search sortOf); none is the board's order. Not a filter: it
+      narrows nothing. */
   sort?: Sort;
 }
 
 /** Overdue, due within a week (overdue too), or has a date (backend/task_match.py DUE). */
 export type Due = 'overdue' | 'week' | 'any';
 
-/** A list's order: Priority (the default), or by when each task was made. */
-export type Sort = 'priority' | 'newest' | 'oldest';
+/** A list's order: the board's (the default, the stage's shared queue order), Priority (Tico's order for the person),
+    or by when each task was made. */
+export type Sort = 'board' | 'priority' | 'newest' | 'oldest';
 
-/** Each sort as the server's `sort` names it (backend/hubdb.py TASK_ORDERS). Priority sends none here: a pipeline's
-    read is in the server's queue order, and the stage the list beside an open task shows is read on its own by priority
-    (`stagePriorityQuery`). */
+/** Each sort as the server's `sort` names it (backend/hubdb.py TASK_ORDERS). The board's order and Priority send none
+    here: a pipeline's read is in the server's queue order, as the board draws it, and under Priority the stage the list
+    beside an open task shows is read on its own by priority (`stagePriorityQuery`). */
 const SERVER_SORT: Partial<Record<Sort, string>> = { newest: 'newest', oldest: 'oldest' };
 
 /** The server's most, one page at a time (backend/task_list_routes.py). */
@@ -177,7 +178,7 @@ export function listParams(pipeline: string, f: Filters): Record<string, string 
   return p;
 }
 
-/** The rows in the order `sort` draws them: as read for Priority (the server's), else by when each was made, as the
+/** The rows in the order `sort` draws them: as read for the board's order and Priority (the server's), else by when each was made, as the
     server pages them (a missing date first in Oldest), so a row the stream adds lands in its place, not at the end. */
 export function inOrder<T extends Pick<TaskItem, 'id' | 'created_at'>>(rows: readonly T[], sort: Sort | undefined): readonly T[] {
   if (sort !== 'newest' && sort !== 'oldest') return rows;

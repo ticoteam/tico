@@ -1,5 +1,5 @@
 import { fmtDate } from '@/lib';
-import type { ExactCheck, Hook, OrgRule, Routine, Run, StageRule, Trigger } from './types';
+import type { ExactCheck, Hook, OnlyIf, OrgRule, Routine, Run, StageRule, Trigger } from './types';
 
 /* Plain words for what the server stores: a schedule, a trigger, a stage rule's When / If / Then. Ported from the old
    app (ui/app/format.ts cronWords, ui/app/automations.ts auCronWords and auSource, ui/app/stage-rules.ts srParts),
@@ -237,6 +237,77 @@ export function triggerWords(t: Trigger, names: { hook?: (id: string) => string 
   }
 }
 
+// ---------------------------------------------------------------- Only if
+
+/** An Only if's read as the editor draws it: tasks in a stage, a repository's pull requests, or any other read. */
+export type OnlyIfSource = { kind: 'tasks'; stage: string } | { kind: 'prs'; repo: string; idle?: number } | { kind: 'query'; read: string };
+
+/** A query value as the server reads it (parse_qsl): only what would split or end it is escaped, so it stays legible. */
+const qv = (v: string) => encodeURIComponent(v).replace(/%20/g, ' ').replace(/%2F/g, '/');
+
+/** A read back into the pickers when it is one of their shapes: `tasks?stage=<s>&status=open` or
+   `prs?repo=<r>[&idle_hours=<h>]`. Anything else is a Query. */
+export function onlyIfSource(read: string): OnlyIfSource {
+  const at = read.indexOf('?');
+  const path = at < 0 ? read : read.slice(0, at);
+  const params = new URLSearchParams(at < 0 ? '' : read.slice(at + 1));
+  const keys = [...params.keys()];
+  const only = (allowed: string[]) => keys.every((k) => allowed.includes(k)) && new Set(keys).size === keys.length;
+  const stage = params.get('stage');
+  // Without status=open the read counts closed tasks too, which the stage picker does not say: it stays a Query.
+  if (path === 'tasks' && stage && only(['stage', 'status']) && params.get('status') === 'open') return { kind: 'tasks', stage };
+  const repo = params.get('repo');
+  const idle = params.get('idle_hours');
+  if (path === 'prs' && repo && only(['repo', 'idle_hours']) && (idle === null || /^\d+$/.test(idle))) {
+    return { kind: 'prs', repo, ...(idle !== null ? { idle: Number(idle) } : {}) };
+  }
+  return { kind: 'query', read };
+}
+
+/** The read a source saves. */
+export function onlyIfRead(s: OnlyIfSource): string {
+  if (s.kind === 'tasks') return `tasks?stage=${qv(s.stage)}&status=open`;
+  if (s.kind === 'prs') return `prs?repo=${qv(s.repo)}${s.idle !== undefined ? `&idle_hours=${s.idle}` : ''}`;
+  return s.read.trim();
+}
+
+/** The Only if row as it is edited: its source in the pickers, its rule, and N as typed. */
+export interface OnlyIfDraft {
+  src: OnlyIfSource;
+  none: boolean;
+  n: string;
+}
+
+/** The editor's pickers have no idle hours: a PR read with them opens as a Query, so they stay in sight and editable. */
+export function onlyIfDraft(o: OnlyIf): OnlyIfDraft {
+  const s = onlyIfSource(o.read);
+  return { src: s.kind === 'prs' && s.idle !== undefined ? { kind: 'query', read: o.read } : s, none: o.none === true, n: String(o.at_least ?? 1) };
+}
+
+/** What the row saves, or null while it is not whole (no stage or repository picked, no read, N outside 1 to 1000). */
+export function onlyIfOf(d: OnlyIfDraft): OnlyIf | null {
+  const read = onlyIfRead(d.src);
+  if (!read || (d.src.kind === 'tasks' && !d.src.stage.trim()) || (d.src.kind === 'prs' && !d.src.repo.trim())) return null;
+  if (d.none) return { read, none: true };
+  const n = Number(d.n);
+  return Number.isInteger(n) && n >= 1 && n <= 1000 ? { read, at_least: n } : null;
+}
+
+/** The About row: "Release ready has a task", "app has a PR idle 48h", otherwise the read; `none` "… is empty". */
+export function onlyIfWords(o: OnlyIf, stageName: (id: string) => string | undefined = () => undefined): string {
+  const s = onlyIfSource(o.read);
+  const n = o.at_least ?? 1;
+  if (s.kind === 'tasks') {
+    const name = stageName(s.stage) ?? s.stage;
+    return o.none ? `${name} is empty` : n === 1 ? `${name} has a task` : `${name} has ${n} tasks`;
+  }
+  if (s.kind === 'prs') {
+    const idle = s.idle !== undefined ? ` idle ${s.idle}h` : '';
+    return o.none ? `${s.repo} PRs${idle} is empty` : n === 1 ? `${s.repo} has a PR${idle}` : `${s.repo} has ${n} PRs${idle}`;
+  }
+  return o.none ? `${o.read} is empty` : `${o.read} has at least ${n}`;
+}
+
 /** A watch's limits: "10 a day". */
 export function limitsWords(limits: Trigger['limits']): string {
   const first = limits?.[0];
@@ -380,6 +451,8 @@ export function flowLines(flow: FlowLike | null | undefined): string[] {
   const out: string[] = [];
   const t = flow?.trigger;
   if (t) out.push(`Trigger: ${triggerWords(t)}`, ...(t.filters ?? []).map((c) => `  filter ${condLine(c)}`));
+  // The exact read and rule, so a proposal that only changes the check shows it.
+  if (t?.only_if) out.push(`  only if ${t.only_if.read} ${t.only_if.none ? 'is empty' : `has at least ${t.only_if.at_least ?? 1}`}`);
   const walk = (steps: FlowLike['steps'], pad: string) => {
     for (const s of steps ?? []) {
       const off = s.enabled === false ? ' (off)' : '';

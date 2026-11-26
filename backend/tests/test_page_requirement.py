@@ -457,9 +457,20 @@ def test_a_bots_question_to_the_person_a_people_only_page_waits_on_is_refused_wh
     assert (card.state, card.ask) == (W.PERSON, True)
     holder = card.who
     other = BEN if holder != BEN else ANA
-    with _refused("that approval is your ask"):
+    with _refused(r"that approval is your ask\. .*\nWhy: one card per person per task"):
         Q.ask(c, po, row["id"], holder, "Please move this task on past QA yourself.")
     assert not Q.on_task(c, row["id"]), "a refused ❓ leaves nothing"
+    # A stage note that names the guard: the refusal quotes its why and points at it.
+    c.execute(
+        "INSERT INTO pipeline_notes (id, pipeline_id, stage_id, note, why, since, evidence, guard, state, created_by, "
+        "created_at, updated_at) VALUES ('n_qa1', ?, ?, 'A pending approval is the ask.', 'Approvers got two cards.', "
+        "'2026-11-18', '#4237', 'approval_first', 'active', 'human:ana', '', '')",
+        (row["pipeline_id"], row["stage_id"]),
+    )
+    with _refused(
+        r"that approval is your ask\. .*\nWhy: Approvers got two cards\. .* note n_qa1 \(2026-11-18, #4237\)\."
+    ):
+        Q.ask(c, po, row["id"], holder, "Please move this task on past QA yourself.")
     assert Q.ask(c, po, row["id"], other, "Which importer first?")["person_id"] == other
 
 
@@ -1222,6 +1233,139 @@ def test_any_page_on_a_task_with_prs_is_judged_with_their_newest_commits_and_an_
     assert _standing(c, row).met, "a new commit does not undo a page that is not at_head"
 
 
+# ----------------------------------------------------------------------------- Undo of a close (task #3678)
+def _waiting_on_ana(c, store):
+    """A task whose page Jev passed, its OK waiting on Ana."""
+    rid = _pipeline(c, person=ANA)
+    row = _task(c)
+    fid, _ = _page(c, store)
+    _say(c, _attach(c, row, "page:" + fid), "met")
+    assert (_standing(c, row).state, _standing(c, row).on) == (R.WAITING, ANA)
+    return rid, row, fid
+
+
+def _undo(c, row, by=ANA):
+    return E.move(c, row["id"], E.REOPEN, by, "Undid the close", undo_close=True)
+
+
+def test_undoing_a_close_brings_back_the_same_ok_waiting_and_wakes_nobody(c, store):
+    rid, row, fid = _waiting_on_ana(c, store)
+    visit = E.task(c, row["id"])["visit"]["id"]
+    woken = X.wakes(c, row["id"])
+    E.move(c, row["id"], E.CLOSED, ANA, "Not needed")
+    back = _undo(c, row)
+    assert (back["stage"]["name"], back["status"], back["visit"]["id"]) == ("Spec", "open", visit), (
+        "the visit it closed"
+    )
+    standing = _standing(c, row)
+    assert (standing.state, standing.on, standing.line) == (R.WAITING, ANA, "Spec page"), "no page to attach again"
+    assert X.wakes(c, row["id"]) == woken, "nobody is told the task is in Spec again"
+    done = A.answer(c, row["id"], rid, ANA, "ok", page_version=f"{fid}@1")
+    assert done["stage"]["name"] == "Done"
+
+
+def test_a_reopen_that_is_no_undo_starts_a_new_visit_and_tells_the_owner(c, store):
+    _, row, _ = _waiting_on_ana(c, store)
+    visit = E.task(c, row["id"])["visit"]["id"]
+    E.move(c, row["id"], E.CLOSED, ANA, "Not needed")
+    back = E.move(c, row["id"], E.REOPEN, ANA, "It is needed after all")
+    assert back["visit"]["id"] != visit, "a reopen with a reason is a new decision, however soon"
+    assert (_standing(c, row).on, _standing(c, row).line) == (WRITER, "No page attached")
+    assert X.wakes(c, row["id"])[-1][1] == WRITER
+
+
+def test_an_undo_of_someone_elses_close_is_a_plain_reopen(c, store):
+    _, row, _ = _waiting_on_ana(c, store)
+    visit = E.task(c, row["id"])["visit"]["id"]
+    E.move(c, row["id"], E.CLOSED, ANA, "Not needed")
+    assert _undo(c, row, by=BEN)["visit"]["id"] != visit, "Ben did not close it"
+
+
+def test_an_undo_past_its_window_is_a_plain_reopen(c, store):
+    _, row, _ = _waiting_on_ana(c, store)
+    visit = E.task(c, row["id"])["visit"]["id"]
+    E.move(c, row["id"], E.CLOSED, ANA, "Not needed")
+    closed = E.task(c, row["id"])["visit"]
+    earlier = H.shift(closed["entered_at"], seconds=-E.UNDO_CLOSE_S - 1)
+    c.execute("UPDATE visits SET entered_at=? WHERE id=?", (earlier, closed["id"]))
+    c.execute("UPDATE visits SET left_at=? WHERE id=?", (earlier, visit))
+    assert _undo(c, row)["visit"]["id"] != visit
+
+
+def test_undoing_a_close_brings_back_the_sub_tasks_it_closed_and_leaves_one_reopened_since(c, store):
+    _, row, _ = _waiting_on_ana(c, store)
+    visit = E.task(c, row["id"])["visit"]["id"]
+    sub = X.new_task(c, ANA, "Check the importer's limits", "product", parent=row["id"])
+    deeper = X.new_task(c, ANA, "Measure a large file", "product", parent=sub["id"])
+    other = X.new_task(c, ANA, "Ask about formats", "product", parent=row["id"])
+    sub_visit = E.task(c, sub["id"])["visit"]["id"]
+    E.move(c, row["id"], E.CLOSED, ANA, "Not needed")
+    assert {E.task(c, t["id"])["status"] for t in (sub, deeper, other)} == {"closed"}
+    again = E.move(c, other["id"], E.REOPEN, ANA, "Still worth asking")["visit"]["id"]
+    woken = X.wakes(c, sub["id"]) + X.wakes(c, deeper["id"])
+    back = _undo(c, row)
+    assert back["visit"]["id"] == visit and _standing(c, row).on == ANA, "the same OK waits on Ana"
+    assert (E.task(c, sub["id"])["status"], E.task(c, sub["id"])["visit"]["id"]) == ("open", sub_visit)
+    assert E.task(c, deeper["id"])["status"] == "open", "what closed under a sub-task comes back with it"
+    assert X.wakes(c, sub["id"]) + X.wakes(c, deeper["id"]) == woken, "nobody is told"
+    assert E.task(c, other["id"])["visit"]["id"] == again, "one reopened since stays as it is"
+
+
+def test_undoing_a_close_leaves_a_sub_task_closed_again_since_by_something_else(c, store):
+    _, row, _ = _waiting_on_ana(c, store)
+    sub = X.new_task(c, ANA, "Check the importer's limits", "product", parent=row["id"])
+    deeper = X.new_task(c, ANA, "Measure a large file", "product", parent=sub["id"])
+    E.move(c, row["id"], E.CLOSED, ANA, "Not needed")
+    E.move(c, sub["id"], E.REOPEN, ANA, "Still worth checking")
+    E.move(c, deeper["id"], E.REOPEN, ANA, "This too")
+    E.move(c, sub["id"], E.CLOSED, ANA, "Not after all")  # closes the deeper one again, as its own cascade
+    _undo(c, row)
+    assert E.task(c, sub["id"])["status"] == "closed", "its own close is not the one undone"
+    assert E.task(c, deeper["id"])["status"] == "closed", "closed again by a later close: not this Undo's to give back"
+
+
+def test_undoing_a_close_brings_back_the_hand_off_its_stage_filed(c, store):
+    X.pipeline(c)
+    made = X.pipeline(c, "product", "Product", _stages(person=ANA), manager="bot:manager")
+    c.execute("UPDATE stages SET on_enter=? WHERE id=?", (json.dumps({"file_into": "general"}), made["stages"]["Spec"]))
+    row = _task(c)
+    visit = E.task(c, row["id"])["visit"]["id"]
+    (filed,) = c.execute("SELECT to_task_id FROM links WHERE visit_id=?", (visit,)).fetchone()
+    E.move(c, row["id"], E.CLOSED, ANA, "Not needed")
+    assert E.task(c, filed)["status"] == "closed"
+    assert _undo(c, row)["visit"]["id"] == visit
+    assert E.task(c, filed)["status"] == "open"
+    assert c.execute("SELECT count(*) FROM links WHERE visit_id=?", (visit,)).fetchone()[0] == 1, "none filed again"
+
+
+def test_undoing_a_close_from_a_stage_that_queues_prs_enters_it_again(c, store):
+    made = X.pipeline(c, "product", "Product", _stages(person=ANA), manager="bot:manager")
+    c.execute("UPDATE stages SET on_enter=? WHERE id=?", (json.dumps({"act": "github.queue"}), made["stages"]["Spec"]))
+    row = _task(c)
+    visit = E.task(c, row["id"])["visit"]["id"]
+    E.move(c, row["id"], E.CLOSED, ANA, "Not needed")
+    assert _undo(c, row)["visit"]["id"] != visit, "the close took its PRs out of the queue: a restored visit holds none"
+
+
+def test_the_move_route_takes_undo_only_with_reopen(api):
+    store = api.app.state.store
+    store.blobs = store.blobs or Blobs(store.settings)
+    with store.transaction() as c:
+        for slug in ("writer", "manager"):
+            X.bot(c, slug)
+        _, row, _ = _waiting_on_ana(c, store)
+        visit = E.task(c, row["id"])["visit"]["id"]
+    path = f"/api/v2/tasks/{row['id']}/move"
+    for wrong in ({"to": "closed"}, {"to": "reopen", "to_pipeline": "product"}, {"to": "next", "let_see": [BEN]}):
+        refused = api.post(path, json={**wrong, "why": "Not needed", "undo": True}, headers=headers())
+        assert refused.status_code == 422, refused.text
+    assert api.post(path, json={"to": "closed", "why": "Not needed"}, headers=headers()).status_code == 200
+    undone = api.post(path, json={"to": "reopen", "why": "Undid the close", "undo": True}, headers=headers())
+    assert undone.status_code == 200, undone.text
+    with store.read() as c:
+        assert E.task(c, row["id"])["visit"]["id"] == visit
+
+
 # ----------------------------------------------------------------------------- the Jev step
 def _engine(p, calls, reason="Clear and complete"):
     def ask(model, state, questions, label):
@@ -1316,7 +1460,8 @@ def test_a_review_page_sent_back_names_the_unmet_rubric_item_on_the_task_and_in_
     store, seeded, monkeypatch
 ):
     """Task #614: on the shipped Review rubric, the line the task shows to leave the stage and the message that sends
-    the page back both name the part Jev finds missing, not only 'Doesn't meet'."""
+    the page back both name the part Jev finds missing, not only 'Doesn't meet'. Since task #3451 that rubric is asked
+    as its parts, so the reason is the part's own line."""
     from backend import pipeline_settings as PS
 
     def build(c):
@@ -1343,7 +1488,7 @@ def test_a_review_page_sent_back_names_the_unmet_rubric_item_on_the_task_and_in_
             )
         ]
         line = _standing(r, row).line
-    assert line.startswith("Decision model sent it back: ") and item in line and "Read: " in line, line
+    assert line == "Decision model sent it back: " + item, line
     assert len(bodies) == 1 and item in bodies[0], bodies
 
 

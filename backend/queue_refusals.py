@@ -8,6 +8,10 @@ EVENT = 'job.refusal-observed'
 KEY = 'queue-refusal:'
 REFRESH_SECONDS = 60
 MAX_GAP_SECONDS = 300
+# Refusals that hold a job on purpose, each until a person or a date ends it, never an aged refusal: a card's lane
+# held, a card On ice (D69) until a person moves it out, and a Tico notice on a snoozed task (task_wait,
+# docs/dev/pipelines-v3.md rule 7) until the snooze ends. Health's slow-queue check shows the last as resting.
+ON_PURPOSE = frozenset({'lane_held', 'on_ice', 'task_wait'})
 
 
 def state(c, bot):
@@ -61,8 +65,7 @@ def current(c, settings, bot, default=None, loads=None):
         tuple[Any, Any, Any, Any],
         E.bot_claimable(c, settings, row['runner_id'], bot, default, oldest=True, with_job=True, loads=loads),
     )
-    # A job held for a card On ice (D69) waits on purpose until a person moves the card out: never an aged refusal.
-    if not job or not why or why in ('lane_held', 'on_ice'):
+    if not job or not why or why in ON_PURPOSE:
         return {}
     return {
         'bot': bot,

@@ -14,7 +14,8 @@ STATEMENTS=<path> (the statement shapes and slowest statements of one read), PRO
 
 Reads, as Ana and as Ben: the rail, Catch up (the default page, limit=20, and the page after limit=20's cursor), its
 count form when the route has one, and Browse. Per read it prints the statements one call takes, the median wall time
-of RUNS calls and the answer's size. Only fictional data, in a temporary folder removed afterwards (unless DB is
+of RUNS calls and the answer's size. Per reader it then checks that the count form's `mentions` are the mention items
+among Catch up's first 99, in order, and that its count and roots are Catch up's. Only fictional data, in a temporary folder removed afterwards (unless DB is
 given). Never point it at a real hub.
 """
 
@@ -144,6 +145,31 @@ def _paths(api, token):
     return paths
 
 
+def _agrees(api, token):
+    """ "yes, N mentions of M items" when the count route's count, roots and mentions are those of Catch up's first 99
+    items over its pages (in order); else what differs."""
+    from backend import thread_rail
+
+    counted = api.get("/api/v2/threads/catch-up/count", headers=headers(token)).json()
+    items, cursor = [], None
+    while len(items) < thread_rail.CATCH_UP_SHOWN:
+        path = f"/api/v2/threads/catch-up?limit={thread_rail.CATCH_UP_MAX_LIMIT}" + (
+            f"&cursor={cursor}" if cursor else ""
+        )
+        page = api.get(path, headers=headers(token)).json()
+        items += page["items"]
+        cursor = page["next_cursor"]
+        if not cursor:
+            break
+    items = items[: thread_rail.CATCH_UP_SHOWN]
+    roots = [it["thread"]["id"] for it in items]
+    mentions = [it["thread"]["id"] for it in items if it["mention"]]
+    named = [m["id"] for m in counted.get("mentions") or []]
+    if counted["ids"] != roots or counted["count"] != page["count"] or named != mentions:
+        return f"NO: ids {counted['ids'] == roots}, count {counted['count']} vs {page['count']}, mentions {named} vs {mentions}"
+    return f"yes, {len(named)} mentions of {len(roots)} items"
+
+
 def report(api):
     store = api.app.state.store
     with store.read() as c:
@@ -168,6 +194,8 @@ def report(api):
                 if isinstance(answer, dict):
                     answer.pop("seq", None)
                 answers[f"{label} {token}"] = answer
+    for token in TOKENS:
+        print(f"count agrees with Catch up    {token:9s} {_agrees(api, token)}")
     if os.environ.get("ANSWERS"):
         Path(os.environ["ANSWERS"]).write_text(json.dumps(answers, sort_keys=True, default=str))
     if os.environ.get("STATEMENTS") or os.environ.get("PROFILE"):

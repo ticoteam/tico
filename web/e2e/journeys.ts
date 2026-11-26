@@ -551,6 +551,48 @@ test('a thread: send a message; archive a mail row', async ({ browser, hub }) =>
   clean(page);
 });
 
+test("the menu counts Catch up without reading its cards, at most once a second; a mention and a person's DM both ask Dana", async ({ browser, hub }) => {
+  // Omar writes as a teammate does: a thread that @s Dana, and a line in his DM with her.
+  const asOmar = async (path: string, body: unknown) => {
+    const r = await fetch(`${hub.url}/api/v2/${path}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${hub.tokens.omar}`, 'Idempotency-Key': `e2e-${path}-${Math.random()}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    expect(r.ok, `POST ${path}: ${r.status}`).toBe(true);
+    return (await r.json()) as { id: string };
+  };
+  const room = await asOmar('threads', { title: 'Launch copy', audience: 'members', members: ['human:dana', 'human:priya'] });
+  await asOmar(`threads/${room.id}/messages`, { text: '@dana can you sign off the launch copy?' });
+  await asOmar(`threads/${hub.facts.thread}/messages`, { text: 'Lunch at one?' });
+
+  const page = await open(browser, hub, '/tasks');
+  const reads: { path: string; at: number }[] = [];
+  page.on('request', (r) => {
+    const path = new URL(r.url()).pathname;
+    if (path.startsWith('/api/v2/threads/catch-up')) reads.push({ path, at: Date.now() });
+  });
+  await page.reload();
+  const menu = page.getByRole('navigation', { name: 'Main' });
+  await expect.poll(() => reads.filter((r) => r.path.endsWith('/count')).length).toBeGreaterThan(0);
+
+  // the thread that @s her asks her in Threads, and Omar asks her on his row in Team
+  await menu.getByRole('tab', { name: /Threads/ }).click();
+  await expect(menu.getByRole('link', { name: /Launch copy/ }).getByRole('img', { name: 'Asks you' })).toBeVisible();
+  await menu.getByRole('tab', { name: /Team/ }).click();
+  await expect(menu.getByRole('link', { name: /Omar/ }).first().locator('.dot')).toBeVisible();
+
+  // ten new messages: the menu reads the count again, never the cards, and never twice in one second
+  const from = Date.now();
+  for (let i = 0; i < 10; i++) await asOmar(`threads/${room.id}/messages`, { text: `Note ${i}` });
+  await expect.poll(() => reads.filter((r) => r.at > from).length).toBeGreaterThan(0);
+  await page.waitForTimeout(1500);
+  expect(reads.filter((r) => !r.path.endsWith('/count')), 'no read of the cards').toEqual([]);
+  const counts = reads.map((r) => r.at).filter((at) => at > from);
+  for (let i = 1; i < counts.length; i++) expect(counts[i]! - counts[i - 1]!, 'a second between count reads').toBeGreaterThanOrEqual(900);
+  clean(page);
+});
+
 test('settings: change the model a new agent uses; add a Cloud agent', async ({ browser, hub }) => {
   const page = await open(browser, hub, '/settings/agents');
   const pick = page.locator('[data-target="setting:default-model"]').getByRole('combobox');
@@ -659,5 +701,24 @@ test('phone: a task opens full screen over its board; its list pulls up from the
   await modal(page, date!.title).getByRole('button', { name: 'Close', exact: true }).tap();
   await expect(layers(page)).toHaveCount(0);
   await expect(page).toHaveURL(board);
+  clean(page);
+});
+
+test("Library: an app page an agent made is marked App in Pages; it opens as a page, and Back returns to the list", async ({ browser, hub }) => {
+  // the shape of an agent's library page (a Creative Library): an app that reads files and keeps notes in its store
+  const text =
+    '<!doctype html><html><head><title>Creative library</title></head><body><h1>Creative library</h1>' +
+    '<p>Winners first, then the tired ones.</p></body></html>';
+  const { page: made } = await post<{ page: { file_id: string } }>(hub, 'pages', { name: 'creative-library.html', title: 'Creative library', text, app: 'reads=files,store' });
+  const page = await open(browser, hub, '/library/pages');
+  const row = page.locator('.page-line').filter({ hasText: 'Creative library' });
+  await expect(row).toBeVisible();
+  await expect(row.locator('.tag', { hasText: 'App' })).toBeVisible();
+  await row.click();
+  await expect(page).toHaveURL(new RegExp(`[?&]file=${made.file_id}`));
+  // the page itself, framed: its own heading inside the frame, under the page's title
+  await expect(page.frameLocator('iframe[title="Creative library"]').getByRole('heading', { name: 'Creative library' })).toBeVisible();
+  await page.goBack();
+  await expect(page.locator('.page-line').filter({ hasText: 'Creative library' })).toBeVisible();
   clean(page);
 });

@@ -208,7 +208,7 @@ describe('a file', () => {
 
 describe('tags, metadata and made from', () => {
   it('shows them on a file, and its writer ticks a tag from ⋯, sent and shown as the server answers', async () => {
-    const sent = serve((url, method) =>
+    const sent = serve((_url, method) =>
       method === 'POST' ? { file: 'f1', tags: [{ id: 't1', key: 'client:acme', label: 'Acme' }, { id: 't2', key: 'launch', label: 'launch' }] } : 'plain words',
     );
     queryClient.setQueryData(['tags'], [{ id: 't1', key: 'client:acme' }, { id: 't2', key: 'launch' }]);

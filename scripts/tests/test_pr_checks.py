@@ -1158,7 +1158,8 @@ def test_the_main_cache_warm_up_saves_the_keys_pr_checks_restore():
             assert len(setup) == 1 and steps[setup[0]].get("id") == "python" and setup[0] < at[0], name
             install = [i for i, step in enumerate(steps) if "scripts/ci_install.sh" in str(step.get("run", ""))]
             assert install and at[0] < install[0], name
-    assert sum(venv in str(job) for job in pr["jobs"].values()) == 6  # plan, tests, static, types, merge, caddy-linux
+    # plan, tests, static, types, web, merge, caddy-linux
+    assert sum(venv in str(job) for job in pr["jobs"].values()) == 7
     for ident, uses, args, runner, lookup in warmed:
         assert runner in ("ubuntu-24.04", "macos-latest"), ident
         assert any((uses, args) == (r[1], r[2]) and runner == r[3] for r in restored), ident
@@ -1306,7 +1307,7 @@ def test_every_job_runs_on_a_github_hosted_runner_and_only_a_ready_pull_request_
         "github.event_name == 'merge_group' || (github.event_name == 'pull_request' && "
         "!github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository)"
     )
-    for name in ("tests", "rust-lint", "desktop-app", "caddy-linux", "advisories"):
+    for name in ("tests", "web", "rust-lint", "desktop-app", "caddy-linux", "advisories"):
         assert ready in jobs[name]["if"], name
     for name, output in (
         ("rust-lint", "rust_lint"),
@@ -1326,6 +1327,7 @@ def test_every_job_runs_on_a_github_hosted_runner_and_only_a_ready_pull_request_
         "plan",
         "static",
         "types",
+        "web",
         "merge-checks",
         "tests",
         "checks",
@@ -1877,8 +1879,6 @@ def test_a_queue_group_runs_every_whole_tree_static_check_on_its_merge_commit_be
     found -= {"scripts/ci_install.sh"}  # the static job's install, which the merge commit checks job has already done
     # The old web app's checks are no-ops that the static job still lists until its steps go; the merge commit skips them.
     found -= {
-        "scripts/check_ui_types.sh",
-        "scripts/check_ui_lint.sh",
         "scripts/check_ui_strict.py",
         "scripts/check_ui_routes.sh",
         "scripts/check_ui_source_suffixes.py",

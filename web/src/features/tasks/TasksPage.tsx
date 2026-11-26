@@ -25,7 +25,7 @@ import { BoardFit } from './BoardFit';
 import { Capped, CARD_H, COL_CAP, COL_SHOW, LIST_CAP, LIST_SHOW, moreText, PHONE_ROW_H, RowMore, ROW_H } from './capped';
 import { FilterItems, FilterMenu } from './FilterMenu';
 import { SelectBar, StageMenu } from './many';
-import { useNeedsYou } from './needs';
+import { useNeedsYou, yoursFirst } from './needs';
 import { NewTask } from './NewTask';
 import { Blocks, Face, isPending, markOf, Movable, StoppedMark, taskHref, waitsOnMe } from './parts';
 import {
@@ -319,8 +319,8 @@ function byStage(stages: readonly Stage[], rows: readonly TaskItem[]) {
   return out;
 }
 
-/** Shown order only: what waits on you leads its stage, so a long stage never hides it below the cap. Bulk moves keep the stage's own order. */
-const yoursFirst = (list: readonly TaskItem[], needs: ReadonlySet<string> | undefined) => [...list.filter((t) => waitsOnMe(t, needs)), ...list.filter((t) => !waitsOnMe(t, needs))];
+/* Shown order only (yoursFirst): what waits on you leads its stage, so a long stage never hides it below the cap. Bulk
+   moves keep the stage's own order. */
 
 /** In Select, the box in the mark's place. */
 const Pick = ({ on }: { on: boolean }) => (

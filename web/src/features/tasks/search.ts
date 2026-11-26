@@ -59,9 +59,10 @@ export function validateRoadmapSearch(raw: Record<string, unknown>): RoadmapSear
   return task ? { ...filters, requesters: task } : filters;
 }
 
-/** The sort the list beside an open task keeps in its search (lib changeBoardSearch): Newest or Oldest; Priority, the
-    default, is none. A board's address never takes one. */
-export const sortOf = (raw: Record<string, unknown>): Sort | undefined => (raw.sort === 'newest' || raw.sort === 'oldest' ? raw.sort : undefined);
+/** The sort the list beside an open task keeps in its search (lib changeBoardSearch): Priority, Newest or Oldest; the
+    board's order, the default, is none. A board's address never takes one. */
+export const sortOf = (raw: Record<string, unknown>): Sort | undefined =>
+  raw.sort === 'priority' || raw.sort === 'newest' || raw.sort === 'oldest' ? raw.sort : undefined;
 
 export const filtersOf = ({ owner, waiting, asked, tag, due, late, q }: Filters): Filters => ({ owner, waiting, asked, tag, due, late, q });
 
