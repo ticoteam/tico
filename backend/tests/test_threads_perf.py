@@ -139,11 +139,28 @@ def round_of(api, *polls):
 
         return run
 
+    class Held:
+        """Takes the round's server until every stream has asked: otherwise the pool's thread can open a round
+        after the first poll and leave the rest for a second round, which builds Ben's Needs you twice."""
+
+        def __init__(self):
+            self.serves = []
+
+        def submit(self, serve):
+            self.serves.append(serve)
+
     async def together():
-        waits = [
-            served.poll(check, step(person, arguments), after, arguments.get("threads_scope", ()))
-            for person, after, arguments, check in polls
-        ]
+        held, pool = Held(), E._poll_threads
+        E._poll_threads = lambda: held
+        try:
+            waits = [
+                served.poll(check, step(person, arguments), after, arguments.get("threads_scope", ()))
+                for person, after, arguments, check in polls
+            ]
+        finally:
+            E._poll_threads = pool
+        for serve in held.serves:
+            pool().submit(serve)
         return await asyncio.gather(*waits, return_exceptions=True)
 
     return asyncio.run(together())
