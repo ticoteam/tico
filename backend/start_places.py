@@ -5,6 +5,7 @@ from typing import Any
 
 from .store import H, readiness_document
 from . import bot_settings as BS
+from .wait_reasons import TURNS_COLON
 
 START_SECONDS = 180
 
@@ -522,9 +523,11 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
     if not runner_ids:
         return out
 
-    def add(rid, reason, count, since):
+    def add(rid, reason, count, since, code=''):
         out[rid]['waiting'] += count
         old = groups[rid].setdefault(reason, {'reason': reason, 'count': 0, 'oldest': since})
+        if code:
+            old.setdefault('code', code)  # the claim's own code, for an agent reading its status (wait_reasons)
         old['count'] += count
         old['oldest'] = min(old['oldest'], since)
 
@@ -546,7 +549,8 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
         else:
             out[rid]['queued'] += 1
     from . import read_cache
-    from .execution import PRIME_QUEUED, claim_refusal, queued_reasons
+    from . import wait_reasons
+    from .execution import PRIME_QUEUED, claim_refusal, continuation_run, queued_reasons
 
     runners = {
         row['id']: row for row in c.execute(f"SELECT * FROM runners_with_state WHERE id IN ({marks})", runner_ids)
@@ -557,23 +561,23 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
     samples = {}
     oldest_reason = {}
     overflow = {}
-    reasons = {
-        'cooling_off': 'quota',
-        'limit': 'spending limit',
-        'not_ready': 'computer readiness',
-        'readiness_unknown': 'computer readiness',
-        'sign_in_rejected': 'sign-in',
-        'payer_wait': 'Paid by',
-        'payer_update': 'a runner update',
-        'draining': 'bot paused',
-        'run_hold': 'stopped runs',
-        'backoff': 'a failed run',
-        'budget': 'run budget',
-        'bot_limit': 'at its turn limit',
-        'task_wait': 'a snooze, prerequisite, person or check',
-        'task_next_run': 'the next run or a stored resume condition',
-        'on_ice': 'a card On ice',
-    }
+    labels = {}  # a computer's label, read once
+
+    def phrase(refused, job_id=None, homes=None):
+        """The Turns line's words for a refusal (backend/wait_reasons.py), naming the computer that holds a task's
+        checkout or a turn's saved session."""
+        if refused == 'continuation_home' and job_id and not homes:
+            saved = continuation_run(c, job_id)
+            homes = {saved['runner_id']} if saved else None
+        names = []
+        for home in sorted(homes or ()):
+            if home not in labels:
+                found = c.execute("SELECT label FROM runners WHERE id=?", (home,)).fetchone()
+                labels[home] = found['label'] if found else ''
+            if labels[home]:
+                names.append(labels[home])
+        return wait_reasons.turns(refused, home=', '.join(names[:3]))
+
     for row in c.execute(
         f"SELECT a.runner_id,j.bot_id,j.held,count(*) n,min(j.created_at) oldest,{BS.CONFIG} AS config,"
         "b.state bot_state,EXISTS (SELECT 1 FROM agent_subscriptions p WHERE p.bot=j.bot_id) has_payer "
@@ -586,6 +590,7 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
         runner = runners.get(rid)
         ready = read_cache.readiness(c, rid, runner['readiness']) if runner else {}
         why = 'bot paused' if row['bot_state'] != 'active' else ''
+        code = 'paused' if why else ''
         if not why and row['held']:
             # A notice batch, digest or routine run its release policy holds (backend/wake_presets.py): no claim takes
             # it before its release, so it is not queued work the computer leaves waiting.
@@ -615,6 +620,7 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
             if classify:
                 try:
                     if sample is None or sample:
+                        worktree_waits = {}
                         for job, refused in queued_reasons(
                             c,
                             settings,
@@ -623,12 +629,14 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
                             default,
                             ignore_refusals=STALE if sleeping else (),
                             sample=sample,
+                            worktree_waits=worktree_waits,
                         ):
                             if refused or sleeping:
-                                reason = reasons.get(refused, 'pre-start requirements') if refused else ASLEEP
-                                add(rid, reason, 1, job['created_at'])
+                                job_id = job['id'] if 'id' in job.keys() else None
+                                reason = phrase(refused, job_id, worktree_waits.get(job_id)) if refused else ASLEEP
+                                add(rid, reason, 1, job['created_at'], refused or '')
                                 counted += 1
-                                found = (job['created_at'], job['id'], reason)
+                                found = (job['created_at'], job['id'], reason, refused or '')
                                 if not sleeping and (rid not in oldest_reason or found < oldest_reason[rid]):
                                     oldest_reason[rid] = found
                 except Exception as exc:
@@ -648,7 +656,8 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
                 refused, _ = claim_refusal(
                     c, settings, runner, row['bot_id'], row['config'], False, ready, default=default
                 )
-                why = reasons.get(refused, 'pre-start requirements') if refused else ''
+                why = phrase(refused) if refused else ''
+                code = refused or ''
         if not count:
             continue
         if not why:
@@ -656,13 +665,13 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
                 holds[rid] = computer_hold(c, rid, status=statuses[rid], row=runners.get(rid))
             why = holds[rid][0] if holds[rid] else ''
         if why:
-            add(rid, why, count, row['oldest'])
+            add(rid, why, count, row['oldest'], code)
         else:
             out[rid]['queued'] += count
     for rid, count in overflow.items():
         if rid in oldest_reason:
-            since, _, why = oldest_reason[rid]
-            add(rid, why, count, since)
+            since, _, why, code = oldest_reason[rid]
+            add(rid, why, count, since, code)
         elif holds.get(rid):
             add(rid, holds[rid][0], count, groups[rid][holds[rid][0]]['oldest'])
         else:
@@ -681,7 +690,11 @@ def describe(counts):
         age = f"{minutes // 60} h" if minutes >= 60 else f"{minutes} min"
         reason = (
             "waiting: " + wait['reason']
-            if wait['reason'].startswith(('computer busy', 'computer not reporting', 'at ', 'asleep;', BUILD_WAIT))
+            if wait['reason'].startswith(
+                ('computer busy', 'computer not reporting', 'at ', 'asleep;', BUILD_WAIT, *TURNS_COLON)
+            )
+            else "waiting " + wait['reason']
+            if wait['reason'].startswith('(code:')
             else "waiting for " + wait['reason']
         )
         parts.append(f"{wait['count']} {reason} (oldest {age})")

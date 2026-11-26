@@ -2,7 +2,7 @@
 
 from typing import Any, cast
 
-from . import execution as E, hubdb as H, usage_limits
+from . import execution as E, hubdb as H, login_holds, usage_limits
 
 EVENT = 'job.refusal-observed'
 KEY = 'queue-refusal:'
@@ -67,7 +67,7 @@ def current(c, settings, bot, default=None, loads=None):
     )
     if not job or not why or why in ON_PURPOSE:
         return {}
-    return {
+    value = {
         'bot': bot,
         'runner_id': row['runner_id'],
         'name': row['display_name'] or bot,
@@ -75,6 +75,49 @@ def current(c, settings, bot, default=None, loads=None):
         'oldest': created,
         'reason': why,
     }
+    if why == 'payer_wait' and (payer := payer_wait(c, settings, row['runner_id'], bot, loads)):
+        value['payer'] = payer
+    elif why == 'cooling_off' and (limit := login_limit(c, settings, row['runner_id'], bot)):
+        value['payer'] = limit
+    return value
+
+
+def login_limit(c, settings, runner_id, bot):
+    """{'plan', 'until'} when the bot's own login waits out its provider's usage limit (login_holds), else {}."""
+    from .model_subscriptions import RUNTIME_LABELS
+    from .read_cache import one
+    from .shared_bots import follow
+
+    config = one(c, E.CLAIM_CONFIG_SQL, (bot,))
+    if not config:
+        return {}
+    login = E._limits_login(c, settings, runner_id, bot, follow(c, bot, H._json(config['config'], {}) or {}))
+    if not login:
+        return {}
+    hold = login_holds.get(c, *login)
+    if not hold.get('until'):
+        return {}
+    runtime = login[2]
+    return {'plan': RUNTIME_LABELS.get(runtime, runtime), 'until': hold['until']}
+
+
+def payer_wait(c, settings, runner_id, bot, loads=None):
+    """What the bot's Paid by waits for, so the chat can say it (thread_bot_status): {'text'} as Health says it, and
+    'plan' and 'until' when a plan waits out its usage limit. {} when no queued job waits on a payer now."""
+    from .read_cache import one
+    from .shared_bots import follow
+
+    runner = one(c, E.RUNNER_SQL, (runner_id,))
+    config = one(c, E.CLAIM_CONFIG_SQL, (bot,))
+    if not runner or not config:
+        return {}
+    followed = follow(c, bot, H._json(config['config'], {}) or {})
+    for _, payment in E.waiting_payers(c, settings, runner, bot, followed, loads):
+        out = {'text': payment.reason}
+        if payment.limited and payment.until:
+            out.update(plan=payment.limited, until=payment.until.isoformat())
+        return out
+    return {}
 
 
 def plan(c, settings, bot, at, previous=None):

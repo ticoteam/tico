@@ -418,3 +418,19 @@ def test_resting_chat_labels_do_not_say_starting_or_not_reporting(cloud, recent_
     with cloud.store.read() as c:
         label, _ = views.queued_label(c, 'ops', views.machine(c, 'ops'), cloud.store.settings)
         assert CM.ASLEEP in label and start_places.NOT_REPORTING not in label
+
+
+def test_a_machine_woken_for_work_that_ran_nothing_says_so_not_asleep(cloud):
+    """#3967: a Builder's machine read "asleep; starts when work can run" for an hour while its one wake had run
+    nothing, and it is never woken again for the same work. The chat says when it was woken and that nothing ran."""
+    asleep_bot(cloud)
+    thread = new_thread(cloud.api)
+    say(cloud.api, thread['id'], '@ops can you check this?')
+    woke = int(time.time()) - 1800
+    with cloud.store.transaction() as c:
+        [job] = [r[0] for r in c.execute("SELECT id FROM jobs WHERE bot_id='ops' AND state='queued'")]
+        c.execute("UPDATE cloud_machines SET wake_key=?,woke_at=? WHERE bot='ops'", ('job:' + job, woke))
+    status = bot_status(cloud.api, thread['id'])[0]
+    when = time.strftime('%H:%M', time.gmtime(woke))
+    assert CM.ASLEEP not in status['detail']
+    assert f'woken at {when} UTC and ran nothing' in status['detail']

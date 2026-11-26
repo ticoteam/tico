@@ -14,6 +14,8 @@ import { useCards } from '@/kit/Popover';
 import { SkeletonRows } from '@/kit/Skeleton';
 import { toast } from '@/kit/Toast';
 import { DidLine } from '@/kit/DidLine';
+import { Link } from '@/kit/Link';
+import { newAddressFor } from '@/oldAddress/map';
 import { Dot } from '@/tico/dot';
 import { clock, took } from './dates';
 import { Markdown } from '@/kit/Markdown';
@@ -476,12 +478,40 @@ export function LiveRow({ r, variant, text }: { r: LiveRun; variant: Variant; te
   );
 }
 
+/** The waits a person may sit out (a plan's usage limit): the line offers Wait beside its fix. */
+const USAGE_LIMIT_CODES = new Set(['payer_wait', 'cooling_off']);
+
 /** Where a reply ends without being one: something stops the agent (`stuck`, what), or its run ended with no reply
     ('none': it finished; 'failed': it stopped). One line, so the person is never left waiting on nothing. */
-export function ReplyLine({ bot, name, variant, why, detail }: { bot: string; name?: string; variant: Variant; why: 'none' | 'failed' | 'stuck'; detail?: string }) {
+export function ReplyLine({ bot, name, variant, why, detail, fix, code }: { bot: string; name?: string; variant: Variant; why: 'none' | 'failed' | 'stuck'; detail?: string; fix?: { label: string; href: string } | null; code?: string | null }) {
   // the server's name for it, where this page has not read the agent
   const who = whoOf({ sender_id: bot }, variant, undefined, useActor(bot)?.name ?? (name || undefined));
-  if (why === 'stuck') return <DidLine text={detail ? `${who.name} can't reply. ${detail}` : `${who.name} can't reply`} fault status />;
+  const [waiting, setWaiting] = useState(false);
+  if (why === 'stuck') {
+    if (waiting) return null;
+    const line = <DidLine text={detail ? `${who.name} can't reply. ${detail}` : `${who.name} can't reply`} fault status />;
+    // The one fix the server names (Switch model, Open Computers...), and Wait for a usage limit: it hides the line.
+    const href = fix?.href ? (fix.href.startsWith('#/') ? (newAddressFor(fix.href) ?? fix.href) : fix.href) : null;
+    const canWait = !!code && USAGE_LIMIT_CODES.has(code);
+    if (!href && !canWait) return line;
+    return (
+      <div className="reply-stuck">
+        {line}
+        <div className="reply-fix">
+          {href && fix && (
+            <Link className="btn" href={href}>
+              {fix.label === 'Fix' ? 'Fix it' : fix.label}
+            </Link>
+          )}
+          {canWait && (
+            <Button variant="quiet" onClick={() => setWaiting(true)}>
+              Wait
+            </Button>
+          )}
+        </div>
+      </div>
+    );
+  }
   if (why === 'failed') return <DidLine text={`${who.name} stopped before replying`} fault status />;
   return <DidLine text={`${who.name} finished without replying`} face={<Face who={who} size={22} />} status />;
 }

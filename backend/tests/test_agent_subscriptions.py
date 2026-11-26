@@ -452,6 +452,39 @@ def test_old_runner_admits_only_turns_that_match_its_current_payer(api, mismatch
         assert claim(api, box, "cpo")["attempt_credential"]["id"] == second
 
 
+def test_a_plan_at_its_usage_limit_is_named_in_the_chat_with_its_reset_and_switch_model(api):
+    """#3967: the chat read "Waiting for the agent's Paid by" while the agent's plan was at its usage limit. It names
+    the plan and its reset, with Switch model, and an agent reading the status gets the code too."""
+    from backend import login_holds, queue_refusals
+
+    setup(api)
+    company(api)
+    first = add(api, name="Antigravity")["id"]
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    box = machine(api, signed_in=True)
+    report(api, box, ["ops"])
+    choose(api, "ops", {"kind": "plan", "subscription_id": first})
+    soon = (datetime.now(timezone.utc) + timedelta(hours=2)).replace(second=0, microsecond=0)
+    with api.app.state.store.transaction() as c:
+        held = login_holds.record(
+            c, "", login_holds.subscription_login(first), "claude", H.now(), reset=soon.isoformat()
+        )
+    post(api, "chat/ops", {"text": "Check the plan."})
+    assert claim(api, box, "ops") is None
+    store = api.app.state.store
+    with store.transaction() as c:
+        queue_refusals.observe(c, store.settings)
+        assert queue_refusals.state(c, "ops")["reason"] == "payer_wait"
+        root = c.execute(
+            "SELECT coalesce(t.root_id,t.id) FROM jobs j JOIN messages m ON m.id=j.message_id "
+            "JOIN conversations t ON t.id=m.conversation_id WHERE j.bot_id='ops' AND j.state='queued'"
+        ).fetchone()[0]
+    [row] = get(api, f"threads/{root}/bot-status")["bots"]
+    assert row["state"] == "cant_reply" and row["code"] == "payer_wait"
+    assert row["detail"] == f"It hit its Antigravity usage limit (resets {MS._when(held['until'])})"
+    assert row["fix"] == {"label": "Switch model", "href": "#/bot/ops/settings"}
+
+
 def test_pool_wait_is_visible_in_health_and_rechecks_without_a_gateway_fallback(api):
     from backend.tests.helpers.check_models import finish
 

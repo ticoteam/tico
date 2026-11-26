@@ -779,6 +779,21 @@ describe('an agent answering', () => {
     expect(screen.getByText("QA Owner can't reply. Its computer is offline")).toBeTruthy();
   });
 
+  it("names a plan at its usage limit with Switch model and Wait, and Wait hides the line (#3967)", () => {
+    show();
+    const limit = 'It hit its Antigravity usage limit (resets Nov 26 17:40 UTC)';
+    waiting(wait('cant_reply', 'm2', { detail: limit, code: 'payer_wait', fix: { label: 'Switch model', href: '#/bot/qa-owner/settings' } }));
+    expect(screen.getByText(`QA Owner can't reply. ${limit}`)).toBeTruthy();
+    const fix = screen.getByRole('link', { name: 'Switch model' });
+    expect(fix.getAttribute('href')).not.toContain('#/bot/');
+    fireEvent.click(screen.getByRole('button', { name: 'Wait' }));
+    expect(screen.queryByText(`QA Owner can't reply. ${limit}`)).toBeNull();
+    // Another cause comes back with its own fix, and no Wait: only a usage limit can be sat out.
+    waiting(wait('cant_reply', 'm2', { detail: 'Its checkout is on Shared cloud machine', code: 'worktree_home', fix: { label: 'Open Computers', href: '#/settings/computers' } }));
+    expect(screen.getByRole('link', { name: 'Open Computers' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Wait' })).toBeNull();
+  });
+
   it('counts a reply the agent posted with a tool: no typing comes back while its run goes on', () => {
     show();
     starts();

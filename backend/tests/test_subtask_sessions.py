@@ -270,7 +270,7 @@ def test_an_exact_continuation_waits_for_its_computer_and_preserves_the_thread(a
     ready(api, other, ["ops"], RUNNER_CAPABILITIES)
     assert claim(api, other) is None
     [held] = [row for row in get(api, "health")["stuck"] if row["reason"] == "continuation_home"]
-    assert "computer that saved its session" in held["why"]
+    assert "Its saved session is on Test Mac" in held["why"]  # names the computer (#3967)
 
     if retired:
         post(api, f"computers/{home['runner_id']}/revoke", {})

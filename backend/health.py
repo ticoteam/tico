@@ -51,6 +51,8 @@ from .store import H, Problem, readiness_document
 from .views import roster
 from . import bot_settings as BS
 from .api_contract import api_v2, error as answer_error
+from . import wait_reasons
+from .wait_reasons import BILLING, BOT_SETTINGS, COMPUTERS, RUNS
 
 QUEUE_MINUTES = 15  # work that has waited this long on a computer that is up is stuck
 PERSON_QUEUE_MINUTES = 2  # a person's own message, sooner: someone is sitting there waiting for the reply
@@ -1311,84 +1313,30 @@ def runtime_choice(c, bot, runtime, who, computers, harness="", model="", *, man
 
 
 # Why the claim holds an idle bot's queued work on purpose (execution.claim_refusal, job_refusal): what Health says, and
-# where the fix is. A reason not here is "Not started": a Tico bug (Health Monitor queue_idle).
-RUNS, COMPUTERS, BOT_SETTINGS = (
-    ("Open Runs", "#/settings", "runs"),
-    ("Open Computers", "#/settings", "devices"),
-    ("Open bot settings", "#/settings", "bots"),
-)
-BILLING = ("Open Billing", "#/settings", "billing")
-HELD = {
-    # A Tico Cloud company's access (backend/cloud_access.py): out of credit, or locked behind Pay to continue.
-    "out_of_credit": ("Out of credit: its Tico model turns start once credit is added", BILLING),
-    "cloud_locked": ("Pay to continue: bots run again once the plan is paid", BILLING),
-    "company_limit": ("Your company is at its limit; Tico is fixing what's stuck.", RUNS),
-    "task_wait": ("Its task is snoozed: its work starts when the snooze ends", RUNS),
-    # A task made from a draft an agent wrote in setup (backend/setup_drafts.py).
-    "draft_wait": ("Its draft from setup waits for your Send", RUNS),
-    "draft_needs_plan": ("Its draft from setup runs on your connected plan, never on Gateway credit", RUNS),
-    # The task was given to this bot while another bot's turn on it was out (execution.turn_moved_on).
-    "task_turn_out": ("Its task was handed to it mid-turn: it starts when the earlier owner's turn ends", RUNS),
-    "paused": ("Paused: its owner or Agent Ops must resume it", BOT_SETTINGS),
-    "company_paused": ("All bots on Tico Team are paused: its work starts when someone resumes", BOT_SETTINGS),
-    "no_slot": ("No slot on {computer}: queued behind running turns", RUNS),
-    "busy": ("Queued behind this bot's running turn", RUNS),
-    "draining": ("Paused, or held while Tico updates: its work starts when it is resumed", BOT_SETTINGS),
-    "moving": ("Moving to its own cloud machine: its next turn starts there once its running turns end", COMPUTERS),
-    "restarting": ("{computer} is restarting: it starts new work once its running turns end", COMPUTERS),
-    "maintaining": ("{computer} is tidying this bot's task worktrees: its work starts when that finishes", COMPUTERS),
-    "lane_held": (
-        "{computer} still runs an earlier turn of this bot whose lease lapsed: the next starts when it ends",
-        RUNS,
-    ),
-    "handed_back": ("{computer} handed its last try back before starting it: it tries again in a moment", RUNS),
-    # Its claim raised while preparing it (bot_stops.hold_job): Health names the error in its own finding.
-    "claim_held": ("Tico couldn't start it: an error happened while preparing it. It tries again by itself", RUNS),
-    "uncertain": ("An interrupted run on the same task or chat waits for review in Runs", RUNS),
-    "task_quarantine": ("Held after repeated refusals; resumes after cooldown or quarantine clear", RUNS),
-    # A person limited the bot's claims to one task (execution.scoped_sql): the rest waits for the scope's release.
-    "scoped": ("Limited to one task: its other work starts when the limit is lifted", BOT_SETTINGS),
-    "cooling_off": ("Waiting out a usage limit, or a Tico AI Gateway outage, before it tries again", RUNS),
-    "payer_wait": ("Waiting for the agent's Paid by", BOT_SETTINGS),
-    "payer_update": ("Update {computer}", COMPUTERS),
-    "readiness_unknown": ("{computer} has not said whether it can run this bot", COMPUTERS),
-    "sign_in_rejected": ("Its model sign-in was rejected on {computer}", COMPUTERS),
-    # The computer read a plan's sign-in as ready, and no plan signs it in now (execution.signed_in_by_lapsed_plan).
-    "sign_in_missing": ("Its model is not signed in on {computer}", COMPUTERS),
-    "gateway_disconnected": ("Reconnect the Tico AI Gateway to start relationship turns", COMPUTERS),
-    "model_key_missing": ("Grant the relationship worker an API key for its model in Credentials", COMPUTERS),
-    "login_upgrade": (
-        "Update {computer} to use one login per AI tool; its bots wait without changing accounts",
-        COMPUTERS,
-    ),
-    # A Tico model runs only where bots run as their own user (execution.claim_refusal): the bot waits, it never fails.
-    "not_isolated": (
-        "{computer} can't run Tico Gateway work (it needs Tico's Docker runner): it waits for another "
-        "model or computer",
-        BOT_SETTINGS,
-    ),
-    "isolation_unknown": (
-        "{computer} hasn't said it can run Tico Gateway work: it waits until its runner is updated",
-        COMPUTERS,
-    ),
-    "profile": ("Its subscription profile is not signed in or not reported on {computer}", COMPUTERS),
-    "config": ("Its settings cannot be read", BOT_SETTINGS),
-    "check_model": ("Its check model does not run on {computer}, or is on hold", BOT_SETTINGS),
-    "unreadable": ("Its queued message is one it may not read", RUNS),
-    "continuation_home": ("This turn can only continue on the computer that saved its session", COMPUTERS),
-    # Tico stopped the bot (backend/bot_stops.py): a person releases it. A back-off is a short pause after a failed run.
-    "run_hold": (
-        "Tico stopped it after five failed runs in a row and tries one run on its own now and then: check its last runs, or release it now",
-        BOT_SETTINGS,
-    ),
-    "budget": (
-        "Tico stopped it for too many runs in a short time: check its last runs, then release it or raise its budget",
-        BOT_SETTINGS,
-    ),
-    "backoff": ("Pausing after a failed run: it tries again in a moment", RUNS),
-    # The owner's "Turns at once" for the bot is full across every computer: its queued work starts when one ends.
-    "bot_limit": ("At its turn limit: it starts when one of its running turns ends", BOT_SETTINGS),
-}
+# where the fix is, from the one list in backend/wait_reasons.py. A reason not there shows its code and logs an error.
+HELD = {code: (reason.words, reason.fix) for code, reason in wait_reasons.REASONS.items()}
+
+
+TURNS_WAIT_MINUTES = 15
+# Waits a person or a date ends on purpose: never a look however long they last (start_places, queue_refusals).
+TURNS_ON_PURPOSE = ("paused", "draining", "company_paused", "task_wait", "on_ice", "draft_wait", "scoped")
+
+
+def turns_late(counts):
+    """The oldest wait on a computer's Turns line older than TURNS_WAIT_MINUTES, or None. A held release and waits
+    kept on purpose are not late; a stopped machine still asleep with work queued that long is (#3967)."""
+    from .start_places import HELD_WAIT
+
+    cutoff = H.shift(H.now(), minutes=-TURNS_WAIT_MINUTES)
+    late = [
+        wait
+        for wait in counts.get("waits") or ()
+        if wait["oldest"]
+        and wait["oldest"] < cutoff
+        and wait["reason"] not in (HELD_WAIT, "bot paused")
+        and wait.get("code") not in TURNS_ON_PURPOSE
+    ]
+    return min(late, key=lambda wait: wait["oldest"]) if late else None
 
 
 def _stuck(c, rows, online_ids, who, full, auth=None, loads=None):
@@ -1418,6 +1366,18 @@ def _stuck(c, rows, online_ids, who, full, auth=None, loads=None):
             f"Task worktree on {', '.join(names) or 'another computer'}. Its owner can bring it online, or retire it if it is gone. "
             "A bot administrator can assign the bot there."
         )
+
+    def saved_home(bot, reason):
+        """The computer that saved a queued turn's session, by label, for continuation_home; else ""."""
+        if reason != "continuation_home":
+            return ""
+        from .execution import continuation_run
+
+        for job in c.execute("SELECT id FROM jobs WHERE bot_id=? AND state='queued' ORDER BY created_at,id", (bot,)):
+            saved = continuation_run(c, job["id"])
+            if saved and (home := one(c, "SELECT label FROM runners WHERE id=?", (saved["runner_id"],))):
+                return home["label"]
+        return ""
 
     computers = _movable(c, who, online_ids) if full else []
     # Each stuck bot's runtime as its config declares it (filled below with the config it reads).
@@ -1546,13 +1506,13 @@ def _stuck(c, rows, online_ids, who, full, auth=None, loads=None):
             group = next((g for g in row.get("queue_reasons") or () if g["reason"] == reason), {"reason": reason})
             text = worktree_wait(group)
             fix = _fix(*COMPUTERS)
-        elif reason in HELD:
-            words, where = HELD[reason]
-            text = words.format(computer=label or "its computer")
-            fix = _fix(*where)
-        else:
+        elif reason == "slow" or not reason:
             text = f"Not started after {QUEUE_MINUTES} min"
-            fix = _fix("Open Runs", "#/settings", "runs")
+            fix = _fix(*RUNS)
+        else:
+            # Every claim reason has its words (backend/wait_reasons.py); one without them shows its code.
+            text, where = wait_reasons.say(reason, computer=label or "", home=saved_home(row["bot"], reason))
+            fix = _fix(*where)
         queue_reasons = row.get("queue_reasons") or []
         if len(queue_reasons) > 1 and reason not in ("no_slot", "busy", "updating", "restarting"):
             # Keep one bot row, but never describe all its jobs with the oldest job's hold.
@@ -1566,10 +1526,7 @@ def _stuck(c, rows, online_ids, who, full, auth=None, loads=None):
                 + str(
                     worktree_wait(item)
                     if item.get("worktree_homes")
-                    else words.get(
-                        item["reason"],
-                        HELD.get(item["reason"], ("not started",))[0].format(computer=label or "its computer"),
-                    )
+                    else words.get(item["reason"]) or wait_reasons.say(item["reason"], computer=label or "")[0]
                 )
                 for item in queue_reasons
             )
@@ -3615,13 +3572,16 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
     rows = hold_rows(c, [computer["id"] for computer in computers])  # and their runner rows, once
     for computer in computers:
         if full or kind == "bot":
+            # A wait over TURNS_WAIT_MINUTES is a look, not Fine (#3967), with its oldest wait's own fix.
+            late = turns_late(computer["turn_counts"])
+            where = wait_reasons.say(late["code"])[1] if late and late.get("code") else COMPUTERS
             checks.append(
                 _check(
                     "turns:" + computer["id"],
                     "Turns",
-                    "ok",
+                    "warn" if late else "ok",
                     computer["label"] + ": " + computer["turn_summary"],
-                    [_fix("Open Computers", "#/settings", "devices")] if full else [],
+                    [_fix(*where)] if full else [],
                 )
             )
         # Its last boot's load cannot hold a machine that is asleep on purpose.

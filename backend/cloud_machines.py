@@ -3526,8 +3526,30 @@ def waiting(c, bot):
     if machine["problem"] == "no_enroll":
         return "its cloud machine never connected to this server"
     if machine["state"] in GOING:
+        if _wake_spent(c, bot, machine):
+            # Woken for this work once and nothing ran: it is not woken for the same work again (`wake_for`), so the
+            # words say so rather than promise a start (#3967).
+            when = datetime.fromtimestamp(machine["woke_at"], timezone.utc).strftime("%H:%M UTC")
+            return f"its cloud machine was woken at {when} and ran nothing; it is not woken again for this work"
         return "its cloud machine is " + ASLEEP
     return "starting its cloud machine"
+
+
+def _wake_spent(c, bot, machine):
+    """Whether the machine was woken for one of `bot`'s queued jobs and no turn has started or ended on its computer
+    since: `wake_for` does not wake it for that job again."""
+    if not (machine["wake_key"] and machine["woke_at"]):
+        return False
+    queued = [r[0] for r in c.execute("SELECT id FROM jobs WHERE bot_id=? AND state='queued'", (bot,))]
+    if not any(covers(machine["wake_key"], "job:" + job) for job in queued):
+        return False
+    if not machine["runner_id"]:
+        return True
+    found = c.execute(
+        "SELECT max(coalesce(finished_at,started_at,created_at)) FROM attempts WHERE runner_id=?",
+        (machine["runner_id"],),
+    ).fetchone()
+    return (epoch(found[0]) or 0 if found and found[0] else 0) <= machine["woke_at"]
 
 
 # A machine whose computer has not enrolled yet, as `coming` says it: on its way by itself, or held until a person acts.

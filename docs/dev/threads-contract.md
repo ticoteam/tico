@@ -542,8 +542,14 @@ newest first, so a chat that draws a bot's first row says the latest:
 ```json
 {"actor": "bot:legal", "name": "Legal", "state": "up_next|cant_reply|working|replied|no_reply|stopped",
  "detail": "...", "since": "<wait start>", "run_id": "<attempt id>|null",
- "fix": {"label": "Fix", "href": "#/settings/computers"}|null, "message_id": "<the person's message that woke it>"}
+ "fix": {"label": "Open Computers", "href": "#/settings/computers"}|null, "message_id": "<the person's message that woke it>",
+ "code": "worktree_home|null"}
 ```
+- `cant_reply`: `detail` names the real cause in plain words, `fix` the one place a person fixes it (its label says
+  what it does: Switch model, Open Computers...), and `code` the claim's own code (backend/wait_reasons.py), so an
+  agent reading its status gets the same words and the code. A plan at its usage limit reads "It hit its <plan> usage
+  limit (resets <time>)" with `code` `payer_wait` or `cooling_off`: a client may offer Wait beside its fix. A code
+  with no words reads "Waiting (code: <code>)" and logs an error. `code` is null on every other state.
 - `working`: the run that took it is going. `run_id`, `detail` (the run's current step: its last tool or progress
   line, "Writing a reply", "Thinking", "Starting") and `since` (its start) only when the reader reads the run as the
   `runs` stream sends it (the bot's activity, the thread the run started in, the run itself); else `run_id` null,

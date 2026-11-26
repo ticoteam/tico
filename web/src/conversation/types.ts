@@ -114,4 +114,8 @@ export interface BotWait {
   run_id: string | null;
   /** The message that woke it (the newest, when several did). */
   message_id: string;
+  /** Where a person fixes what stops it ('cant_reply' only): the server's label and page (an old-app "#/" address). */
+  fix?: { label: string; href: string } | null;
+  /** The claim's code for what stops it ('cant_reply' only), e.g. 'payer_wait' (backend/wait_reasons.py). */
+  code?: string | null;
 }
