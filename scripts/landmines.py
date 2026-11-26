@@ -87,7 +87,7 @@ CORE_BRIDGE = ("finance", "actions")
 def py_prod(path):
     """Shipped Python: not under a tests/ folder and not a conftest.py. A module named test_*.py elsewhere ships
     (backend/test_receipts.py)."""
-    return path.endswith(".py") and "/tests/" not in f"/{path}" and not path.endswith("conftest.py")
+    return path.endswith(".py") and "/tests/" not in f"/{path}" and path.rsplit("/", 1)[-1] != "conftest.py"
 
 
 def core_backend(path):

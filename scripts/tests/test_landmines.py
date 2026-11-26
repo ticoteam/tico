@@ -156,6 +156,8 @@ def test_core_imports_app_reads_only_core_backend_code():
 def test_a_production_module_named_like_a_test_is_read_and_a_test_folder_is_not():
     text = "from .mail import send\nimport runner_support.op\n"
     assert hits("backend/test_receipts.py", text) == {"core-imports-app": 1, "no-runner-support-import": 1}
+    assert hits("backend/preconftest.py", text) == {"core-imports-app": 1, "no-runner-support-import": 1}
+    assert hits("clients/preconftest.py", text) == {"no-runner-support-import": 1}
     for path in ("backend/tests/helpers/fake.py", "backend/conftest.py", "clients/tests/test_x.py"):
         assert hits(path, text) == {}, path
 
@@ -168,6 +170,14 @@ def test_each_statement_on_one_line_is_its_own_hit():
 def test_an_import_inside_a_string_is_not_an_import():
     text = 'HELP = """\nfrom .mail import send\nimport runner_support\n"""\n'
     assert hits(CORE, text) == {}
+
+
+@pytest.fixture(autouse=True)
+def _git_finds_the_repository_by_its_folder(monkeypatch):
+    """A hook exports GIT_DIR and GIT_INDEX_FILE; unset, every git call here (landmines' own included) reads the scratch
+    repository its cwd names."""
+    for name in ("GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY"):
+        monkeypatch.delenv(name, raising=False)
 
 
 def git(root, *args):
