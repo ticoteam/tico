@@ -3714,6 +3714,7 @@ impl Worktrees {
     }
 
     /// Whether a round of copies is still running (tests).
+    #[cfg(test)]
     pub fn backing_up(&self) -> bool {
         self.backing_up
             .lock()
