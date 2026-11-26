@@ -585,8 +585,9 @@ test("the menu counts Catch up without reading its cards, at most once a second;
   // ten new messages: the menu reads the count again, never the cards, and never twice in one second
   const from = Date.now();
   for (let i = 0; i < 10; i++) await asOmar(`threads/${room.id}/messages`, { text: `Note ${i}` });
-  await expect.poll(() => reads.filter((r) => r.at > from).length).toBeGreaterThan(0);
-  await page.waitForTimeout(1500);
+  // the stream has caught up once the menu reads the count after the last message was written
+  const written = Date.now();
+  await expect.poll(() => reads.filter((r) => r.at > written).length).toBeGreaterThan(0);
   expect(reads.filter((r) => !r.path.endsWith('/count')), 'no read of the cards').toEqual([]);
   const counts = reads.map((r) => r.at).filter((at) => at > from);
   for (let i = 1; i < counts.length; i++) expect(counts[i]! - counts[i - 1]!, 'a second between count reads').toBeGreaterThanOrEqual(900);
