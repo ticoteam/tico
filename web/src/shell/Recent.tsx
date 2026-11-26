@@ -29,42 +29,38 @@ export function RecentViews() {
   const at = usePlacement();
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const popup = useRef<HTMLDivElement>(null);
-  const [byKey, setByKey] = useState(false);
+  const button = useRef<HTMLButtonElement>(null);
   useEffect(() => {
+    // as Enter on the button does: the menu opens from the keyboard, so its top row has the focus
     opener = () => {
-      setByKey(true);
-      setOpen(true);
+      const b = button.current;
+      if (!b) return;
+      b.focus();
+      b.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      b.click();
     };
     return () => {
       opener = null;
     };
   }, []);
-  // opened by `g r`: the top row has the focus, as Enter on the button would give it
-  useEffect(() => {
-    if (!open || !byKey) return;
-    const f = requestAnimationFrame(() => popup.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus());
-    setByKey(false);
-    return () => cancelAnimationFrame(f);
-  }, [open, byKey]);
 
   const go = (e: MouseEvent, v: RecentView) => {
     // a new tab or window is the browser's own
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
     e.preventDefault();
-    router.history.push(v.to);
+    void router.navigate({ href: v.to });
   };
 
   return (
     <BaseMenu.Root open={open} onOpenChange={setOpen}>
       <BaseMenu.Trigger
-        render={<button type="button" className="shell-recent" aria-label={RECENT_LABEL} title={RECENT_LABEL} data-target="shell:recent" />}
+        render={<button ref={button} type="button" className="shell-recent" aria-label={RECENT_LABEL} title={RECENT_LABEL} data-target="shell:recent" />}
       >
         <Icon name="clock" />
       </BaseMenu.Trigger>
       <BaseMenu.Portal>
         <BaseMenu.Positioner className={at.layer} style={at.style} side="bottom" align="start" sideOffset={6}>
-          <BaseMenu.Popup ref={popup} className={`menu shell-recent-list ${at.look}`} aria-label={RECENT_LABEL}>
+          <BaseMenu.Popup className={`menu shell-recent-list ${at.look}`} aria-label={RECENT_LABEL}>
             <div className="menu-group-label" aria-hidden="true">
               {RECENT_LABEL}
             </div>

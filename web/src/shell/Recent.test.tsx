@@ -34,7 +34,7 @@ afterEach(() => {
 describe('Recent views', () => {
   it('sits left of the first breadcrumb, the first stop in the top bar', async () => {
     draw();
-    const nav = screen.getByRole('navigation', { name: 'Breadcrumb' });
+    const nav = await screen.findByRole('navigation', { name: 'Breadcrumb' });
     const first = nav.querySelector('button, a');
     expect(first).toBe(await button());
     expect(first?.nextElementSibling?.textContent).toBe('Tico Team');

@@ -49,7 +49,7 @@ export const openView = defineAction({
   kind: 'view',
   input: z.strictObject({ to: href }),
   tico: false,
-  run: ({ router }, { to }) => router.history.push(to),
+  run: ({ router }, { to }) => router.navigate({ href: to }),
 });
 
 const chat = z.string().check(z.maxLength(200), z.regex(/^(agent|person|thread):[^\s]+$/), z.describe('agent:<slug>, person:<id> or thread:<id>'));
