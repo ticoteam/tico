@@ -1,5 +1,6 @@
 {
   "backend/granola_mcp.py": {
+    "no-install-closure": 1,
     "no-runner-support-import": 4
   }
 }

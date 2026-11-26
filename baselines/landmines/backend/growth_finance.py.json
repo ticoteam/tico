@@ -1,0 +1,5 @@
+{
+  "backend/growth_finance.py": {
+    "no-install-closure": 1
+  }
+}

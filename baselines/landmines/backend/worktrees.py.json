@@ -1,0 +1,5 @@
+{
+  "backend/worktrees.py": {
+    "no-install-closure": 1
+  }
+}

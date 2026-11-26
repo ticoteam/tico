@@ -1,0 +1,5 @@
+{
+  "backend/market.py": {
+    "no-install-closure": 1
+  }
+}

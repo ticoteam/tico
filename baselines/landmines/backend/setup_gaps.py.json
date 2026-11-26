@@ -1,0 +1,5 @@
+{
+  "backend/setup_gaps.py": {
+    "no-install-closure": 1
+  }
+}

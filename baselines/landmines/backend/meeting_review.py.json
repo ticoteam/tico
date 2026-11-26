@@ -1,0 +1,5 @@
+{
+  "backend/meeting_review.py": {
+    "no-install-closure": 1
+  }
+}

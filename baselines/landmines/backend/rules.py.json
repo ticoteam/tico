@@ -1,0 +1,5 @@
+{
+  "backend/rules.py": {
+    "no-install-closure": 1
+  }
+}

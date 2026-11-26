@@ -1,0 +1,5 @@
+{
+  "backend/file_signings.py": {
+    "no-install-closure": 1
+  }
+}

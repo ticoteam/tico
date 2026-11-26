@@ -1,0 +1,5 @@
+{
+  "backend/mcp_connect.py": {
+    "no-install-closure": 1
+  }
+}

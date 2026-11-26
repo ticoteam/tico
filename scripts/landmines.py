@@ -23,10 +23,15 @@ rules read import statements token by token (one hit per Non-Core module a state
 the tracked paths with the --base ref's tree, so it runs only with --base, as CI runs it. Two bans keep retired things
 out: no-flight-in-hub (the flight recorder's tables are made only in hub.flight.db) and no-tauri (desktop/, Electron, is
 the one desktop app).
+
+Three more hold the lifespan and the routes, also read token by token: backend/app.py starts no raw asyncio task (its
+loops are lifespan workers), backend/ adds no install(app, ...) / register*(app, ...) closure (a ratchet: modules move
+to api_routing.router()), and only backend/api_routing.py builds an APIRouter or calls include_router.
 """
 
 import argparse
 import collections
+import functools
 import io
 import json
 import re
@@ -295,6 +300,97 @@ def tauri_lines(path, text):
     return found
 
 
+@functools.lru_cache(maxsize=1)
+def code_tokens(text):
+    """`text`'s Python tokens without comments and layout (a NEWLINE ends each statement), so a string is one STRING
+    token and a call or a def split over lines reads as one run. Empty when the file does not tokenize. The rules that
+    read a file's tokens run one after another on it, so they share one tokenize."""
+    try:
+        return tuple(
+            t
+            for t in tokenize.generate_tokens(io.StringIO(text).readline)
+            if t.type not in (tokenize.NL, tokenize.COMMENT, tokenize.INDENT, tokenize.DEDENT)
+        )
+    except (tokenize.TokenError, SyntaxError, IndentationError):
+        return ()
+
+
+def _is(tok, string, kind=tokenize.OP):
+    return tok is not None and tok.type == kind and tok.string == string
+
+
+def imported_names(tokens, modules, names):
+    """The local names `from <module> import <name> [as <alias>]` binds, for a module in `modules` and a name in
+    `names`."""
+    bound, statement = set(), []
+    for tok in [*tokens, None]:
+        if tok is not None and tok.type not in (tokenize.NEWLINE, tokenize.ENDMARKER) and not _is(tok, ";"):
+            statement.append(tok.string)
+            continue
+        if statement[:1] == ["from"] and "import" in statement:
+            split = statement.index("import")
+            if "".join(statement[1:split]) in modules:
+                words = [w for w in statement[split + 1 :] if w not in "()"]
+                for k, word in enumerate(words):
+                    if word in names and (k == 0 or words[k - 1] == ","):
+                        bound.add(words[k + 2] if words[k + 1 : k + 2] == ["as"] else word)
+        statement = []
+    return bound
+
+
+def calls(tokens, attributes=(), bare=()):
+    """The line of each call `x.<attribute>(` and `<bare>(`, where a bare name is a call of its own (not `x.name(`)
+    and not a definition (`def name(`)."""
+    lines = []
+    for i, tok in enumerate(tokens[:-1]):
+        if tok.type != tokenize.NAME or not _is(tokens[i + 1], "("):
+            continue
+        before = tokens[i - 1] if i else None
+        if (tok.string in attributes and _is(before, ".")) or (
+            tok.string in bare and not _is(before, ".") and not _is(before, "def", tokenize.NAME)
+        ):
+            lines.append(tok.start[0])
+    return lines
+
+
+def lifespan_tasks(path, text):
+    """Raw tasks: `asyncio.create_task(`, `loop.create_task(`, `asyncio.ensure_future(`, and a bare call of a name
+    imported from asyncio. The app's own `create_task(...)` (it creates a Tico task) is not one."""
+    tokens = code_tokens(text)
+    spawn = imported_names(tokens, {"asyncio", "asyncio.tasks"}, {"create_task", "ensure_future"})
+    return calls(tokens, attributes={"create_task", "ensure_future"}, bare=spawn)
+
+
+INSTALLER = re.compile(r"(install|register)\w*")
+
+
+def install_closures(path, text):
+    """The line of each `def install*(app, ...)` / `def register*(app, ...)`, however its parameters are laid out
+    and typed; in a method, `app` first after `self`."""
+    tokens = code_tokens(text)
+    lines = []
+    for i, tok in enumerate(tokens[:-3]):
+        if not (
+            _is(tok, "def", tokenize.NAME) and INSTALLER.fullmatch(tokens[i + 1].string) and _is(tokens[i + 2], "(")
+        ):
+            continue
+        first = i + 3
+        if _is(tokens[first], "self", tokenize.NAME) and first + 2 < len(tokens) and _is(tokens[first + 1], ","):
+            first += 2
+        after = tokens[first + 1] if first + 1 < len(tokens) else None
+        if _is(tokens[first], "app", tokenize.NAME) and after is not None and after.string in (",", ":", ")", "="):
+            lines.append(tok.start[0])
+    return lines
+
+
+def bare_routers(path, text):
+    """`APIRouter(` however it is reached (`fastapi.APIRouter(`, an alias imported from fastapi or fastapi.routing),
+    and `x.include_router(`."""
+    tokens = code_tokens(text)
+    routers = {"APIRouter"} | imported_names(tokens, {"fastapi", "fastapi.routing"}, {"APIRouter"})
+    return calls(tokens, attributes={"include_router", "APIRouter"}, bare=routers)
+
+
 @dataclass
 class Rule:
     id: str
@@ -462,6 +558,39 @@ RULES = [
         "package, CLI, workflow or doc comes back; build and describe the Electron app instead (docs/desktop.md).",
         "L39",
         find=tauri_lines,
+    ),
+    Rule(
+        "no-lifespan-task",
+        "ban",
+        lambda path: path == "backend/app.py",
+        [],
+        "A raw asyncio task in the app dies silently and is never awaited at shutdown. Register background work in the "
+        "lifespan workers (backend/lifespan_workers.py, Workers.add): a crash is logged and stops the app, and "
+        "shutdown unwinds every worker.",
+        "L40",
+        find=lifespan_tasks,
+    ),
+    Rule(
+        "no-install-closure",
+        "ratchet",
+        lambda path: path.startswith("backend/") and py_prod(path),
+        [],
+        "No new install(app, ...) or register*(app, ...) closure. Build the module's routes on api_routing.router(), "
+        "take services as a deps.Injected parameter, and add them in create_app with api_routing.include(app, "
+        "router), as backend/report_order.py does.",
+        "L41",
+        find=install_closures,
+    ),
+    Rule(
+        "no-bare-apirouter",
+        "ban",
+        lambda path: path.startswith("backend/") and py_prod(path) and path != "backend/api_routing.py",
+        [],
+        "Build routes on api_routing.router() and add them with api_routing.include(app, router). A bare APIRouter's "
+        "routes skip TicoRoute (orjson, display names, run names, shared reads, compression), and app.include_router "
+        "adds one lazy entry that hides its routes from app.routes.",
+        "L42",
+        find=bare_routers,
     ),
 ]
 BY_ID = {rule.id: rule for rule in RULES}

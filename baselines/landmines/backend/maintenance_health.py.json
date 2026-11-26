@@ -1,0 +1,5 @@
+{
+  "backend/maintenance_health.py": {
+    "no-install-closure": 1
+  }
+}

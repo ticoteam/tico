@@ -1,0 +1,5 @@
+{
+  "backend/growth_segments.py": {
+    "no-install-closure": 1
+  }
+}

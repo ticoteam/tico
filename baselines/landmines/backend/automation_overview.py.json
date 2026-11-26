@@ -1,0 +1,5 @@
+{
+  "backend/automation_overview.py": {
+    "no-install-closure": 1
+  }
+}

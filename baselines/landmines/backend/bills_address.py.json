@@ -1,0 +1,5 @@
+{
+  "backend/bills_address.py": {
+    "no-install-closure": 1
+  }
+}

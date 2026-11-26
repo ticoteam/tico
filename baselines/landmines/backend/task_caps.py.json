@@ -1,0 +1,5 @@
+{
+  "backend/task_caps.py": {
+    "no-install-closure": 1
+  }
+}

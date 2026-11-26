@@ -1,0 +1,5 @@
+{
+  "backend/web_routes.py": {
+    "no-install-closure": 2
+  }
+}

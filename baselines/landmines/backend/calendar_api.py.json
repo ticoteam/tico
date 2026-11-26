@@ -1,0 +1,5 @@
+{
+  "backend/calendar_api.py": {
+    "no-install-closure": 1
+  }
+}

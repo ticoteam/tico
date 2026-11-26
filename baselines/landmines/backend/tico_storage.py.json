@@ -1,0 +1,5 @@
+{
+  "backend/tico_storage.py": {
+    "no-install-closure": 1
+  }
+}

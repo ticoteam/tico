@@ -1,0 +1,5 @@
+{
+  "backend/lenses.py": {
+    "no-install-closure": 1
+  }
+}

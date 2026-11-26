@@ -1,0 +1,5 @@
+{
+  "backend/access_requests.py": {
+    "no-install-closure": 1
+  }
+}
