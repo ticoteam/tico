@@ -278,7 +278,7 @@ EXPLAINED: dict[str, tuple[Part, ...]] = {
         Part(
             "findings",
             "gives each real defect its own finding with file:line, a severity and why it matters, or says there are "
-            "no findings",
+            "no findings; a finding on the PR description may cite the guideline line it breaks as its file:line",
             "A finding lacks file:line, a severity or why it matters, or there is no line saying there are none.",
             "Can't tell if each finding has file:line, a severity and why it matters.",
         ),
@@ -302,7 +302,11 @@ def check_of(rubric: object) -> str | None:
     known: dict[str, tuple[str, ...]] = {
         "spec": (S.SPEC_RUBRIC, *S.EARLIER.get("product-spec/page/rubric", ())),
         # The combined Review uses the whole rubric. These parts only check a single review.
-        "review": S.EARLIER.get("engineering-review-1/page/rubric", ()),
+        "review": tuple(
+            text
+            for text in S.EARLIER.get("engineering-review-1/page/rubric", ())
+            if text not in S.COMBINED_REVIEW_RUBRICS
+        ),
         "qa": (S.QA_RUBRIC, *S.EARLIER.get("engineering-qa/page/rubric", ())),
         "validate": (S.VALIDATE_RUBRIC, *S.EARLIER.get("product-validate/page/rubric", ())),
     }
@@ -342,7 +346,7 @@ def explain_parts(rubric: object) -> tuple[Part, ...]:
     said = _words(rubric)
     if not said or check_of(rubric) is not None:
         return ()
-    if said == _words(S.REVIEW_RUBRIC):
+    if any(said == _words(text) for text in S.COMBINED_REVIEW_RUBRICS):
         return EXPLAINED["two_reviews"]
     sentences = _sentences(said)
     if len(sentences) < 2:
