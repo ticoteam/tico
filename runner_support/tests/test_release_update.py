@@ -1534,6 +1534,26 @@ def test_a_linux_update_moves_the_legacy_units_to_runner_support_reloads_systemd
     assert systemctl.calls == [["systemctl", "--user", "daemon-reload"]]
 
 
+def test_a_reload_that_times_out_still_leaves_a_way_to_put_the_files_back(tmp_path):
+    units = tmp_path / "units"
+    units.mkdir()
+    (units / "tico-bot.service").write_text(legacy_unit("bot"))
+    calls = []
+
+    def systemctl(cmd, **kw):
+        calls.append(cmd)
+        if len(calls) == 1:
+            raise subprocess.TimeoutExpired(cmd, 60)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    said = []
+    undo = ru.move_units(SYSTEMD, mac=False, run=systemctl, unit_dir=units, say=said.append)
+    assert (units / "tico-bot.service").read_text() == legacy_unit("bot", "runner_support")
+    assert "daemon-reload failed: TimeoutExpired" in said[-1]
+    undo()
+    assert (units / "tico-bot.service").read_text() == legacy_unit("bot") and len(calls) == 2
+
+
 def test_nothing_is_rewritten_or_reloaded_without_a_legacy_job(tmp_path):
     agents, units = tmp_path / "agents", tmp_path / "units"
     agents.mkdir()

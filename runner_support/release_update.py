@@ -667,15 +667,24 @@ def move_units(env=os.environ, *, mac, run=subprocess.run, agents=None, unit_dir
         say(f"Tico update: {name} now starts python -m runner_support")
 
     def reload(paths):
+        # Never raises: a moved file must still be put back on a rollback when its reload timed out.
         if not paths:
             return
         if not mac:
-            done = run(["systemctl", "--user", "daemon-reload"], capture_output=True, text=True, timeout=60)
+            try:
+                done = run(["systemctl", "--user", "daemon-reload"], capture_output=True, text=True, timeout=60)
+            except (OSError, subprocess.SubprocessError) as exc:
+                say(f"Tico update: systemctl daemon-reload failed: {type(exc).__name__}")
+                return
             if done.returncode:
                 say(f"Tico update: systemctl daemon-reload exited {done.returncode}")
             return
         for path in paths:
-            done = reload_job(path.stem, path, domain, run)
+            try:
+                done = reload_job(path.stem, path, domain, run)
+            except (OSError, subprocess.SubprocessError) as exc:
+                say(f"Tico update: could not reload {path.stem}: {type(exc).__name__}")
+                continue
             if done.returncode:
                 say(f"Tico update: could not reload {path.stem}: launchctl exited {done.returncode}")
 
