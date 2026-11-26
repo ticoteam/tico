@@ -3,8 +3,8 @@
 has stacks of different heights, a few teammates holding them, a rate in and out, and one that waits on Ana.
 
 Leads come in all week and most stop at Targets; a few reach Outreach and Replies, one is Qualified, and three closed
-out as Done. Bids talks to three venues and has two proposals out. Most customers sit in Active. Product has builds
-in Build and Review 1, one in QA, and one release waiting on Ana's OK. Each task enters its pipeline on its day and is moved on by Ana with a reason, the way a
+out as Done. Bids talks to three venues and has two proposals out. Most customers sit in Active. The Product factory's
+Engineering pipeline has builds in Build and Review, one in QA, and one in Release that Ana holds. Each task enters its pipeline on its day and is moved on by Ana with a reason, the way a
 person moves work past a stage it has no check for yet.
 """
 
@@ -47,13 +47,13 @@ WORK = (
     ("customer", "customer-active", "bot:success-owner", 4.9, "Brightwater Library"),
     ("customer", "customer-active", "bot:success-owner", 5.5, "Tamarack Lodge"),
     ("customer", "customer-referral-asked", "bot:success-owner", 6.3, "Referral ask: Grove Street Cinema"),
-    ("product", "product-build", "bot:mobile", 1.2, "Scene preview on the phone app"),
-    ("product", "product-build", "bot:firmware", 2.3, "Firmware 2.5: steady Wi-Fi"),
-    ("product", "product-build", "bot:cloud", 3.0, "Scene upload retries on a weak signal"),
-    ("product", "product-review-1", "bot:mobile", 4.1, "Share a show with a link"),
-    ("product", "product-review-1", "bot:firmware", 4.7, "Two-phone calibration"),
-    ("product", "product-qa", "bot:qa-owner", 5.3, "Sunset start for scheduled shows"),
-    ("product", "product-ok-release", ANA, 6.0, "Release 2.4.1"),
+    ("engineering", "engineering-build", "bot:mobile", 1.2, "Scene preview on the phone app"),
+    ("engineering", "engineering-build", "bot:firmware", 2.3, "Firmware 2.5: steady Wi-Fi"),
+    ("engineering", "engineering-build", "bot:cloud", 3.0, "Scene upload retries on a weak signal"),
+    ("engineering", "engineering-review-1", "bot:mobile", 4.1, "Share a show with a link"),
+    ("engineering", "engineering-review-1", "bot:firmware", 4.7, "Two-phone calibration"),
+    ("engineering", "engineering-qa", "bot:qa-owner", 5.3, "Sunset start for scheduled shows"),
+    ("engineering", "engineering-release", ANA, 6.0, "Release 2.4.1"),
 )
 # (pipeline, owner, days ago it entered, days ago it reached Done, title)
 DONE = (
