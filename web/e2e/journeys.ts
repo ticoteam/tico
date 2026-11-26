@@ -709,7 +709,7 @@ test("Library: an app page an agent made is marked App in Pages; it opens as a p
   const text =
     '<!doctype html><html><head><title>Creative library</title></head><body><h1>Creative library</h1>' +
     '<p>Winners first, then the tired ones.</p></body></html>';
-  const made = await post<{ file_id: string }>(hub, 'pages', { name: 'creative-library.html', title: 'Creative library', text, app: 'reads=files,store' });
+  const { page: made } = await post<{ page: { file_id: string } }>(hub, 'pages', { name: 'creative-library.html', title: 'Creative library', text, app: 'reads=files,store' });
   const page = await open(browser, hub, '/library/pages');
   const row = page.locator('.page-line').filter({ hasText: 'Creative library' });
   await expect(row).toBeVisible();
