@@ -440,10 +440,11 @@ The Python runner is gone; an `"engine"` setting in `runner.json` or `TICO_RUNNE
 the side jobs (Close calls, meeting importers), the catalog set-up and the update process, from `runner_support/`. A
 small `runner/` package forwards the two entry points older installs saved, until it is deleted: `python -m runner ...`
 (launchd plists and systemd units, `python -m runner --config <path> <job>`) and `python -m runner.cloud_machine boot`
-(cloud machine images). Each runner start points them at `python -m runner_support` and reloads them: one
-`systemctl --user daemon-reload`, or `launchctl bootout` and `bootstrap` for a Mac's helper jobs, and for the runner's
-own job a short launchd job of its own that waits for any update to finish first. A reload that fails puts the old file
-back, so the next start tries again. A cloud machine's boot moves its boot unit the same way.
+(cloud machine images). Each runner start points them at `python -m runner_support`. On Linux one
+`systemctl --user daemon-reload` follows, which each unit's next restart uses. On a Mac each helper job is reloaded
+(`launchctl bootout` and `bootstrap`); the runner's own job is never reloaded from inside itself, so its new plist
+takes effect at the next login or `scripts/tico-computer install`. A reload that fails puts the old file back, so the
+next start tries again. A cloud machine's boot moves its boot unit the same way.
 
 ## A Docker runner
 

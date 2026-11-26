@@ -1489,6 +1489,10 @@ def test_only_the_interpreters_own_dash_m_runner_word_moves_and_keeps_its_quotin
     assert ru.moved_exec(spaced, "runner", "runner_support") == (
         'ExecStart="/opt/my py/bin/python" "-m" "runner_support" "--config" "/c/runner.json" "run"'
     )
+    single = "ExecStart='/opt/my py/bin/python' '-m' 'runner' 'run'"
+    assert ru.moved_exec(single, "runner", "runner_support") == (
+        "ExecStart='/opt/my py/bin/python' '-m' 'runner_support' 'run'"
+    )
     assert ru.moved_exec(
         "ExecStart=/py -m runner.cloud_machine boot", "runner.cloud_machine", "runner_support.cloud_machine"
     ) == ("ExecStart=/py -m runner_support.cloud_machine boot")
@@ -1496,6 +1500,7 @@ def test_only_the_interpreters_own_dash_m_runner_word_moves_and_keeps_its_quotin
         'ExecStart="/py" "-m" "runner_support" "--config" "/c" "run"',  # already moved
         'ExecStart="/py" "-m" "backend.server" "-m" "runner"',  # not the interpreter's module
         'ExecStart="/opt/-m runner/py" "--config" "/c" "run"',  # the words are inside one quoted path
+        "ExecStart='/opt/x -m runner' run",  # the same, single-quoted
         'Environment="-m runner"',
     ):
         assert ru.moved_exec(line, "runner", "runner_support") is None, line
@@ -1514,27 +1519,23 @@ def write_units(units, **kinds):
 
 
 def test_a_linux_start_moves_the_units_and_reloads_systemd_once(tmp_path):
-    units, state = tmp_path / "units", tmp_path / "state"
+    units = tmp_path / "units"
     write_units(units, bot="runner", importers="runner", close_calls="runner_support")
-    systemctl, said = Systemctl(), []
-    moved = ru.move_systemd_units(SYSTEMD, state, run=systemctl, unit_dir=units, say=said.append)
+    systemctl = Systemctl()
+    moved = ru.move_systemd_units(SYSTEMD, run=systemctl, unit_dir=units, say=lambda line: None)
     assert moved == ["tico-bot.service", "tico-importers.service"]
     for kind in ("bot", "importers"):
-        text = (units / f"tico-{kind}.service").read_text()
-        assert (
-            text == legacy_unit(kind, "runner_support")
-            and ((units / f"tico-{kind}.service").stat().st_mode & 0o777) == 0o600
-        )
-        assert (state / ru.LEGACY_DIR / f"tico-{kind}.service").read_text() == legacy_unit(kind)
+        path = units / f"tico-{kind}.service"
+        assert path.read_text() == legacy_unit(kind, "runner_support") and (path.stat().st_mode & 0o777) == 0o600
     # The running processes go on as they are; the next restart of each starts the new ExecStart=.
     assert systemctl.calls == [["systemctl", "--user", "daemon-reload"]]
-    assert ru.move_systemd_units(SYSTEMD, state, run=systemctl, unit_dir=units, say=said.append) == []
+    assert ru.move_systemd_units(SYSTEMD, run=systemctl, unit_dir=units, say=lambda line: None) == []
     assert len(systemctl.calls) == 1  # nothing left to move, nothing reloaded
 
 
 @pytest.mark.parametrize("how", ["exits non-zero", "times out"])
 def test_a_failed_daemon_reload_puts_the_units_back_so_the_next_start_tries_again(tmp_path, how):
-    units, state = tmp_path / "units", tmp_path / "state"
+    units = tmp_path / "units"
     write_units(units, bot="runner")
     calls = []
 
@@ -1546,13 +1547,11 @@ def test_a_failed_daemon_reload_puts_the_units_back_so_the_next_start_tries_agai
             return subprocess.CompletedProcess(cmd, 1, "", "")
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
-    assert ru.move_systemd_units(SYSTEMD, state, run=failing, unit_dir=units, say=lambda line: None) == []
+    assert ru.move_systemd_units(SYSTEMD, run=failing, unit_dir=units, say=lambda line: None) == []
     # The file systemd may still have loaded is the one on disk again, reloaded.
     assert (units / "tico-bot.service").read_text() == legacy_unit("bot") and len(calls) == 2
     systemctl = Systemctl()
-    assert ru.move_systemd_units(SYSTEMD, state, run=systemctl, unit_dir=units, say=lambda line: None) == [
-        "tico-bot.service"
-    ]
+    assert ru.move_systemd_units(SYSTEMD, run=systemctl, unit_dir=units, say=lambda line: None) == ["tico-bot.service"]
     assert systemctl.calls == [["systemctl", "--user", "daemon-reload"]]
 
 
@@ -1563,8 +1562,8 @@ def install_mac(agents, *jobs):
         (agents / f"{label}.plist").chmod(0o600)
 
 
-def test_a_mac_start_moves_and_reloads_the_helper_jobs_but_never_boots_out_its_own(tmp_path):
-    agents, state = tmp_path / "agents", tmp_path / "state"
+def test_a_mac_start_rewrites_its_own_plist_without_unloading_it_and_reloads_the_helpers(tmp_path):
+    agents = tmp_path / "agents"
     install_mac(
         agents,
         ("team.tico.tico-bot", "run", "runner"),
@@ -1572,144 +1571,64 @@ def test_a_mac_start_moves_and_reloads_the_helper_jobs_but_never_boots_out_its_o
         ("team.tico.tico-close-calls", "close-calls", "runner_support"),
     )
     launchd = Launchd(loaded={"team.tico.tico-bot", "team.tico.tico-importers", "team.tico.tico-close-calls"})
-    moved = ru.move_launchd_helpers({}, state, run=launchd, agents=agents, uid=501, say=lambda line: None)
-    assert moved == ["team.tico.tico-importers"] and launchd.booted_out() == ["team.tico.tico-importers"]
-    assert args_of(agents / "team.tico.tico-importers.plist")[1:3] == ["-m", "runner_support"]
-    assert "team.tico.tico-importers" in launchd.loaded
-    assert ((agents / "team.tico.tico-importers.plist").stat().st_mode & 0o777) == 0o600
-    # The runner's own job: a launchd job of its own does it, so this process (and an updater) is not stopped.
-    assert ru.hand_off_runner_job({}, state, root=tmp_path / "hub", python="/py", run=launchd, agents=agents, uid=501)
-    assert "team.tico.tico-bot" not in launchd.booted_out()
-    assert args_of(agents / "team.tico.tico-bot.plist")[1:3] == ["-m", "runner"]  # untouched until that job runs
-    job = state / "team.tico.tico-bot.unit-move.plist"
-    assert launchd.calls[-1] == ["launchctl", "bootstrap", "gui/501", str(job)]
-    assert args_of(job) == [
-        "/py",
-        "-m",
-        "runner_support.release_update",
-        "move-runner-job",
-        "--action",
-        "move",
-        "--label",
+    moved = ru.move_launchd_jobs({}, run=launchd, agents=agents, uid=501, say=lambda line: None)
+    assert moved == ["team.tico.tico-bot", "team.tico.tico-importers"]
+    for label in ("team.tico.tico-bot", "team.tico.tico-importers"):
+        assert args_of(agents / f"{label}.plist")[1:3] == ["-m", "runner_support"]
+        assert ((agents / f"{label}.plist").stat().st_mode & 0o777) == 0o600
+    # The runner's own job is the one this process runs in: no launchctl call names it, so it stays loaded as it is.
+    assert not any("team.tico.tico-bot" in " ".join(map(str, cmd)) for cmd in launchd.calls)
+    assert launchd.booted_out() == ["team.tico.tico-importers"] and launchd.loaded >= {
         "team.tico.tico-bot",
-        "--plist",
-        str(agents / "team.tico.tico-bot.plist"),
-        "--state-dir",
-        str(state),
-        "--root",
-        str(tmp_path / "hub"),
-    ]
-
-
-def test_a_helper_job_that_does_not_load_from_its_new_plist_gets_the_old_one_back_loaded(tmp_path, monkeypatch):
-    monkeypatch.setattr(ru, "_sleep", lambda seconds: None)
-    agents, state = tmp_path / "agents", tmp_path / "state"
-    install_mac(agents, ("team.tico.tico-importers", "importers", "runner"))
-    launchd = Launchd(
-        loaded={"team.tico.tico-importers"},
-        fail_bootstrap=lambda label, path: args_of(path)[2] == "runner_support",  # both tries
-    )
-    assert ru.move_launchd_helpers({}, state, run=launchd, agents=agents, uid=501, say=lambda line: None) == []
-    assert (agents / "team.tico.tico-importers.plist").read_bytes() == legacy_plist(
-        "team.tico.tico-importers", "importers"
-    )
-    assert "team.tico.tico-importers" in launchd.loaded  # never left unloaded
-
-
-def test_the_runner_job_is_not_handed_off_when_moved_or_after_a_failure_today(tmp_path, monkeypatch):
-    agents, state = tmp_path / "agents", tmp_path / "state"
-    state.mkdir()
-    install_mac(agents, ("team.tico.tico-bot", "run", "runner_support"))
-    launchd = Launchd()
-    assert not ru.hand_off_runner_job({}, state, run=launchd, agents=agents, uid=501)
-    install_mac(agents, ("team.tico.tico-bot", "run", "runner"))
-    (state / ru.MOVE_FAILED).write_text("x")
-    now = time.time()
-    monkeypatch.setattr(ru, "_now", lambda: now)
-    assert not ru.hand_off_runner_job({}, state, run=launchd, agents=agents, uid=501) and launchd.calls == []
-    monkeypatch.setattr(ru, "_now", lambda: now + ru.MOVE_RETRY_S + 1)
-    assert ru.hand_off_runner_job({}, state, run=launchd, agents=agents, uid=501)
-
-
-def runner_job(tmp_path, with_support=True):
-    agents, state, root = tmp_path / "agents", tmp_path / "state", tmp_path / "hub"
-    state.mkdir(parents=True)
-    if with_support:
-        (root / "runner_support").mkdir(parents=True)
-        (root / "runner_support" / "__main__.py").write_text("")
-    install_mac(agents, ("team.tico.tico-bot", "run", "runner"))
-    return agents / "team.tico.tico-bot.plist", state, root
-
-
-def test_the_runner_jobs_own_launchd_job_moves_and_reloads_it(tmp_path):
-    plist, state, root = runner_job(tmp_path)
-    launchd = Launchd(loaded={"team.tico.tico-bot"})
-    result = ru.move_runner_job("team.tico.tico-bot", plist, state, root, uid=501, run=launchd, say=lambda line: None)
-    assert result == "moved" and args_of(plist)[1:3] == ["-m", "runner_support"]
-    assert launchd.booted_out() == ["team.tico.tico-bot"] and "team.tico.tico-bot" in launchd.loaded
-    assert (state / ru.LEGACY_DIR / plist.name).read_bytes() == legacy_plist("team.tico.tico-bot", "run")
+        "team.tico.tico-importers",
+    }
+    launchd.calls.clear()
+    assert ru.move_launchd_jobs({}, run=launchd, agents=agents, uid=501, say=lambda line: None) == []
+    assert launchd.calls == []  # all moved: nothing reloaded again
 
 
 @pytest.mark.parametrize("how", ["bootstrap fails twice", "launchctl times out"])
-def test_a_runner_job_that_does_not_load_gets_its_old_plist_back_loaded_and_waits_a_day(tmp_path, monkeypatch, how):
+def test_a_helper_job_that_does_not_load_from_its_new_plist_gets_the_old_one_back_loaded(tmp_path, monkeypatch, how):
     monkeypatch.setattr(ru, "_sleep", lambda seconds: None)
-    plist, state, root = runner_job(tmp_path)
+    agents = tmp_path / "agents"
+    install_mac(agents, ("team.tico.tico-importers", "importers", "runner"))
     timed_out = []
 
     def raise_on(cmd):
-        # The first bootstrap of the new plist times out; launchd still has nothing loaded.
+        # The first bootstrap of the new plist times out; launchd has nothing loaded.
         if how == "launchctl times out" and cmd[1] == "bootstrap" and not timed_out:
             timed_out.append(cmd)
             return True
         return False
 
     launchd = Launchd(
-        loaded={"team.tico.tico-bot"},
+        loaded={"team.tico.tico-importers"},
         fail_bootstrap=lambda label, path: how == "bootstrap fails twice" and args_of(path)[2] == "runner_support",
         raise_on=raise_on,
     )
-    result = ru.move_runner_job("team.tico.tico-bot", plist, state, root, uid=501, run=launchd, say=lambda line: None)
-    assert result == "put back" and plist.read_bytes() == legacy_plist("team.tico.tico-bot", "run")
-    assert "team.tico.tico-bot" in launchd.loaded  # the runner is never left unloaded
-    assert (state / ru.MOVE_FAILED).exists()
-
-
-def test_the_runner_jobs_move_waits_for_an_update_and_leaves_a_checkout_without_runner_support(tmp_path, monkeypatch):
-    plist, state, root = runner_job(tmp_path)
-    now = [0.0]
-    monkeypatch.setattr(ru, "_now", lambda: now[0])
-    monkeypatch.setattr(ru, "_sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
-    launchd = Launchd(loaded={"team.tico.tico-bot"})
-    with ru.updater_lock(state) as held:  # an update is under way
-        assert held
-        result = ru.move_runner_job(
-            "team.tico.tico-bot", plist, state, root, uid=501, run=launchd, say=lambda line: None, lock_wait=60
-        )
-    assert result == "busy" and launchd.calls == [] and args_of(plist)[2] == "runner"
-    bare = tmp_path / "old"
-    plist2, state2, root2 = runner_job(bare, with_support=False)
-    assert (
-        ru.move_runner_job("team.tico.tico-bot", plist2, state2, root2, uid=501, run=launchd, say=lambda line: None)
-        == "kept"
+    assert ru.move_launchd_jobs({}, run=launchd, agents=agents, uid=501, say=lambda line: None) == []
+    assert (agents / "team.tico.tico-importers.plist").read_bytes() == legacy_plist(
+        "team.tico.tico-importers", "importers"
     )
-    assert args_of(plist2)[2] == "runner" and launchd.calls == []
+    assert "team.tico.tico-importers" in launchd.loaded  # never left unloaded
 
 
-def test_the_move_runs_at_a_supervised_start_only_and_never_raises(tmp_path, monkeypatch):
-    config = tmp_path / "runner.json"
-    config.write_text(json.dumps({"runner_id": "r1"}))
+def test_the_move_runs_at_a_supervised_start_only_and_never_raises(monkeypatch):
     seen = []
-    monkeypatch.setattr(ru, "move_systemd_units", lambda env, state, **kw: seen.append(("systemd", state)))
-    monkeypatch.setattr(ru, "move_launchd_helpers", lambda env, state, **kw: seen.append(("helpers", state)))
-    monkeypatch.setattr(ru, "hand_off_runner_job", lambda env, state, **kw: seen.append(("runner job", state)))
-    ru.move_at_start(config, SYSTEMD, darwin=False)
-    ru.move_at_start(config, {"XPC_SERVICE_NAME": "team.tico.tico-bot"}, darwin=True)
-    ru.move_at_start(config, {}, darwin=True)  # started by hand: nothing to move
-    state = tmp_path / "state-r1"  # runner-rs config.rs state_dir
-    assert seen == [("systemd", state), ("helpers", state), ("runner job", state)]
+    monkeypatch.setattr(ru, "move_systemd_units", lambda env, **kw: seen.append("systemd"))
+    monkeypatch.setattr(ru, "move_launchd_jobs", lambda env, **kw: seen.append("launchd"))
+    ru.move_at_start(SYSTEMD, darwin=False)
+    ru.move_at_start({"XPC_SERVICE_NAME": "team.tico.tico-bot"}, darwin=True)
+    ru.move_at_start({}, darwin=True)  # started by hand: nothing to move
+    ru.move_at_start({}, darwin=False)
+    assert seen == ["systemd", "launchd"]
+
+    def broken(env, **kw):
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(ru, "move_systemd_units", broken)
     said = []
-    config.write_text("{")
-    ru.move_at_start(config, SYSTEMD, darwin=False, say=said.append)
+    ru.move_at_start(SYSTEMD, darwin=False, say=said.append)
     assert "could not move the jobs" in said[0]
 
 
@@ -1717,7 +1636,7 @@ def test_the_runner_start_moves_the_jobs_before_it_execs_the_runner(monkeypatch,
     from runner_support import __main__ as cli, engine
 
     order = []
-    monkeypatch.setattr(ru, "move_at_start", lambda config: order.append(("move", config)))
+    monkeypatch.setattr(ru, "move_at_start", lambda: order.append("move"))
 
     class Execd(Exception):
         """A real exec never returns."""
@@ -1731,75 +1650,10 @@ def test_the_runner_start_moves_the_jobs_before_it_execs_the_runner(monkeypatch,
         with pytest.raises(Execd):
             cli.main(["--config", str(tmp_path / "runner.json"), command])
     assert order == [
-        ("move", tmp_path / "runner.json"),
+        "move",
         ("exec", ["--config", str(tmp_path / "runner.json"), "run"]),
         ("exec", ["--config", str(tmp_path / "runner.json"), "doctor"]),
     ]
-
-
-def test_a_rollback_to_a_checkout_without_runner_support_puts_the_old_units_back(tmp_path):
-    units, state, root = tmp_path / "units", tmp_path / "state", tmp_path / "hub"
-    root.mkdir()
-    write_units(units, bot="runner")
-    ru.move_systemd_units(SYSTEMD, state, run=Systemctl(), unit_dir=units, say=lambda line: None)
-    systemctl = Systemctl()
-    assert ru.restore_legacy_units(
-        root, state, darwin=False, env=SYSTEMD, run=systemctl, unit_dir=units, say=lambda line: None
-    ) == ["tico-bot.service"]
-    assert (units / "tico-bot.service").read_text() == legacy_unit("bot")
-    assert systemctl.calls == [["systemctl", "--user", "daemon-reload"]]
-    (root / "runner_support").mkdir()
-    (root / "runner_support" / "__main__.py").write_text("")
-    ru.move_systemd_units(SYSTEMD, state, run=Systemctl(), unit_dir=units, say=lambda line: None)
-    assert ru.restore_legacy_units(root, state, darwin=False, env=SYSTEMD, run=Systemctl(), unit_dir=units) == []
-    assert (units / "tico-bot.service").read_text() == legacy_unit("bot", "runner_support")
-
-
-def test_a_mac_rollback_reloads_the_runner_job_from_a_launchd_job_of_its_own(tmp_path, monkeypatch):
-    agents, state, root = tmp_path / "agents", tmp_path / "state", tmp_path / "hub"
-    root.mkdir()
-    (state / ru.LEGACY_DIR).mkdir(parents=True)
-    for label, command in (("team.tico.tico-bot", "run"), ("team.tico.tico-importers", "importers")):
-        install_mac(agents, (label, command, "runner_support"))
-        (state / ru.LEGACY_DIR / f"{label}.plist").write_bytes(legacy_plist(label, command))
-    handed = []
-    monkeypatch.setattr(ru, "hand_off_runner_job", lambda env, state_dir, **kw: handed.append(kw["action"]) or True)
-    launchd = Launchd(loaded={"team.tico.tico-bot", "team.tico.tico-importers"})
-    restored = ru.restore_legacy_units(
-        root, state, darwin=True, env={}, run=launchd, agents=agents, uid=501, say=lambda line: None
-    )
-    assert sorted(restored) == ["team.tico.tico-bot.plist", "team.tico.tico-importers.plist"]
-    assert launchd.booted_out() == ["team.tico.tico-importers"] and handed == ["load"]
-    assert args_of(agents / "team.tico.tico-bot.plist")[2] == "runner"
-
-
-def test_a_rollback_runs_the_legacy_step_before_restarting_the_old_release(repos):
-    public, checkout, state = repos
-    order = []
-    calls = Calls(healthy=(False, True))
-    restart = calls.restart
-    calls.restart = lambda: order.append("restart") or restart()
-    result, _ = run_apply(checkout, state, calls=calls, legacy=lambda root: order.append(("legacy", Path(root))))
-    assert result["state"] == "rolled_back" and order == ["restart", ("legacy", checkout), "restart"]
-
-
-def test_the_update_wires_the_legacy_step_for_a_mac_or_a_systemd_runner_only(monkeypatch, tmp_path):
-    seen = []
-    monkeypatch.setattr(ru, "in_flight", lambda directory: False)
-    monkeypatch.setattr(ru, "apply", lambda root, version, directory, **kw: seen.append(kw["legacy"]) or {"state": "x"})
-    monkeypatch.setattr(ru, "restore_legacy_units", lambda root, state_dir, **kw: ("restored", kw["darwin"]))
-    args = SimpleNamespace(state_dir=tmp_path, pid=42, root=tmp_path, version="0.2.0", started="")
-    for runner_kind, unit, expect in (
-        ("mac", "", ("restored", True)),
-        ("linux", "tico-bot.service", ("restored", False)),
-        ("linux", "", None),
-        ("docker", "tico-bot.service", None),
-    ):
-        monkeypatch.setattr(ru, "kind", lambda: runner_kind)
-        monkeypatch.setattr(ru, "systemd_unit", lambda env=None: unit)
-        ru.run_update(args)
-        legacy = seen.pop()
-        assert (legacy(tmp_path) if legacy else None) == expect, runner_kind
 
 
 @pytest.mark.slow

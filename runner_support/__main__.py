@@ -51,7 +51,7 @@ def main(argv=None):
             # The runner's own start, under launchd or systemd: point an older install's jobs at runner_support.
             from . import release_update
 
-            release_update.move_at_start(config_path)
+            release_update.move_at_start()
         engine.exec_binary(argv)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=Path.home() / ".config/tico/runner.json")
