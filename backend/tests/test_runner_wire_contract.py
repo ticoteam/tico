@@ -585,6 +585,43 @@ def test_a_replayed_completion_is_checked_for_who_may_read_it_now_not_when_it_wa
     }
 
 
+def test_a_completion_whose_access_ends_after_it_settled_does_not_send_the_answer_back(api, monkeypatch):
+    """Invariant 3, the post-write check. The completion passed every check and its settlement committed; then, before
+    the answer went back, a task the run read went private (a concurrent write landing after the commit). The run stays
+    settled with its receipt, but the answer (the reply's words) is refused, and the same key's replay is too."""
+    computer, attempt = started_with_one_event(api)
+    token, aid, key = computer["token"], attempt["id"], "complete:" + attempt["id"]
+    plan = a_public_task_the_run_read(api, attempt)
+    store = api.app.state.store
+    settle = store.mutate
+
+    def settle_then_revoke(*args, **kwargs):
+        result = settle(*args, **kwargs)  # the real write, committed
+        if args[1] == "/api/v2/attempts/%s/complete" % aid:
+            monkeypatch.setattr(store, "mutate", settle)
+            made_private(api, plan)
+        return result
+
+    monkeypatch.setattr(store, "mutate", settle_then_revoke)
+    body = {"outcome": "completed", "text": "Acme's summary is ready", "last_seq": 1}
+    answer = complete(api, token, aid, body, key)
+    assert store.mutate is settle  # the revocation ran, after the settlement's commit
+    assert answer.status_code == 403, answer.text
+    assert answer.json()["error"] == {
+        "code": "privacy",
+        "detail": "This execution is no longer available",
+        "retryable": False,
+    }
+    assert "Acme's summary" not in answer.text
+    settled = settlement(api, aid)
+    assert settled["run"][:3] == ("completed", "completed", "Acme's summary is ready")
+    assert settled["job"] == "completed" and settled["receipts"] == 1 and settled["finishes"] == 1
+    assert [text for _, text in settled["replies"]] == ["Acme's summary is ready"]
+    replay = complete(api, token, aid, body, key)
+    assert replay.status_code == 403 and "Acme's summary" not in replay.text
+    assert settlement(api, aid) == settled
+
+
 def test_a_too_old_runner_is_told_why_in_the_claim_answer(api):
     """The server's floor (runner_versions.MIN_RUNNER_RELEASE) pauses an older runner through the claim answer."""
     from backend import runner_versions
