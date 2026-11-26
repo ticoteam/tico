@@ -4,6 +4,7 @@
       "bot:ops": "ops",
       "human:ana": "Ana"
     },
+    "can_close": false,
     "can_comment": true,
     "can_direct": true,
     "can_set_run_model": true,

@@ -4,7 +4,7 @@ import type { OkPreview, PagePublished, PageShown, PipelineSettingsResult, Publi
 import { asksGone, keys, meQuery, queryClient, quietRoot, write } from '@/data';
 import { newId } from '@/lib/ids';
 import { timelineQuery } from '@/conversation';
-import { flowQuery, leaveNeedsYou, pipelinesQuery, settleNeedsYou } from '@/features/tasks/routing';
+import { flowQuery, flowSnoozedAsksQuery, leaveNeedsYou, pipelinesQuery, settleNeedsYou } from '@/features/tasks/routing';
 import type { FileLibrary, FileSearch, ReconcileTaskShotsBody, ReconcileTaskShotsResponse, TaskFileResult, TaskFileView } from '@/api/schema';
 
 /* One open task: its detail (GET /api/v2/tasks/{tid}, kept current by the stream under keys.tasks.detail), the files
@@ -29,6 +29,8 @@ export type TaskData = TaskDetail['task'] & {
   /** One row per agent on the task, the holder first: each opens its session view (`session=` on the timeline). */
   sessions: TaskSession[];
   mover: boolean;
+  /** Whether the reader may close it now, as the server's close decides (task_calls.can_work). */
+  can_close: boolean;
   /** The agent Tico stopped that this task is the notice for, when the person may release it; else null. */
   stopped_agent: NonNullable<TaskDetail['stopped_agent']> | null;
   /** The task's note (a legal matter's case in brief): the task read carries it, the schema does not name it yet. */
@@ -51,6 +53,7 @@ function flat(d: TaskDetail): TaskData {
     can_direct: d.can_direct ?? false,
     sessions: d.sessions ?? [],
     mover: d.mover ?? false,
+    can_close: d.can_close ?? false,
     stopped_agent: d.stopped_agent ?? null,
   };
 }
@@ -195,6 +198,22 @@ export function moveTask(id: string, to: string, why?: string) {
   return change(id, shown, (idem) => post(`${taskPath(id)}/move`, why ? { to, why } : { to }, idem));
 }
 
+/** Snooze one ask for the person alone until `until` (POST /api/v2/needs-you/snooze, backend/ask_snoozes.py): it leaves
+    their Needs you and its count at once, and comes back then; the task, its stage and its bot do not change. The ask's
+    id in Needs you is its task's visit and the requirement (waiting_on.ask_id). */
+export async function snoozeAsk(id: string, rid: string, visit: string, until: string): Promise<void> {
+  const undo = leaveNeedsYou(id, rid);
+  try {
+    await api.post('/api/v2/needs-you/snooze', { id: `${visit}:${rid}`, until }, { idempotencyKey: newId() });
+  } catch (e) {
+    undo(); // refused: back as it was, then read again
+    settleNeedsYou();
+    throw e;
+  }
+  settleNeedsYou({ task: id, wait: rid });
+  void queryClient.invalidateQueries({ queryKey: flowSnoozedAsksQuery.queryKey });
+}
+
 export const giveTask = (id: string, owner: string, setAnyway?: boolean) =>
   change(id, { owner_id: owner }, (idem) => post(`${taskPath(id)}/owner`, { owner, ...(setAnyway && { set_anyway: true }) }, idem));
 
@@ -301,14 +320,16 @@ export interface BoundAction {
 export const decisionShownQuery = (task: string, rid: string, version: number, send?: string | null, outbound = false) =>
   queryOptions({
     queryKey: [...keys.tasks.detail(task), 'shown', rid, version, send ?? null, outbound] as const,
-    queryFn: async ({ signal }): Promise<{ hash: string | null; complete: boolean; rule?: BoundRule; action?: BoundAction }> => {
+    queryFn: async ({ signal }): Promise<{ hash: string | null; complete: boolean; stage?: boolean; rule?: BoundRule; action?: BoundAction }> => {
       const shown = await api.get<OkPreview>(`/api/v2/oks/${enc(rid)}`, { signal }).catch((e: unknown) => {
         if (e instanceof ApiError && e.status === 404) return null;
         throw e;
       });
       if (!shown) {
         if (outbound) return { hash: null, complete: false };
-        if (!send) return { hash: null, complete: true };
+        // no grant: a stage's own OK, about the task itself (a letter's, a webhook's, a rule's or any OK bound to one
+        // thing has a grant and is read above)
+        if (!send) return { hash: null, complete: true, stage: true };
         const mail = await queryClient.fetchQuery({ ...emailSendQuery(task, send), staleTime: 0 });
         return { hash: null, complete: mail.preview_complete };
       }
