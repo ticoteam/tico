@@ -354,6 +354,8 @@ def move_boot_unit(m: Machine, unit_dir: Path = UNIT_DIR) -> bool:
 
     path = unit_dir / UNIT
     try:
+        if not path.is_file():
+            return False
         before = path.read_bytes()
         after = release_update.moved_unit(before, "runner.cloud_machine", "runner_support.cloud_machine")
         if after is None:
