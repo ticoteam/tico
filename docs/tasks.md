@@ -51,7 +51,9 @@ evidence (a task, a pull request or a run). They sit in the pipeline editor next
 `tico pipeline show` lists them. A bot's first turn after its task enters a pipeline reads that pipeline's notes, and its
 first turn after the task enters a stage reads the stage's, in the turn's own message (never its instructions, so a
 resumed session keeps its cached start). A later turn in the same session does not repeat them; a fresh session, an edit
-to a list, or a compaction during the turn sends them again.
+to a list, or a compaction during the turn sends them again. When a list the session was given becomes empty (its last
+note retired, or a stage with none), the next turn says so in one line; a session never given notes is told nothing.
+Side stages carry notes too, with no rules.
 
 People who may change the pipeline add, edit and retire notes; an edit or a retire says in one line what changed and
 why, shown under the note. A bot proposes one with `tico pipeline note propose <pipeline> [--stage <stage>] --note ...
