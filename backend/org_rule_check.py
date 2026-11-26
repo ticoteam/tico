@@ -2052,6 +2052,7 @@ def answer(gate):
 LATE_BUSY_SECONDS = 60
 LATE_RETRY_SECONDS = 1.0
 LATE_QUESTIONS = ("question", "chat_question")
+LATE_READ = 200  # late checks read from the queue at a time, ❓s first
 LATE_QUESTION_SECONDS = 10
 LATE_QUESTION_BUSY_SECONDS = LATE_QUESTION_SECONDS - DEADLINES[RULE_LEVEL] - int(LATE_RETRY_SECONDS)
 LATE_KEYS = (
@@ -2197,7 +2198,15 @@ def drain_late(store, primary):
     with draining:
         while True:
             with store.read() as c:
-                rows = [dict(r) for r in c.execute("SELECT * FROM org_rule_late ORDER BY created_at, rowid LIMIT 200")]
+                rows = [
+                    dict(r)
+                    for r in c.execute(
+                        "SELECT * FROM org_rule_late"
+                        " ORDER BY json_extract(verdict, '$.operation') IN (%s) DESC, created_at, rowid LIMIT ?"
+                        % ",".join("?" * len(LATE_QUESTIONS)),
+                        (*LATE_QUESTIONS, LATE_READ),
+                    )
+                ]
             waiting = sorted((r for r in rows if r["id"] not in tried), key=lambda r: not _late_question(r))
             group = waiting[: _late_width(store)]
             if not group:

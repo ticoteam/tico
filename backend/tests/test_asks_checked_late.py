@@ -205,3 +205,20 @@ def test_late_checks_run_side_by_side(ruled, monkeypatch):
     settle(api)
     assert events(api, "rules.unchecked") == []
     assert len(events(api, "rules.warned")) == 4
+
+
+def test_a_question_behind_more_late_checks_than_one_read_takes_is_still_in_the_first_group(ruled, monkeypatch):
+    """The queue is read a page at a time (LATE_READ): a ❓ behind a full page of older checks still goes first."""
+    api, judge = ruled
+    color_rule(api, if_broken="warn")
+    task = task_for_ops(api)
+    monkeypatch.setattr(org_rule_check, "kick_late", lambda store, primary: None)
+    monkeypatch.setattr(org_rule_check, "LATE_READ", 4)
+    for n in range(12):
+        comment(api, task, f"Step {n} is done.")
+    asked = "Which of the two launch note drafts goes out first?"
+    assert question(api, task, asked).status_code == 200
+    settle(api)
+    said = [c["state"]["output"] for c in judge.calls]
+    assert len(said) == 13
+    assert any(asked in s for s in said[: org_rule_check._late_width(api.app.state.store)]), said
