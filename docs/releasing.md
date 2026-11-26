@@ -398,10 +398,11 @@ new commit to borrow an old run. Roll back this tooling change by reverting it; 
 ## Tests on a PR
 
 Open the pull request as a draft and run tests on your computer while you work: a draft runs no checks, so pushes are
-free. When the change is done, `python3 scripts/pr_checks.py local --ready` runs the tests the plan selects for the
-branch (the same selection a pull request's run makes, through `scripts/heavy.sh`), prints a receipt line naming the full
-head sha and the result for the task's review, and marks the draft ready after a pass; without `--ready` it only
-runs and prints. It names what only CI runs (Rust conformance). A change that reaches most of
+free. When the change is done, mark it ready with `gh pr ready`: its checks run the tests the plan selects. Running
+them first on your computer is optional and never waited for: when a heavy slot is free,
+`python3 scripts/pr_checks.py local --ready` runs the same selection (through `scripts/heavy.sh`), prints a receipt line
+naming the full head sha and the result for the task's review, and marks the draft ready after a pass; without
+`--ready` it only runs and prints. It names what only CI runs (Rust conformance). A change that reaches most of
 the suite (a catalog template, a shared module) selects most of it: with `TICO_HEAVY_REMOTE=1` each part runs on a RunsOn
 VM against the pushed head instead. Mark a pull request ready once:
 each later push runs its checks again. A push to a ready pull request runs the cheap checks on free GitHub-hosted runners:
@@ -446,7 +447,7 @@ time from a parameter, a subprocess's own reads) must name that file or folder l
 select it. A file that makes a computed import or lists the repository with `git ls-files` runs on every change.
 The Release validation workflow retains its full candidate gate and never cancels a running validation.
 
-Write unit tests while you build and run them as you go; keep every one that guards a real failure, as many as the change needs, and drop the trivial ones. Before you mark the PR ready, run `python3 scripts/pr_checks.py local`, not the full suite. For each release, run the full suite once on its frozen candidate.
+Write unit tests while you build and run them as you go; keep every one that guards a real failure, as many as the change needs, and drop the trivial ones. When the PR is ready, its checks run the selected tests, not the full suite. For each release, run the full suite once on its frozen candidate.
 
 Use `pytest -ra` to see prerequisite skip reasons. Systemd lifecycle scenarios run on Linux;
 unit rendering still runs on every host. Installer scenarios need Docker and stage their mounts
@@ -493,7 +494,8 @@ checks on that merge commit, and moves main only when they pass.
   same day, or deleted. Release validation runs without retries.
 - **Required check**: `checks` on main. It fails when a job it needs failed or was cancelled; a skipped job passes.
 
-Agents open pull requests as drafts and run `python3 scripts/pr_checks.py local --ready` once the change is done; the
+Agents open pull requests as drafts and mark them ready with `gh pr ready` once the change is done; the PR checks run
+the selected tests (`python3 scripts/pr_checks.py local` runs the same plan locally, optional and never waited for), and the
 queue runs the selected set once per group.
 
 **Enqueue once.** A pull request needs no rebase to be current: the queue merges it onto the current main. Rebase only when
