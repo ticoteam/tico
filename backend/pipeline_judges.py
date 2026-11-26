@@ -71,15 +71,25 @@ REASON_BYTES = 500
 LINES_AT_MOST = 3  # a verdict names at most this many missing parts, one line each
 
 
+# Task #3451: the no line of a part that asks whether something is there at all (a second review, its model, the
+# commit, a reviewer's findings), stricter than its check's. Pages with it cut out scored 0.2 to 0.4 on it (a Review
+# page with every commit hash taken out 0.08 to 0.33 on the commit; a QA page without Reviewer 2's lines 0.22 to 0.32),
+# and the real pages of Nov 18 to 25 that scored as low lacked it (a second review whose maker was not named). Parts
+# that ask how well a thing is done (what was checked, how findings are written) keep the check's no line: real pages
+# that scored them 0.2 to 0.4 had them, and stay unsure.
+PRESENT_NO_AT = 0.4
+
+
 class Part:
     """One named part of a check: its question id, what Jev is asked (`ask`, completing "The attachment ..."), the line a
     verdict says when it is missing (`missing`) and when Jev can't tell (`unclear`), and the short line an OK that shows
     a passed page lists as one of its check rows (`found`; ui/app/decide.ts decideAskBubbleHTML), where it has one.
     `needs` is the key of a part this one only makes sense after: while that part reads no, this one is not named in
     the reason (a page with one review is told it lacks the second, not also that the two models don't differ). `at`
-    is the part's own yes line where it is stricter than its check's bar (BARS), else None."""
+    is the part's own yes line where it is stricter than its check's bar (BARS), else None; `no_at` its own no line
+    where that is stricter, else None."""
 
-    __slots__ = ("key", "ask", "missing", "unclear", "found", "needs", "at")
+    __slots__ = ("key", "ask", "missing", "unclear", "found", "needs", "at", "no_at")
 
     def __init__(
         self,
@@ -90,9 +100,10 @@ class Part:
         found: str = "",
         needs: str = "",
         at: float | None = None,
+        no_at: float | None = None,
     ) -> None:
         self.key, self.ask, self.missing, self.unclear, self.found = key, ask, missing, unclear, found
-        self.needs, self.at = needs, at
+        self.needs, self.at, self.no_at = needs, at, no_at
 
 
 # The checks Tico ships, each as its parts (the Spec page's "What changes" table, task #351). A rubric is one of these
@@ -181,6 +192,7 @@ CHECKS: dict[str, tuple[Part, ...]] = {
             "Reviewer 1's findings are missing.",
             "Can't tell what Reviewer 1 found.",
             "Has Reviewer 1's findings.",
+            no_at=PRESENT_NO_AT,
         ),
         Part(
             "reviewer_2",
@@ -189,6 +201,7 @@ CHECKS: dict[str, tuple[Part, ...]] = {
             "Reviewer 2's findings are missing.",
             "Can't tell what Reviewer 2 found.",
             "Has Reviewer 2's findings.",
+            no_at=PRESENT_NO_AT,
         ),
         # Task #389 (Chris, Nov 13: the QA review "should look really, really clear", with architecture diagrams): what
         # a person reads first, how the change works, and how to undo it. Nov 14's five QA pages had none of the three.
@@ -225,6 +238,7 @@ CHECKS: dict[str, tuple[Part, ...]] = {
             "No second review that names its model.",
             "Can't tell if there are two reviews that each name their model.",
             "Has two reviews, each naming its model.",
+            no_at=PRESENT_NO_AT,
         ),
         Part(
             "models",
@@ -233,6 +247,7 @@ CHECKS: dict[str, tuple[Part, ...]] = {
             "Can't tell if the two reviews are by different models.",
             "The two reviews are by different models.",
             needs="two",
+            no_at=PRESENT_NO_AT,
         ),
         Part(
             "commit",
@@ -242,6 +257,7 @@ CHECKS: dict[str, tuple[Part, ...]] = {
             "A review doesn't name the PR's newest commit.",
             "Can't tell if each review names the PR's newest commit.",
             "Each review names the newest commit.",
+            no_at=PRESENT_NO_AT,
         ),
         Part(
             "checked",
@@ -292,15 +308,16 @@ CHECKS: dict[str, tuple[Part, ...]] = {
 # plainly there) is out of Jev's reach and does not count. QA's checks part stays at 0.75 (`Part.at`) because the
 # eval's page with the checks of an older commit scored 0.57 to 0.71 over nine real runs: met at 0.5, and once at 0.7
 # (the result's "raised_by_eval"). Task #3451 re-ran it on the 250 real Review and QA pages of Nov 18 to 25
-# (results/bars-2026-11-26.md): the two reviews at a yes of 0.5 and a no of 0.4 left 13% unsure (75% before, none met),
-# and QA's other parts at 0.6 left 9% (24% at 0.75), with no page cut to one review, no commit, no rollback or one
-# reviewer's findings met. Rerun them when what Jev is shown, or a check's parts, change: `rebuild.py --out` rewrites
+# (results/bars-2026-11-26.md): the two reviews at a yes of 0.5 left 18% unsure (75% before, none met), and QA's other
+# parts at 0.6 left 9% (24% at 0.75); with the parts' own no lines (`PRESENT_NO_AT`) every page cut to one review, no
+# commit, no rollback or one reviewer's findings was not met. A no line of 0.4 on every Review part left 13% unsure,
+# but by sending back pages whose findings and checks were there. Rerun them when what Jev is shown, or a check's parts, change: `rebuild.py --out` rewrites
 # the result without "raised_by_eval" or "set_by_eval", so carry each over by hand
 # (test_the_committed_rebuild_result_is_the_bar_the_server_uses fails until it agrees with BARS).
 BARS: dict[str, tuple[float, float]] = {
     "spec": (0.5, NOT_MET_AT),
     "review": (0.5, NOT_MET_AT),
-    "two_reviews": (0.5, 0.4),
+    "two_reviews": (0.5, NOT_MET_AT),
     "qa": (0.6, NOT_MET_AT),
     "validate": (0.5, NOT_MET_AT),
 }
@@ -346,9 +363,11 @@ def check_of(rubric: object) -> str | None:
 
 # A rubric a company edited to be close to one of Tico's bars, but not the same, is a company's own: asked whole on the
 # default bar, not as the bar's calibrated parts. The save says so (pipeline_settings.near_bar_notes) and changes
-# nothing. Close is sharing at least this share of its words with the bar (each word counted as often as it is in both,
-# out of the longer text's words, case and punctuation aside).
+# nothing. Close is at least NEAR_SHARE of the rubric's own words being in the bar (each word counted as often as it is
+# in both, case and punctuation aside), so a bar made by cutting sentences from Tico's is close; and, so that a line or
+# two lifted from it is not, the rubric holds at least NEAR_COVERS of the bar's words.
 NEAR_SHARE = 0.8
+NEAR_COVERS = 0.5
 # What a person calls each check's bar.
 BAR_NAMES: dict[str, str] = {
     "spec": "Spec",
@@ -364,10 +383,10 @@ def _bag(text: object) -> "Counter[str]":
 
 
 def shared_words(one: object, other: object) -> float:
-    """The share of words two texts have in common: each word as often as it is in both, out of the longer text's."""
+    """The share of `one`'s words that are in `other`: each word as often as it is in both, out of `one`'s words."""
     a, b = _bag(one), _bag(other)
-    longer = max(sum(a.values()), sum(b.values()))
-    return sum((a & b).values()) / longer if longer else 0.0
+    total = sum(a.values())
+    return sum((a & b).values()) / total if total else 0.0
 
 
 def near_bar(rubric: object) -> tuple[str, str] | None:
@@ -384,8 +403,12 @@ def near_bar(rubric: object) -> tuple[str, str] | None:
         "qa": S.QA_RUBRIC,
         "validate": S.VALIDATE_RUBRIC,
     }
-    share, check = max((shared_words(rubric, text), check) for check, text in shipped.items())
-    return (check, shipped[check]) if share >= NEAR_SHARE else None
+    close = [
+        (shared_words(rubric, text), check)
+        for check, text in shipped.items()
+        if shared_words(rubric, text) >= NEAR_SHARE and shared_words(text, rubric) >= NEAR_COVERS
+    ]
+    return (max(close)[1], shipped[max(close)[1]]) if close else None
 
 
 # A rubric of a company's own is explained by its sentences in at most this many parts (a longer rubric's sentences are
@@ -413,9 +436,12 @@ def _sentences(said: str) -> list[str]:
 FRAMING = (
     # "Only these seven count." / "Only these three count: a page with all three meets it ..."
     re.compile(r"only (these|those|the above)( \w+)? (count|matter)\b.*", re.I),
-    # "A page that leaves any of them out, such as ..., does not meet it."
+    # "A page that leaves any of them out, such as ..., does not meet it." Only a page that leaves out "them" (the items
+    # the bar lists) is framing: "A page without a rollback plan does not meet it." names an item, and is a part.
     re.compile(
-        r"(a|an|any|the) ([\w-]+ ){0,3}(page|report)\b.*\b(does not|doesn't|do not|don't|never) (meet|meets|pass|passes)( it| this( bar| check)?| the (bar|check))?[.!]?",
+        r"(a|an|any|the) ([\w-]+ ){0,3}(page|report) (that|which) (leaves|misses|lacks|omits|skips) (any|one|some|all)"
+        r"( \w+)? of (them|these|those|the \w+)( out)?\b.*\b(does not|doesn't|do not|don't|never) (meet|pass)(es|s)?"
+        r"( it| this( bar| check)?| the (bar|check))?[.!]?",
         re.I,
     ),
     # "A QA page that must meet this bar before the change ships."
@@ -560,8 +586,10 @@ def _band(p: float, bar: tuple[float, float]) -> str:
 
 
 def part_bar(part: Part, bar: tuple[float, float]) -> tuple[float, float]:
-    """One part's (yes, no) lines: its check's bar, with the part's own yes line where it is stricter (`Part.at`)."""
-    return (max(bar[0], part.at), bar[1]) if part.at is not None else bar
+    """One part's (yes, no) lines: its check's bar, with the part's own lines where they are stricter (`Part.at`,
+    `Part.no_at`). The no line never reaches the yes line."""
+    yes = max(bar[0], part.at) if part.at is not None else bar[0]
+    return yes, min(max(bar[1], part.no_at), yes) if part.no_at is not None else bar[1]
 
 
 def _part_lines(check: str, parts: dict[str, float]) -> tuple[str, float, str]:

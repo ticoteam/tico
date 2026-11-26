@@ -527,7 +527,8 @@ def test_the_eval_asks_each_check_in_parts_and_scores_the_servers_verdict(monkey
         p, cost, ms, said = adapter.judge_once(engine, by_check[check])
         assert said == "met" and p == 0.9 and cost == 0.0001, check
         assert calls[-1] == sorted(f"part_{part.key}" for part in P.CHECKS[check]), check
-    between = (P.BARS["qa"][0] + P.BARS["qa"][1]) / 2
+    lines = [P.part_bar(part, P.BARS["qa"]) for part in P.CHECKS["qa"]]
+    between = (min(yes for yes, _ in lines) + max(no for _, no in lines)) / 2  # between every part's own two lines
     monkeypatch.setattr(J, "gateway", _gateway_answering(between, calls))
     engine = adapter._decide("jev", "k", "http://gateway.acme.example")
     assert adapter.judge_once(engine, by_check["qa"])[3] == "unsure"

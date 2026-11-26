@@ -153,9 +153,9 @@
     "0.50": {
      "n": 182,
      "met": 108,
-     "unsure": 48,
-     "not_met": 26,
-     "unsure_rate": 0.264,
+     "unsure": 32,
+     "not_met": 42,
+     "unsure_rate": 0.176,
      "met_then_sent_back": 0,
      "mtsb_rate": 0.0,
      "out_of_reach": 0
@@ -163,9 +163,9 @@
     "0.55": {
      "n": 182,
      "met": 91,
-     "unsure": 65,
-     "not_met": 26,
-     "unsure_rate": 0.357,
+     "unsure": 49,
+     "not_met": 42,
+     "unsure_rate": 0.269,
      "met_then_sent_back": 0,
      "mtsb_rate": 0.0,
      "out_of_reach": 0
@@ -173,9 +173,9 @@
     "0.60": {
      "n": 182,
      "met": 82,
-     "unsure": 74,
-     "not_met": 26,
-     "unsure_rate": 0.407,
+     "unsure": 58,
+     "not_met": 42,
+     "unsure_rate": 0.319,
      "met_then_sent_back": 0,
      "mtsb_rate": 0.0,
      "out_of_reach": 0
@@ -183,9 +183,9 @@
     "0.65": {
      "n": 182,
      "met": 62,
-     "unsure": 94,
-     "not_met": 26,
-     "unsure_rate": 0.516,
+     "unsure": 78,
+     "not_met": 42,
+     "unsure_rate": 0.429,
      "met_then_sent_back": 0,
      "mtsb_rate": 0.0,
      "out_of_reach": 0
@@ -193,9 +193,9 @@
     "0.70": {
      "n": 182,
      "met": 41,
-     "unsure": 115,
-     "not_met": 26,
-     "unsure_rate": 0.632,
+     "unsure": 99,
+     "not_met": 42,
+     "unsure_rate": 0.544,
      "met_then_sent_back": 0,
      "mtsb_rate": 0.0,
      "out_of_reach": 0
@@ -203,9 +203,9 @@
     "0.75": {
      "n": 182,
      "met": 21,
-     "unsure": 135,
-     "not_met": 26,
-     "unsure_rate": 0.742,
+     "unsure": 119,
+     "not_met": 42,
+     "unsure_rate": 0.654,
      "met_then_sent_back": 0,
      "mtsb_rate": 0.0,
      "out_of_reach": 0
@@ -213,9 +213,9 @@
     "0.80": {
      "n": 182,
      "met": 13,
-     "unsure": 143,
-     "not_met": 26,
-     "unsure_rate": 0.786,
+     "unsure": 127,
+     "not_met": 42,
+     "unsure_rate": 0.698,
      "met_then_sent_back": 0,
      "mtsb_rate": 0.0,
      "out_of_reach": 0
@@ -223,9 +223,9 @@
     "0.85": {
      "n": 182,
      "met": 4,
-     "unsure": 152,
-     "not_met": 26,
-     "unsure_rate": 0.835,
+     "unsure": 136,
+     "not_met": 42,
+     "unsure_rate": 0.747,
      "met_then_sent_back": 0,
      "mtsb_rate": 0.0,
      "out_of_reach": 0
@@ -233,9 +233,9 @@
     "0.90": {
      "n": 182,
      "met": 0,
-     "unsure": 156,
-     "not_met": 26,
-     "unsure_rate": 0.857,
+     "unsure": 140,
+     "not_met": 42,
+     "unsure_rate": 0.769,
      "met_then_sent_back": 0,
      "mtsb_rate": 0.0,
      "out_of_reach": 0
@@ -243,9 +243,9 @@
     "0.95": {
      "n": 182,
      "met": 0,
-     "unsure": 156,
-     "not_met": 26,
-     "unsure_rate": 0.857,
+     "unsure": 140,
+     "not_met": 42,
+     "unsure_rate": 0.769,
      "met_then_sent_back": 0,
      "mtsb_rate": 0.0,
      "out_of_reach": 0
@@ -258,7 +258,7 @@
  "set_by_eval": {
   "two_reviews": [
    0.5,
-   0.4
+   0.2
   ],
   "qa": [
    0.6,
@@ -269,13 +269,13 @@
   "two_reviews": {
    "bar": [
     0.5,
-    0.4
+    0.2
    ],
    "n": 182,
    "met": 108,
-   "unsure": 23,
-   "not_met": 51,
-   "unsure_rate": 0.126,
+   "unsure": 32,
+   "not_met": 42,
+   "unsure_rate": 0.176,
    "today": {
     "n": 182,
     "met": 0,
@@ -284,8 +284,7 @@
    },
    "traps": {
     "no_commit:not_met": 15,
-    "one_review:not_met": 14,
-    "one_review:unsure": 1
+    "one_review:not_met": 13
    }
   },
   "qa": {
@@ -305,8 +304,7 @@
     "not_met": 5
    },
    "traps": {
-    "no_reviewer_2:not_met": 6,
-    "no_reviewer_2:unsure": 2,
+    "no_reviewer_2:not_met": 8,
     "no_rollback:not_met": 8
    }
   }

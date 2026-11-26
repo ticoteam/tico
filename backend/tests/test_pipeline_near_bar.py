@@ -53,5 +53,19 @@ def test_close_is_four_in_five_words_shared_with_one_of_ticos_bars_as_it_ships_n
     assert P.near_bar(PS.REVIEW_RUBRIC) is None and P.near_bar(PS.LEGACY_REVIEW_RUBRIC) is None, "Tico's own"
     near = P.near_bar(PS.REVIEW_RUBRIC + " Name the reviewer's maker.")
     assert near == ("two_reviews", PS.REVIEW_RUBRIC)
-    assert P.near_bar("Our own: " + PS.SPEC_RUBRIC.split(" Only")[0]) is None, "under four in five words shared"
+    assert P.near_bar("Our own: " + PS.SPEC_RUBRIC.split(" Only")[0])[0] == "spec", "Tico's bar with a line cut"
+    own = "Names the launch page's address and shows it live there, with who signed it off and when."
+    assert P.near_bar(own) is None, "a few of Tico's words in a bar of the company's own"
     assert P.shared_words("a b c d e", "a b c d f") == 0.8 and P.shared_words("", "") == 0.0
+    assert P.shared_words("a b", "a b c d e") == 1.0 and P.shared_words("a b c d e", "a b") == 0.4, (
+        "out of the first's words"
+    )
+
+
+def test_close_is_measured_on_the_companys_words_so_a_bar_cut_from_ticos_is_close_but_a_line_lifted_from_it_is_not():
+    """Review of #5299: four in five of the company bar's own words, not the longer text's. A QA bar with its last two
+    sentences cut is all Tico's words and is close; one sentence lifted from Tico's bar covers too little of it."""
+    cut = " ".join(PS.QA_RUBRIC.split(". ")[:-2]) + "."
+    assert P.check_of(cut) is None and P.near_bar(cut) == ("qa", PS.QA_RUBRIC)
+    lifted = PS.QA_RUBRIC.split(". ")[0] + "."
+    assert P.shared_words(lifted, PS.QA_RUBRIC) == 1.0 and P.near_bar(lifted) is None

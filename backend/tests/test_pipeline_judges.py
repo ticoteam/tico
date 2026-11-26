@@ -540,6 +540,18 @@ def test_a_qa_page_passes_its_parts_at_0_6_but_its_checks_only_at_0_75():
     assert P.part_bar(P.CHECKS["qa"][2], P.BARS["qa"]) == (0.75, P.NOT_MET_AT) and P.CHECKS["qa"][2].key == "checks"
 
 
+def test_a_qa_page_without_one_reviewers_findings_is_not_met_even_when_that_part_reads_0_3():
+    """Review of #5299: QA pages with Reviewer 2's lines cut scored that part 0.22 to 0.32, unsure under QA's 0.2 no
+    line. A reviewer part is no under 0.4 (no real QA page from Nov 19 to 25 scored one between 0.2 and 0.4)."""
+    from backend import pipeline_settings as PS
+
+    req = {"id": "r", "name": "QA report", "rubric": PS.QA_RUBRIC}
+    cut = P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({"reviewer_2": 0.32}))
+    assert (cut["verdict"], cut["reason"]) == ("not_met", "Reviewer 2's findings are missing."), cut
+    assert P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({"reviewer_1": 0.45}))["verdict"] == "unsure"
+    assert P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({"how": 0.32}))["verdict"] == "unsure", "others 0.2"
+
+
 def test_framing_lines_of_a_companys_own_bar_are_never_quoted_as_missing():
     """Task #3451: a bar edited from Tico's QA bar is a company's own, explained sentence by sentence. Its framing lines
     (what the page is, which items count, that a page without them fails) name nothing a page shows: they are never
@@ -563,10 +575,14 @@ def test_framing_lines_of_a_companys_own_bar_are_never_quoted_as_missing():
         said = P.judge_once(None, req, page, engine=_parts_engine({"met": p, **{f"s{n}": p for n in range(1, 9)}}))
         assert said["verdict"] in ("not_met", "unsure")
         assert not any(one[:40] in said["reason"] for one in framing), said["reason"]
-    every = "Only these two count. A page that leaves one out does not meet it."
+    every = "Only these two count. A page that leaves any of them out does not meet it."
     assert len(P.explain_parts(every)) == 2, "a bar of framing lines alone keeps its sentences rather than none"
-    for line in (*PS.QA_RUBRIC.split(". ")[1:2], "Shows the checks at the newest commit.", PS.VALIDATE_RUBRIC):
+    named = ("A page without a rollback plan does not meet it.", "A page that lacks a diagram does not meet it.")
+    for line in (*PS.QA_RUBRIC.split(". ")[1:2], "Shows the checks at the newest commit.", PS.VALIDATE_RUBRIC, *named):
         assert not P.framing(line), line
+    assert any("rollback" in part.ask for part in P.explain_parts(f"Shows the checks. {named[0]}")), (
+        "a named item is a part"
+    )
 
 
 def test_a_company_rubric_refused_names_its_unmet_sentence_and_a_one_sentence_rubric_its_only_item():
