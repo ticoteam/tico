@@ -66,6 +66,9 @@ LOW = (
 
 # A run's API-equivalent spend: its estimate whether billed by key or to a plan, as `spend` adds them up.
 SPENT = "CASE WHEN t.usage_reason IS NULL THEN coalesce(t.est_cost_usd, 0) ELSE 0 END"
+# The same in whole nano-dollars, as usage_facts keeps costs: `empty_usd` and `cold_usd` are summed as integers and
+# returned unrounded (nano / 1e9), so a group's rows add up to its totals exactly at that precision, however small.
+NANO = f"CAST(round(({SPENT}) * 1e9) AS INTEGER)"
 # Sums over the runs (usage_records.RUNS) shared by every grouping. `empty_*` are the runs that changed nothing
 # (`did_nothing`, no write), `cold_*` the resumed runs whose session sat idle past the 1-hour cache (run_triggers.COLD_SQL),
 # each with its API-equivalent spend; `cold_cache_write_tokens` is what those runs wrote to the cache again. A run with no token counts (a runtime that reports none,
@@ -84,9 +87,9 @@ SUMS = f"""count(DISTINCT t.id) AS runs,
        THEN t.id END) AS api_unpriced,
   count(DISTINCT CASE WHEN t.est_cost_usd IS NOT NULL AND t.usage_reason IS NULL AND {LOW} THEN t.id END) AS low_priced,
   count(DISTINCT CASE WHEN a.did_nothing = 1 THEN t.id END) AS empty_runs,
-  sum(CASE WHEN a.did_nothing = 1 THEN {SPENT} ELSE 0 END) AS empty_usd,
+  sum(CASE WHEN a.did_nothing = 1 THEN {NANO} ELSE 0 END) AS empty_nano,
   count(DISTINCT CASE WHEN {COLD_SQL} THEN t.id END) AS cold_runs,
-  sum(CASE WHEN {COLD_SQL} THEN {SPENT} ELSE 0 END) AS cold_usd,
+  sum(CASE WHEN {COLD_SQL} THEN {NANO} ELSE 0 END) AS cold_nano,
   sum(CASE WHEN {COLD_SQL} THEN coalesce(t.cache_write_tokens, 0) ELSE 0 END) AS cold_cache_write_tokens"""
 # Each run's own attempts row (`a`), for what SUMS reads of the run beyond its usage: whether it changed nothing and
 # whether it resumed a cold session (backend/run_triggers.py). By primary key, in the same statement.
@@ -108,8 +111,9 @@ EMPTY_DAY = {
     "cold_usd": 0.0,
     "cold_cache_write_tokens": 0,
 }
-# The figures that add up the same in a row and in `figures`.
+# The counts that add up the same in a row and in `figures`, and the costs kept in nano-dollars (`<name>_nano`).
 WAKES = ("empty_runs", "cold_runs", "cold_cache_write_tokens")
+WAKE_COSTS = ("empty", "cold")
 
 
 def money(value):
@@ -131,8 +135,7 @@ def figures(row):
         "unpriced_runs": row["api_unpriced"],
         "low_estimate_runs": row["low_priced"],
         **{key: row[key] or 0 for key in WAKES},
-        "empty_usd": money(row["empty_usd"]),
-        "cold_usd": money(row["cold_usd"]),
+        **{f"{name}_usd": (row[f"{name}_nano"] or 0) / 1e9 for name in WAKE_COSTS},
     }
 
 
@@ -150,7 +153,8 @@ def raw(item):
         "api_priced": 0 if cost is None else 1,
         "api_unpriced": item["unpriced_runs"],
         "low_priced": item["low_estimate_runs"],
-        **{key: item[key] for key in (*WAKES, "empty_usd", "cold_usd")},
+        **{key: item[key] for key in WAKES},
+        **{f"{name}_nano": round(item[f"{name}_usd"] * 1e9) for name in WAKE_COSTS},
     }
 
 
@@ -420,8 +424,7 @@ def install(app, store, auth, mutate, settings):
             "api_unpriced",
             "low_priced",
             *WAKES,
-            "empty_usd",
-            "cold_usd",
+            *(f"{name}_nano" for name in WAKE_COSTS),
         )
         return figures({k: sum(r[k] or 0 for r in rows) for k in keys})
 

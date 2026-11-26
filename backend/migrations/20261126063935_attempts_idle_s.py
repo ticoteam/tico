@@ -1,13 +1,14 @@
 """attempts.idle_s: how long a resumed run's session sat idle, in seconds from its bot's latest settled run on the same
-task to the run's start (backend/run_triggers.py IDLE_SQL). Usage counts a resumed run idle over an hour as a cold
+task to the run's actual start (`started_at`, else `created_at` for a run recorded with no lease; backend/run_triggers.py
+IDLE_SQL). Usage counts a resumed run idle over an hour as a cold
 start. Resumed runs from the last 35 days get it from the runs already recorded; older ones keep NULL. Running it
 again changes nothing."""
 
 # run_triggers.IDLE_SQL word for word: a migration stands alone, so it does not import the module that may change.
 IDLE_SQL = (
-    "(SELECT CAST(round((julianday(attempts.created_at)-julianday(max(p.settled_at)))*86400) AS INTEGER) "
-    "FROM attempts p WHERE p.task_id=attempts.task_id AND p.bot_id=attempts.bot_id AND p.id<>attempts.id "
-    "AND p.settled_at<=attempts.created_at)"
+    "(SELECT CAST(round((julianday(coalesce(attempts.started_at,attempts.created_at))-julianday(max(p.settled_at)))"
+    "*86400) AS INTEGER) FROM attempts p WHERE p.task_id=attempts.task_id AND p.bot_id=attempts.bot_id "
+    "AND p.id<>attempts.id AND p.settled_at<=coalesce(attempts.started_at,attempts.created_at))"
 )
 BACKFILL_DAYS = 35
 

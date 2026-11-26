@@ -255,13 +255,15 @@ def new_session(c, task_id, why, actor=None):
 
 
 # How long a resumed run's session sat idle: seconds from its bot's latest settled run on the same task to this run's
-# start, NULL with no such run (a chat, or the first run on the task). One subquery inside the session's own UPDATE, on
+# actual start (`started_at`, set when its runner starts it; a run recorded with no lease has none and uses its
+# `created_at`), NULL with no such run (a chat, or the first run on the task). A run claimed and started later is
+# measured to its start: the cache aged until then. One subquery inside the session's own UPDATE, on
 # attempts_task, so recording a session costs no extra statement. Migration 20261126063935_attempts_idle_s backfills
 # with the same expression.
 IDLE_SQL = (
-    "(SELECT CAST(round((julianday(attempts.created_at)-julianday(max(p.settled_at)))*86400) AS INTEGER) "
-    "FROM attempts p WHERE p.task_id=attempts.task_id AND p.bot_id=attempts.bot_id AND p.id<>attempts.id "
-    "AND p.settled_at<=attempts.created_at)"
+    "(SELECT CAST(round((julianday(coalesce(attempts.started_at,attempts.created_at))-julianday(max(p.settled_at)))"
+    "*86400) AS INTEGER) FROM attempts p WHERE p.task_id=attempts.task_id AND p.bot_id=attempts.bot_id "
+    "AND p.id<>attempts.id AND p.settled_at<=coalesce(attempts.started_at,attempts.created_at))"
 )
 # A cold start: a resumed session idle longer than the provider's 1-hour prompt cache, so its prompt was written again.
 COLD_IDLE_S = 3600

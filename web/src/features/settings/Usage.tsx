@@ -126,7 +126,7 @@ function AgentOpen({ where, bot }: { where: UsageWhere; bot: string }) {
             </>
           )}
         </span>
-        <span title="Runs that resumed a session idle for more than an hour since this agent’s last run on the task, so the cache had expired and the prompt was written again. The cost is the whole run.">
+        <span title="Runs that resumed a session more than an hour after this agent’s last run on the task ended. Past an hour the provider’s cache has likely expired, so the prompt may be written to it again; the tokens shown are what the runs reported writing. The cost is the whole run.">
           <b>{t.cold_runs}</b> cold {t.cold_runs === 1 ? 'start' : 'starts'}
           {t.cold_runs > 0 && (
             <>

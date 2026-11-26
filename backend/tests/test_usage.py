@@ -326,6 +326,23 @@ def test_each_row_and_the_totals_say_what_runs_that_changed_nothing_and_cold_sta
     assert ops["tasks_more"]["empty_runs"] == 0 and ops["tasks_more"]["cold_usd"] == 0
 
 
+def test_tiny_wake_costs_add_up_to_the_totals_and_are_never_rounded_away(api):
+    """Two bots' runs that changed nothing and were cold starts at $0.00000149 each: every row keeps its exact cost
+    and the rows add up to the totals (rounding each row to six decimals gave $0.000002 against $0.000003)."""
+    seed(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET did_nothing=0, session_kind='new', idle_s=NULL")
+        c.execute(
+            "UPDATE attempts SET did_nothing=1, session_kind='resumed', idle_s=7200, est_cost_usd=0.00000149, "
+            "billing='api' WHERE id IN ('t1','t5')"
+        )
+    got = usage(api)
+    for name in ("empty_usd", "cold_usd"):
+        assert sorted(r[name] for r in got["rows"]) == pytest.approx([0.00000149, 0.00000149], abs=1e-15)
+        assert got["totals"][name] == pytest.approx(0.00000298, abs=1e-15)
+        assert sum(r[name] for r in got["rows"]) == pytest.approx(got["totals"][name], abs=1e-15)
+
+
 def test_a_bot_or_a_computer_cannot_ask(api):
     r = runner(api)
     assert api.get("/api/v2/usage", headers=headers(r["token"])).status_code in (401, 403)

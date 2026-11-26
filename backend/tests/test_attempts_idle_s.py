@@ -22,20 +22,23 @@ def test_resumed_runs_from_the_last_35_days_get_their_idle_time_and_running_it_a
     with api.app.state.store.transaction() as c:
         c.execute("ALTER TABLE attempts DROP COLUMN idle_s")
         rows = [
-            # id, started, settled, session, task: two days ago the bot ran, then resumed 61 minutes after it settled
+            # id, claimed (created_at), settled, session, task[, started]: two days ago the bot ran, then resumed 61 minutes after it settled
             ("first", at(2, 120), at(2, 100), "new", "k1"),
             ("cold", at(2, 39), at(2, 30), "resumed", "k1"),
             ("warm", at(2, 1), at(2, 0), "resumed", "k1"),  # 29 minutes after `cold` settled
             ("fresh", at(1, 0), at(1, -5), "new", "k1"),  # a new session: never given an idle time
+            ("late-first", at(3, 100), at(3, 90), "new", "k3"),
+            # Claimed 59 minutes after `late-first` settled, started at 61: measured to its start.
+            ("late", at(3, 31), at(3, 20), "resumed", "k3", at(3, 29)),
             ("old-first", at(40, 100), at(40, 90), "new", "k2"),
             ("old", at(40, 0), at(40, -5), "resumed", "k2"),  # before the 35 days
             ("chat", at(1, 0), at(1, -5), "resumed", None),  # no task: nothing to measure from
         ]
-        for rid, started, settled, kind, tid in rows:
+        for rid, created, settled, kind, tid, *started in rows:
             c.execute(
-                "INSERT INTO attempts(id, bot_id, created_at, settled_at, exit, task_id, session_kind) "
-                "VALUES(?, 'ops', ?, ?, 'completed', ?, ?)",
-                (rid, started, settled, tid, kind),
+                "INSERT INTO attempts(id, bot_id, created_at, started_at, settled_at, exit, task_id, session_kind) "
+                "VALUES(?, 'ops', ?, ?, ?, 'completed', ?, ?)",
+                (rid, created, started[0] if started else None, settled, tid, kind),
             )
         MIGRATION.up(c)
         got = idle(c, rows)
@@ -44,6 +47,8 @@ def test_resumed_runs_from_the_last_35_days_get_their_idle_time_and_running_it_a
             "cold": 61 * 60,
             "warm": 29 * 60,
             "fresh": None,
+            "late-first": None,
+            "late": 61 * 60,
             "old-first": None,
             "old": None,
             "chat": None,

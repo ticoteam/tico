@@ -343,23 +343,30 @@ def test_a_run_says_whether_it_resumed_its_session_and_a_new_one_is_in_the_tasks
 
 
 @pytest.mark.parametrize(
-    "kind,idle_min,idle_s,cold",
-    [("resumed", 61, 3660, True), ("resumed", 59, 3540, False), ("new", 180, None, False)],
+    "kind,idle_min,idle_s,cold,claimed_early",
+    [
+        ("resumed", 61, 3660, True, 0),
+        ("resumed", 59, 3540, False, 0),
+        ("new", 180, None, False, 0),
+        # Claimed 59 minutes after the last run settled, started at 61: the cache aged until the start.
+        ("resumed", 61, 3660, True, 2),
+    ],
 )
 def test_a_resumed_run_records_how_long_its_session_sat_idle_since_the_bots_last_run_on_the_task(
-    api, kind, idle_min, idle_s, cold
+    api, kind, idle_min, idle_s, cold, claimed_early
 ):
-    """idle_s runs from the bot's own latest settled run on the same task to this run's start: another bot's run, or
-    one on another task, does not reset it. Over an hour, a resumed run is a cold start; a new session never is."""
+    """idle_s runs from the bot's own latest settled run on the same task to this run's actual start, not its claim:
+    another bot's run, or one on another task, does not reset it. Over an hour, a resumed run is a cold start; a new
+    session never is."""
     r = machine(api)
     task = post(api, "tasks", {"owner": "ops", "title": "Watch the release", "body": "Each hour."})
     other = post(api, "tasks", {"owner": "ops", "title": "Another task", "body": "Later."})
     attempt = claim(api, r)
     start(api, r, attempt)
     with api.app.state.store.transaction() as c:
-        began = c.execute("SELECT created_at, task_id FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
+        began = c.execute("SELECT started_at, task_id FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
         assert began["task_id"] == task["id"]
-        at = datetime.fromisoformat(began["created_at"].replace("Z", "+00:00"))
+        at = datetime.fromisoformat(began["started_at"].replace("Z", "+00:00"))
 
         def ago(minutes):
             return (at - timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
@@ -374,6 +381,7 @@ def test_a_resumed_run_records_how_long_its_session_sat_idle_since_the_bots_last
                 "INSERT INTO attempts(id, bot_id, created_at, settled_at, exit, task_id) VALUES(?,?,?,?,'completed',?)",
                 (rid, bot, ago(idle_min + 40), settled, tid),
             )
+        c.execute("UPDATE attempts SET created_at=? WHERE id=?", (ago(claimed_early), attempt["id"]))
     post(
         api,
         f"attempts/{attempt['id']}/complete",
