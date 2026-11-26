@@ -5025,6 +5025,42 @@
       }
     },
     {
+      "id": "org.lead",
+      "title": "Set or clear a team's lead",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "group": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "who": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^(human|bot):\\S+$",
+                "description": "human:<id> or bot:<slug>"
+              },
+              {
+                "enum": [
+                  ""
+                ]
+              }
+            ]
+          }
+        },
+        "required": [
+          "group",
+          "who"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "org.move",
       "title": "Move a teammate to another group",
       "kind": "change",

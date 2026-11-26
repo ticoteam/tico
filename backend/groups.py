@@ -510,6 +510,7 @@ def update(c, auth, settings, who, gid, body, via=None):
             "name": body.name,
             "parent": body.parent,
             "bet_id": body.bet_id,
+            "lead": group.get("lead", "") if body.lead is not None else None,
             "added": {"people": body.add.people, "bots": body.add.bots},
             "removed": {"people": body.remove.people, "bots": body.remove.bots},
         },

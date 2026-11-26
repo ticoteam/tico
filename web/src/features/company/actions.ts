@@ -15,6 +15,7 @@ import {
   decideProposal,
   moveTeammate,
   placeKpi,
+  setTeamLead,
   publishBrand,
   saveBrandDraft,
   setSizeParam,
@@ -494,6 +495,18 @@ export const orgMove = defineAction({
   run: (_ctx, { who, from, to }) => moveTeammate(who, from, to),
   did: () => 'Moved the teammate',
   target: ({ who }) => ({ kind: 'mate', id: who }),
+});
+
+/** A teammate becomes its group's lead, replacing the one it had, or the group has no lead (`who` empty). The owner and
+    Admins only; the lead must be in the group (backend/groups.py update). */
+export const orgLead = defineAction({
+  id: 'org.lead',
+  title: "Set or clear a team's lead",
+  kind: 'change',
+  input: z.strictObject({ group: z.string().check(z.minLength(1), z.maxLength(200)), who: z.union([actor, z.literal('')]) }),
+  run: (_ctx, { group, who }) => setTeamLead(group, who),
+  did: ({ who }) => (who ? 'Made the lead' : 'Cleared the lead'),
+  target: ({ who }) => (who ? { kind: 'mate', id: who } : null),
 });
 
 /** A factory: a name and what it is for (POST /api/v2/factories). The server has no way to remove one, so it is the
