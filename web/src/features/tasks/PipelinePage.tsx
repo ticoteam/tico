@@ -331,7 +331,8 @@ export function PipelinePage({ pipeline, fresh }: { pipeline: string; fresh: boo
                               )}
                             </div>
                             {rulesOf && p && <StageRules pipeline={p.id} stage={rulesOf} leave={rec.data?.stages.find((st) => st.id === rulesOf)} />}
-                            {rulesOf && p && <PipelineNotes pipeline={p.id} stage={rulesOf} mayChange={!!rec.data?.may_change} />}
+                            {/* Notes belong to any saved stage, a side stage's included: a bot there is handed them. */}
+                            {r.id && p && <PipelineNotes pipeline={p.id} stage={r.id} mayChange={!!rec.data?.may_change} />}
                           </div>
                         )}
                       </div>

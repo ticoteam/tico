@@ -182,6 +182,11 @@ pub struct Built {
     pub rules: bool,
 }
 
+/// Said once to a session that was given the pipeline's notes when none are in force any more.
+pub const NOTES_RETIRED_PIPELINE: &str = "The pipeline notes you were given earlier in this session are retired: none are in force now, so stop following them.";
+/// Said once to a session that was given a stage's notes when the task's stage now has none (retired, or a new stage).
+pub const NOTES_RETIRED_STAGE: &str = "The stage notes you were given earlier in this session no longer apply: this stage has none in force now.";
+
 /// Heads what a shortened turn's prompt left out when the harness compacts the session during that turn.
 pub const RESTORED: &str = "Your context was compacted during this turn; here again is what this turn's prompt left out because you already had it.";
 
@@ -236,6 +241,36 @@ fn assemble(
     seen: &Seen,
     context: &str,
 ) -> Built {
+    // A list the session was given and that is now empty (its last note retired, or a stage with none) is retracted
+    // in one line, so the bot stops following it; a session never given one is told nothing.
+    let given = |part: Part| lines.iter().any(|(p, _)| *p == part);
+    let retracted: Vec<&str> = [
+        (
+            &seen.pipeline_notes,
+            Part::PipelineNotes,
+            NOTES_RETIRED_PIPELINE,
+        ),
+        (&seen.stage_notes, Part::StageNotes, NOTES_RETIRED_STAGE),
+    ]
+    .into_iter()
+    .filter(|(digest, part, _)| !digest.is_empty() && !given(*part))
+    .map(|(_, _, line)| line)
+    .collect();
+    let owned: Vec<(Part, String)>;
+    let lines = if retracted.is_empty() {
+        lines
+    } else {
+        let at = lines
+            .iter()
+            .position(|(p, l)| *p == Part::Turn && l.starts_with("Current message from"))
+            .unwrap_or(lines.len());
+        let mut with = lines.to_vec();
+        for (i, line) in retracted.into_iter().enumerate() {
+            with.insert(at + i, (Part::Turn, line.to_string()));
+        }
+        owned = with;
+        &owned[..]
+    };
     let pick = |part: Part| {
         lines
             .iter()
@@ -1466,13 +1501,38 @@ mod tests {
         // A fresh session holds nothing: both lists again.
         let fresh = build(&next, &names, Some("m1"), false, "", &Seen::default(), ctx);
         assert!(fresh.text.contains(ENG_NOTES) && fresh.text.contains(MERGE_NOTES));
-        // A stage with no notes: nothing of them, and the stage digest is empty, so a later stage's list is sent.
+        // A stage with no notes (or its last note retired): Merge's list is retracted in one line, once, just before
+        // the message, and the stage digest is empty, so a later stage's list is sent.
         next["pipeline_notes"] = json!({"pipeline": ENG_NOTES});
         let bare = build(&next, &names, Some("m1"), true, "", &seen(&moved), ctx);
         assert!(
             !bare.text.contains("Notes for") && bare.stage_notes.is_empty(),
             "{}",
             bare.text
+        );
+        let (gone, msg) = (
+            bare.text.find(NOTES_RETIRED_STAGE),
+            bare.text.find("Current message from"),
+        );
+        assert!(gone.is_some() && gone < msg, "{}", bare.text);
+        assert!(!bare.text.contains(NOTES_RETIRED_PIPELINE));
+        let after = build(&next, &names, Some("m1"), true, "", &seen(&bare), ctx);
+        assert!(!after.text.contains(NOTES_RETIRED_STAGE), "{}", after.text);
+        // The pipeline's last note retired: retracted once too.
+        next.as_object_mut().unwrap().remove("pipeline_notes");
+        let none = build(&next, &names, Some("m1"), true, "", &seen(&after), ctx);
+        assert!(
+            none.text.contains(NOTES_RETIRED_PIPELINE) && none.pipeline_notes.is_empty(),
+            "{}",
+            none.text
+        );
+        // A session never given notes is told nothing: a pipeline without notes keeps its prompt byte for byte.
+        let never = build(&next, &names, Some("m1"), true, "", &Seen::default(), ctx);
+        assert!(!never.text.contains("notes you were given"));
+        let (bare_first, _) = task_turns();
+        assert_eq!(
+            build(&bare_first, &names, None, false, "", &Seen::default(), ctx).text,
+            plain.text
         );
     }
 

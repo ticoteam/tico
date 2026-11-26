@@ -44,7 +44,7 @@ export function PipelineNotes({ pipeline, stage, mayChange }: { pipeline: string
   const [open, setOpen] = useState<{ id: string | null; act: 'add' | 'edit' | 'retire' | 'accept' | 'decline' } | null>(null);
   const [draft, setDraft] = useState<Draft>(BLANK);
   const [error, setError] = useState('');
-  const all = stage === null ? (q.data?.notes ?? []) : (q.data?.stages.find((s) => s.id === stage)?.notes ?? []);
+  const all = stage === null ? (q.data?.notes ?? []) : (q.data?.stages?.find((s) => s.id === stage)?.notes ?? []);
   const shown = all.filter((n) => n.state === 'active' || n.state === 'proposed');
   const set = (k: keyof Draft) => (v: string) => setDraft((d) => ({ ...d, [k]: v }));
 
