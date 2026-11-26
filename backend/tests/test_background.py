@@ -57,12 +57,14 @@ def test_a_stop_during_a_start_waits_for_it_and_covers_the_threads_it_started():
     def before():  # runs under the loop's lock, just before the start's threads
         stopper.start()
         assert loop.lock.reached.wait(5), "the stop did not take the loop's lock, so it ran in the middle of a start"
-        assert not loop.stopped(), "the stop set the event while a start held the lock"
+        assert not loop.halt.is_set(), "the stop set the event while a start held the lock"
 
     try:
         loop.start(lambda halt: halt.wait(), count=2, before=before)
         stopper.join()
-        assert stops == [loop.threads] and len(stops[0]) == 2, "the stop returns both threads the start made"
+        assert len(stops) == 1 and [t.name for t in stops[0]] == ["test-loop-race-0", "test-loop-race-1"], (
+            "the stop returns both threads the start made"
+        )
         background.join(stops[0], 5)
         assert loop.stopped() and not any(t.is_alive() for t in stops[0])
     finally:
@@ -70,7 +72,7 @@ def test_a_stop_during_a_start_waits_for_it_and_covers_the_threads_it_started():
         background._loops.remove(loop)
 
 
-def test_a_thread_still_running_after_a_stop_gave_up_blocks_a_second_copy_until_it_ends():
+def test_a_start_while_a_timed_out_stop_drains_runs_once_the_old_thread_ends():
     release = threading.Event()
     loop = background.Loop("test-loop-stubborn", lambda: None)
     try:
@@ -79,17 +81,36 @@ def test_a_thread_still_running_after_a_stop_gave_up_blocks_a_second_copy_until_
         loop.stop(timeout=0)  # the join gives up at once
         assert first.is_alive() and loop.threads == [first], "the stop forgot a thread that is still running"
 
-        loop.start(lambda halt: halt.wait())
+        loop.start(lambda halt: halt.wait())  # the next lifespan's start, the only one it makes
         assert loop.threads == [first] and background.running().count("test-loop-stubborn") == 1, (
             "a start ran a second copy beside the one the stop gave up on"
         )
+        assert not loop.stopped(), "a start is asked for, so ensure() must not read the Loop as stopped"
 
         release.set()
         first.join()
+        assert len(loop.threads) == 1 and loop.threads[0] is not first, "the start that waited did not run"
+        assert loop.threads[0].is_alive() and not loop.halt.is_set() and not loop.stopped()
+    finally:
+        release.set()
+        loop.stop()
+        background._loops.remove(loop)
+
+
+def test_a_stop_after_that_start_cancels_it():
+    release = threading.Event()
+    loop = background.Loop("test-loop-cancelled", lambda: None)
+    try:
+        loop.start(lambda halt: release.wait())
+        first = loop.threads[0]
+        loop.stop(timeout=0)
         loop.start(lambda halt: halt.wait())
-        assert loop.threads[0] is not first and loop.threads[0].is_alive() and not loop.stopped(), (
-            "a start after the old thread ended runs again on a new event"
-        )
+        loop.stop(timeout=0)  # the next shutdown, before the old thread ends
+
+        release.set()
+        first.join()
+        assert not any(t.is_alive() for t in loop.threads) and loop.stopped(), "the cancelled start ran after all"
+        assert "test-loop-cancelled" not in background.running()
     finally:
         release.set()
         loop.stop()
