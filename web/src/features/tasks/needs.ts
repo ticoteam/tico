@@ -35,6 +35,13 @@ export function useNeedsYouRead(): ReadonlySet<string> | undefined {
 /** Whether a task waits on the person: Needs you names it. */
 export const waitsOnMe = (t: { id: string }, needs: ReadonlySet<string> | undefined): boolean => !!needs?.has(t.id);
 
+/** A board's shown order for one stage: what waits on the person leads it, each part in the stage's own order. The
+    board's columns and the list beside a task opened from it (in Board order) both draw it, so they match. */
+export const yoursFirst = <T extends { id: string }>(list: readonly T[], needs: ReadonlySet<string> | undefined): T[] => [
+  ...list.filter((t) => waitsOnMe(t, needs)),
+  ...list.filter((t) => !waitsOnMe(t, needs)),
+];
+
 /** Needs you's rows in Tico's order (the server's `order`; requests first, then tasks, from a read that has none). */
 const latestOf = (flow: Pick<Flow, 'items' | 'requests' | 'order'>): string[] =>
   flow.order ?? [...(flow.requests ?? []), ...flow.items].map((it) => it.id);

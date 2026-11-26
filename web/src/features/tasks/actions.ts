@@ -127,17 +127,17 @@ export const filterTasks = defineAction({
   target: () => ({ kind: 'tasks', id: 'filter' }),
 });
 
-/** Orders the list beside a task open under its pipeline: Priority (the default), Newest or Oldest. Only there: a
-    board keeps its own order. */
+/** Orders the list beside a task open under its pipeline: the board's order (the default), Priority, Newest or Oldest.
+    Only there: a board keeps its own order. */
 export const sortTasks = defineAction({
   id: 'tasks.sort',
   title: 'Sort tasks',
   kind: 'view',
-  input: z.strictObject({ sort: z.enum(['priority', 'newest', 'oldest'] as const) }),
+  input: z.strictObject({ sort: z.enum(['board', 'priority', 'newest', 'oldest'] as const) }),
   can: ({ router }) => !!listOf(router),
   run: ({ router }, { sort }) => {
     const beside = listOf(router);
-    if (beside) changeBoardSearch(beside, { sort: sort === 'priority' ? null : sort });
+    if (beside) changeBoardSearch(beside, { sort: sort === 'board' ? null : sort });
   },
   did: ({ sort }) => `Sorted Tasks by ${sort}`,
   target: () => ({ kind: 'tasks', id: 'sort' }),
