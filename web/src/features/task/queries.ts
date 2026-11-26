@@ -183,8 +183,9 @@ export function setTaskDue(id: string, due: string | null) {
 
 export const tagTask = (id: string, labels: string[]) => change(id, { labels }, (idem) => post(taskPath(id), { labels }, idem));
 
-/** `to`: a stage's id, or next, done, closed or reopen. `why` moves it past what is missing. */
-export function moveTask(id: string, to: string, why?: string) {
+/** `to`: a stage's id, or next, done, closed or reopen. `why` moves it past what is missing. `undo` with reopen: a
+ *  Close's own Undo, which gets the closed visit back (backend task_engine.move). */
+export function moveTask(id: string, to: string, why?: string, undo?: boolean) {
   const pipelines = queryClient.getQueryData(pipelinesQuery.queryKey);
   const shown = (t: TaskData): Fields => {
     const stages = pipelines?.find((p) => p.id === t.pipeline_id)?.stages ?? queryClient.getQueryData(retiredStagesQuery(t.pipeline_id ?? '').queryKey);
@@ -195,7 +196,7 @@ export function moveTask(id: string, to: string, why?: string) {
     if (to === 'reopen') return { status: 'open' };
     return {};
   };
-  return change(id, shown, (idem) => post(`${taskPath(id)}/move`, why ? { to, why } : { to }, idem));
+  return change(id, shown, (idem) => post(`${taskPath(id)}/move`, { to, ...(why && { why }), ...(undo && { undo }) }, idem));
 }
 
 /** Snooze one ask for the person alone until `until` (POST /api/v2/needs-you/snooze, backend/ask_snoozes.py): it leaves
