@@ -58,6 +58,7 @@ TAGS = {
     "worktree_fallback": "urgent",
     "cannot_fetch": "urgent",
     "event_stream": "urgent",
+    "worker_died": "urgent",  # a server's background worker is dead until a restart: nothing comes back on its own
     "readiness_403": "urgent",
     "local_busy": "urgent",
     "lease_overdue": "urgent",

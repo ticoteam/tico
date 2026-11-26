@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable
 
-from . import flight, hook_relay, run_failures
+from . import flight, hook_relay, lifespan_workers, run_failures
 from .store import H
 
 log = logging.getLogger(__name__)
@@ -193,6 +193,12 @@ def recorder_drops(c, ctx):
     ]
 
 
+def worker_died(c, ctx):
+    """The server's background workers that died of an uncaught error since it started (backend/lifespan_workers.py
+    records each; the next start clears them). One range read on registry_metadata's key."""
+    return lifespan_workers.dead(c, LIMIT)
+
+
 CHECKS = (
     Check(
         "lease_overdue",
@@ -268,6 +274,15 @@ CHECKS = (
         "The minutes named (Health's minute rows); the server is likely too busy to record, see its CPU and lock waits.",
         "botops",
         recorder_drops,
+    ),
+    Check(
+        "worker_died",
+        "Background worker stopped",
+        "A background worker of this server died of an error and does not run again until the server restarts.",
+        "The server log at the time named: the worker's error and traceback (\"Background worker <name> died\"). "
+        "Restarting the server starts it again; fix the cause first, or it dies again.",
+        "botops",
+        worker_died,
     ),
 )
 BY_ID = {check.id: check for check in CHECKS}
