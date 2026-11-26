@@ -68,7 +68,13 @@ export function setRecentHere(who: string, open: string): void {
   const known = who && who !== here.who;
   here = { who, open };
   // views found gone (or failing) before it was known whose list this is leave it now
-  if (known && (gone.size || fault)) write(who, (rows) => (rows.some(out) ? rows.filter((r) => !out(r)) : rows));
+  if (known && (gone.size || fault))
+    write(who, (rows) => {
+      const left = rows.filter((r) => !out(r));
+      // a row dropped for the address it was saved under stays gone by its own key too
+      for (const r of rows) if (r.key !== fault && !left.includes(r)) gone.add(r.key);
+      return left.length === rows.length ? rows : left;
+    });
   for (const on of heard) on();
 }
 
@@ -126,7 +132,14 @@ export function forgetTask(...names: readonly (string | number | null | undefine
   for (const n of said) forgetView(`task:${n}`);
 }
 
-const taskIn = (to: string): string => new URL(to, 'http://x').searchParams.get('task') ?? '';
+// the task an address names (`?task=`); none for an address that cannot be read
+function taskIn(to: string): string {
+  try {
+    return new URL(to, 'http://x').searchParams.get('task') ?? '';
+  } catch {
+    return '';
+  }
+}
 
 /* The page whose route failed (PageFault): no visit to it is a view while it shows its fault. Read again and drawn, it
    is one again. */

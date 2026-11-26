@@ -123,6 +123,25 @@ describe('recent views', () => {
     expect(keys()).toEqual(['page:/tasks/product']);
   });
 
+  it('passes over a saved row whose address cannot be read, and still drops the task named', () => {
+    noteView({ key: 'page:/odd', to: '//[', trail: ['Odd'] });
+    noteView(view('task:99', 'Tasks', 'Product', 'Gone task'));
+    expect(() => forgetTask('99')).not.toThrow();
+    expect(keys()).toEqual(['page:/odd']);
+  });
+
+  it('keeps a task found gone before the owner was known out, though its row is noted again after', () => {
+    noteView({ key: 'task:12', to: '/tasks/product?task=t-abc', trail: ['Tasks', 'Product', 'Fix the login bug'] });
+    setRecentHere('', '');
+    forgetTask('t-abc');
+    setRecentHere(ME, '');
+    noteView({ key: 'task:12', to: '/tasks/product?task=12', trail: ['Tasks', 'Product', 'Fix the login bug'] });
+    expect(keys()).toEqual([]);
+    // an unrelated task is still noted
+    noteView(view('task:13', 'Tasks', 'Product', 'Another'));
+    expect(keys()).toEqual(['task:13']);
+  });
+
   it('counts no address that only passes on, and no view without a trail', () => {
     noteView(view('page:/', 'Tico Team'));
     noteView(view('page:/library', 'Library'));
