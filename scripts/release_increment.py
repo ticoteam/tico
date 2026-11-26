@@ -44,7 +44,15 @@ PRODUCT_INPUTS = (
 # The web app's journeys (ci.yml web-journeys): every validation runs them, outside the gate's matrix. What they run is
 # the app's build and the server it talks to, so a change to either selects them: a fix to a red journey wakes the train.
 WEB = "web-journeys"
-WEB_INPUTS = ("web/", "backend/", "evals/redesign/")
+WEB_INPUTS = (
+    "web/",
+    "backend/",
+    "evals/redesign/",
+    "scripts/ci_install.sh",  # its install: the root's npm and Playwright, the browser's system packages
+    "scripts/playwright-system-packages.json",
+    "package.json",
+    "package-lock.json",
+)
 IGNORED_JOBS = {"release-check", "test-timings"}  # a consequence of a failed part, or optional
 FAILED = {"failure", "cancelled", "timed_out", "startup_failure", "action_required"}
 RUNNER = "4cpu-linux-x64"

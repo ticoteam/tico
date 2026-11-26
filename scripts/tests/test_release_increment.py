@@ -390,7 +390,12 @@ def test_selection_tokens_name_what_the_selection_runs():
 
 def test_a_fix_to_the_app_or_its_server_selects_the_web_journeys_and_a_docs_change_does_not():
     red = {"sha": "a" * 40, "url": "u", "conclusion": "failure", "failed": {ri.WEB}}
-    for changed in (["web/src/actions/registry.ts"], ["backend/pages.py"]):
+    for changed in (
+        ["web/src/actions/registry.ts"],
+        ["backend/pages.py"],
+        ["scripts/ci_install.sh"],
+        ["package-lock.json"],
+    ):
         assert ri.WEB in ri.selection_tokens(selected(), changed)
         assert ri.red_rule(red, "b" * 40, ri.selection_tokens(selected(), changed))[0]
     assert ri.WEB not in ri.selection_tokens(selected(), ["docs/pages.md"])
