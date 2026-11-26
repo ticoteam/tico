@@ -3296,15 +3296,19 @@ impl Runner {
             let last_context = self.state.repo_rules(&crate::continuity::context_key(&th), None)?.and_then(|c| c.parse::<i64>().ok());
             // A stateless bot gets its whole prompt each turn: the short form points at state.md, which it does not keep.
             let mut seen = if !stateless && prompt_turn && told && last_context.is_some() && !compacted_first && !side_ran && !after_interrupt {
+                let notes = self.state.repo_rules(&crate::continuity::notes_key(&th), None)?.unwrap_or_default();
+                let (pipeline_notes, stage_notes) = notes.split_once('\n').unwrap_or_default();
                 crate::prompt::Seen {
                     standing: self.state.repo_rules(&crate::continuity::standing_key(&th), None)?.unwrap_or_default(),
                     task: self.state.repo_rules(&crate::continuity::task_key(&th), None)?.unwrap_or_default(),
+                    pipeline_notes: pipeline_notes.to_string(),
+                    stage_notes: stage_notes.to_string(),
                 }
             } else {
                 crate::prompt::Seen::default()
             };
             // Until this turn completes with no compaction, the thread may not hold what it is given, repo rules included.
-            for key in [th.clone(), crate::continuity::standing_key(&th), crate::continuity::task_key(&th), crate::continuity::context_key(&th)] {
+            for key in [th.clone(), crate::continuity::standing_key(&th), crate::continuity::task_key(&th), crate::continuity::notes_key(&th), crate::continuity::context_key(&th)] {
                 self.state.repo_rules(&key, Some(""))?;
             }
             // What the standing lines tell the bot to read, and who reads them: a change to either sends them again.
@@ -3425,6 +3429,7 @@ impl Runner {
             if kept && prompt_turn {
                 self.state.repo_rules(&crate::continuity::standing_key(&th), Some(&built.standing))?;
                 self.state.repo_rules(&crate::continuity::task_key(&th), Some(&built.task))?;
+                self.state.repo_rules(&crate::continuity::notes_key(&th), Some(&format!("{}\n{}", built.pipeline_notes, built.stage_notes)))?;
                 let context = h.context_tokens(&th).map(|c| c.to_string()).unwrap_or_default();
                 self.state.repo_rules(&crate::continuity::context_key(&th), Some(&context))?;
             }

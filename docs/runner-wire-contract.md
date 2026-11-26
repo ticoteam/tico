@@ -71,6 +71,12 @@ It contains no source content. An older server omits it; the runner then renders
 content with its normal read commands and its own permissions, the same during task work as in any other turn.
 Claim retries rebuild the reference list using current access ([Pages](pages.md#publishing)).
 
+Claim attempts may include `pipeline_notes`: the task's pipeline notes (`pipeline`) and its stage's (`stage`), each a
+rendered list of what the team learned there with why, since when and its evidence. The runner sends each list in the
+turn's message the first time a session meets it, and again when its text changes or the session is new; a resumed
+turn that already holds it leaves it out, and a compaction during that turn gives it back. An older server omits it
+and an older runner ignores it.
+
 Claim attempts may include `run_header`: at most 2,000 characters on where the turn's card stands now (stage, time in
 it, version, whose turn, what is met and missing, what others changed since the bot's last run there, the stage's rules
 and the org rules the bot follows) and, in a person's own Assistant turn, their Needs you count, its first five items

@@ -457,9 +457,20 @@ def test_a_bots_question_to_the_person_a_people_only_page_waits_on_is_refused_wh
     assert (card.state, card.ask) == (W.PERSON, True)
     holder = card.who
     other = BEN if holder != BEN else ANA
-    with _refused("that approval is your ask"):
+    with _refused(r"that approval is your ask\. .*\nWhy: one card per person per task"):
         Q.ask(c, po, row["id"], holder, "Please move this task on past QA yourself.")
     assert not Q.on_task(c, row["id"]), "a refused ❓ leaves nothing"
+    # A stage note that names the guard: the refusal quotes its why and points at it.
+    c.execute(
+        "INSERT INTO pipeline_notes (id, pipeline_id, stage_id, note, why, since, evidence, guard, state, created_by, "
+        "created_at, updated_at) VALUES ('n_qa1', ?, ?, 'A pending approval is the ask.', 'Approvers got two cards.', "
+        "'2026-11-18', '#4237', 'approval_first', 'active', 'human:ana', '', '')",
+        (row["pipeline_id"], row["stage_id"]),
+    )
+    with _refused(
+        r"that approval is your ask\. .*\nWhy: Approvers got two cards\. .* note n_qa1 \(2026-11-18, #4237\)\."
+    ):
+        Q.ask(c, po, row["id"], holder, "Please move this task on past QA yourself.")
     assert Q.ask(c, po, row["id"], other, "Which importer first?")["person_id"] == other
 
 

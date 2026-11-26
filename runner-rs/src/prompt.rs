@@ -127,11 +127,14 @@ pub(crate) fn speaker(msg: &Value) -> String {
     actor
 }
 
-/// What a prompt line is: the same every turn of a thread (Standing), the assigned task (Task), or this turn's own.
+/// What a prompt line is: the same every turn of a thread (Standing), the assigned task (Task), the task's pipeline
+/// notes and its stage's (each sent once per session, `Seen`), or this turn's own.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Part {
     Standing,
     Task,
+    PipelineNotes,
+    StageNotes,
     Turn,
 }
 
@@ -153,12 +156,14 @@ const TASK_HIDDEN: &[&str] = &[
     "goal",
 ];
 
-/// What a resumed thread was last given in full (`Built::standing` and `Built::task`), each empty when it may not
-/// hold it any more.
+/// What a resumed thread was last given in full (`Built::standing`, `Built::task` and the notes' digests), each empty
+/// when it may not hold it any more.
 #[derive(Default, Clone, Debug)]
 pub struct Seen {
     pub standing: String,
     pub task: String,
+    pub pipeline_notes: String,
+    pub stage_notes: String,
 }
 
 /// A turn's prompt: `text` is what is sent, `full` the whole prompt (the same unless `Seen` let parts out), and the
@@ -171,6 +176,8 @@ pub struct Built {
     pub full: String,
     pub standing: String,
     pub task: String,
+    pub pipeline_notes: String,
+    pub stage_notes: String,
     pub restore: String,
     pub rules: bool,
 }
@@ -273,13 +280,30 @@ fn assemble(
         && !seen.standing.is_empty()
         && seen.standing == standing;
     let short_task = !seen.task.is_empty() && seen.task == task_digest;
+    // A notes list the thread was given in this form is left out with no line in its place: the bot already holds it.
+    let notes_digest = |part: Part| {
+        let text = pick(part);
+        if text.is_empty() {
+            String::new()
+        } else {
+            crate::gitrun::sha256_hex(text.as_bytes())
+        }
+    };
+    let (pipeline_notes, stage_notes) = (notes_digest(Part::PipelineNotes), notes_digest(Part::StageNotes));
+    let short_pipeline_notes = !seen.pipeline_notes.is_empty() && seen.pipeline_notes == pipeline_notes;
+    let short_stage_notes = !seen.stage_notes.is_empty() && seen.stage_notes == stage_notes;
+    let left_out = |part: Part| match part {
+        Part::Standing => short_standing,
+        Part::Task => short_task,
+        Part::PipelineNotes => short_pipeline_notes,
+        Part::StageNotes => short_stage_notes,
+        Part::Turn => false,
+    };
     let repo_rules = s(&attempt["_repo_rules"]);
     let rules = !repo_rules.is_empty() && lines.iter().any(|(_, l)| *l == repo_rules);
     let mut left: Vec<&str> = lines
         .iter()
-        .filter(|(p, _)| {
-            (*p == Part::Standing && short_standing) || (*p == Part::Task && short_task)
-        })
+        .filter(|(p, _)| left_out(*p))
         .map(|(_, l)| l.as_str())
         .collect();
     if !repo_rules.is_empty() && !rules {
@@ -290,7 +314,7 @@ fn assemble(
     } else {
         format!("{RESTORED}\n\n{}", left.join("\n\n"))
     };
-    let text = if short_standing || short_task {
+    let text = if short_standing || short_task || short_pipeline_notes || short_stage_notes {
         let mut out: Vec<String> = vec![];
         let (mut said_standing, mut said_task) = (false, false);
         for (part, line) in lines {
@@ -308,6 +332,7 @@ fn assemble(
                         out.push(format!("Assigned task {id}: {} (unchanged since your last turn; `tico task show {id}` has it)", s(&task["title"])));
                     }
                 }
+                Part::PipelineNotes | Part::StageNotes if left_out(*part) => {}
                 _ => out.push(line.clone()),
             }
         }
@@ -320,6 +345,8 @@ fn assemble(
         full,
         standing,
         task: task_digest,
+        pipeline_notes,
+        stage_notes,
         restore,
         rules,
     }
@@ -666,6 +693,13 @@ fn parts(
                 Part::Turn,
                 format!("Attachments: {}", py_dumps(&msg["refs"]["attachments"])),
             );
+        }
+    }
+    // The task's pipeline and stage notes (backend/pipeline_notes.py), just before the message they bear on.
+    for (key, part) in [("pipeline", Part::PipelineNotes), ("stage", Part::StageNotes)] {
+        let text = attempt["pipeline_notes"][key].as_str().unwrap_or_default();
+        if !text.trim().is_empty() {
+            put(&mut lines, part, text.to_string());
         }
     }
     let who = if truthy(&message["from_actor"]) {
@@ -1369,7 +1403,53 @@ mod tests {
         Seen {
             standing: b.standing.clone(),
             task: b.task.clone(),
+            pipeline_notes: b.pipeline_notes.clone(),
+            stage_notes: b.stage_notes.clone(),
         }
+    }
+
+    const ENG_NOTES: &str = "Notes for Engineering (what we learned; follow them):\n- Heavy checks run one at a time per machine. Why: a type check took the shared machine offline. Since 2026-11-18 (#4232).";
+    const QA_NOTES: &str = "Notes for QA (what we learned; follow them):\n- A pending approval is the ask. Why: approvers got two cards for one decision. Since 2026-11-18 (#4237). A guard refuses it.";
+    const MERGE_NOTES: &str = "Notes for Merge (what we learned; follow them):\n- Never enqueue by hand. Why: the queue tests the checked head. Since 2026-11-20 (#4300).";
+
+    #[test]
+    fn notes_come_on_entering_a_pipeline_or_stage_once_a_session_and_never_touch_the_cached_prefix() {
+        let names = Names {
+            company: "Acme".into(),
+            app: "Tico".into(),
+            assistant: "assistant".into(),
+        };
+        let ctx = "claude opus agent-1";
+        let (mut first, mut next) = task_turns();
+        let plain = build(&first, &names, None, false, "", &Seen::default(), ctx);
+        first["pipeline_notes"] = json!({"pipeline": ENG_NOTES, "stage": QA_NOTES});
+        let given = build(&first, &names, None, false, "", &Seen::default(), ctx);
+        let t = &given.text;
+        // First turn in QA, new to the pipeline too: both lists, pipeline first, just before the message.
+        let (eng, qa, msg) = (t.find(ENG_NOTES), t.find(QA_NOTES), t.find("Current message from"));
+        assert!(eng.is_some() && eng < qa && qa < msg, "{t}");
+        // The standing part, which a resumed thread keeps as its cached prefix, is the same with notes or without.
+        assert_eq!(given.standing, plain.standing);
+        assert!(!given.pipeline_notes.is_empty() && !given.stage_notes.is_empty());
+        assert!(plain.pipeline_notes.is_empty() && plain.stage_notes.is_empty());
+        // The next turn in QA, same session: no notes, and a compaction during it gives them back.
+        next["pipeline_notes"] = first["pipeline_notes"].clone();
+        let again = build(&next, &names, Some("m1"), true, "", &seen(&given), ctx);
+        assert!(!again.text.contains("Notes for"), "{}", again.text);
+        assert!(again.full.contains(ENG_NOTES) && again.full.contains(QA_NOTES));
+        assert!(again.restore.contains(ENG_NOTES) && again.restore.contains(QA_NOTES), "{}", again.restore);
+        // A move to Merge, same session: Merge's notes only, not Engineering's again.
+        next["pipeline_notes"] = json!({"pipeline": ENG_NOTES, "stage": MERGE_NOTES});
+        let moved = build(&next, &names, Some("m1"), true, "", &seen(&given), ctx);
+        assert!(moved.text.contains(MERGE_NOTES) && !moved.text.contains(ENG_NOTES), "{}", moved.text);
+        assert!(moved.restore.contains(ENG_NOTES) && !moved.restore.contains(MERGE_NOTES));
+        // A fresh session holds nothing: both lists again.
+        let fresh = build(&next, &names, Some("m1"), false, "", &Seen::default(), ctx);
+        assert!(fresh.text.contains(ENG_NOTES) && fresh.text.contains(MERGE_NOTES));
+        // A stage with no notes: nothing of them, and the stage digest is empty, so a later stage's list is sent.
+        next["pipeline_notes"] = json!({"pipeline": ENG_NOTES});
+        let bare = build(&next, &names, Some("m1"), true, "", &seen(&moved), ctx);
+        assert!(!bare.text.contains("Notes for") && bare.stage_notes.is_empty(), "{}", bare.text);
     }
 
     #[test]

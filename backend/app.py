@@ -2454,6 +2454,9 @@ def _install_features(
     from . import stage_rules_api
 
     stage_rules_api.install(app, store, auth, mutate)  # stage rules: the Rules button, the Rules page's groups
+    from . import pipeline_notes_api
+
+    pipeline_notes_api.install(app, store, auth, mutate)  # pipeline and stage notes, served to a bot's first turn
     why_here.install(app, store, auth)  # GET /api/v2/origins/{ref}: why an item is on the list
     assistant_changes.install(app, store, auth, mutate, settings_admin)  # the Assistant's changes, and undoing one
     from . import page_history

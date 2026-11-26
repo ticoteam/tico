@@ -236,6 +236,12 @@ pub fn task_key(thread: &str) -> String {
     format!("standing-task:{thread}")
 }
 
+/// The key under which the state keeps the digests of the pipeline and stage notes this thread holds (one a line,
+/// pipeline first), the same way.
+pub fn notes_key(thread: &str) -> String {
+    format!("standing-notes:{thread}")
+}
+
 /// The key under which the state remembers that the provider refused this thread's transcript (`transcript_refused`):
 /// it is not resumed again.
 pub fn refused_key(thread: &str) -> String {
