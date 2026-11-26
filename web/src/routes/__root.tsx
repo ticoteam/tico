@@ -2,7 +2,7 @@ import { useInfiniteQuery, useQuery, type QueryClient } from '@tanstack/react-qu
 import { CatchBoundary, Link, Outlet, createRootRouteWithContext, useLocation, useRouter, useRouterState } from '@tanstack/react-router';
 import { Suspense, lazy, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { ActionsRoot, run } from '@/actions';
-import { reportCallToDesktop, useCallWindow } from '@/desktop';
+import { chatWindowWho, isChatWindow, keepInSmallWindow, reportCallToDesktop, useCallWindow } from '@/desktop';
 import { AppActSheet, ticoRoomQuery } from '@/conversation';
 import {
   configQuery,
@@ -162,10 +162,43 @@ function Root() {
   const gate = useStartGate();
   const me = useQuery(meQuery);
   useFlowCountRefresh(!gate.screen && me.isSuccess);
-  useDesktopReports(gate.screen === 'signin' || gate.screen === 'signed-out');
+  // an agent's chat window is not the company's page: the main window alone reports to the desktop app
+  const chatWho = useLocation({ select: (l) => (isChatWindow(l.pathname, l.searchStr) ? chatWindowWho(l.pathname) : '') });
+  useDesktopReports(gate.screen === 'signin' || gate.screen === 'signed-out', !chatWho);
   const callWindow = useLocation({ select: (l) => isCallWindow(l.pathname, l.searchStr) });
   if (gate.screen) return <StartScreen screen={gate.screen} error={gate.error} retry={gate.retry} busy={gate.busy} />;
+  if (chatWho) return <ChatWindow who={chatWho} />;
   return callWindow ? <CallWindow /> : <App />;
+}
+
+/* An agent's chat in its own window (/team/<agent>?window=1): its face and name over the same chat as its page, with
+   no Tico, menu or tabs. The live stream is its own, so a message sent in either window shows in both. */
+function ChatWindow({ who }: { who: string }) {
+  const me = useQuery(meQuery);
+  const actor = useDirectory((d) => d.byId[who]);
+  const name = actor?.name ?? '';
+  useEffect(() => {
+    if (me.isSuccess) startLive();
+  }, [me.isSuccess]);
+  useEffect(() => {
+    document.title = name ? `${name} · Tico` : 'Tico';
+  }, [name]);
+  return (
+    <>
+      {/* in the desktop app a link pressed here opens in the main window, and this one stays on its chat */}
+      <div className="shell-chatwin" onClickCapture={desktop() ? keepInSmallWindow : undefined}>
+        <header className="side-head">
+          {actor && <Avatar decorative kind={actor.kind} name={actor.name} initials={short(actor.name)} hue={actor.hue ?? 0} size={28} live={actor.working} />}
+          <b>{name}</b>
+        </header>
+        <Suspense fallback={null}>
+          <TeammateChat who={who} />
+        </Suspense>
+      </div>
+      <ActionsRoot dot={dotEl} fold={foldSheet} />
+      <Toasts />
+    </>
+  );
 }
 
 /* The desktop app's small call window (/call/<id>?window=1): the call page alone, with no Tico, menu or call bar. */
@@ -183,8 +216,8 @@ function CallWindow() {
 
 /* In the desktop app: who is signed in here, this company's Needs you count for the Dock badge, its files origin.
    Nothing is read or sent in a browser. */
-function useDesktopReports(signedOut: boolean) {
-  const on = !!desktop();
+function useDesktopReports(signedOut: boolean, mainPage = true) {
+  const on = !!desktop() && mainPage;
   const callLive = isCallActive(useCall());
   useEffect(() => {
     if (on) reportCallToDesktop(callLive);
@@ -508,6 +541,7 @@ function AppMenu({ note }: { note: ReactNode }) {
         onMessage={() => setMessaging(true)}
         onCall={() => setCalling(true)}
         onAutomations={press('shell.goTo', { to: '/company/routines' })}
+        onPopOut={(m) => void run('team.popOut', { who: chatWindowWho(m.to) }, { via: 'click' })}
         companyMenu={<CompanyRows name={name} all={companies} />}
         accountMenu={<AccountRows me={meMate} email={me?.email ?? ''} />}
       />

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseDeepLink } from './deeplink';
-import { decideNavigation, decideNewWindow, keepOnCall, signInOver, type NavContext } from './navigation';
+import { decideNavigation, decideNewWindow, keepOnCall, keepOnChat, signInOver, type NavContext } from './navigation';
 import { permissionAllowed } from './permissions';
 
 const ctx: NavContext = {
@@ -104,6 +104,30 @@ describe('the small call window', () => {
     expect(nav('https://acme.tico.team/', { ...call, signingIn: true })).toEqual({ kind: 'stay' });
     expect(nav('https://beta.tico.team/flow').kind).toBe('switch');
     expect(nav('https://beta.tico.team/flow')).toMatchObject({ companyId: 'cother' });
+  });
+});
+
+describe('an agent’s chat window', () => {
+  const chat = { ...ctx, companyId: 'cacme', chatPath: '/team/release-owner' };
+  const nav = (url: string, c = chat) => keepOnChat(url, decideNavigation(url, c), c);
+  const pop = (url: string) => keepOnChat(url, decideNewWindow(url, chat), chat);
+
+  it('stays on its chat, and opens a task or any other page of the company in the main window', () => {
+    expect(nav('https://acme.tico.team/team/release-owner?window=1')).toEqual({ kind: 'stay' });
+    expect(nav('https://acme.tico.team/task/412')).toEqual({ kind: 'switch', companyId: 'cacme', url: 'https://acme.tico.team/task/412' });
+    expect(pop('https://acme.tico.team/docs/plan')).toEqual({ kind: 'switch', companyId: 'cacme', url: 'https://acme.tico.team/docs/plan' });
+  });
+
+  it('opens the agent’s full page, or another agent’s chat, in the main window', () => {
+    expect(nav('https://acme.tico.team/team/release-owner?tab=settings')).toEqual({ kind: 'switch', companyId: 'cacme', url: 'https://acme.tico.team/team/release-owner?tab=settings' });
+    expect(nav('https://acme.tico.team/team/builder?window=1')).toMatchObject({ kind: 'switch', companyId: 'cacme' });
+  });
+
+  it('sends outside pages and files to the browser, and leaves a sign-in chain to the usual rules', () => {
+    expect(pop('https://example.com/a')).toEqual({ kind: 'external', url: 'https://example.com/a' });
+    expect(nav('https://acme.tico.team/api/files/9')).toEqual({ kind: 'external', url: 'https://acme.tico.team/api/files/9' });
+    expect(nav('https://acme.tico.team/auth/login?next=/')).toEqual({ kind: 'sign-in' });
+    expect(nav('https://beta.tico.team/flow')).toMatchObject({ kind: 'switch', companyId: 'cother' });
   });
 });
 

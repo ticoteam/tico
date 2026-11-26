@@ -133,6 +133,7 @@ function AgentHead({
   children: (head: Head) => ReactNode;
 }) {
   const open = useAction('team.open');
+  const popOut = useAction('team.popOut');
   const pause = useAction('agents.pause');
   const resume = useAction('agents.resume');
   const dream = useAction('agents.dream');
@@ -163,15 +164,19 @@ function AgentHead({
         {sub && <p className="col-sub">{sub}</p>}
       </>
     ),
+    // the new-window mark stands before the gear; the phone has no windows, so it shows only where the page has room
     actions: (
-      <IconButton
-        icon="gear"
-        label="Settings"
-        data-phone
-        on={settings}
-        aria-pressed={settings}
-        onClick={() => open.run({ who: slug, ...(settings ? {} : { tab: 'settings' }) })}
-      />
+      <>
+        <IconButton icon="popout" label="Open in new window" onClick={() => void popOut.run({ who: slug })} />
+        <IconButton
+          icon="gear"
+          label="Settings"
+          data-phone
+          on={settings}
+          aria-pressed={settings}
+          onClick={() => open.run({ who: slug, ...(settings ? {} : { tab: 'settings' }) })}
+        />
+      </>
     ),
     more: (
       <>

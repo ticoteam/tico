@@ -9,6 +9,7 @@ import type { CallWindowState, CompanyRef } from '../bridge';
 import { appUrl, checkAddress, hostOf, localSignInUrl } from './address';
 import { anyCallLive, badgeFor, dotBitmap } from './badge';
 import { CallWindow } from './callWindow';
+import { ChatWindows } from './chatWindows';
 import * as C from './companies';
 import { guardNavigation, hardenSession, pageWebPreferences } from './contents';
 import { parseDeepLink } from './deeplink';
@@ -46,7 +47,7 @@ type Entry = {
 
 export type LocalState = { page: 'add'; prefill?: string } | { page: 'unreachable'; companyId: string };
 
-export type Caller = { company: C.Company; kind: 'main' | 'call' };
+export type Caller = { company: C.Company; kind: 'main' | 'call' | 'chat' };
 
 export type ShellOptions = {
   dataDir: string;
@@ -65,6 +66,7 @@ const overlayIcon = () => (overlay ??= nativeImage.createFromBitmap(dotBitmap(16
 export class Shell {
   readonly win: BaseWindow;
   readonly call: CallWindow;
+  readonly chats: ChatWindows;
   private file: C.CompaniesFile;
   private readonly entries = new Map<string, Entry>();
   private local: { view: WebContentsView; state: LocalState } | null = null;
@@ -81,6 +83,12 @@ export class Shell {
       switchTo: (id, url) => void this.switchTo(id, url),
       notify: (id, state) => this.notifyCall(id, state),
       quitting: () => this.quitting,
+    });
+    this.chats = new ChatWindows({
+      preloadArgs: () => this.preloadArgs(),
+      userAgent: opts.userAgent,
+      others: (id) => this.others(id),
+      switchTo: (id, url) => void this.switchTo(id, url),
     });
     const first = loadAtStart(
       this.file.companies.map((c) => c.id),
@@ -413,6 +421,7 @@ export class Shell {
     });
     if (response !== 0 || !this.entries.has(id)) return;
     if (this.call.belongsTo(id)) this.call.close('closed');
+    this.chats.closeAll(id);
     this.win.contentView.removeChildView(entry.view);
     entry.view.webContents.close();
     this.entries.delete(id);
@@ -441,11 +450,13 @@ export class Shell {
     this.changed();
   }
 
-  /** The page is signing out: its count goes, the small call window closes, and the company shows signed out. */
+  /** The page is signing out: its count goes, the small call window and its chat windows close, and the company shows
+      signed out. */
   signingOut(id: string): void {
     const entry = this.entries.get(id);
     if (!entry) return;
     if (this.call.belongsTo(id)) this.call.close('closed');
+    this.chats.closeAll(id);
     entry.needs = 0;
     entry.signedOut = true;
     entry.callLive = false;
@@ -475,11 +486,19 @@ export class Shell {
     if (entry) entry.filesOrigin = origin;
   }
 
-  /** Which company page is calling: one of the company views, or the call window. */
+  /** Which company page is calling: one of the company views, the call window, or an agent's chat window. */
   callerOf(wc: WebContents): Caller | null {
     for (const e of this.entries.values()) if (e.view.webContents.id === wc.id) return { company: e.company, kind: 'main' };
     const owner = this.call.ownerOf(wc.id);
-    return owner ? { company: owner, kind: 'call' } : null;
+    if (owner) return { company: owner, kind: 'call' };
+    const chat = this.chats.ownerOf(wc.id);
+    return chat ? { company: chat, kind: 'chat' } : null;
+  }
+
+  openChat(companyId: string, agent: string): 'open' | 'full' {
+    const company = this.company(companyId);
+    if (!company) throw new Error('No such company.');
+    return this.chats.show(company, agent);
   }
 
   openCall(companyId: string, callId: string): void {

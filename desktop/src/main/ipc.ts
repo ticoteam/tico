@@ -26,6 +26,9 @@ function callerOf(shell: Shell, event: AnyEvent, kinds: readonly Kind[]): Caller
 
 const BOTH: readonly Kind[] = ['main', 'call'];
 const MAIN: readonly Kind[] = ['main'];
+/** Any page the app opened for a company: an agent's chat window too, which only lists and switches companies (a link
+    pressed there opens in the main window) and reads the update state. */
+const ANY: readonly Kind[] = ['main', 'call', 'chat'];
 
 export function registerIpc(shell: Shell, updater: Updater, version: string): void {
   const handle = (channel: string, kinds: readonly Kind[], fn: (caller: Caller, ...args: unknown[]) => unknown) =>
@@ -39,8 +42,8 @@ export function registerIpc(shell: Shell, updater: Updater, version: string): vo
       }
     });
 
-  handle('companies:list', BOTH, (c) => shell.list(c.company.id));
-  handle('companies:switch', BOTH, (c, id, url) => {
+  handle('companies:list', ANY, (c) => shell.list(c.company.id));
+  handle('companies:switch', ANY, (c, id, url) => {
     const target = shell.company(V.companyIdArg(id));
     if (!target) throw new Error('No such company.');
     shell.switchTo(target.id, V.switchUrlArg(url, c.company.id, target.id, target.url));
@@ -61,6 +64,7 @@ export function registerIpc(shell: Shell, updater: Updater, version: string): vo
   handle('call:close', BOTH, (c, ending) => {
     if (shell.call.belongsTo(c.company.id)) shell.call.close(ending === 'return' ? 'return' : 'closed');
   });
+  handle('chat:open', MAIN, (c, agent) => shell.openChat(c.company.id, V.agentArg(agent)));
   handle('call:current', MAIN, (c) => (shell.call.belongsTo(c.company.id) ? shell.call.currentId : null));
   handle('session:signing-out', MAIN, (c) => shell.signingOut(c.company.id));
   handle('call:on-top', BOTH, (c, on) => {
@@ -68,7 +72,7 @@ export function registerIpc(shell: Shell, updater: Updater, version: string): vo
     if (shell.call.belongsTo(c.company.id)) shell.call.setOnTop(flag);
   });
 
-  handle('app:update-state', BOTH, () => updater.state);
+  handle('app:update-state', ANY, () => updater.state);
   handle('app:restart', MAIN, () => updater.restart());
   handle('app:check', MAIN, () => updater.check());
   handle('app:show-log', MAIN, () => {

@@ -88,11 +88,26 @@ export function decideNewWindow(raw: string, ctx: NavContext): NavDecision {
  * (the browser, https only), and the call's own page, a sign-in chain and everything off the company are unchanged.
  */
 export function keepOnCall(raw: string, base: NavDecision, ctx: NavContext & { companyId: string; callPath: string }): NavDecision {
+  const own = ctx.callPath.replace(/\/+$/, '');
+  return keepOnOwnPage(raw, base, ctx, (url) => url.pathname.replace(/\/+$/, '') === own);
+}
+
+/**
+ * An agent's chat window stays on its chat, as the call window stays on its call: the chat-only page (the agent's
+ * address with ?window=1) stays, and every other page of the company, the agent's full page included, opens in the
+ * main window.
+ */
+export function keepOnChat(raw: string, base: NavDecision, ctx: NavContext & { companyId: string; chatPath: string }): NavDecision {
+  const own = ctx.chatPath.replace(/\/+$/, '');
+  return keepOnOwnPage(raw, base, ctx, (url) => url.pathname.replace(/\/+$/, '') === own && url.searchParams.get('window') === '1');
+}
+
+function keepOnOwnPage(raw: string, base: NavDecision, ctx: NavContext & { companyId: string }, own: (url: URL) => boolean): NavDecision {
   if (ctx.signingIn || (base.kind !== 'stay' && base.kind !== 'external')) return base;
   const url = parse(raw);
   if (!url || url.origin !== ctx.origin) return base;
   const path = url.pathname.replace(/\/+$/, '');
-  if (path === ctx.callPath.replace(/\/+$/, '') || path.startsWith('/auth/')) return base;
+  if (own(url) || path.startsWith('/auth/')) return base;
   if (path.startsWith('/api/')) return externalOrBlock(url);
   return { kind: 'switch', companyId: ctx.companyId, url: url.href };
 }

@@ -374,6 +374,27 @@ describe('Menu', () => {
     localStorage.clear();
   });
 
+  it('an agent’s row opens its chat in a new window, and the page stays; a person’s row has no such mark', async () => {
+    localStorage.clear();
+    const onPopOut = vi.fn();
+    const org: MenuNode[] = [...ORG, { kind: 'mate', key: 'human:dana', mate: mate('dana', 'Dana', 'person'), kids: [], size: 0 }];
+    const nav = within(await show({ org, onPopOut }, '/tasks'));
+    fireEvent.click(nav.getByRole('button', { name: 'Open Ops in new window' }));
+    expect(onPopOut).toHaveBeenCalledWith(expect.objectContaining({ id: 'ops', to: '/team/ops' }));
+    expect(nav.getByRole('link', { name: /^Tasks/ }).getAttribute('aria-current')).toBe('page');
+    expect(nav.queryByRole('button', { name: 'Open Dana in new window' })).toBeNull();
+    localStorage.clear();
+  });
+
+  it('on a phone, no row offers a new window', async () => {
+    const root = createRootRoute({ component: () => <PhoneCards page={<h1>Finance</h1>} tico={<p>Tico's chat</p>} menu={<Menu {...PROPS} onPopOut={() => undefined} />} /> });
+    render(<RouterProvider router={createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: ['/tasks'] }) })} />);
+    fireEvent.click(within(await screen.findByRole('navigation', { name: 'Bar' })).getByRole('button', { name: 'Company' }));
+    const card = screen.getByRole('dialog', { name: 'Menu' });
+    expect(within(card).getByRole('link', { name: 'Ops' })).toBeTruthy();
+    expect(within(card).queryByRole('button', { name: /in new window$/ })).toBeNull();
+  });
+
   it('on a phone, the menu is a card from the bar’s Company icon: the pick, the "?" and a way to tuck it away in its head, no foot; search is on the bar @s1210', async () => {
     const root = createRootRoute({ component: () => <PhoneCards page={<h1>Finance</h1>} tico={<p>Tico's chat</p>} menu={<Menu {...PROPS} />} /> });
     render(<RouterProvider router={createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: ['/tasks'] }) })} />);

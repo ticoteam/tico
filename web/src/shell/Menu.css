@@ -68,9 +68,9 @@
 .tree-fold:hover .tree-chev,.tree-team:hover .tree-chev{color:var(--ink-2)}
 .tree-fold.is-open .tree-chev .ico{transform:rotate(90deg)}
 .tree-fold:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap-in)}
-.tree-line>.tree-more{display:none;flex:none}
+.tree-line>:is(.tree-more,.tree-pop){display:none;flex:none}
 @media (hover:hover){
-  .tree-line:is(:hover,:focus-within)>.tree-more,.tree-line>.tree-more[data-popup-open]{display:inline-grid}
+  .tree-line:is(:hover,:focus-within)>:is(.tree-more,.tree-pop),.tree-line>.tree-more[data-popup-open]{display:inline-grid}
 }
 .org{position:relative;margin-left:var(--s-5);padding-left:var(--s-2);display:grid;gap:calc(var(--s-0) / 2)}
 .org>.tree-node{position:relative}
