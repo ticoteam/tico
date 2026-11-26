@@ -43,6 +43,9 @@ CUSTOMER_WAIT_DAYS = 30
 # Seconds after a change before the never-stuck check looks at the task, and its gap before retrying a run that was cut
 # off. A run that finished is not woken this soon (never_stuck._ladder).
 FIRST_TRY_S = 120
+# A reopen this soon after a close, by whoever closed, is its Undo (the toast's, its hover included): the visit the close
+# ended comes back as it was (`_undoes_close`).
+UNDO_CLOSE_S = 120
 GUARDED = ("status", "stage_id", "owner_id", "pipeline_id")
 
 
@@ -592,6 +595,46 @@ def _open_visit(conn: "sqlite3.Connection", task_id: str, stage_id: str, how: st
 
     waiting_on.tell_asked(conn, {"id": visit_id, "stage_id": stage_id})  # a shared page's approvers: a new ask
     return visit_id
+
+
+def _undoes_close(conn: "sqlite3.Connection", row: Row, target: Row, by: str) -> Row | None:
+    """The visit a reopen gives back, when the reopen is the Undo of a close (task #3678): the task was closed less than
+    UNDO_CLOSE_S ago by `by`, from `target`, and nothing was closed with it (a sub-task or a hand-off the close ended
+    stays as it is, so such a reopen starts a new visit). Its attachments, its verdicts and the OK it waited on are the
+    visit's own rows: they come back with it, and nobody has to submit anything again."""
+    H = _h()
+    here = row.get("visit")
+    if not here or row["stage"]["kind"] != "closed" or here.get("entered_how") != "closed":
+        return None
+    if H.shift(here["entered_at"], seconds=UNDO_CLOSE_S) < H.shift(H.now()):
+        return None
+    left = H._one(
+        conn,
+        "SELECT * FROM visits WHERE task_id=? AND stage_id=? AND how='closed' AND left_at=? AND by_id=? "
+        "ORDER BY rowid DESC LIMIT 1",
+        (row["id"], target["id"], here["entered_at"], str(by)),
+    )
+    if not left:
+        return None
+    # A task closed with it closes a moment after the visit ended (its own move), so "at or after".
+    closed_with = conn.execute(
+        "SELECT 1 FROM links l JOIN tasks t ON t.id = l.to_task_id "
+        "WHERE l.from_task_id=? AND t.status='closed' AND t.closed_at>=? LIMIT 1",
+        (row["id"], here["entered_at"]),
+    ).fetchone()
+    return None if closed_with else left
+
+
+def _restore_visit(conn: "sqlite3.Connection", visit: Row) -> str:
+    """Open again the visit a close ended (`_undoes_close`), with the requirements the close withdrew."""
+    conn.execute(
+        "UPDATE requirements SET withdrawn_at=NULL WHERE visit_id=? AND withdrawn_at=?", (visit["id"], visit["left_at"])
+    )
+    conn.execute("UPDATE visits SET left_at=NULL, how=NULL, by_id=NULL, why=NULL WHERE id=?", (visit["id"],))
+    from . import waiting_on
+
+    waiting_on.tell_asked(conn, visit)  # a shared page's approvers: the ask is back on their Needs you
+    return str(visit["id"])
 
 
 def _close_visit(conn: "sqlite3.Connection", visit: Row, how: str, by: str, why: str | None, ts: str) -> None:
@@ -1271,6 +1314,7 @@ def move(
         _need_why(conn, by, why, "reopen it", task_id, everyone=True)
     elif kind in ("back", "closed"):
         _need_why(conn, by, why, "close it" if kind == "closed" else "move it back", task_id)
+    restored = _undoes_close(conn, row, target, by) if kind == "reopen" else None
     if kind == "back" or (kind == "side" and row["stage"].get("side") and is_main_work(target)):
         _may_go_back_to(conn, by, row, target)
     if kind == "closed" and not cascade:
@@ -1325,10 +1369,10 @@ def move(
         updated_at=ts,
         **extra,
     )
-    entered_visit = _open_visit(conn, task_id, target["id"], how, ts)
+    entered_visit = _restore_visit(conn, restored) if restored else _open_visit(conn, task_id, target["id"], how, ts)
     if picked:
         _picked(conn, task_id, entered_visit, target, picked[0])
-    if target["kind"] == "work":
+    if target["kind"] == "work" and not restored:
         stage_read(conn, task_id, target)
     revision = _event(
         conn,
@@ -1345,6 +1389,7 @@ def move(
             **({"pushed_past": pushed} if pushed else {}),
             **({"stage_rule": ruled["id"]} if ruled else {}),
             **({"undone_answer": undone} if undone else {}),
+            **({"undone_close": entered_visit} if restored else {}),  # the Undo of a close: the same visit, nobody told
             **({"consequence": "cascade"} if cascade else {}),  # closed with what filed it: no decision of its own
         },
     )
@@ -1356,7 +1401,9 @@ def move(
         stage_rules.record(conn, task_id, ruled, unable, SYSTEM, data={"owner": wanted or ""})
     _owned(conn, row, _task(conn, task_id), by)
     moved = _task(conn, task_id)
-    if target["kind"] == "work":
+    if restored:
+        _sync_wait(conn, task_id)  # the visit did what it does on entering once, and its turn was told then
+    elif target["kind"] == "work":
         _wake_turn(conn, moved, stage_effects.enter(conn, moved, by))
     else:
         _sync_wait(conn, task_id)  # it ended: its span closes

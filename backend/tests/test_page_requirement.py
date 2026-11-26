@@ -1233,6 +1233,56 @@ def test_any_page_on_a_task_with_prs_is_judged_with_their_newest_commits_and_an_
     assert _standing(c, row).met, "a new commit does not undo a page that is not at_head"
 
 
+# ----------------------------------------------------------------------------- Undo of a close (task #3678)
+def _waiting_on_ana(c, store):
+    """A task whose page Jev passed, its OK waiting on Ana."""
+    rid = _pipeline(c, person=ANA)
+    row = _task(c)
+    fid, _ = _page(c, store)
+    _say(c, _attach(c, row, "page:" + fid), "met")
+    assert (_standing(c, row).state, _standing(c, row).on) == (R.WAITING, ANA)
+    return rid, row, fid
+
+
+def test_undoing_a_close_brings_back_the_same_ok_waiting_and_wakes_nobody(c, store):
+    rid, row, fid = _waiting_on_ana(c, store)
+    visit = E.task(c, row["id"])["visit"]["id"]
+    woken = X.wakes(c, row["id"])
+    E.move(c, row["id"], E.CLOSED, ANA, "Not needed")
+    back = E.move(c, row["id"], E.REOPEN, ANA, "Undid the close")
+    assert (back["stage"]["name"], back["status"], back["visit"]["id"]) == ("Spec", "open", visit), (
+        "the visit it closed"
+    )
+    standing = _standing(c, row)
+    assert (standing.state, standing.on, standing.line) == (R.WAITING, ANA, "Spec page"), "no page to attach again"
+    assert X.wakes(c, row["id"]) == woken, "nobody is told the task is in Spec again"
+    done = A.answer(c, row["id"], rid, ANA, "ok", page_version=f"{fid}@1")
+    assert done["stage"]["name"] == "Done"
+
+
+def test_a_reopen_later_than_the_undo_starts_a_new_visit(c, store):
+    _, row, _ = _waiting_on_ana(c, store)
+    visit = E.task(c, row["id"])["visit"]["id"]
+    E.move(c, row["id"], E.CLOSED, ANA, "Not needed")
+    closed = E.task(c, row["id"])["visit"]
+    earlier = H.shift(closed["entered_at"], seconds=-E.UNDO_CLOSE_S - 1)
+    c.execute("UPDATE visits SET entered_at=? WHERE id=?", (earlier, closed["id"]))
+    c.execute("UPDATE visits SET left_at=? WHERE id=?", (earlier, visit))
+    back = E.move(c, row["id"], E.REOPEN, ANA, "It is needed after all")
+    assert back["visit"]["id"] != visit
+    assert (_standing(c, row).on, _standing(c, row).line) == (WRITER, "No page attached")
+
+
+def test_undoing_a_close_that_closed_a_sub_task_reopens_as_before(c, store):
+    _, row, _ = _waiting_on_ana(c, store)
+    visit = E.task(c, row["id"])["visit"]["id"]
+    sub = X.new_task(c, ANA, "Check the importer's limits", "product", parent=row["id"])
+    E.move(c, row["id"], E.CLOSED, ANA, "Not needed")
+    assert E.task(c, sub["id"])["status"] == "closed"
+    back = E.move(c, row["id"], E.REOPEN, ANA, "Undid the close")
+    assert back["visit"]["id"] != visit, "what the close ended stays ended, so the visit is not the one it was"
+
+
 # ----------------------------------------------------------------------------- the Jev step
 def _engine(p, calls, reason="Clear and complete"):
     def ask(model, state, questions, label):
