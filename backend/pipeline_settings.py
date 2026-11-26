@@ -158,7 +158,18 @@ def _people_only(requirement: Row) -> Row:
 # A finding on the PR description has no line of the diff to point at: the guideline line it breaks (CONTRIBUTING.md
 # for a missing Spec, Demo steps or Risk) is its place. Without saying so, the judge is unsure of a page whose one
 # finding is that, though it has a place, a severity and why.
+# A page with no blocking findings has nothing to place: the judge was unsure of ten such pages in one week (Nov 16 to
+# 23), each of which the manager OK'd unchanged. It meets the check when each review names the commit and says what
+# it read; its non-blocking notes need no file:line.
 REVIEW_RUBRIC = (
+    "Two reviews of the newest commit of every linked PR, each naming that commit and its model: use different models "
+    "and say what each checked. Give each real defect its own finding with file:line, severity, and why it matters; "
+    "a finding on the PR description may cite the file:line of the guideline it breaks. Skip style nits and diff "
+    "summaries. Say when there are no findings: a page with no blocking findings meets this when each review names "
+    "the commit and says what it read, and its non-blocking notes need no file:line."
+)
+# The combined Review rubric before a page with no blocking findings was said to meet it (EARLIER, `_follow`).
+_REVIEW_RUBRIC_BEFORE_NO_BLOCKERS = (
     "Two reviews of the newest commit of every linked PR, each naming that commit and its model: use different models "
     "and say what each checked. Give each real defect its own finding with file:line, severity, and why it matters; "
     "a finding on the PR description may cite the file:line of the guideline it breaks. Skip style nits and diff "
@@ -171,7 +182,7 @@ _REVIEW_RUBRIC_BEFORE_DESCRIPTION = (
     "Skip style nits and diff summaries. Say when there are no findings."
 )
 # Every text the combined Review rubric has shipped with: asked as pipeline_judges.CHECKS["two_reviews"].
-COMBINED_REVIEW_RUBRICS = (REVIEW_RUBRIC, _REVIEW_RUBRIC_BEFORE_DESCRIPTION)
+COMBINED_REVIEW_RUBRICS = (REVIEW_RUBRIC, _REVIEW_RUBRIC_BEFORE_NO_BLOCKERS, _REVIEW_RUBRIC_BEFORE_DESCRIPTION)
 # The single-review line the presets shipped before the one Review stage (still recognised, EARLIER).
 # Judged from the page alone (Jev is shown the linked PRs' newest commits beside it), and true of a good review of a
 # correct change: one with nothing to fix says so. "What is wrong" alone made a clean review read as incomplete, and
@@ -533,8 +544,17 @@ _REVIEW_PURPOSE_BEFORE_BODY = (
 )
 EARLIER: dict[str, tuple[str, ...]] = {
     "product-ideas/purpose": ("Ideas wait here. Move one to Spec when it is worth a spec. Snooze one to park it.",),
-    "engineering-review-1/page/rubric": (LEGACY_REVIEW_RUBRIC, _REVIEW_RC3, _REVIEW_RUBRIC_BEFORE_DESCRIPTION),
-    "product-review-1/page/rubric": (LEGACY_REVIEW_RUBRIC, _REVIEW_RUBRIC_BEFORE_DESCRIPTION),
+    "engineering-review-1/page/rubric": (
+        LEGACY_REVIEW_RUBRIC,
+        _REVIEW_RC3,
+        _REVIEW_RUBRIC_BEFORE_DESCRIPTION,
+        _REVIEW_RUBRIC_BEFORE_NO_BLOCKERS,
+    ),
+    "product-review-1/page/rubric": (
+        LEGACY_REVIEW_RUBRIC,
+        _REVIEW_RUBRIC_BEFORE_DESCRIPTION,
+        _REVIEW_RUBRIC_BEFORE_NO_BLOCKERS,
+    ),
     "engineering-review-1/purpose": ("Review the newest commit and attach a Review page.", _REVIEW_PURPOSE_BEFORE_BODY),
     "product-review-1/purpose": ("Review the newest commit and attach a Review page.", _REVIEW_PURPOSE_BEFORE_BODY),
     "engineering-fixes-2/purpose": (
