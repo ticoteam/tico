@@ -30,11 +30,12 @@ def test_the_pre_4077_snapshot_fails_on_each_advisory_that_release_fixed_and_not
     fails = failing(found, allowlist())
     # uv's CA store (every pinning file), rustls-webpki, SQLite, rustix and js-yaml (both vendored copies).
     assert {(source, i) for source, ids in expected["fail"].items() for i in ids} <= fails
-    # A RustSec "unmaintained" record stays visible and never fails; the patched GLib is accepted for its own source.
+    # A RustSec "unmaintained" record stays visible and never fails. GLib's acceptance left with app/ (the Tauri shell),
+    # so the snapshot's app/Cargo.lock fails on it again.
     notices = {(f.source, i) for f in found if f.notice for i in f.ids}
     assert ("app/Cargo.lock", "RUSTSEC-2024-0370") in notices
     assert not {(s, i) for s, i in fails if i == "RUSTSEC-2024-0370"}
-    assert ("app/Cargo.lock", "RUSTSEC-2024-0429") not in fails
+    assert ("app/Cargo.lock", "RUSTSEC-2024-0429") in fails
     failures, printed, accepted, _ = osv_gate.evaluate(found, allowlist(), TODAY)
     assert osv_gate.report(failures, printed, accepted, []) == 1
 
