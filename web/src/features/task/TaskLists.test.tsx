@@ -86,6 +86,18 @@ describe("a pipeline's list", () => {
     await waitFor(() => expect(titles()).toEqual(['Bulk edit stock', 'Rate fallback']));
   });
 
+  it('puts what waits on the person first in its stage, as the board does, and goes on in that order', async () => {
+    queryClient.setQueryData(['flow'], { count: 1, items: [], task_ids: ['t5'] });
+    show({ list: 'eng', open: '7', current: cur(row(7, 'Bulk edit stock', 'review')) });
+    await waitFor(() => expect(titles()).toEqual(['Rate fallback', 'Bulk edit stock']));
+    expect(nextInList('t5', 'eng')).toBe('7');
+    expect(nextInList('t7', 'eng')).toBe('8');
+    // filtered, the same: what is left of the stage, waiting first
+    act(() => changeBoardSearch('eng', { owner: 'bot:qa' }));
+    await waitFor(() => expect(calls.some((c) => c.includes('owner=bot%3Aqa'))).toBe(true));
+    await waitFor(() => expect(titles()).toEqual(['Rate fallback', 'Bulk edit stock']));
+  });
+
   it('sorted, a failed read says why, though the open task names its stage', async () => {
     changeBoardSearch('eng', { sort: 'oldest' });
     vi.stubGlobal('fetch', async (url: string) => {

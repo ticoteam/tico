@@ -332,6 +332,21 @@ describe('tasks', () => {
     }
   });
 
+  it("read a list in the board's queue order again when a row's rank or stage changes, as its place in the queue moves", () => {
+    const params = { status: 'open', pipeline: 'p1' };
+    const list: TaskList = { tasks: [task('t1', { stage_id: 's1', rank: 1 }), task('t2', { stage_id: 's1', rank: 2 })], cursor: '900.x' };
+    const reranked = patchTaskList(list, [{ seq: 901, id: 't2', task: task('t2', { stage_id: 's1', rank: 0.5, version: 2 }) }], params);
+    expect(reranked.unsure).toBe(true);
+    const moved = patchTaskList(list, [{ seq: 901, id: 't2', task: task('t2', { stage_id: 's2', rank: 2, version: 2 }) }], params);
+    expect(moved.unsure).toBe(true);
+    // a change that leaves its place alone is patched where it is, without a read
+    const renamed = patchTaskList(list, [{ seq: 901, id: 't2', task: task('t2', { stage_id: 's1', rank: 2, title: 'Renamed', version: 2 }) }], params);
+    expect(renamed.unsure).toBe(false);
+    // made order does not follow rank
+    const newest = patchTaskList(list, [{ seq: 901, id: 't2', task: task('t2', { stage_id: 's1', rank: 0.5, version: 2 }) }], { ...params, sort: 'newest' });
+    expect(newest.unsure).toBe(false);
+  });
+
   it('patch a row in place, keeping every row that did not change', () => {
     const [a, b, c] = [task('t1'), task('t2'), task('t3')];
     queryClient.setQueryData<TaskList>(open, { tasks: [a, b, c], cursor: '900.x' });

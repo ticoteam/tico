@@ -220,6 +220,9 @@ export function patchTaskList<T extends TaskRow>(
   const paged = !!list.next_after && (params?.sort === 'newest' || params?.sort === 'oldest');
   // a stage by priority (Tico's order for the reader): a task new to it is read again in its place, never added at the end
   const ranked = params?.sort === 'priority';
+  // a pipeline in the server's queue order (a board, and the list beside a task in Board order): a row whose rank or stage
+  // changes may move in it, so the list is read again for its new place
+  const queued = !!params?.pipeline && !params.sort;
   const edit = () => {
     if (tasks === list.tasks) tasks = [...tasks];
     return tasks;
@@ -248,11 +251,19 @@ export function patchTaskList<T extends TaskRow>(
     }
     const held = tasks[i] as T;
     if (fits === false) edit().splice(i, 1);
-    else if (!older(e.task, held) && !same(held, e.task)) edit()[i] = e.task;
+    else if (!older(e.task, held) && !same(held, e.task)) {
+      if (queued && moves(held, e.task)) unsure = true;
+      edit()[i] = e.task;
+    }
     if (fits === null) unsure = true;
   }
   return { list: tasks === list.tasks ? list : { ...list, tasks }, unsure };
 }
+
+/** Whether a change may move a task in a pipeline's queue order (rank, then no rank, then oldest, then id, within its
+    stage). An event that leaves rank out says nothing about it. */
+const moves = (held: { rank?: unknown; stage_id?: unknown }, next: { rank?: unknown; stage_id?: unknown }): boolean =>
+  ('rank' in next && next.rank !== held.rank) || ('stage_id' in next && next.stage_id !== held.stage_id);
 
 function patchTasks(batch: TaskEvent[]): void {
   const bulk = batch.some((e) => e.bulk);
