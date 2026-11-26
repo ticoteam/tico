@@ -424,6 +424,7 @@ ASSISTANT_TOOLS = frozenset(
         "tico_task_move",
         "tico_task_reassign",
         "tico_task_answer",
+        "tico_task_approve",
         "tico_task_ask",
         "tico_needs_you_show",
         "tico_origin_show",

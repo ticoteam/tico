@@ -208,7 +208,10 @@ server checks your words, not the Assistant: your own message in your own Assist
 more than 15 minutes old, naming the task (its number, such as `#3555`, or at least two of its title's own words and
 half of them), and one task per message. A page attached after you spoke, one the decision model has not passed, or a
 version other than the one you were shown is refused, as it would be for your own click. The task's history says
-"via assistant" and quotes your words with the message they came from; Undo works as for your own OK. What stays your
+"via assistant" and quotes your words with the message they came from (`data.delegation`: `words`, and `cited` with
+its `message_id` and `conversation_id`), and your Assistant chat gets a receipt, "OK'd: <title>, <stage>", whose
+`refs.assistant_ok` carries the `answer_id` to undo (`POST /api/v2/answers/{id}/undo`), the task, its title and the
+stage; Undo works as for your own OK, while the task's `may` for that requirement still lists `undo`. What stays your
 own click, whatever the setting: an OK on something that leaves the company, spends money, or touches a file or access
 (any OK bound to a preview, [Asks and OKs](tasks.md#asks-and-oks)), a page several people approve, and an OK on your
 own ask. A walk through Needs you (`tico needs-you commit`) answers, sends back, finishes and closes, but never OKs.

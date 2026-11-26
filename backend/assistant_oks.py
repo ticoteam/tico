@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, cast
 from fastapi import FastAPI, Request
 
 from . import models as M
+from .api_contract import api_v2, error
 from .store import H as _H
 from .store import Problem
 
@@ -114,7 +115,7 @@ def _delegable(conn: "sqlite3.Connection", by: str, requirement: Row) -> bool:
 def _lent_elsewhere(conn: "sqlite3.Connection", cited: str, task_id: str) -> bool:
     found = conn.execute(
         "SELECT 1 FROM history_events WHERE subject_type='task' AND kind='answer' AND new='ok' AND via='assistant' "
-        "AND subject_id<>? AND json_extract(data,'$.delegation.cited')=? LIMIT 1",
+        "AND subject_id<>? AND json_extract(data,'$.delegation.cited.message_id')=? LIMIT 1",
         (task_id, cited),
     ).fetchone()
     return found is not None
@@ -176,32 +177,83 @@ def refusal(conn: "sqlite3.Connection", by: str, row: Row, requirement: Row) -> 
 
 
 def delegation(conn: "sqlite3.Connection") -> Row | None:
-    """For the history line of an answer the person's Assistant gave on their word: the message cited and their words."""
+    """For the history line of an answer the person's Assistant gave on their word: their words, and the message they
+    came from as a link (`cited`: message id and the chat it is in; a spoken call turn's chat is its Assistant room)."""
     record = _record()
     cited = str((record or {}).get("cited") or "")
     if not cited:
         return None
     said = _said(conn, cited) or {}
     words = re.sub(r"\s+", " ", str(said.get("body") or "")).strip()[:WORDS_KEPT]
-    return {"cited": cited, "words": words}
+    room = str(said.get("conversation_id") or "") or None
+    return {"cited": {"message_id": cited, "conversation_id": room}, "words": words}
+
+
+RECEIPT = "assistant_ok"  # the receipt's refs key: {answer_id, task_id, title, stage}
+
+
+def receipt(conn: "sqlite3.Connection", row: Row, answer_id: str, lent: Row) -> None:
+    """The Assistant's receipt in the chat the person spoke in: "OK'd: <title>, <stage>", a card whose refs carry the
+    answer to undo (POST /api/v2/answers/{answer_id}/undo) and the task. Whether Undo still applies is the task's own
+    read: the answer's requirement lists `undo` in `may` while it does."""
+    room = H.conversation(conn, lent["cited"].get("conversation_id")) if lent["cited"].get("conversation_id") else None
+    person = str((_record() or {}).get("for") or "")
+    if not room or not person:
+        return
+    at: Row = row.get("stage") or {}
+    stage = str(at.get("name") or "")
+    title = str(row.get("title") or "")
+    refs = {RECEIPT: {"answer_id": answer_id, "task_id": row["id"], "title": title, "stage": stage}, "task": row["id"]}
+    via = H.VIA.set("")  # the Assistant's own line, not one written for the person
+    try:
+        H._write_message(
+            conn, H.assistant_actor(conn), person, f"OK'd: {title}, {stage}", room, "say", refs, None, None
+        )
+    finally:
+        H.VIA.reset(via)
+
+
+def _shown(conn: "sqlite3.Connection", who: "Identity") -> Row:
+    from . import task_asks
+
+    return {"gives_oks": on(conn, str(who.actor)), "may_change": task_asks.own_click(who)}
 
 
 def install(app: FastAPI, store: Any, mutate: Callable[..., Any]) -> None:
-    @app.get("/api/v2/assistant/settings")
+    @app.get(
+        "/api/v2/assistant/settings",
+        **api_v2(
+            "Assistant",
+            "getAssistantOkSettings",
+            "Whether your Assistant gives OKs for you when you tell it to, and whether this caller may change it (only "
+            "your own click in Tico: never your Assistant, Agent Ops or a personal token)",
+            "AssistantOkSettingsResult",
+        ),
+    )
     def assistant_settings_show(request: Request):
         """Whether your Assistant gives OKs for you when you tell it to."""
         who = request.state.identity
         if not H.is_human(who.actor):
             raise Problem("forbidden", "Only a person has this setting", 403)
         with store.read() as c:
-            return {"gives_oks": on(c, who.actor)}
+            return _shown(c, who)
 
-    @app.post("/api/v2/assistant/settings")
+    @app.post(
+        "/api/v2/assistant/settings",
+        **api_v2(
+            "Assistant",
+            "setAssistantOkSettings",
+            "Let your Assistant give OKs for you when you tell it to, or stop it: your own click only",
+            "AssistantOkSettingsResult",
+            responses={"403": error("Not your own click (person_only)")},
+        ),
+    )
     def assistant_settings_set(request: Request, body: M.AssistantOkSettings):
         """Let your Assistant give OKs for you when you tell it to, or stop it. Only your own click."""
         who = request.state.identity
 
         def work(c: "sqlite3.Connection") -> Row:
-            return set_on(c, who, body.gives_oks)
+            set_on(c, who, body.gives_oks)
+            return _shown(c, who)
 
         return mutate(request, body, work)

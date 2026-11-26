@@ -9,6 +9,7 @@ import pytest
 from backend import answers as A
 from backend import assistant_oks as AO
 from backend import task_asks as K
+from backend import task_engine as E
 from backend.auth import Identity
 from backend.blobs import Blobs
 from backend.store import H
@@ -80,9 +81,11 @@ def test_only_the_persons_own_click_turns_it_on_or_off(api):
             assert status == 403, (who, on)
     with api.app.state.store.read() as c:
         assert AO.on(c, "human:ana") is False
-    assert call(api, "GET", "assistant/settings", "ana-test")[3] == {"gives_oks": False}
+    assert call(api, "GET", "assistant/settings", "ana-test")[3] == {"gives_oks": False, "may_change": True}
+    # Read by anyone acting for her, the switch says it is not theirs to change.
+    assert call(api, "GET", "assistant/settings", "ana-token")[3] == {"gives_oks": False, "may_change": False}
     assert gives_oks(api, True)[0] == 200
-    assert call(api, "GET", "assistant/settings", "ana-test")[3] == {"gives_oks": True}
+    assert call(api, "GET", "assistant/settings", "ana-test")[3] == {"gives_oks": True, "may_change": True}
     with api.app.state.store.read() as c:
         assert AO.on(c, "human:ana") is True and AO.on(c, "human:ben") is False
     assert gives_oks(api, False)[0] == 200
@@ -95,6 +98,8 @@ def test_on_her_word_the_assistant_oks_and_the_history_says_via_assistant_with_h
     tid, rid = plain_ok(api)
     assert gives_oks(api)[0] == 200
     token, cited = turn(api)
+    with api.app.state.store.read() as c:
+        task_stage_before = E.task(c, tid)["stage"]["name"]
     status, code, detail, _ = ok(api, token, tid, rid)
     assert status == 200, (code, detail)
     (given,) = answers(api, rid)
@@ -105,7 +110,22 @@ def test_on_her_word_the_assistant_oks_and_the_history_says_via_assistant_with_h
         ).fetchone()
     data = H._json(line["data"], {})
     assert (line["actor_id"], line["via"]) == ("human:ana", "assistant")
-    assert data["delegation"] == {"cited": cited, "words": WORDS}
+    with api.app.state.store.read() as c:
+        room = c.execute("SELECT conversation_id FROM messages WHERE id=?", (cited,)).fetchone()[0]
+        card = c.execute(
+            "SELECT * FROM messages WHERE conversation_id=? AND json_extract(refs,'$.assistant_ok') IS NOT NULL",
+            (room,),
+        ).fetchall()
+    assert data["delegation"] == {"cited": {"message_id": cited, "conversation_id": room}, "words": WORDS}
+    # The receipt in the chat she spoke in names the task and stage back and carries the answer to undo.
+    (receipt,) = card
+    assert receipt["sender_id"].startswith("bot:") and receipt["recipient_id"] == "human:ana"
+    assert H._json(receipt["refs"], {})["assistant_ok"] == {
+        "answer_id": given["id"],
+        "task_id": tid,
+        "title": TITLE,
+        "stage": task_stage_before,
+    }
     # Her own Undo takes it back, as for an OK she clicked.
     assert call(api, "POST", f"answers/{given['id']}/undo", "ana-test", {})[0] == 200
     assert not answers(api, rid)
