@@ -117,15 +117,21 @@ class Loop:
 
     def _restart(self, old: list[threading.Thread]) -> None:
         """The waiting start's own thread: join the old threads until they have exited, then run it, unless a stop
-        dropped it meanwhile. While the stop event is set no thread is added, so `old` is every thread left."""
-        join(old, None)
-        with self.lock:
-            self.waiter = None
-            self.threads = [t for t in self.threads if t.is_alive()]
-            if self.pending is None or self.threads or not self.halt.is_set():
+        dropped it meanwhile. Threads still alive when it looks (a start ran and was stopped while it joined) are
+        joined in turn, so a start waiting on them is never left without this thread."""
+        while True:
+            join(old, None)
+            with self.lock:
+                self.threads = [t for t in self.threads if t.is_alive()]
+                if self.pending is not None and self.halt.is_set() and self.threads:
+                    old = list(self.threads)
+                    continue
+                self.waiter = None
+                if self.pending is None or not self.halt.is_set():
+                    return
+                self.halt = threading.Event()
+                self._spawn(*self.pending)
                 return
-            self.halt = threading.Event()
-            self._spawn(*self.pending)
 
     def stopped(self) -> bool:
         """A stop is in force and no start has been asked for since."""

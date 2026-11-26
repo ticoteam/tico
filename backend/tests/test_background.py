@@ -139,3 +139,42 @@ def test_a_stop_after_that_start_cancels_it():
         release.set()
         loop.stop()
         background._loops.remove(loop)
+
+
+def test_a_start_queued_behind_a_newer_live_thread_still_runs_when_it_ends(monkeypatch):
+    real_join, gate = background.join, threading.Event()
+    calls = []
+
+    def held_join(threads, timeout):  # the restart thread's first join returns only once the test opens the gate
+        real_join(threads, timeout)
+        if threading.current_thread().name == "test-loop-queued-restart":
+            calls.append(1)
+            if len(calls) == 1:
+                gate.wait()
+
+    monkeypatch.setattr(background, "join", held_join)
+    release_a, release_b, c_ran = threading.Event(), threading.Event(), threading.Event()
+    loop = background.Loop("test-loop-queued", lambda: None)
+    try:
+        loop.start(lambda halt: release_a.wait())
+        a = loop.threads[0]
+        loop.stop(timeout=0)
+        loop.start(lambda halt: halt.wait())  # waits on A: the restart thread starts
+        release_a.set()
+        a.join()  # A is gone, and the restart thread is held before it looks
+
+        loop.start(lambda halt: release_b.wait())  # runs B at once: nothing is alive
+        b = loop.threads[0]
+        loop.stop(timeout=0)  # B ignores its stop too
+        loop.start(lambda halt: c_ran.set() or halt.wait())  # C waits on B
+        gate.set()  # the restart thread now finds B alive
+
+        release_b.set()
+        b.join()
+        assert c_ran.wait(5), "the start queued behind B never ran: no restart thread was left waiting on B"
+    finally:
+        gate.set()
+        release_a.set()
+        release_b.set()
+        loop.stop()
+        background._loops.remove(loop)
