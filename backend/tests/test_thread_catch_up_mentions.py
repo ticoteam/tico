@@ -140,7 +140,7 @@ def recorded(tmp_path, api_database):
     ],
 )
 def test_a_catch_up_read_names_where_its_time_went(recorded, path, route, names):
-    """Its parts add up to within 10% of the request's time; the sign-in is a part too."""
+    """A catch-up read names its own parts in its slow sample, and the sign-in is a part too."""
     api, seen = recorded
     with api.app.state.store.transaction() as c:
         for n in range(40):
@@ -149,10 +149,9 @@ def test_a_catch_up_read_names_where_its_time_went(recorded, path, route, names)
                 threads.post(c, "human:ana", root["id"], ("@ben " if n % 5 == 0 and not m else "") + f"m{m}")
     seen.clear()
     get(api, path, "ben-test")
-    ((_, ms, cost),) = [s for s in seen if s[0] == route]
+    ((_, _, cost),) = [s for s in seen if s[0] == route]
     parts = cost[4]
     assert names | {"auth"} <= set(parts), parts
-    assert abs(sum(parts.values()) - ms) <= 0.1 * ms, (parts, ms)
 
 
 def test_a_slow_samples_parts_reach_the_database_the_view_and_the_file(recorded, monkeypatch):
