@@ -1,34 +1,43 @@
+# pyright: strict
 """What taking a person off the team moves, worked out before it happens, kept when it happens, and put back on Restore.
 
-`preview` is the one read behind Settings > People > Remove, `tico human remove --preview` and
+`preview` is the one read behind Settings > People > Remove, `tico human leaving` and
 `GET /api/v2/humans/{pid}/leaving`. `access.leave` applies what it lists and stores `record` on a `person.left`
 event; `restore` reads that event back: the reports move back to the person (all but those moved by hand since), and
 it names the plans that went, which only the person can reconnect."""
 
-from . import hubdb as H
-from . import people as P
+import json
+from typing import Any, cast
+
+from . import hubdb as H_
+from . import people as P_
+
+Row = dict[str, Any]
+# Untyped helpers, as Any so this strict module checks its own code (as backend/flow_ping.py does).
+H: Any = H_
+P: Any = P_
 
 LEFT = "person.left"
 
 
-def plans(c, owner):
+def plans(c: Any, owner: str) -> list[Row]:
     """The model plans `owner` (an actor) connected that leaving removes, each with the bots that lose their model:
     the plans they own, then their pooled seat. One read for the preview and for the leave itself."""
     if not H._has_table(c, "model_subscriptions"):
         return []
     from .model_subscriptions import KINDS
 
-    out = []
+    out: list[Row] = []
     for s in c.execute(
         "SELECT id,name,kind FROM model_subscriptions WHERE owner_id=? ORDER BY created_at,id", (owner,)
     ).fetchall():
-        bots = [
+        bots: list[str] = [
             r[0]
             for r in c.execute("SELECT bot FROM agent_subscriptions WHERE subscription_id=? ORDER BY bot", (s["id"],))
         ]
         kind = (KINDS.get(s["kind"]) or {}).get("name") or s["kind"]
         out.append({"id": s["id"], "name": s["name"] or kind, "kind": kind, "bots": bots})
-    pooled = [
+    pooled: list[str] = [
         r[0]
         for r in c.execute(
             "SELECT DISTINCT bot FROM agent_subscriptions WHERE kind='pool' AND person=? ORDER BY bot", (owner,)
@@ -39,12 +48,12 @@ def plans(c, owner):
     return out
 
 
-def reports(people, pid):
+def reports(people: list[Row], pid: str) -> list[str]:
     """The people who report to `pid` and move up when they leave."""
     return [p["id"] for p in people if p.get("reports_to") == pid and p["id"] != pid]
 
 
-def record(c, people, row):
+def record(c: Any, people: list[Row], row: Row) -> Row:
     """What `access.leave` stores on the `person.left` event, read before it changes anything."""
     owner = H.human_actor(row["id"])
     found = plans(c, owner)
@@ -56,29 +65,29 @@ def record(c, people, row):
     }
 
 
-def _bot(c, bot):
-    row = H.bot(c, bot) or {}
+def _bot(c: Any, bot: str) -> Row:
+    row: Row = H.bot(c, bot) or {}
     return {"id": bot, "slug": row.get("slug") or bot, "name": row.get("display_name") or row.get("slug") or bot}
 
 
-def _name(roster, pid):
-    person = P.person(pid, roster) or {}
+def _name(roster: Row, pid: str) -> Row:
+    person: Row = P.person(pid, roster) or {}
     return {"id": pid, "name": person.get("name") or person.get("email") or pid}
 
 
-def preview(c, roster, pid):
+def preview(c: Any, roster: Row, pid: str) -> Row:
     """What removing `pid` would do, changing nothing. Every list is empty when it has nothing to move."""
-    person = P.person(pid, roster)
+    person: Row | None = P.person(pid, roster)
     owner = H.human_actor(pid)
-    people = roster.get("people") or []
+    people: list[Row] = roster.get("people") or []
     found = plans(c, owner)
-    to = person.get("reports_to") or "" if person else ""
+    to: str = (person.get("reports_to") or "") if person else ""
     who = (owner, pid)
-    tasks = c.execute(
+    tasks: int = c.execute(
         "SELECT count(*) FROM tasks WHERE owner_id IN (?,?) AND status='open'",
         who,
     ).fetchone()[0]
-    asks = (
+    asks: int = (
         c.execute(
             "SELECT count(*) FROM question_marks WHERE cleared_at IS NULL AND person_id IN (?,?)",
             who,
@@ -86,15 +95,19 @@ def preview(c, roster, pid):
         if H._has_table(c, "question_marks")
         else 0
     )
-    mailbot = None
+    mailbot: Row | None = None
     if person and person.get("inbox_bot"):
-        from .mailbox_access import message_bot_mailbox
+        from . import mailbox_access as mailbox_access_
 
-        mailbot = {**_bot(c, person["inbox_bot"]), "address": message_bot_mailbox(c, person, person["inbox_bot"])}
+        mailbox: Any = mailbox_access_
+
+        mailbot = {
+            **_bot(c, person["inbox_bot"]),
+            "address": mailbox.message_bot_mailbox(c, person, person["inbox_bot"]),
+        }
+    org: dict[str, Row] = roster.get("org_groups") or {}
     groups = [
-        {"id": gid, "name": g.get("name") or gid}
-        for gid, g in sorted((roster.get("org_groups") or {}).items())
-        if g.get("lead") == "person:" + pid
+        {"id": gid, "name": g.get("name") or gid} for gid, g in sorted(org.items()) if g.get("lead") == "person:" + pid
     ]
     return {
         "person": _name(roster, pid),
@@ -109,34 +122,35 @@ def preview(c, roster, pid):
     }
 
 
-def last_record(c, pid):
+def last_record(c: Any, pid: str) -> Row | None:
     row = c.execute(
         "SELECT detail FROM events WHERE action=? AND target=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
         (LEFT, pid),
     ).fetchone()
     if not row:
         return None
-    import json
-
     try:
-        return json.loads(row[0] or "{}")
+        found: Any = json.loads(row[0] or "{}")
     except ValueError:
         return None
+    return cast(Row, found) if isinstance(found, dict) else None
 
 
-def restore(c, people, pid):
+def restore(c: Any, people: list[Row], pid: str) -> Row:
     """Move `pid`'s reports back to them, in `people` (the caller's list, mutated), and say what could not come back.
     A report whose manager is no longer the one they were moved to was moved by hand since: it stays."""
-    kept = last_record(c, pid) or {}
+    kept: Row = last_record(c, pid) or {}
     index = {p["id"]: i for i, p in enumerate(people)}
-    moved = []
-    for rid in kept.get("reports") or []:
+    moved: list[Row] = []
+    ids: list[str] = kept.get("reports") or []
+    for rid in ids:
         i = index.get(rid)
         if i is None or people[i].get("hidden") or (people[i].get("reports_to") or "") != (kept.get("to") or ""):
             continue
         people[i] = {**people[i], "reports_to": pid}
         moved.append({"id": rid, "name": people[i].get("name") or people[i].get("email") or rid})
-    bots = [_bot(c, b) for b in kept.get("bots") or []]
-    me = people[index[pid]] if pid in index else {}
+    lost: list[str] = kept.get("bots") or []
+    bots = [_bot(c, b) for b in lost]
+    me: Row = people[index[pid]] if pid in index else {}
     name = me.get("name") or me.get("email") or pid
     return {"name": name, "reports": moved, "plans": list(kept.get("plans") or []), "bots": bots}
