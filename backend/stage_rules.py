@@ -108,8 +108,9 @@ EARLIER: dict[str, dict[str, tuple[str, ...]]] = {
     },
 }
 # Where Owner on the team is made: on the first of these presets the company has live (the pipeline whose `preset` it
-# is, whatever its id), the stages there that hold the build. Product (pipeline_settings.PRODUCT) is every company's from
-# 0.6; Engineering, of the pair Product replaced (pipeline_settings.LEGACY), is a company's set up before then.
+# is, whatever its id), the stages there that hold the build. Engineering (pipeline_settings.PAIR) is every new
+# company's; Features (pipeline_settings.FEATURES, LEGACY) is a company's set up from 0.6 until the pair came back, and
+# comes first so a company that adds the pair beside it keeps the rule where its builds are until it retires Features.
 OWNER_ON_TEAM_ON: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("features", ("product-build", "product-fixes-1", "product-fixes-2")),
     ("engineering", ("engineering-on-deck", "engineering-build", "engineering-fixes-1", "engineering-fixes-2")),

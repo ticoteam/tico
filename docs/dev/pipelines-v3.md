@@ -797,17 +797,17 @@ are chat, not asks. The setup checklist is onboarding and is not touched.
 
 ## Default pipelines
 
-Eleven presets built from the same parts, in four factories. Customers and manager bots can change any of it.
+Twelve presets built from the same parts, in four factories. Customers and manager bots can change any of it.
 
 | Factory | Pipelines |
 |---|---|
-| Product | Product |
+| Product | Product, Engineering |
 | Growth | Growth Experiments, Growth Monitoring; Lead → Opportunity |
 | Success | Customer; Success Experiments, Success Monitoring |
 | Corporate | Legal; Finance (both private) |
 | none | General |
 
-A new org gets General at its first start, and the rest once its setup finishes (Product only if it builds software). A company set up before a preset existed gets it at its next start. A preset the company retired or
+A new org gets General at its first start, and the rest once its setup finishes (Product and Engineering only if it builds software). A company set up before a preset existed gets it at its next start. A preset the company retired or
 renamed is never made again. Legal and Finance are made only once their owner bot exists (the Legal Owner, the
 Finance Owner), the moment it is made; never with the General Manager standing in. Growth and Success
 Monitoring are made only where their factory's Experiments pipeline is.
@@ -815,24 +815,41 @@ Monitoring are made only where their factory's Experiments pipeline is.
 A preset the company has keeps its stages and requirements on an upgrade, but its wording nobody edited follows the
 preset: at each start, a goal, stage purpose, requirement line or check line that still reads a text the preset shipped
 with before moves to the current text. Anything else was edited and stays. A purpose follows only where the stage keeps
-the preset's requirements and every stage of the preset is there. The move is logged as Tico's save of the pipeline
+the preset's requirements, each as people only as the preset's (a purpose says who signs off), and every stage of the
+preset is there. The move is logged as Tico's save of the pipeline
 (the pipeline's Log shows it), and raises its settings version unless nobody has changed it yet. **When you change a preset line, add the text it had
 to `EARLIER`** (`backend/pipeline_settings.py`, or `backend/pipeline_presets_more.py` for the presets there), then run
 `python -m backend.tests.test_preset_texts --write`; `backend/tests/test_preset_texts.py` fails until both are done.
 
-Product replaced the Product and Engineering pair on Nov 14 (0.6). A company set up before keeps the pair, so its open
-tasks finish where they are, and the pair's upkeep goes on (`pipeline_settings.LEGACY`); a start never makes Product
-beside it, since the old Product holds the id `product`. A person (the company's owner or an Admin) adds Product by
-hand, under another id, name and prefix while the old ones are in use:
+Product decides, Engineering builds: from Nov 26 a new company that builds software gets the pair (`pipeline_settings.PAIR`),
+in the shape Tico Team has run since Nov 18. Between 0.6 (Nov 14) and then, a new company got Features instead: one
+pipeline under the id `product` in which the feature owner wrote the spec and built it, with three person sign-offs.
+In that shape Product's In development sat after Release, so every shipped ticket filed a duplicate Engineering task
+(21 on Nov 18 on Tico Team), and the person OKs on QA and release stalled tickets for no gain.
 
-    POST /api/v2/pipelines/features/from-preset   {"preset": "features", "name": "Features", "prefix": "F"}
+No company's pipelines change shape on an upgrade, so there is nothing to roll back:
 
-It is made as a new company's would be (its roles' bots, its people OK's person, the Product factory); a stage id the
-old Product holds gets a number (`product-spec-2`, `product-validate-2`). Then retire each of the pair once it holds no
-open task (`POST /api/v2/pipelines/{id}/retire`, refused while one is open), and rename Features to Product. No code
-moves a task between them.
+- **A company with Features** (preset `features`, `pipeline_settings.LEGACY`) keeps it. Its open tasks finish where
+  they are, and its upkeep (empty roles filled, unedited wording following) goes on. A start never makes Engineering or
+  the pair's Product beside it, retired or not: Features holds the id `product`.
+- **A company with the pair from before 0.6** keeps its stages and requirements: Approval is not added and Merge is not
+  removed. Only wording nobody edited follows the preset, and a purpose only where the stage's requirements match
+  (QA's still asks a person, so its purpose stays; Release after a Merge stage has only In a release, so its stays).
+  Tico Team is one of these and already has the new shape: nothing in its pipelines changes.
 
-The Product and Engineering presets both use Build → Review → Fixes → QA. Review needs one page covering the newest
+A person (the company's owner or an Admin) moves a Features company by hand: add Engineering, then Product under
+another id, name and prefix while Features holds `product`, P and its name:
+
+    POST /api/v2/pipelines/engineering/from-preset   {"preset": "engineering"}
+    POST /api/v2/pipelines/decide/from-preset        {"preset": "product", "name": "Decide", "prefix": "D"}
+
+Each is made as a new company's would be (its roles' bots, its people OK's person, the Product factory); a stage id
+Features holds gets a number (`product-spec-2`, `product-validate-2`), and Product's In development files into the
+company's Engineering, whatever its id. Adding Features is refused. Then retire Features once it holds no open task
+(`POST /api/v2/pipelines/{id}/retire`, refused while one is open), and rename the new Product. No code moves a task
+between them; an automatic move would re-home open tasks and visits across two pipelines and is a spec of its own.
+
+Engineering and Features both use Build → Review → Fixes → QA. Review needs one page covering the newest
 commit of every linked PR, with both reviews and their models, and a finished second-review subtask on a different
 model. The reviewer files it with
 `tico task child <id> --check-model <runtime>:<model> --role review --title "Review: second opinion"`
@@ -886,10 +903,49 @@ holds are the task's assignee's. The person on a people OK that names one is the
 manager bot on the org chart, else the org owner. Product is made for a company that answers yes to "Do you build
 software?" (a blank answer is yes); an untouched one is retired when it answers no.
 
-### Product
+### Product and Engineering (the default)
 
-From a spec to something checked in production, in one task. Manager: the Product Manager bot.
-Preset `features`, id `product` (`pipeline_settings.PRODUCT`).
+Product decides, with one person sign-off: the Spec's Approval. Engineering builds and ships with none: the decision
+model checks QA's report, and entering Release queues the merge. Stage ids are those of Tico Team's own pipelines.
+
+#### Product
+
+From an idea to something checked in production. Manager: the Product Manager bot. Preset `product`, id `product`.
+
+Stages: Ideas → Spec → Approval → In development → Validate → Done · Closed
+
+- **Ideas** (`product-ideas`). Owner: Product Owner. Tasks leave by hand: the owner or a person moves one to Spec. To
+  park an idea, snooze it with no end date; a bot's own idea starts snoozed.
+- **Spec** (`product-spec`). Owner: Product Owner. To leave: a Spec page with the goal, the scope (in and out) and
+  acceptance criteria someone can check, which the decision model checks. No person. Limit 20. Expected time: 2 days.
+- **Approval** (`product-spec-ok`). Owner: Product Owner. To leave: **a person approves the Spec** (people only: no bot
+  OKs it or pushes past it), the person named the first above the Product Manager. The only person sign-off: after it,
+  Engineering builds, QAs and releases without asking again. Expected time: 2 days.
+- **In development** (`product-in-development`). On enter: file one Engineering task. To leave: Linked work done, so the
+  task leaves when every Engineering task it filed is Done. Owner: Product Owner. Expected time: 5 days.
+- **Validate** (`product-validate`). As on the pair below. Not validated sends the task back to In development, which
+  files new Engineering work.
+
+#### Engineering
+
+From a task to a published release. Manager: the Engineering Manager bot. Preset `engineering`.
+
+Stages: On deck → Build → Review → Fixes → QA → Release → Done · Closed
+
+- **On deck, Build, Review, Fixes:** as on the pair's Engineering below.
+- **QA** (`engineering-qa`). Owner: Builder. To leave: Checks pass, and the QA report, which the decision model checks
+  against the linked PRs' newest commits. No person signs it.
+- **Release** (`engineering-release`). Owner: Release Owner. On enter: queue the PRs. To leave: PR merged and In a
+  release; neither can be pushed past. Merge is folded in here: what the pair's Merge says of a PR GitHub takes out of
+  the queue holds here, sending the task back to QA. Expected time: 1 day.
+
+With no Builder or Reviewer bots yet, Engineering's stages fall to its manager, then the General Manager, until the
+role's bot appears.
+
+### Features (0.6 until Nov 26)
+
+Kept for the companies set up while it was the default; never made again. From a spec to something checked in
+production, in one task. Manager: the Product Manager bot. Preset `features`, id `product` (`pipeline_settings.FEATURES`).
 
 Stages: Spec → Related input → OK spec → Build → Review → Fixes → QA → OK release →
 Merge → Validate → Done · Closed
@@ -939,7 +995,9 @@ release-owner).
 
 ### Product and Engineering (before 0.6)
 
-The pair a company set up before 0.6 keeps until its tasks finish. Nothing new is made with it.
+The pair as a company set up before 0.6 has it, which it keeps; the default above grew out of it. Where they differ:
+its Spec is the person's (no Approval stage), its Ideas move on by themselves, its QA report is a person's to OK and
+Merge is a stage of its own before Release.
 
 #### Product (the pair's)
 
@@ -947,7 +1005,7 @@ From an idea to something checked in production. Manager: the Product Manager bo
 
 Stages: Ideas → Spec → In development → Validate → Done · Closed
 
-- **Ideas.** Owner: Product Owner. Tasks leave by hand. Nobody is told when Spec has room. To park an idea, snooze it with
+- **Ideas.** Owner: Product Owner. Nobody is told when Spec has room. To park an idea, snooze it with
   no end date. A person's request moves on (the stage's switch is on): it goes into Spec as soon as Spec has room,
   oldest first. Work a bot hands over (Bug Triage files a bug, or moves one back) is the Product Owner's turn, due in
   24 hours; past that it is Late and the Product Manager is woken once.

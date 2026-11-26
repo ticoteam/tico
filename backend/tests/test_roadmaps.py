@@ -236,7 +236,9 @@ def _product(api):
     from backend import pipeline_settings as PS
 
     with api.app.state.store.transaction() as c:
-        return PS.add_preset(c, PS.SYSTEM, PS.PRODUCT)['id']
+        if not PS._made_from(c, 'engineering'):
+            PS.add_preset(c, PS.SYSTEM, 'engineering')
+        return PS.add_preset(c, PS.SYSTEM, 'product')['id']
 
 
 def _ranked(api, query='', token='ana-test'):

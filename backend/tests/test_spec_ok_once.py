@@ -18,7 +18,7 @@ from backend.blobs import Blobs
 from backend.store import H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.page_requirement import _page, _say
-from backend.tests.helpers.product_engineering_presets import _answers, _team
+from backend.tests.helpers.product_engineering_presets import _answers, _team, features
 
 ANA = X.ANA
 OWNER = "bot:pm"  # the Product Owner of _team, as the feature owner the tasks are given to
@@ -61,7 +61,8 @@ def _beat(c):
 
 
 # ----------------------------------------------------------------------------- the preset
-def test_a_new_companys_spec_names_nobody_and_ok_spec_is_the_one_person_ok(c):
+def test_features_spec_names_nobody_and_ok_spec_is_the_one_person_ok(c):
+    features(c)
     PS.ensure_presets(c)
     spec = _spec_page(c)
     assert (spec["person_id"], R.people_only(spec)) == (None, False), "Jev checks Spec; no person is named"
@@ -71,10 +72,14 @@ def test_a_new_companys_spec_names_nobody_and_ok_spec_is_the_one_person_ok(c):
     assert [R.people_only(r) or bool(r["person_id"]) for r in pages] == [False, True], "one person OK of the spec"
 
 
-def test_a_spec_jev_passes_leaves_spec_without_a_person(c, store):
+@pytest.mark.parametrize(("preset", "after"), [("product", PS.SPEC_OK_STAGE), (PS.FEATURES, "product-related")])
+def test_a_spec_jev_passes_leaves_spec_without_a_person(c, store, preset, after):
+    if preset == PS.FEATURES:
+        features(c)
     PS.ensure_presets(c)
+    assert PS.read(c, "product")["preset"] == preset
     task = _in_spec_with_a_met_page(c, store)
     (standing,) = R.standings(c, E.task(c, task["id"]))
     assert (standing.state, standing.line) == (R.MET, "Decision model passed it")
     _beat(c)
-    assert E.task(c, task["id"])["stage_id"] == "product-related"
+    assert E.task(c, task["id"])["stage_id"] == after

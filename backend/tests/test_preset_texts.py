@@ -41,7 +41,7 @@ def _now():
     """Every preset line by where it sits. Product's lines are under `features:`: it has the ids of the pair's Product
     it replaced (`product/goal`, `product-spec/purpose`), whose own lines keep their paths."""
     return {
-        f"{key}:{path}" if key == PS.PRODUCT else path: text
+        f"{key}:{path}" if key == PS.FEATURES else path: text
         for key in PS.PRESETS
         for path, text in PS.preset_texts(key).items()
     }
@@ -245,13 +245,13 @@ def test_an_unedited_combined_review_rubric_follows_to_the_one_a_page_with_no_bl
     assert "no blocking findings" in PS.REVIEW_RUBRIC
     for before in (PS._REVIEW_RUBRIC_BEFORE_NO_BLOCKERS, PS._REVIEW_RUBRIC_BEFORE_DESCRIPTION):
         assert before != PS.REVIEW_RUBRIC
-        _rubric(c, "product-review-1", before)
+        _rubric(c, "engineering-review-1", before)
         PS.ensure_presets(c)
-        assert _page(PS.read(c, "product"), "product-review-1")["settings"]["rubric"] == PS.REVIEW_RUBRIC
+        assert _page(PS.read(c, "engineering"), "engineering-review-1")["settings"]["rubric"] == PS.REVIEW_RUBRIC
     own = "Our own check: " + PS._REVIEW_RUBRIC_BEFORE_NO_BLOCKERS
-    _rubric(c, "product-review-1", own)
+    _rubric(c, "engineering-review-1", own)
     PS.ensure_presets(c)
-    assert _page(PS.read(c, "product"), "product-review-1")["settings"]["rubric"] == own
+    assert _page(PS.read(c, "engineering"), "engineering-review-1")["settings"]["rubric"] == own
 
 
 # ----------------------------------------------------------------------------- QA, added to a company made before it
@@ -338,6 +338,16 @@ def test_a_task_past_fixes_2_when_qa_is_added_keeps_the_persons_ok_for_its_relea
     assert [GR.unsigned(c, E.task(c, t)) for t in tasks] == [None, "Fixes 2"]
     PS.ensure_presets(c)
     assert [GR.unsigned(c, E.task(c, t)) for t in tasks] == [None, "QA"]
+
+
+def test_every_changed_preset_line_keeps_its_old_text_and_the_record_is_current():
+    """A preset line whose shipped text changed has that text in EARLIER, or a company still on it would keep it; and the
+    record holds every line the presets ship now (`--write` after a change)."""
+    shipped, now = json.loads(SHIPPED.read_text()), _now()
+    assert _lost(shipped, now) == []
+    assert {path: _hash(text) for path, text in now.items()} == shipped, (
+        "run python -m backend.tests.test_preset_texts --write"
+    )
 
 
 def _write():

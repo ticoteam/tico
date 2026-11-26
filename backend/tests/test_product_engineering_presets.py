@@ -111,7 +111,7 @@ def test_the_pair_has_its_roles_and_a_start_keeps_it_with_no_product_made_beside
     _team(c)
     _answers(c, software="")  # a blank answer is yes (D7)
     assert "product" not in _pair(c) and "engineering" not in PS.ensure_presets(c)
-    assert PS._made_from(c, PS.PRODUCT) is None, "the pair's Product holds the id `product`: no Product beside it"
+    assert PS._made_from(c, PS.FEATURES) is None, "the pair's Product holds the id `product`: no Product beside it"
     product, engineering = PS.read(c, "product"), PS.read(c, "engineering")
     assert (product["name"], product["prefix"], product["manager_id"], product["factory_id"]) == (
         "Product",
