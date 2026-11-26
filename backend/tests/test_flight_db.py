@@ -7,14 +7,16 @@ import json
 import os
 import sqlite3
 import stat
+import threading
 import time
 from contextlib import closing
 from datetime import datetime, timezone
 
 import pytest
-from backend import backup, flight, invariants, maintenance_health
+from backend import backup, flight, invariants, maintenance_health, performance
 from backend.config import Settings
-from backend.store import Store
+from backend.maintenance_steps import clean_up
+from backend.store import H, Store
 from backend.tests.helpers.api import headers  # noqa: F401  (the api fixture)
 
 NOW = 1_700_000_040
@@ -41,8 +43,44 @@ def flight_rows(db_path):
 def test_the_flight_database_sits_beside_the_servers_and_memory_has_none(tmp_path):
     assert flight.path(tmp_path / "hub.sqlite") == tmp_path / "hub.flight.db"
     assert flight.path(tmp_path / "hub.db") == tmp_path / "hub.flight.db"
-    assert flight.path(tmp_path / "hub.flight.db") == tmp_path / "hub.flight.db"
     assert flight.path(":memory:") is None and flight.path("") is None
+
+
+def test_a_server_database_named_like_a_flight_file_gets_a_flight_file_of_its_own(tmp_path):
+    """A company whose database is company.flight.db: the recorder never writes to, resets or replaces it."""
+    hub = tmp_path / "company.flight.db"
+    assert flight.path(hub) == tmp_path / "company.flight.flight.db"
+    s = Store(Settings(db_path=hub, registry_dir=tmp_path), flight.Recorder())
+    s.initialize(seed_market=False)
+    flight._READY.clear()
+    with closing(sqlite3.connect(hub)) as c:
+        before = (c.execute("PRAGMA user_version").fetchone()[0], c.execute("SELECT count(*) FROM tasks").fetchone()[0])
+    flight.record_event(s, "note", {})
+    with closing(sqlite3.connect(hub)) as c:
+        assert (
+            c.execute("PRAGMA user_version").fetchone()[0],
+            c.execute("SELECT count(*) FROM tasks").fetchone()[0],
+        ) == before
+        assert c.execute("SELECT count(*) FROM flight_events").fetchone()[0] == 0
+    with s.read() as c:
+        assert [e for e in flight.view(c, minutes=5)["events"]["recent"] if e["kind"] == "note"]
+
+
+def test_a_symlinked_server_database_has_one_flight_file_for_writers_and_readers(tmp_path):
+    real = tmp_path / "data"
+    real.mkdir()
+    s = Store(Settings(db_path=real / "hub.db", registry_dir=tmp_path), flight.Recorder())
+    s.initialize(seed_market=False)
+    link = tmp_path / "hub.db"
+    link.symlink_to(real / "hub.db")
+    linked = Store(Settings(db_path=link, registry_dir=tmp_path), flight.Recorder())
+    flight._READY.clear()
+    assert flight.path(link) == real / "hub.flight.db"
+    flight.record_event(linked, "note", {"via": "link"})  # the writer holds the link's path
+    assert not (tmp_path / "hub.flight.db").exists() and (real / "hub.flight.db").exists()
+    with linked.read() as c:  # SQLite names the real file in PRAGMA database_list: the reader finds the same one
+        assert flight.state(c) == "ok"
+        assert [e["via"] for e in flight.view(c, minutes=5)["events"]["recent"] if e["kind"] == "note"] == ["link"]
 
 
 def test_every_recorder_write_goes_to_its_own_file_and_none_to_the_servers_database(store, tmp_path):
@@ -86,6 +124,20 @@ def test_the_file_and_its_wal_and_shm_are_owner_only(store):
         assert c.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
 
+def test_a_new_file_is_owner_only_before_anything_is_written_to_it(store, monkeypatch):
+    """Made owner-only when it is made, not chmod-ed afterwards: no moment where others can read it."""
+    seen, schema = [], flight._schema
+    monkeypatch.setattr(
+        flight, "_schema", lambda target: (seen.append(stat.S_IMODE(os.stat(target).st_mode)), schema(target))
+    )
+    old = os.umask(0o022)
+    try:
+        flight.record_event(store, "note", {})
+    finally:
+        os.umask(old)
+    assert seen == [0o600]
+
+
 def test_a_file_made_readable_by_others_is_made_owner_only_again(store):
     flight.record_event(store, "note", {})
     target = flight.path(store.settings.db_path)
@@ -123,6 +175,16 @@ def test_a_file_that_is_not_a_database_is_replaced_by_the_next_write(store, tmp_
     assert stat.S_IMODE(os.stat(target).st_mode) == 0o600
 
 
+def test_a_database_without_the_recorders_tables_reads_as_unreadable_and_empty(store):
+    """SQLite opens it, but the tables are not there (another program's file): every reader answers empty."""
+    with closing(sqlite3.connect(flight.path(store.settings.db_path))) as c:
+        c.execute("CREATE TABLE other(x)")
+    with store.read() as c:
+        assert flight.state(c) == "unreadable" and flight.last_start(c) is None
+        assert flight.start_times(c) == [] and flight.latest_db_sample(c) is None
+        assert flight.view(c, minutes=5)["flight_db"] == "unreadable"
+
+
 def test_a_file_damaged_after_it_was_opened_is_replaced_and_the_minute_kept(store, tmp_path):
     sampler = flight.Flight(store.recorder, store, store.settings, folder=tmp_path / "flight")
     assert sampler.write_db(lambda c: flight._event(c, "first", {}, NOW))
@@ -133,6 +195,151 @@ def test_a_file_damaged_after_it_was_opened_is_replaced_and_the_minute_kept(stor
     sampler.file.close()
     with closing(sqlite3.connect(target)) as c:
         assert [r[0] for r in c.execute("SELECT kind FROM flight_events ORDER BY id")] == ["second", "third"]
+
+
+def test_a_damaged_file_is_replaced_only_after_its_connection_is_closed(store, monkeypatch, tmp_path):
+    opened, at_replace = [], []
+    connect = flight.connect
+
+    def tracked(*args, **kwargs):
+        opened.append(connect(*args, **kwargs))
+        return opened[-1]
+
+    def closed(c):
+        try:
+            c.execute("SELECT 1")
+        except sqlite3.ProgrammingError:
+            return True
+        return False
+
+    replace = flight._replace
+    monkeypatch.setattr(flight, "connect", tracked)
+    monkeypatch.setattr(
+        flight, "_replace", lambda target: (at_replace.append([closed(c) for c in opened]), replace(target))
+    )
+    sampler = flight.Flight(store.recorder, store, store.settings, folder=tmp_path / "flight")
+    assert sampler.write_db(lambda c: flight._event(c, "first", {}, NOW))
+    target = flight.path(store.settings.db_path)
+    target.write_bytes(b"\0" * 100 + b"garbage" * 1000)
+    assert sampler.write_db(lambda c: flight._event(c, "second", {}, NOW), NOW) is False
+    target.write_bytes(b"\0" * 100 + b"garbage" * 1000)
+    flight._READY.add(str(target))
+    with pytest.raises(sqlite3.DatabaseError), flight.tables(store, write=True) as c:
+        c.execute("SELECT count(*) FROM flight_events")
+    sampler.file.close()
+    assert at_replace == [[True, True], [True, True, True]]  # every connection to the file was closed first
+
+
+def test_a_damaged_file_that_cannot_be_removed_fails_the_write_and_never_raises(store, monkeypatch, tmp_path):
+    sampler = flight.Flight(store.recorder, store, store.settings, folder=tmp_path / "flight")
+    assert sampler.write_db(lambda c: flight._event(c, "first", {}, NOW))
+    flight.path(store.settings.db_path).write_bytes(b"\0" * 100 + b"garbage" * 1000)
+
+    def refuse(name):
+        raise PermissionError(name)
+
+    monkeypatch.setattr(flight.os, "remove", refuse)
+    assert sampler.write_db(lambda c: flight._event(c, "second", {}, NOW), NOW) is False  # damaged at the write
+    assert sampler.write_db(lambda c: flight._event(c, "third", {}, NOW), NOW + 60) is False  # damaged at the open
+    sampler.file.close()
+    assert sampler.db_failed == 2 and len(sampler.pending) == 2
+
+
+def test_a_connection_never_makes_a_file_without_tables(store, monkeypatch):
+    """A file replaced between the schema check and the open is an error for that one write, not an empty file
+    without tables that every later write would fail on."""
+    flight.record_event(store, "note", {})
+    target = flight.path(store.settings.db_path)
+    monkeypatch.setattr(flight, "_ensure", lambda target, hub_path=None: None)  # it was ready a moment ago
+    flight._replace(target)
+    with pytest.raises(sqlite3.OperationalError):
+        flight.connect(store.settings.db_path)
+    assert not target.exists()
+
+
+def test_threads_finding_a_damaged_file_together_make_one_new_file(store):
+    flight.record_event(store, "note", {})
+    target = flight.path(store.settings.db_path)
+    target.write_bytes(b"\0" * 100 + b"garbage" * 1000)
+    flight._READY.clear()
+    errors, go = [], threading.Barrier(8)
+
+    def write(i):
+        go.wait()
+        try:
+            flight.record_event(store, "note", {"i": i})
+        except Exception as exc:  # noqa: BLE001  the test counts them
+            errors.append(exc)
+
+    threads = [threading.Thread(target=write, args=(i,)) for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+    assert errors == []
+    with closing(sqlite3.connect(target)) as c:
+        assert c.execute("PRAGMA user_version").fetchone()[0] == flight.SCHEMA_VERSION
+        assert sorted(
+            json.loads(r[0])["i"] for r in c.execute("SELECT detail FROM flight_events WHERE kind='note'")
+        ) == list(range(8))
+    assert stat.S_IMODE(os.stat(target).st_mode) == 0o600
+
+
+def test_a_folder_that_cannot_take_the_file_counts_failed_writes_and_keeps_a_capped_backlog(tmp_path, monkeypatch):
+    folder = tmp_path / "data"
+    folder.mkdir()
+    s = Store(Settings(db_path=folder / "hub.db", registry_dir=tmp_path), flight.Recorder())
+    s.initialize(seed_market=False)
+    flight._READY.clear()
+    monkeypatch.setattr(flight, "PENDING_MAX", 3)
+    sampler = flight.Flight(s.recorder, s, s.settings, folder=tmp_path / "flight")
+    os.chmod(folder, 0o500)
+    try:
+        for minute in range(5):
+            assert sampler.write_db(lambda c: None, NOW + minute * 60) is False
+    finally:
+        os.chmod(folder, 0o700)
+        sampler.file.close()
+    assert sampler.db_failed == 5 and len(sampler.pending) == 3 and sampler.lost == [NOW, NOW + 60]
+    assert not flight.path(s.settings.db_path).exists()
+
+
+def test_last_start_reads_the_flight_file_from_the_servers_connection(store):
+    """Health's release-image check holds the server's connection: it finds the start there, and None (never an
+    error) when the file is missing or unreadable."""
+    with store.read() as c:
+        assert flight.last_start(c) is None  # missing
+    flight.record_event(store, "start", {"version": "0.2.0", "provenance": "modified"}, NOW)
+    with store.read() as c:
+        assert flight.last_start(c) == {"at": NOW, "version": "0.2.0", "provenance": "modified"}
+    flight.path(store.settings.db_path).write_bytes(b"not a database, " * 512)
+    with store.read() as c:
+        assert flight.state(c) == "unreadable" and flight.last_start(c) is None
+
+
+def test_a_row_with_damaged_json_reads_as_empty_detail_not_an_error(store):
+    flight.record_event(store, "note", {})
+    with flight.tables(store, write=True) as c:
+        c.execute("INSERT INTO flight_events(created_at,kind,detail) VALUES(?,'start','{not json')", (NOW,))
+        c.execute("INSERT INTO flight_slow(created_at,route,ms,top,parts) VALUES(?,'GET /x',1500,'[x','{y')", (NOW,))
+        c.execute("INSERT INTO flight_db VALUES(?,1,0,0,'nope')", (NOW,))
+    with store.read() as c:
+        assert flight.last_start(c) == {"at": NOW}
+        out = flight.view(c, minutes=5, now=NOW + 60)
+    assert "flight_db" not in out and out["events"]["start"] == {"at": NOW}
+    assert [(r["top"], r["parts"]) for r in out["slow"]] == [([], {})]
+
+
+def test_cleanup_finishes_its_other_sweeps_when_the_flight_file_fails(store, monkeypatch):
+    swept = []
+
+    def broken(store, now=None):
+        raise sqlite3.DatabaseError("file is not a database")
+
+    monkeypatch.setattr(flight, "sweep", broken)
+    monkeypatch.setattr(performance, "sweep", lambda store, now=None: swept.append(now))
+    out = clean_up.run(None, {"store": store, "now": H.now()})
+    assert out["status"] == "ran" and out["details"] == {"flight": "not swept: DatabaseError"} and len(swept) == 1
 
 
 def test_health_invariants_and_metrics_read_empty_without_a_flight_file(store, tmp_path):

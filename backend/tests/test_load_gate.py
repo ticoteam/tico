@@ -149,3 +149,8 @@ def test_a_lagging_sender_is_not_valid_even_when_its_chained_steps_show_no_laten
     short = R.level_report(300, [log(2.0, 0.1)], {"requests": {"n": 100, "routes": []}, "process": {}}, 100, 160)
     assert short["valid"] is True and short["server"]["seen_share"] == round(100 / 600, 3)
     assert len(short["warnings"]) == 1 and "minute may be missing" in short["warnings"][0]
+
+    # The server's recorder file was missing or unreadable: its sections read empty, so the window proves nothing.
+    blind = R.level_report(300, [log(2.0, 0.1)], dict(flight, flight_db="unreadable"), 100, 160)
+    assert blind["valid"] is False
+    assert "the server's flight recorder file was unreadable" in blind["not_valid_because"]

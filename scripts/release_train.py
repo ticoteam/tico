@@ -1505,9 +1505,12 @@ def speed_check(target, version, base):
     window = "%d minutes on v%s against v%s" % ((data["now"] - data["since"]) // 60, want, base)
     if not judged_routes:
         return ["Speed: %s, %s: no route had %d requests; not checked" % (name, window, SPEED_MIN)], []
+    # The install recorded nothing in the hour it last ran `base`: no route can be compared, only measured.
+    empty = data.get("baseline") == "empty"
+    verdict = "no v%s baseline recorded; comparison not checked" % base if empty else "none twice as slow"
     lines = [
         "Speed: %s, %s, %d routes: %s"
-        % (name, window, judged_routes, "; ".join("SLOWER " + x for x in regressions) or "none twice as slow")
+        % (name, window, judged_routes, "; ".join("SLOWER " + x for x in regressions) or verdict)
     ]
     if over:
         lines.append("Speed: %s routes over %d ms at p95: %s" % (name, SPEED_TARGET_MS, "; ".join(over)))
