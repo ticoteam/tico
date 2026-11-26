@@ -3,6 +3,8 @@ listening gathered, or with `--all` every page to the end, the total first."""
 
 import json
 
+import pytest
+
 from clients import hubtools
 from clients.commands import listening
 from clients.tests.helpers import cli_fixtures
@@ -35,6 +37,20 @@ def test_all_follows_the_cursor_to_the_end_and_answers_the_total_first():
     assert len({i["id"] for i in out["items"]}) == 1200
     assert [q.get("cursor") for _, q in api.asked] == [None, "500", "1000"]
     assert all(q["since"] == "2026-11-01" and q["status"] == "dropped" for _, q in api.asked)
+
+
+def test_all_stops_when_a_page_answers_the_cursor_it_was_sent():
+    class Stuck(Pages):
+        def get(self, path, **query):
+            if len(self.asked) >= 5:  # a loop that never stops fails here, not as a hang
+                raise AssertionError("still asking after 5 pages")
+            page = super().get(path, **query)
+            return {**page, "next_cursor": query.get("cursor") or "500"}
+
+    api = Stuck()
+    with pytest.raises(ValueError, match="did not move"):
+        listening.listen_items(api, {"automation": "a1", "all": True})
+    assert len(api.asked) == 2
 
 
 def test_without_all_it_answers_one_page_and_its_cursor():

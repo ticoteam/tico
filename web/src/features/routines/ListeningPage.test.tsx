@@ -261,4 +261,18 @@ describe('One watch', () => {
     expect(screen.queryByRole('button', { name: 'Show more' })).toBeNull();
     expect(asked.map((u) => new URL(u, 'http://x').searchParams.get('cursor'))).toEqual([null, 'c100']);
   });
+
+  it('a link to a match past the first page reads on until that match opens', async () => {
+    // Each day group stays at 100 or fewer, so all its rows are drawn (a longer group scrolls in a virtual list).
+    const at = (n: number) => new Date(Date.now() - (n < 100 ? 3 : 0) * 86_400_000).toISOString();
+    const match = (n: number) => ({ id: `m${n}`, source: 'r1', site: 'Reddit', title: `Post ${n}`, text: `Text of post ${n}`, status: 'kept', created_at: at(n), posted_at: at(n) });
+    record((u) => {
+      if (!u.includes('/listening/items')) return nothing();
+      const from = u.includes('cursor=c100') ? 100 : 0;
+      return ok({ items: Array.from({ length: from ? 50 : 100 }, (_, i) => match(from + i)), total: 150, counts: { kept: 150 }, next_cursor: from ? null : 'c100' });
+    });
+    queryClient.setQueryData(watchQuery('w1').queryKey, watch());
+    show('/company/listening?watch=w1&match=m120');
+    expect(await screen.findByText('Text of post 120')).toBeTruthy();
+  });
 });

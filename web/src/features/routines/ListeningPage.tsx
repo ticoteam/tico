@@ -1,5 +1,5 @@
 import { useInfiniteQuery, useQuery, useSuspenseQuery, type InfiniteData, type UseInfiniteQueryResult } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
@@ -150,6 +150,12 @@ function WatchPage({ id, tab, match }: { id: string; tab?: 'sources'; match?: st
   const one = useQuery(watchQuery(id));
   const listed = useQuery(watchesQuery).data?.find((w) => w.id === id);
   const matches = useInfiniteQuery({ ...matchesQuery(id), enabled: tab !== 'sources' });
+  // A link to a match past the loaded pages reads on, a page at a time, until that match is loaded or the list ends.
+  const unread = !!match && tab !== 'sources' && !matches.data?.pages.some((p) => p.items.some((m) => m.id === match));
+  const { hasNextPage, isFetching, fetchNextPage } = matches;
+  useEffect(() => {
+    if (unread && hasNextPage && !isFetching) void fetchNextPage();
+  }, [unread, hasNextPage, isFetching, fetchNextPage]);
   const w = one.data ?? listed;
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState(false);

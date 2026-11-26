@@ -80,7 +80,10 @@ def listen_items(api, args):
     page = api.get("listening/items", **query)
     items = list(page["items"])
     while page.get("next_cursor"):
-        page = api.get("listening/items", **{**query, "cursor": page["next_cursor"]})
+        if page["next_cursor"] == query.get("cursor"):
+            raise ValueError("listening items: the next cursor did not move; stopped instead of reading the page again")
+        query["cursor"] = page["next_cursor"]
+        page = api.get("listening/items", **query)
         items += page["items"]
     return {"total": page["total"], "counts": page["counts"], "items": items, "next_cursor": None}
 
