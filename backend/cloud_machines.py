@@ -1319,6 +1319,13 @@ def bind(c, execution, bot, lasting=False):
         moving(c, bot, False)
         return False
     target = machine.get("runner_id")
+    if target and not c.execute("SELECT 1 FROM runners WHERE id=? AND revoked_at IS NULL", (target,)).fetchone():
+        # A machine whose computer was revoked since (a person removed it in Settings > Computers) is no computer to
+        # go to (#3587: binding to it was refused "Computer is not registered"), and it can never check in again. The
+        # bot waits where it is; its own such machine is deleted, and its want makes a new one.
+        if machine["bot"] == bot and machine.get("machine_id"):
+            intend_delete(c, machine, "computer_revoked")
+        target = None
     placed_on = c.execute(PLACED_ON, (bot,)).fetchone()
     if placed_on and placed_on["return_pending"] is not None:
         from .compute_pool import resume_return

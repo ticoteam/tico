@@ -4368,3 +4368,26 @@ def test_cloud_health_leaves_out_a_machine_whose_computer_has_a_stuck_update(clo
         )
         assert "deletion" in CM.health(c, store.settings)["summary"]
         assert CM.health(c, store.settings, skip={computer["runner_id"]}) is None
+
+
+def test_choosing_its_own_machine_again_after_its_computer_was_revoked_is_not_refused(cloud):
+    """#3587: a bot's own machine row kept the runner_id of a computer revoked since (the bot meanwhile on the shared
+    machine). Choosing its own machine again bound it to that computer, and the assignment said Computer is not
+    registered (404). Now the choice is saved, the bot stays where it is, and that machine is replaced by a new one."""
+    shared = shared_for(cloud, "cpo")["runner_id"]
+    old = own_computer(cloud, "ops")["runner_id"]
+    change_as(cloud, "ops", mode="cloud", placement="shared")
+    assert placed(cloud)["ops"] == shared
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), old))
+    assert cloud.row("ops")["runner_id"] == old
+    change_as(cloud, "ops", mode="cloud", placement="own", size="large")
+    current = cloud.row("ops")
+    assert current["placement"] == "own" and current["size"] == "large"
+    assert placed(cloud)["ops"] == shared
+    # That machine can never check in again: it is deleted, and a new one is made at the size chosen for the bot.
+    assert cloud.tick()[-2:] == ["delete", "create"] and cloud.hq.calls[-1][1] == "ops"
+    fresh = post(cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm", "platform": "linux"})
+    cloud.tick()
+    assert cloud.row("ops")["machine_size"] == "large" and fresh["runner_id"] != old
+    assert placed(cloud)["ops"] == fresh["runner_id"]
