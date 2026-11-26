@@ -648,7 +648,7 @@ function ApiToolView({ id, row }: { id: string; row: ToolIndexRow | undefined })
       can={
         (names.length > 0 || unlisted.length > 0) && (
           <>
-            {manage && <Dim>Read bots may call tools that only read. Only mark a tool you know only reads: Read bots will be able to call it.</Dim>}
+            {manage && <Dim>Agents at Read may call tools that only read. Only mark a tool you know only reads: agents at Read will be able to call it.</Dim>}
             {(allNames ? names : names.slice(0, 8)).map((n) => (
               <div key={n} className="row arow" title={n}>
                 <span className="row-title is-code">{n}</span>
