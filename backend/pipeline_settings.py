@@ -1973,8 +1973,11 @@ def _fill(conn: "sqlite3.Connection", key: str, pipeline_id: str) -> None:
                 "AND (owner IS NULL OR owner=? OR owner=?)",
                 (owner, ts, saved.get(sid, sid), pipeline_id, *stand_ins),
             )
+    present = {str(s["id"]) for s in task_engine.stages(conn, pipeline_id)}
     for stage in record["stages"]:
         sid = saved[stage["id"]]
+        if sid not in present:
+            continue  # a stage this pipeline does not have: a stage of that id is another pipeline's
         for req in stage["requirements"]:
             if req.get("person_id"):
                 conn.execute(

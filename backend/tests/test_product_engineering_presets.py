@@ -991,6 +991,18 @@ def test_no_bot_starts_a_task_past_a_sign_off_or_moves_it_into_another_pipeline(
     assert H.task_create(c, ANA, "Hotfix", "", ANA, pipeline="engineering", stage="engineering-merge", lint=False)
 
 
+def test_an_old_pairs_upkeep_never_changes_another_pipelines_stage_of_an_id_it_lacks(c):
+    _team(c)
+    _answers(c, software="yes")
+    # The old Product has no Approval (`product-spec-ok`); a company's own pipeline has a stage of that id.
+    loose = {"kind": "page", "line": "Spec page", "person": None, "settings": {}, "who_oks": "people_with_exceptions"}
+    X.pipeline(c, "product-spec", "Specs", ({"name": "Ok", "owner": ANA, "requirements": [loose]},), manager=ANA)
+    _pair(c)
+    assert PS._made_from(c, "product") == "product" and PS._untouched(c, "product")
+    found = c.execute("SELECT who_oks, person_id FROM requirements WHERE stage_id='product-spec-ok'")
+    assert [tuple(r) for r in found] == [("people_with_exceptions", None)]
+
+
 def test_an_untouched_preset_made_before_its_sign_offs_were_people_only_gets_them(c):
     _team(c)
     _answers(c, software="yes")

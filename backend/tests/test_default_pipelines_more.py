@@ -33,7 +33,7 @@ NEW = (
     "success-monitoring",
 )
 FACTORIES = [
-    ("product", ["product"]),
+    ("product", ["engineering", "product"]),
     ("growth", ["growth-experiments", "growth-monitoring", "lead", "opportunity"]),
     ("success", ["customer", "success-experiments", "success-monitoring"]),
     ("corporate", ["finance", "legal"]),
