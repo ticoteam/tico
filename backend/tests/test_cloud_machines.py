@@ -4368,3 +4368,63 @@ def test_cloud_health_leaves_out_a_machine_whose_computer_has_a_stuck_update(clo
         )
         assert "deletion" in CM.health(c, store.settings)["summary"]
         assert CM.health(c, store.settings, skip={computer["runner_id"]}) is None
+
+
+def test_a_shared_machine_made_again_moves_its_open_checkouts_to_the_new_computer_and_closes_finished_ones(cloud):
+    """Task #3448: on 18 Nov the shared machine came back on a fresh disk and 45 checkouts stayed on the retired
+    computer. Now each open one is queued again on the new computer, restored from its task branch or wip/ copy."""
+    from backend import worktrees as W
+
+    old = shared_enrolled(cloud, "ops", "finance")
+    last = {"checkout_state": "ready", "last_commit": "c" * 40, "pushed": "a" * 40, "ahead": 2, "backed_up": "c" * 40}
+    links = {}
+    with cloud.store.transaction() as c:
+        for name, bot, status in (("ops", "ops", "open"), ("finance", "finance", "open"), ("done", "ops", "done")):
+            tid = H.task_create(c, "human:ana", f"Work of {name}", "Details.", f"bot:{bot}", lint=False)["id"]
+            if status == "done":
+                H.task_done(c, "human:ana", tid, "Finished.", H.task(c, tid)["version"])
+            links[name] = f"link-{name}"
+            c.execute(
+                "INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created_at,repo,branch,computer_id,path,"
+                "updated_at,detail) VALUES(?,?,'worktree',?,'Acme/product','present',?,?,'Acme/product',?,?,?,?,?)",
+                (
+                    links[name],
+                    tid,
+                    "worktree:" + links[name],
+                    f"bot:{bot}",
+                    H.now(),
+                    f"tico/{tid[:8]}-work",
+                    old,
+                    f"tasks/{tid[:8]}/acme__product",
+                    H.now(),
+                    json.dumps({**last, "owner": f"bot:{bot}"}),
+                ),
+            )
+    machine_id = cloud.row(CM.SHARED)["machine_id"]
+    cloud.hq.machines[machine_id].update(state="failed", last_error="not_ready")
+    assert cloud.tick(CM.SYNC) == ["create", "create"]
+    new = post(cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm", "platform": "linux"})
+    assert new["runner_id"] != old
+    with cloud.store.read() as c:
+        rows = {r["id"]: dict(r) for r in c.execute("SELECT * FROM task_links WHERE kind='worktree'")}
+        for name in ("ops", "finance"):
+            row, detail = rows[links[name]], json.loads(rows[links[name]]["detail"])
+            assert (row["computer_id"], row["state"], detail["checkout_state"]) == (
+                new["runner_id"],
+                "pending",
+                "queued",
+            )
+            assert detail["recovery"]["published_head"] == "a" * 40
+            assert detail["retired_worktree"]["ahead"] == 2 and detail["retired_worktree"]["computer_id"] == old
+            assert detail["retired_worktree"]["backed_up"] == "c" * 40 and "backed_up" not in detail
+        # A finished task's checkout is closed, not restored; its last report stays as history.
+        done = rows[links["done"]]
+        detail = json.loads(done["detail"])
+        assert done["state"] == "removed" and done["computer_id"] == old
+        assert (detail["last_commit"], detail["ahead"], detail["removed_by"]) == ("c" * 40, 2, "replacement")
+        assert "2 unpushed commits" in detail["release_reason"]
+        # Nothing is left on the retired computer for Health to list.
+        assert not [r for r in W.statuses(c, rows.values()) if r["state"] == "retired"]
+    assert events(cloud, "cloud_machine.checkouts_moved")[0]["target"] == CM.SHARED
+    moved = json.loads(events(cloud, "cloud_machine.checkouts_moved")[0]["detail"])
+    assert (moved["moved"], moved["closed"]) == (2, 1)

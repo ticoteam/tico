@@ -3737,3 +3737,316 @@ async fn only_a_branch_that_tracks_its_upstream_is_published_already() {
     sh(&tmp.0, &["init", "-q", empty.to_str().unwrap()]);
     assert_eq!(agree(empty).await, (false, "skipped"));
 }
+
+/// A ready checkout of `org/product` on task branch `tico/feature`, already pushed to origin, in a fresh workspace:
+/// (bare remote, workspace, checkout folder, its task link row).
+async fn backed_checkout(tmp: &Tmp, env: &Env) -> (PathBuf, PathBuf, PathBuf, Value) {
+    let (bare, _seed) = remote(&tmp.0, "product");
+    let workspace = tmp.0.join("ws");
+    let base = workspace
+        .join("repos")
+        .join(crate::repositories::base_folder("org/product"));
+    std::fs::create_dir_all(base.parent().unwrap()).unwrap();
+    sh(
+        &tmp.0,
+        &[
+            "clone",
+            "-q",
+            bare.to_str().unwrap(),
+            base.to_str().unwrap(),
+        ],
+    );
+    sh(
+        &base,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://github.com/org/product.git",
+        ],
+    );
+    sh(
+        &base,
+        &[
+            "config",
+            &format!("url.{}.insteadOf", bare.display()),
+            "https://github.com/org/product.git",
+        ],
+    );
+    let tree = workspace.join("work/product");
+    sh(
+        &base,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "tico/feature",
+            tree.to_str().unwrap(),
+        ],
+    );
+    sh(&tree, &["push", "-q", "origin", "tico/feature"]);
+    sh(&tree, &["fetch", "-q", "origin"]);
+    let mut row = json!({
+        "id": "link-0001", "task_id": "task-0001", "path": "work/product", "repo": "org/product",
+        "branch": "tico/feature", "owner": "bot:ops", "state": "pending",
+        "detail_json": json!({"checkout_state": "attached_pending"}).to_string(),
+    });
+    let first = worktrees::inspect(&workspace, &row, env, None).await;
+    let mut detail = serde_json::Map::new();
+    for k in ["expected_head", "checkout_target", "expected_base"] {
+        detail.insert(k.into(), first[k].clone());
+    }
+    detail.insert("checkout_state".into(), json!("ready"));
+    row["detail_json"] = json!(Value::Object(detail).to_string());
+    row["state"] = json!("present");
+    (bare, workspace, tree, row)
+}
+
+fn commit(tree: &Path, file: &str) -> String {
+    std::fs::write(tree.join(file), format!("{file}\n")).unwrap();
+    sh(tree, &["add", "-A"]);
+    sh(tree, &["commit", "-qm", file]);
+    sh(tree, &["rev-parse", "HEAD"])
+}
+
+fn remote_head(bare: &Path, branch: &str) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .args([
+            "--git-dir",
+            bare.to_str().unwrap(),
+            "rev-parse",
+            "--verify",
+            "-q",
+        ])
+        .arg(format!("refs/heads/{branch}"))
+        .output()
+        .unwrap();
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+#[tokio::test]
+async fn an_unpushed_commit_is_copied_to_its_wip_branch_and_copied_again_only_once_it_moves() {
+    use std::time::{Duration, Instant};
+    use worktrees::{backup_due, Backup, BACKUP_EVERY};
+    let tmp = Tmp::new();
+    let env = turn_env(&tmp.0, &[]);
+    let (bare, workspace, tree, row) = backed_checkout(&tmp, &env).await;
+    let wip = worktrees::wip_branch(&row);
+    let now = Instant::now();
+
+    // Nothing unpushed: nothing to copy.
+    let clean = worktrees::inspect(&workspace, &row, &env, None).await;
+    assert_eq!(
+        (clean["state"].as_str(), clean["ahead"].as_i64()),
+        (Some("present"), Some(0)),
+        "{clean}"
+    );
+    assert_eq!(backup_due(&clean, "", None, now), None);
+
+    // The bot commits and does not push: the next pass copies that head to the checkout's own wip/ branch.
+    let head = commit(&tree, "one.txt");
+    let report = worktrees::inspect(&workspace, &row, &env, None).await;
+    assert_eq!(report["ahead"], 1, "{report}");
+    assert_eq!(backup_due(&report, "", None, now), Some(head.clone()));
+    let copied = worktrees::back_up(&workspace, &row, &head, &env).await;
+    assert!(copied.is_ok(), "{:?}", copied.err().map(|e| e.text()));
+    assert_eq!(remote_head(&bare, &wip), Some(head.clone()));
+    // The copy is not the task branch: the commit still counts as unpushed, and the task branch did not move.
+    let after = worktrees::inspect(&workspace, &row, &env, None).await;
+    assert_eq!(after["ahead"], 1, "{after}");
+    assert_ne!(remote_head(&bare, "tico/feature"), Some(head.clone()));
+
+    // No new commit since the copy: no further push however long heartbeats continue.
+    let last = Backup {
+        head: head.clone(),
+        at: Some(now),
+        error: None,
+    };
+    assert_eq!(
+        backup_due(&after, &head, Some(&last), now + 6 * BACKUP_EVERY),
+        None
+    );
+    // The server's record of the copy is enough after a restart.
+    assert_eq!(backup_due(&after, &head, None, now), None);
+
+    // A new commit is copied once ten minutes have passed since the last copy, not before.
+    let newer = commit(&tree, "two.txt");
+    let moved = worktrees::inspect(&workspace, &row, &env, None).await;
+    assert_eq!(
+        backup_due(&moved, &head, Some(&last), now + Duration::from_secs(300)),
+        None
+    );
+    assert_eq!(
+        backup_due(&moved, &head, Some(&last), now + BACKUP_EVERY),
+        Some(newer.clone())
+    );
+    worktrees::back_up(&workspace, &row, &newer, &env)
+        .await
+        .unwrap();
+    assert_eq!(remote_head(&bare, &wip), Some(newer));
+}
+
+#[tokio::test]
+async fn a_copy_that_cannot_be_pushed_says_why_keeps_the_checkout_and_is_retried_after_an_hour() {
+    use std::time::{Duration, Instant};
+    use worktrees::{backup_due, Backup, BACKUP_RETRY};
+    let tmp = Tmp::new();
+    let env = turn_env(&tmp.0, &[]);
+    let (_bare, workspace, tree, row) = backed_checkout(&tmp, &env).await;
+    let head = commit(&tree, "one.txt");
+    // Origin refuses the push (here: it is gone).
+    let base = workspace
+        .join("repos")
+        .join(crate::repositories::base_folder("org/product"));
+    let gone = tmp.0.join("gone.git");
+    sh(
+        &base,
+        &["remote", "set-url", "origin", gone.to_str().unwrap()],
+    );
+    let failed = worktrees::back_up(&workspace, &row, &head, &env)
+        .await
+        .unwrap_err();
+    let shown = worktrees::backup_error(&failed);
+    assert!(
+        shown.starts_with("Unpushed commits not backed up: "),
+        "{shown}"
+    );
+    // The checkout keeps working and its report is unchanged.
+    let report = worktrees::inspect(&workspace, &row, &env, None).await;
+    assert_eq!(
+        (report["state"].as_str(), report["ahead"].as_i64()),
+        (Some("present"), Some(1)),
+        "{report}"
+    );
+    assert_eq!(sh(&tree, &["rev-parse", "HEAD"]), head);
+    // Tried again no more than once an hour, new commits or not.
+    let now = Instant::now();
+    let last = Backup {
+        head: String::new(),
+        at: Some(now),
+        error: Some(shown),
+    };
+    commit(&tree, "two.txt");
+    let report = worktrees::inspect(&workspace, &row, &env, None).await;
+    assert_eq!(
+        backup_due(&report, "", Some(&last), now + Duration::from_secs(1800)),
+        None
+    );
+    assert!(backup_due(&report, "", Some(&last), now + BACKUP_RETRY).is_some());
+}
+
+#[tokio::test]
+async fn removing_a_checkout_whose_head_is_on_its_task_branch_deletes_its_wip_copy() {
+    let tmp = Tmp::new();
+    let env = turn_env(&tmp.0, &[]);
+    let (bare, workspace, tree, row) = backed_checkout(&tmp, &env).await;
+    let wip = worktrees::wip_branch(&row);
+    let head = commit(&tree, "one.txt");
+    worktrees::back_up(&workspace, &row, &head, &env)
+        .await
+        .unwrap();
+    // The bot pushes its branch, then the task finishes and its checkout is removed.
+    sh(&tree, &["push", "-q", "origin", "tico/feature"]);
+    let mut action_row = row.as_object().unwrap().clone();
+    action_row.insert("full_name".into(), json!("org/product"));
+    let removed = worktrees::act(&workspace, &mut action_row, "remove", &env, &[], || async {
+        true
+    })
+    .await;
+    assert!(
+        matches!(removed, Ok("removed")),
+        "{:?}",
+        removed.err().map(|e| e.text())
+    );
+    assert_eq!(remote_head(&bare, &wip), None);
+    assert_eq!(remote_head(&bare, "tico/feature"), Some(head));
+}
+
+#[tokio::test]
+async fn a_wip_copy_holding_work_the_task_branch_lacks_survives_removal() {
+    let tmp = Tmp::new();
+    let env = turn_env(&tmp.0, &[]);
+    let (bare, workspace, tree, row) = backed_checkout(&tmp, &env).await;
+    let wip = worktrees::wip_branch(&row);
+    let head = commit(&tree, "one.txt");
+    worktrees::back_up(&workspace, &row, &head, &env)
+        .await
+        .unwrap();
+    // The bot drops that commit; the checkout is clean and has nothing unpushed, but the copy is the only record.
+    sh(&tree, &["reset", "-q", "--hard", "HEAD~1"]);
+    let mut action_row = row.as_object().unwrap().clone();
+    action_row.insert("full_name".into(), json!("org/product"));
+    let removed = worktrees::act(&workspace, &mut action_row, "remove", &env, &[], || async {
+        true
+    })
+    .await;
+    assert!(
+        matches!(removed, Ok("removed")),
+        "{:?}",
+        removed.err().map(|e| e.text())
+    );
+    assert_eq!(remote_head(&bare, &wip), Some(head));
+}
+
+#[tokio::test]
+async fn a_checkout_rebuilt_on_a_fresh_disk_starts_from_its_wip_copy_not_the_older_task_branch() {
+    let tmp = Tmp::new();
+    let env = turn_env(&tmp.0, &[]);
+    let (bare, workspace, tree, row) = backed_checkout(&tmp, &env).await;
+    let head = commit(&tree, "one.txt");
+    worktrees::back_up(&workspace, &row, &head, &env)
+        .await
+        .unwrap();
+    assert_ne!(remote_head(&bare, "tico/feature"), Some(head.clone()));
+    // The machine is made again: a new workspace with only what reached origin.
+    let fresh = tmp.0.join("fresh");
+    let base = fresh
+        .join("repos")
+        .join(crate::repositories::base_folder("org/product"));
+    std::fs::create_dir_all(base.parent().unwrap()).unwrap();
+    sh(
+        &tmp.0,
+        &[
+            "clone",
+            "-q",
+            bare.to_str().unwrap(),
+            base.to_str().unwrap(),
+        ],
+    );
+    sh(
+        &base,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://github.com/org/product.git",
+        ],
+    );
+    sh(
+        &base,
+        &[
+            "config",
+            &format!("url.{}.insteadOf", bare.display()),
+            "https://github.com/org/product.git",
+        ],
+    );
+    let mut action_row = row.as_object().unwrap().clone();
+    action_row.insert("full_name".into(), json!("org/product"));
+    action_row.insert("state".into(), json!("pending"));
+    let restored = worktrees::act(&fresh, &mut action_row, "restore", &env, &[], || async {
+        false
+    })
+    .await;
+    assert!(
+        matches!(restored, Ok("present")),
+        "{:?}",
+        restored.err().map(|e| e.text())
+    );
+    assert_eq!(
+        sh(&fresh.join("work/product"), &["rev-parse", "HEAD"]),
+        head
+    );
+}

@@ -1780,6 +1780,150 @@ pub fn wip_branch(row: &Value) -> String {
     )
 }
 
+/// How often an open checkout's unpushed head is copied to its wip/ branch, and how long a failed copy waits before
+/// the next try. A cloud machine made again on a new disk keeps only what reached GitHub (task #3448).
+pub const BACKUP_EVERY: Duration = Duration::from_secs(600);
+pub const BACKUP_RETRY: Duration = Duration::from_secs(3600);
+
+/// The last copy of a checkout's head to its wip/ branch: the head copied (empty before the first), when this
+/// computer last tried, and why that try failed.
+#[derive(Clone, Debug, Default)]
+pub struct Backup {
+    pub head: String,
+    pub at: Option<Instant>,
+    pub error: Option<String>,
+}
+
+/// The head to copy now for an inspected checkout `report`, if any: one that is present, holds commits origin
+/// does not have, and moved since the head last copied (`known`: this computer's last copy, else the server's
+/// record of it). A copy waits BACKUP_EVERY after the last one, and BACKUP_RETRY after a failed one.
+pub fn backup_due(
+    report: &Value,
+    known: &str,
+    last: Option<&Backup>,
+    now: Instant,
+) -> Option<String> {
+    let head = text_of(&report["last_commit"]);
+    if report["state"] != "present"
+        || report["ahead"].as_i64().unwrap_or(0) <= 0
+        || !is_sha(&head)
+        || head == known
+    {
+        return None;
+    }
+    if let Some((at, failed)) = last.and_then(|b| b.at.map(|at| (at, b.error.is_some()))) {
+        let wait = if failed { BACKUP_RETRY } else { BACKUP_EVERY };
+        if now.saturating_duration_since(at) < wait {
+            return None;
+        }
+    }
+    Some(head)
+}
+
+/// Copy `head` of checkout `row` to its own wip/ branch on origin, the branch restore and recovery already read
+/// (`saved_history`). Only that branch is written; the checkout, its branch and its upstream are untouched.
+pub async fn back_up(workspace: &Path, row: &Value, head: &str, env: &Env) -> R<()> {
+    let path = safe_path(workspace, &text_of(&row["path"]))?;
+    if !is_sha(head) {
+        return Err(WtErr::msg("Not a commit"));
+    }
+    let wip = checked_branch(&wip_branch(row)).await?;
+    let pushed = git(
+        &path,
+        env,
+        &[
+            "push",
+            "--force",
+            "origin",
+            &format!("{head}:refs/heads/{wip}"),
+        ],
+        true,
+    )
+    .await;
+    // A remote-tracking ref for the copy would count its commits as pushed (`ahead`, `unpushed`).
+    git(
+        &path,
+        env,
+        &["update-ref", "-d", &format!("refs/remotes/origin/{wip}")],
+        false,
+    )
+    .await?;
+    pushed.map(|_| ())
+}
+
+/// The words a checkout shows for a failed copy: Tico's message and git's first line, without credentials.
+pub fn backup_error(e: &WtErr) -> String {
+    let mut reason = e.text();
+    if let WtErr::Msg(_, Some(detail)) = e {
+        if let Some(line) = detail.lines().map(str::trim).find(|l| !l.is_empty()) {
+            reason = format!("{reason}: {line}");
+        }
+    }
+    crate::redact::scrub_log(&format!("Unpushed commits not backed up: {reason}"))
+        .chars()
+        .take(300)
+        .collect()
+}
+
+/// After a clean removal whose head is on the task branch at origin, its wip/ copy holds nothing more: delete it so
+/// GitHub keeps no stale branch per task. A copy origin's task branch does not contain is kept.
+async fn drop_backup(path: &Path, branch: &str, wip: &str, env: &Env) -> R<()> {
+    let listed = |name: String| async move {
+        let out = git(
+            path,
+            env,
+            &[
+                "ls-remote",
+                "--exit-code",
+                "origin",
+                &format!("refs/heads/{name}"),
+            ],
+            false,
+        )
+        .await?;
+        R::Ok(out.ok().then(|| {
+            out.stdout
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .to_string()
+        }))
+    };
+    let Some(copy) = listed(wip.to_string()).await? else {
+        return Ok(());
+    };
+    let Some(task) = listed(branch.to_string()).await? else {
+        return Ok(());
+    };
+    if !is_sha(&copy)
+        || !is_sha(&task)
+        || !git(
+            path,
+            env,
+            &["merge-base", "--is-ancestor", &copy, &task],
+            false,
+        )
+        .await?
+        .ok()
+    {
+        return Ok(());
+    }
+    git(
+        path,
+        env,
+        &[
+            "push",
+            "origin",
+            &format!("--force-with-lease=refs/heads/{wip}:{copy}"),
+            "--delete",
+            &format!("refs/heads/{wip}"),
+        ],
+        true,
+    )
+    .await?;
+    Ok(())
+}
+
 /// Restore and recovery choose the newest saved head containing local and published task history.
 async fn saved_history(
     base: &Path,
@@ -2740,6 +2884,8 @@ where
             .trim()
             .to_string();
         let against = upstreams(&path, env, &branch, &defaults).await?;
+        // Whether this removal saved work to the wip/ branch; when not, an older copy is dropped below.
+        let mut copied = false;
         if crate::util::truthy(row.get("release")) {
             // Released while its task is open: the bot may still use it, so nothing is saved on its behalf.
             if dirty {
@@ -2902,6 +3048,7 @@ where
                 true,
             )
             .await?;
+            copied = true;
             if !defaults.contains(&branch) {
                 let moved = fast_forward(&path, &branch, "HEAD", env).await;
                 git(&path, env, &["switch", &branch], true).await?;
@@ -2916,6 +3063,7 @@ where
                 true,
             )
             .await?;
+            copied = true;
             if !defaults.contains(&branch) {
                 if !git(
                     &path,
@@ -2948,6 +3096,7 @@ where
                     true,
                 )
                 .await?;
+                copied = true;
             } else if current != branch || defaults.contains(&branch) {
                 return Err(WtErr::msg(
                     "Unpushed history on another or default branch; kept worktree",
@@ -2975,6 +3124,10 @@ where
             return Err(WtErr::Deferred(
                 "Task reopened or bot is running; retry cleanup later".into(),
             ));
+        }
+        if !copied && !defaults.contains(&branch) {
+            // Best effort: a copy left on GitHub costs a branch, never work.
+            let _ = drop_backup(&path, &branch, &wip, env).await;
         }
         git(
             &base,
@@ -3114,6 +3267,8 @@ struct Inner {
     /// Explicit requests are consumed once and remain consumed across ordinary cleanup failures.
     cleanup_retry_generations: HashMap<String, String>,
     stats: SizeCache,
+    /// Each checkout's last copy to its wip/ branch (`back_up_all`).
+    backups: HashMap<String, Backup>,
 }
 
 /// The computer's worktree reports and the one background pass that refreshes them (worktrees.Worktrees).
@@ -3385,10 +3540,109 @@ impl Worktrees {
             }
             reports.push(report);
         }
+        self.back_up_all(&rows, &mut reports).await;
         let mut inner = self.inner.lock().unwrap();
         inner.stats = stats;
         inner.errors = errors;
         inner.reports = reports;
+    }
+
+    /// The git environment for link `link`'s repository `name`: its bot's token, or this machine's own git sign-in
+    /// when the server configures none (`machine_git` in the returned listing). With `listing`, also the
+    /// repository's entry in this computer's list. Returns (environment, listing, token).
+    async fn repository_env(
+        &self,
+        link: &str,
+        name: &str,
+        listing: bool,
+    ) -> R<(Env, Map<String, Value>, String)> {
+        let process = crate::env::process_environment();
+        let mut env = crate::safegit::environment(&process);
+        let mut repo = Map::new();
+        let mut token = String::new();
+        if name.is_empty() {
+            return Ok((env, repo, token));
+        }
+        let granted = self
+            .client
+            .post(
+                &format!("runners/me/worktrees/{link}/token"),
+                &json!({}),
+                None,
+            )
+            .await
+            .map_err(WtErr::Api)?;
+        if granted["configured"] == false {
+            env = crate::safegit::machine_environment(&process);
+            repo.insert("machine_git".into(), json!(true));
+        } else if text_of(&granted["token"]).is_empty() {
+            return Err(WtErr::msg("No repository credential for this worktree"));
+        } else {
+            token = text_of(&granted["token"]);
+            env.extend(repositories::token_env(&token));
+            if listing {
+                let listed = self
+                    .client
+                    .get("runners/me/repositories")
+                    .await
+                    .map_err(WtErr::Api)?;
+                if let Some(found) = listed["repositories"].as_array().and_then(|a| {
+                    a.iter()
+                        .find(|r| text_of(&r["full_name"]).to_lowercase() == name.to_lowercase())
+                }) {
+                    repo = found.as_object().cloned().unwrap_or_default();
+                }
+            }
+        }
+        Ok((env, repo, token))
+    }
+
+    /// Copy each inspected checkout's unpushed head to its wip/ branch when `backup_due`, and put the copy's
+    /// outcome on its report: the head copied (`backed_up`), or why the latest copy failed (`backup_error`).
+    async fn back_up_all(&self, rows: &[Value], reports: &mut [Value]) {
+        let mut backups = std::mem::take(&mut self.inner.lock().unwrap().backups);
+        for (row, report) in rows.iter().zip(reports.iter_mut()) {
+            let link = text_of(&row["id"]);
+            let last = backups.get(&link).cloned();
+            let recorded = detail(row)
+                .get("backed_up")
+                .map(text_of)
+                .unwrap_or_default();
+            let known = last
+                .as_ref()
+                .map(|b| b.head.clone())
+                .filter(|h| !h.is_empty())
+                .unwrap_or(recorded);
+            if let Some(head) = backup_due(report, &known, last.as_ref(), Instant::now()) {
+                let outcome = match self
+                    .repository_env(&link, &text_of(&row["repo"]), false)
+                    .await
+                {
+                    Ok((env, _, _)) => back_up(&self.workspace, row, &head, &env).await,
+                    Err(e) => Err(e),
+                };
+                let entry = backups.entry(link.clone()).or_default();
+                entry.at = Some(Instant::now());
+                match outcome {
+                    Ok(()) => {
+                        entry.head = head;
+                        entry.error = None;
+                    }
+                    Err(e) => entry.error = Some(backup_error(&e)),
+                }
+            }
+            if let Some(b) = backups.get(&link) {
+                if is_sha(&b.head) {
+                    report["backed_up"] = json!(b.head);
+                }
+                if let Some(e) = &b.error {
+                    report["backup_error"] = json!(e);
+                }
+            }
+        }
+        let ids: HashSet<String> = rows.iter().map(|r| text_of(&r["id"])).collect();
+        backups.retain(|k, _| ids.contains(k));
+        self.inner.lock().unwrap().backups = backups;
     }
 
     /// One action on one row: (the link's new state, its new detail_json when a restore changed it).
@@ -3408,41 +3662,7 @@ impl Worktrees {
             text_of(&row["task_id"]),
             text_of(&row["repo"]),
         );
-        let process = crate::env::process_environment();
-        let mut env = crate::safegit::environment(&process);
-        let mut repo = Map::new();
-        let mut token = String::new();
-        if !name.is_empty() {
-            let granted = self
-                .client
-                .post(
-                    &format!("runners/me/worktrees/{link}/token"),
-                    &json!({}),
-                    None,
-                )
-                .await
-                .map_err(WtErr::Api)?;
-            if granted["configured"] == false {
-                env = crate::safegit::machine_environment(&process);
-                repo.insert("machine_git".into(), json!(true));
-            } else if text_of(&granted["token"]).is_empty() {
-                return Err(WtErr::msg("No repository credential for this worktree"));
-            } else {
-                token = text_of(&granted["token"]);
-                env.extend(repositories::token_env(&token));
-                let listed = self
-                    .client
-                    .get("runners/me/repositories")
-                    .await
-                    .map_err(WtErr::Api)?;
-                if let Some(found) = listed["repositories"].as_array().and_then(|a| {
-                    a.iter()
-                        .find(|r| text_of(&r["full_name"]).to_lowercase() == name.to_lowercase())
-                }) {
-                    repo = found.as_object().cloned().unwrap_or_default();
-                }
-            }
-        }
+        let (env, repo, token) = self.repository_env(&link, &name, true).await?;
         for source in [row.as_object(), Some(&repo), action.as_object()]
             .into_iter()
             .flatten()
