@@ -4,8 +4,9 @@ when someone else changes it. `pipeline.save` events keep every change as {path:
 (pipeline_settings._changes); this module only words them, one line per change, top-level facts first, then each
 stage in its new order."""
 
+import json
 import sqlite3
-from typing import Any
+from typing import Any, cast
 
 from . import hubdb
 
@@ -32,17 +33,33 @@ STAGE = (
     ("on_enter", "action on entering"),
     ("pick", "who it picks from"),
 )
-ACTOR_KEYS = {"manager_id", "owner_id", "owner"}
+REQUIREMENT = (
+    ("kind", "kind"),
+    ("source", "source"),
+    ("condition", "condition"),
+    ("settings", "settings"),
+    ("can_push_past", "Can be pushed past"),
+    ("who_oks", "who OKs"),
+    ("person_id", "person"),
+    ("person_ids", "people"),
+    ("line", "wording"),
+)
+WHO_OKS = {"none": "nobody", "people_only": "people only", "people_with_exceptions": "people, with exceptions"}
+ACTOR_KEYS = {"manager_id", "owner_id", "owner", "person_id", "person_ids"}
 LONGEST = 60
 
 
 def _word(c: sqlite3.Connection, key: str, value: object) -> str:
     """One value as a person reads it: a name for a teammate, a factory's name, "none" for nothing."""
-    if value is None or value == "":
+    if value is None or value == "" or value == [] or value == {}:
         return "none"
     if isinstance(value, bool):
         return "on" if value else "off"
-    text = str(value)
+    if isinstance(value, list):
+        return ", ".join(_word(c, key, one) for one in cast("list[object]", value))
+    if key == "who_oks":
+        return WHO_OKS.get(str(value), str(value))
+    text = json.dumps(value, sort_keys=True) if isinstance(value, dict) else str(value)
     if key in ACTOR_KEYS:
         if text == "assignee":
             return "the task's assignee"
@@ -66,8 +83,6 @@ def _top(c: sqlite3.Connection, key: str, label: str, old: object, new: object) 
 
 
 def _stage(c: sqlite3.Connection, name: str, key: str, label: str, old: object, new: object) -> str:
-    if isinstance(old, dict | list) or isinstance(new, dict | list):
-        return f"changed {name}'s {label}"
     if isinstance(old, bool) or isinstance(new, bool):
         return f"turned {label} {'on' if new else 'off'} for {name}"
     return f"changed {name}'s {label} from {_word(c, key, old)} to {_word(c, key, new)}"
@@ -96,7 +111,13 @@ def lines(c: sqlite3.Connection, pipeline_id: str, changes: Row) -> list[str]:
     if [m for m in sorted(moved, key=lambda m: stages[m]["fields"]["position"][0])] != sorted(
         moved, key=lambda m: stages[m]["fields"]["position"][1]
     ):
-        out.append("changed the order of the stages")
+        # Each stage that moved, from its place to its new one (1 is where a new task starts).
+        steps = [
+            f"{stages[m]['fields'].get('name', [names.get(m)] * 2)[1] or 'a stage'} from "
+            f"{stages[m]['fields']['position'][0] + 1} to {stages[m]['fields']['position'][1] + 1}"
+            for m in sorted(moved, key=lambda m: stages[m]["fields"]["position"][1])
+        ]
+        out.append(f"changed the order of the stages: {', '.join(steps)}")
     for sid in sorted(stages, key=at):
         fields: Row = stages[sid]["fields"]
         old_name, new_name = fields.get("name", [names.get(sid), names.get(sid)])
@@ -119,7 +140,16 @@ def lines(c: sqlite3.Connection, pipeline_id: str, changes: Row) -> list[str]:
             elif kind[1] is None and kind[0] is not None:
                 out.append(f"removed {what} from {name}")
             else:
-                out.append(f"changed {what} on {name}")
+                out += [
+                    f"changed {what} on {name}: {label} from {_word(c, key, req[key][0])} to "
+                    f"{_word(c, key, req[key][1])}"
+                    for key, label in REQUIREMENT
+                    if key in req and key != "line"
+                ]
+                if "line" in req:
+                    out.append(f"changed the wording on {name} from {_word(c, 'line', req['line'][0])} to {words}")
+                if "position" in req:
+                    out.append(f"moved {what} on {name} from {req['position'][0] + 1} to {req['position'][1] + 1}")
     return out
 
 
@@ -135,3 +165,68 @@ def sentence(c: sqlite3.Connection, by: str, pipeline_id: str, detail: Row) -> t
     more = len(every) - 1
     tail = f" and {more} more change{'s' if more > 1 else ''}" if more else ""
     return f"{who} {every[0]}{tail}", every
+
+
+RULE = (
+    ("name", "name"),
+    ("stages", "stages"),
+    ("event", "when"),
+    ("cond", "only when"),
+    ("jev", "Jev's question"),
+    ("then", "then"),
+    ("then_params", "then's settings"),
+    ("reason", "reason"),
+)
+
+
+def _hours(timer: object) -> str:
+    """A rule's timer as a person reads it: "24 h", else as stored."""
+    found: dict[str, object] = cast("dict[str, object]", timer) if isinstance(timer, dict) else {}
+    hours = found.get("hours")
+    return f"{hours:g} h" if isinstance(hours, int | float) else _word_plain(found or None)
+
+
+def _word_plain(value: object) -> str:
+    if value is None or value == "" or value == {}:
+        return "none"
+    text = json.dumps(value, sort_keys=True) if isinstance(value, dict | list) else str(value)
+    return text if len(text) <= LONGEST else text[: LONGEST - 1].rstrip() + "…"
+
+
+def rule_lines(c: sqlite3.Connection, pipeline_id: str, detail: Row) -> list[str]:
+    """Every change one rule change made (`pipeline.rule`, pipeline_settings.rule_changed), one line each, without who
+    made it ("changed the Late time on Spec from 24 h to 4 h")."""
+    names = {str(r[0]): str(r[1]) for r in c.execute("SELECT id, name FROM stages WHERE pipeline_id=?", (pipeline_id,))}
+
+    def where(ids: object) -> str:
+        listed = (
+            [names.get(str(i), "a removed stage") for i in cast("list[object]", ids)] if isinstance(ids, list) else []
+        )
+        return ", ".join(listed) or "the pipeline"
+
+    changes: Row = dict(detail.get("changes") or {})
+    rule, on = str(detail.get("name") or "a rule"), where(detail.get("stages"))
+    if "added" in changes:
+        return [f"added the rule {rule} on {on}"]
+    if "retired" in changes:
+        return [f"retired the rule {rule} on {on}"]
+    out: list[str] = []
+    if "timer" in changes:
+        old, new = changes["timer"]
+        out.append(f"changed the {rule} time on {on} from {_hours(old)} to {_hours(new)}")
+    for key, label in RULE:
+        if key not in changes:
+            continue
+        old, new = changes[key]
+        if key == "stages":
+            old, new = where(old), where(new)
+        out.append(f"changed the rule {rule} on {on}: {label} from {_word_plain(old)} to {_word_plain(new)}")
+    return out
+
+
+def rule_sentence(c: sqlite3.Connection, by: str, pipeline_id: str, detail: Row) -> tuple[str, list[str]]:
+    """The Log line for one rule change and its full list, as `sentence` words a save."""
+    every = rule_lines(c, pipeline_id, detail)
+    more = len(every) - 1
+    tail = f" and {more} more change{'s' if more > 1 else ''}" if more > 0 else ""
+    return f"{H.actor_name(c, by)} {every[0] if every else 'changed a rule'}{tail}", every

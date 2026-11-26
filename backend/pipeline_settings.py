@@ -1238,6 +1238,7 @@ def check(conn: "sqlite3.Connection", record: Row) -> list[str]:
 
 # ----------------------------------------------------------------------------- rights
 OWNER_ADMINS_ONLY = "Only the company's owner and Admins choose who owns a board."
+PRIVACY_ADMINS_ONLY = "Only the company's owner and Admins make a board private or company-wide."
 
 
 def company_admin(conn: "sqlite3.Connection", by: str) -> bool:
@@ -1510,7 +1511,7 @@ def _loosens_people_only(
         for req in R.on_stage(conn, stage["id"]):
             if not R.people_only(req):
                 continue
-            if me and me in {pipeline_rights.canonical(conn, p) for p in R.approvers(req)}:
+            if me and me in _named_on(conn, req):
                 continue
             found = placed.get(req["id"])
             if not found or found[0]["id"] != stage["id"]:
@@ -1523,6 +1524,10 @@ def _loosens_people_only(
             person: object = now.get("person_id")
             if person != req.get("person_id") and not is_human(person):
                 return str(stage["name"])
+            if me and _named_on(conn, now) != _named_on(conn, req):
+                # A person held here takes no OK off the people it names, even to give it to someone else: the next
+                # save could then remove it under the new name.
+                return str(stage["name"])
             later = {s["id"] for s in old[at + 1 :]}
             upto = new[: next(i for i, s in enumerate(new) if s["id"] == stage["id"]) + 1]
             for ahead in upto:
@@ -1531,6 +1536,11 @@ def _loosens_people_only(
                 if ahead["on_enter"] and ahead["on_enter"] != was_enter.get(ahead["id"] or "", {}):
                     return str(stage["name"])
     return None
+
+
+def _named_on(conn: "sqlite3.Connection", req: Row) -> set[str]:
+    """Everyone a requirement names to answer it, as one id each (`pipeline_rights.canonical`)."""
+    return {pipeline_rights.canonical(conn, p) for p in R.approvers(req)}
 
 
 # How a release is cut and which releases count (In a release's settings): a person's call. A bot that could set
@@ -1662,6 +1672,8 @@ def save(
             _refuse(conn, by, "task_settings", LOOSENS_NAMED.format(sign_off))
     if existing and existing.get("private") and not parsed["private"] and is_bot(by):
         _refuse(conn, by, "task_settings", "Only a person makes a private pipeline company-wide.")
+    if existing and bool(existing.get("private")) != bool(parsed["private"]) and not company_admin(conn, by):
+        _refuse(conn, by, "task_settings", PRIVACY_ADMINS_ONLY)
     if existing and is_bot(by):
         sign_off = _loosens_people_only(conn, str(existing["id"]), parsed)
         if sign_off:
@@ -1722,8 +1734,10 @@ def save(
         pid,
         {"version": after["settings_version"], "made": existing is None, "changes": changes},
     )
-    if existing:
-        _tell_owner_and_manager(conn, by, after, changes)
+    if existing and changes:
+        from . import pipeline_changes
+
+        _tell_owner_and_manager(conn, by, after, pipeline_changes.sentence(conn, by, pid, {"changes": changes})[0])
     if existing and loosened:
         task_engine.fill_open_slots(conn, [s["id"] for s in after["stages"]])
         after = read(conn, pid)
@@ -1731,16 +1745,43 @@ def save(
     return after
 
 
-def _tell_owner_and_manager(conn: "sqlite3.Connection", by: str, after: Row, changes: Row) -> None:
-    """A save by someone else tells the board's owner and its manager, once each, what changed and where its Log is.
-    Whoever saved is told nothing, nor is anyone for Tico's own saves or a save that changed nothing. A bot reads it
-    on its next run (quiet): a board change is news, not work."""
+RULE_FIELDS = ("name", "stages", "event", "timer", "cond", "jev", "then", "then_params", "reason")
+
+
+def rule_changed(conn: "sqlite3.Connection", by: str, before: Row | None, after: Row | None) -> None:
+    """A person's change to a rule in force on a pipeline (stage_rules: add, edit, retire, accept), such as a stage's
+    Late time: the pipeline's Log records it (`pipeline.rule`, {path: [old, new]} as a save does) and its owner and
+    manager are told, as for a save. A company rule, Tico's own write and a change that changed nothing say nothing."""
     from . import pipeline_changes
 
-    if by == SYSTEM or not changes:
+    rule = after or before
+    pid = str((rule or {}).get("pipeline_id") or "")
+    if by == SYSTEM or not rule or not pid:
+        return
+    live = [r if r and r.get("status") == "active" and not r.get("retired_at") else None for r in (before, after)]
+    if live[0] is None and live[1] is None:
+        return
+    changes: Row = {
+        key: [old, new] for key in RULE_FIELDS if (old := (live[0] or {}).get(key)) != (new := (live[1] or {}).get(key))
+    }
+    if live[0] is None or live[1] is None:
+        changes = {"added" if live[0] is None else "retired": [None, True]}
+    if not changes:
+        return
+    detail: Row = {"rule": rule["id"], "name": rule.get("name"), "stages": rule.get("stages") or [], "changes": changes}
+    _h().event(conn, by, "pipeline.rule", pid, detail)
+    board = task_engine.pipeline(conn, pid)
+    if board:
+        _tell_owner_and_manager(conn, by, board, pipeline_changes.rule_sentence(conn, by, pid, detail)[0])
+
+
+def _tell_owner_and_manager(conn: "sqlite3.Connection", by: str, after: Row, text: str) -> None:
+    """A change by someone else tells the board's owner and its manager, once each, its Log line and where the Log is.
+    Whoever changed it is told nothing, nor is anyone for Tico's own changes. A bot reads it on its next run (quiet):
+    a board change is news, not work."""
+    if by == SYSTEM:
         return
     pid, name = str(after["id"]), str(after["name"])
-    text, _every = pipeline_changes.sentence(conn, by, pid, {"changes": changes})
     me = pipeline_rights.canonical(conn, by)
     told: set[str] = set()
     for ref in (after.get("owner_id"), after.get("manager_id")):

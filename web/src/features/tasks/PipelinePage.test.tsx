@@ -153,6 +153,39 @@ describe('Pipeline editor @s138', () => {
     expect(owner.hasAttribute('disabled') || owner.getAttribute('aria-disabled') === 'true').toBe(true);
   });
 
+  it('one who may not choose the owner saves over an Admin\'s new owner with Save mine, not over it', async () => {
+    const theirs = { ...REC, settings_version: 6, owner_id: 'human:ana' };
+    let read = 0;
+    serve((url, method) => {
+      if (url === '/api/v2/pipelines/ops' && method === 'GET') return { status: 200, body: { pipeline: read++ === 0 ? REC : theirs } };
+      if (url === '/api/v2/pipelines/ops' && posts.length === 1) return { status: 409, body: { error: { code: 'task_changed', detail: 'The pipeline changed since you looked.' } } };
+      if (url === '/api/v2/pipelines/ops') return { status: 200, body: { pipeline: { ...theirs, settings_version: 7 } } };
+      return { status: 200, body: {} };
+    });
+    show(<PipelinePage pipeline="ops" fresh={false} />, '/tasks/ops/edit');
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Prefix' }), { target: { value: 'D' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Save mine' }));
+    await waitFor(() => expect(posts).toHaveLength(2));
+    expect(posts[0]!.body).toMatchObject({ owner_id: null });
+    expect(posts[1]!.body).toMatchObject({ settings_version: 6, owner_id: 'human:ana', prefix: 'D' });
+  });
+
+  it('a refused save shows the server\'s reason, such as the OK it would loosen', async () => {
+    const why = "This change loosens the person's OK on Packing. Only the person it names or an Admin can make it.";
+    serve((url, method) => {
+      if (url === '/api/v2/pipelines/ops' && method === 'GET') return { status: 200, body: { pipeline: REC } };
+      if (url === '/api/v2/pipelines/ops') return { status: 403, body: { error: { code: 'not_allowed', detail: why } } };
+      return { status: 200, body: {} };
+    });
+    show(<PipelinePage pipeline="ops" fresh={false} />, '/tasks/ops/edit');
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Prefix' }), { target: { value: 'D' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    // A toast and the held line show the server's first sentence, not the generic words.
+    expect((await screen.findAllByText(/loosens the person's OK on Packing/)).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/can change this board/)).toBeNull();
+  });
+
   it('someone who may not change it reads who may, by name', async () => {
     queryClient.setQueryData(pipelinesQuery.queryKey, [{ ...PIPE, mayChange: false, boardOwner: 'human:ana', manager: 'bot:packer' }]);
     serve(() => ({ status: 200, body: {} }));

@@ -160,7 +160,8 @@ def _save_text(c: Any, by: str, detail: dict[str, Any], pipeline_id: str) -> str
 def log(c: Any, pipeline_id: str, visible_sql: str) -> list[dict[str, Any]]:
     """The manager rail's Log (S10): each push past out of a stage of this pipeline, each snooze a bot made with no end
     date on one of its tasks, and each save of the pipeline (`pipeline.save`, written to events with the pipeline as its
-    target), newest first. Tasks by title; a task the reader may not read is left out."""
+    target), and each change a person made to a rule in force on it (`pipeline.rule`), newest first. Tasks by title; a
+    task the reader may not read is left out."""
     t_visible = f"t.id IN (SELECT id FROM tasks WHERE {visible_sql})"
     lines: list[dict[str, Any]] = []
     for at, by, title, stage, why, tid in c.execute(
@@ -198,6 +199,14 @@ def log(c: Any, pipeline_id: str, visible_sql: str) -> list[dict[str, Any]]:
                 "changes": every,
             }
         )
+    for at, by, detail in c.execute(
+        "SELECT created_at, actor, detail FROM events WHERE action='pipeline.rule' AND target=? "
+        "ORDER BY created_at DESC LIMIT ?",
+        (pipeline_id, LOG_LIMIT),
+    ):
+        # A rule in force on it changed, such as a stage's Late time (pipeline_settings.rule_changed): no version.
+        text, every = pipeline_changes.rule_sentence(c, by, pipeline_id, H._json(detail, {}))
+        lines.append({"at": at, "text": text, "task_id": None, "by": by, "why": "", "version": None, "changes": every})
     lines.sort(key=lambda line: line["at"] or "", reverse=True)
     return lines[:LOG_LIMIT]
 

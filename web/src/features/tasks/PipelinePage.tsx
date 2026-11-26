@@ -112,7 +112,9 @@ export function PipelinePage({ pipeline, fresh }: { pipeline: string; fresh: boo
   const keep = rows.find((r) => r.id && !r.side);
   const keepId = keep?.id;
 
-  const send = async (moveTo?: { pipeline: string; stage: string }, version?: number) => {
+  // Who owns the pipeline is the company's owner's and Admins' to choose; a new pipeline is made by one of them.
+  const mayChoose = !p || rec.data?.may_choose_owner === true;
+  const send = async (moveTo?: { pipeline: string; stage: string }, version?: number, stored?: PipelineSettingsRecord) => {
     if (!shown) return;
     const { facts } = shown;
     const stages = shown.rows.map(({ id, name, side, purpose, owner, task_limit }, i) => ({
@@ -126,7 +128,8 @@ export function PipelinePage({ pipeline, fresh }: { pipeline: string; fresh: boo
     const fields = {
       goal: facts.goal.trim(),
       manager_id: facts.manager || null,
-      owner_id: facts.owner || null,
+      // Only one who may choose the owner sends their pick; anyone else sends the owner of the record they save over.
+      owner_id: mayChoose ? facts.owner || null : ((stored ?? base ?? rec.data)?.owner_id ?? null),
       factory_id: facts.factory || null,
       prefix: facts.prefix.trim() ? facts.prefix.trim().toUpperCase() : null,
     };
@@ -150,7 +153,7 @@ export function PipelinePage({ pipeline, fresh }: { pipeline: string; fresh: boo
         setHeld({ text: "Couldn't read the pipeline again", move: false });
       }
     } else if (out.error === HAS_TASKS && keep) setHeld({ text: `A removed stage holds tasks. Move them to ${keep.name}?`, move: true });
-    else setHeld({ text: out.error === 'not_allowed' ? who : (out.why ?? "Couldn't save the pipeline"), move: false });
+    else setHeld({ text: out.why ?? (out.error === 'not_allowed' ? who : "Couldn't save the pipeline"), move: false });
   };
 
   /** Their record in place of these edits. */
@@ -165,15 +168,13 @@ export function PipelinePage({ pipeline, fresh }: { pipeline: string; fresh: boo
     const { theirs } = clash;
     setBase(theirs);
     setClash(null);
-    void send(undefined, theirs.settings_version);
+    void send(undefined, theirs.settings_version, theirs);
   };
 
   const agents = actors.filter((a) => a.kind === 'agent');
   const people = actors.filter((a) => a.kind === 'person');
   const nameOf = (id: string | null | undefined) => (id ? (actors.find((a) => a.id === id)?.name ?? id) : '');
   const who = mayChangeLine(nameOf(p?.boardOwner), nameOf(p?.manager));
-  // Who owns the pipeline is the company's owner's and Admins' to choose; a new pipeline is made by one of them.
-  const mayChoose = !p || rec.data?.may_choose_owner === true;
   const choice = (list: { id: string; name: string }[], none: string, on: string): SelectOption[] => {
     const out = [{ value: '', label: none }, ...list.map((a) => ({ value: a.id, label: a.name }))];
     // A saved value the list lacks stays chosen under its own id.

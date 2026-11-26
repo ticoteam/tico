@@ -142,3 +142,83 @@ def test_the_owner_and_manager_are_told_when_someone_else_changes_their_board(c)
     PS.save(c, CARA, dict(after, goal="Keep it neat"))
     assert len(_notices(c, CARA)) == 1  # whoever made the change is not told
     assert len(_notices(c, "bot:manager")) == 2
+
+
+def test_a_board_owner_cannot_hand_a_persons_ok_to_someone_else(c):
+    """Handing Ben's OK to Cara and then removing it in a second save would take it off without Ben or an Admin."""
+    saved = _board(c)
+    mine = copy.deepcopy(saved)
+    mine["stages"][1]["requirements"][0]["person_id"] = CARA
+    with _refused("Sign off"):
+        PS.save(c, CARA, mine)
+    assert PS.read(c, saved["id"])["stages"][1]["requirements"][0]["person_id"] == BEN
+    # A document approval's list of approvers is held the same way: none taken off, none added.
+    page = {
+        "kind": "page",
+        "settings": {"document": "Spec", "rubric": "States the goal."},
+        "who_oks": "people_only",
+        "person_ids": [BEN, ANA],
+        "line": "Ben or Ana approve the spec",
+    }
+    saved["stages"][1]["requirements"].append(page)
+    saved = PS.save(c, BEN, saved)
+    for people in ([BEN], [BEN, ANA, CARA], [CARA]):
+        swapped = copy.deepcopy(saved)
+        swapped["stages"][1]["requirements"][1]["person_ids"] = people
+        with _refused("Sign off"):
+            PS.save(c, CARA, swapped)
+    assert PS.read(c, saved["id"])["stages"][1]["requirements"][1]["person_ids"] == [BEN, ANA]
+
+
+def test_only_the_company_owner_and_admins_make_a_board_private_or_company_wide(c):
+    saved = _board(c)  # it holds no task, so its privacy may change, but not by its owner or manager
+    for who, seen in ((CARA, None), ("bot:manager", saved["settings_version"])):
+        with _refused("Only the company's owner and Admins make a board private or company-wide"):
+            PS.save(c, who, dict(copy.deepcopy(saved), private=True), seen_version=seen)
+    assert PS.read(c, saved["id"])["private"] is False
+    made = PS.save(c, BEN, dict(saved, private=True))
+    assert made["private"] is True
+    with _refused("Only the company's owner and Admins make a board private or company-wide"):
+        PS.save(c, CARA, dict(copy.deepcopy(made), private=False))
+    assert PS.save(c, ANA, dict(made, private=False))["private"] is False
+
+
+def test_a_late_time_change_is_in_the_log_and_the_owner_and_manager_are_told(c):
+    from backend import stage_rules as SR
+
+    saved = _board(c)
+    sign = saved["stages"][1]
+    assert SR.add_late(c, sign["id"], sign["name"], saved["id"], 24 * 60)
+    rule = SR.get(c, f"sr_late_{sign['id']}")
+    SR.edit(c, CARA, rule["id"], {"timer": {"kind": "in_stage", "hours": 4}}, rule["revision"])
+    line = _log(c, saved["id"])[0]
+    assert line["text"] == "Cara changed the Late time on Sign off from 24 h to 4 h"
+    assert line["version"] is None  # a rule is not a save of the pipeline's settings
+    assert [n.split(" [")[0] for n in _notices(c, "bot:manager")] == [line["text"] + " on Operations."]
+    assert _notices(c, CARA) == []  # whoever made the change is not told
+    SR.retire(c, BEN, rule["id"])
+    assert _log(c, saved["id"])[0]["text"] == "Ben retired the rule Late on Sign off"
+    assert len(_notices(c, CARA)) == 1
+    # A bot's change is only a suggestion until a person takes it: nothing changed, so nothing is logged.
+    SR.add(c, "bot:manager", {"name": "Nudge", "pipeline_id": saved["id"], "stages": [sign["id"]], **_TIMER})
+    assert _log(c, saved["id"])[0]["text"] == "Ben retired the rule Late on Sign off"
+
+
+_TIMER = {"event": "timer", "timer": {"kind": "in_stage", "hours": 2}, "then": "tell_owner", "reason": "Two hours"}
+
+
+def test_the_log_says_where_each_stage_moved_and_what_an_approval_changed_from_and_to(c):
+    saved = _board(c)
+    intake, sign = copy.deepcopy(saved["stages"])
+    after = PS.save(c, BEN, dict(saved, stages=[sign, intake]))
+    assert _log(c, saved["id"])[0]["changes"] == [
+        "changed the order of the stages: Sign off from 2 to 1, Intake from 1 to 2"
+    ]
+    sign, intake = copy.deepcopy(after["stages"])
+    sign["requirements"][0]["who_oks"] = "people_with_exceptions"
+    sign["requirements"][0]["person_id"] = ANA
+    PS.save(c, BEN, dict(after, stages=[sign, intake]))
+    assert _log(c, saved["id"])[0]["changes"] == [
+        'changed "Ben OKs it" on Sign off: who OKs from people only to people, with exceptions',
+        'changed "Ben OKs it" on Sign off: person from Ben to Ana',
+    ]
