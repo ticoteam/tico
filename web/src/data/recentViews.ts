@@ -11,7 +11,7 @@ import { readPref, removePref, usePref, writePref } from '@/prefs';
    not listed again in this load. */
 
 export interface RecentView {
-  /** `page:<path>` or `task:<task>` (viewKey). */
+  /** `page:<path>` or `task:<number>` (viewKey; a task's id where it has no number). */
   key: string;
   /** The address as last seen there, filters and all. */
   to: string;
@@ -106,12 +106,43 @@ export function noteView(view: RecentView, who = here.who): void {
 /** A view that is gone (deleted, not found, no access): dropped, and not listed again in this load. */
 export function forgetView(key: string, who = here.who): void {
   gone.add(key);
+  drop(key, who);
+}
+
+function drop(key: string, who: string): void {
   write(who, (rows) => (rows.some((r) => r.key === key) ? rows.filter((r) => r.key !== key) : rows));
 }
 
 /** A task that is gone, by any of the ways its address names it (its number, its id). */
 export function forgetTask(...names: readonly (string | number | null | undefined)[]): void {
   for (const n of names) if (n != null && n !== '') forgetView(`task:${n}`);
+}
+
+/* The page whose route failed (PageFault): no visit to it is a view while it shows its fault. Read again and drawn, it
+   is one again. */
+let fault = '';
+const faults = new Set<() => void>();
+
+/** The page (pageKey) shows a fault: it is no recent view, and leaves the list, until it draws (`on` false). */
+export function pageFaulted(key: string, on: boolean, who = here.who): void {
+  if (on) drop(key, who);
+  else if (fault !== key) return;
+  fault = on ? key : '';
+  for (const f of faults) f();
+}
+
+/** The page that shows a fault now, if any: read where a visit is noted, after the page's own effects. */
+export const faultedPage = (): string => fault;
+
+/** The same, as state, so a page drawn again after its fault is noted then. */
+export function useFaultedPage(): string {
+  return useSyncExternalStore(
+    (on) => {
+      faults.add(on);
+      return () => faults.delete(on);
+    },
+    () => fault,
+  );
 }
 
 /** Sign-out: nothing is left on this device. */
@@ -132,24 +163,27 @@ export function useRecentViews(): RecentView[] {
 /** The same rows, read once (Search with nothing typed). */
 export const recentViewsNow = (): RecentView[] => shown(readRecentViews(here.who), here.open);
 
-/* The open task's name, which only the task knows: its trail ends with it. */
-let task = { task: '', name: '' };
+/* The open task's name and the number it is known by (its id where it has none), which only the task knows: its trail
+   ends with its name, and its row is keyed by that number whichever way its address named it. */
+let task = { task: '', name: '', as: '' };
 const named = new Set<() => void>();
 
-/** The task open over the page has its name (TaskModal). */
-export function nameOpenTask(open: string, name: string): void {
-  if (open === task.task && name === task.name) return;
-  task = { task: open, name };
+/** The task open over the page (as its address names it) has its name and number (TaskModal). */
+export function nameOpenTask(open: string, name: string, as: string = open): void {
+  if (open === task.task && name === task.name && as === task.as) return;
+  task = { task: open, name, as };
   for (const on of named) on();
 }
 
-/** The open task's name, once the task has said it. */
-export function useOpenTaskName(open: string): string {
+const NONE = { name: '', as: '' };
+
+/** The open task's name and number, once the task has said them. */
+export function useOpenTask(open: string): { name: string; as: string } {
   return useSyncExternalStore(
     (on) => {
       named.add(on);
       return () => named.delete(on);
     },
-    () => (open && task.task === open ? task.name : ''),
+    () => (open && task.task === open ? task : NONE),
   );
 }

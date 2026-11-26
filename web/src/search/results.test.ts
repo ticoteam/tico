@@ -130,6 +130,33 @@ describe('search', () => {
     expect(empty([], readRecent()).map((g) => g.name)).toEqual(['Recent']);
   });
 
+  it('leaves out of its own Recent only what opens a Recent views row: the same task or page, never a namesake', () => {
+    const views = [
+      { key: 'task:7', to: '/tasks/product?task=7', trail: ['Tasks', 'Product', 'Frost dates (renamed)'] },
+      { key: 'page:/tasks/product', to: '/tasks/product?owner=bot%3Aqa', trail: ['Tasks', 'Product'] },
+      { key: 'page:/threads/th1', to: '/threads/th1', trail: ['Threads', 'Launch'] },
+      { key: 'page:/library/d2', to: '/library/d2', trail: ['Library', 'Pricing'] },
+    ];
+    const recent = [
+      // the same task under its old name
+      { key: 'task:7', title: 'Frost dates', run: { id: 'task.open', input: { task: 7, list: 'search:frost' } } },
+      // another task that shares the new name
+      { key: 'task:8', title: 'Frost dates (renamed)', run: { id: 'task.open', input: { task: 8 } } },
+      { key: 'pipeline:product', title: 'Product', run: { id: 'tasks.open', input: { pipeline: 'product' } } },
+      { key: 'thread:th1', title: 'Launch', run: { id: 'threads.open', input: { thread: 'th1' } } },
+      { key: 'page:/tasks/product', title: 'Tasks, Product', run: { id: 'shell.goTo', input: { to: '/tasks/product' } } },
+      { key: 'doc:d2', title: 'Pricing', run: { id: 'docs.open', input: { doc: 'd2' } } },
+      // a doc that only shares a name with a thread in the list
+      { key: 'doc:d1', title: 'Launch', run: { id: 'docs.open', input: { doc: 'd1' } } },
+      // a goal opens a panel Search cannot place: kept
+      { key: 'goal:g1', title: 'Pricing', run: { id: 'goals.open', input: { goal: 'g1' } } },
+    ];
+    expect(empty(views, recent).map((g) => [g.name, g.hits.map((h) => h.key)])).toEqual([
+      ['Recent views', ['view:task:7', 'view:page:/tasks/product', 'view:page:/threads/th1', 'view:page:/library/d2']],
+      ['Recent', ['task:8', 'doc:d1', 'goal:g1']],
+    ]);
+  });
+
   describe('servers wait for a pause in the typing', () => {
     afterEach(() => vi.useRealTimers());
     const server = () => {

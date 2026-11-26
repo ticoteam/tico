@@ -5,12 +5,14 @@ import {
   forgetRecentViews,
   forgetTask,
   forgetView,
+  faultedPage,
   nameOpenTask,
   noteView,
+  pageFaulted,
   pageKey,
   readRecentViews,
   setRecentHere,
-  useOpenTaskName,
+  useOpenTask,
   useRecentViews,
   viewKey,
 } from './recentViews';
@@ -117,12 +119,24 @@ describe('recent views', () => {
     expect(pageKey('/next/library/docs/abc/')).toBe('page:/library/docs/abc');
   });
 
-  it("carries the open task's name from the task to the trail", () => {
-    const { result } = renderHook(() => useOpenTaskName('12'));
-    expect(result.current).toBe('');
-    act(() => nameOpenTask('12', 'Fix the login bug'));
-    expect(result.current).toBe('Fix the login bug');
+  it("carries the open task's name and number from the task to the trail, whichever way its address names it", () => {
+    const { result } = renderHook(() => useOpenTask('t-abc'));
+    expect(result.current).toEqual({ name: '', as: '' });
+    act(() => nameOpenTask('t-abc', 'Fix the login bug', '12'));
+    expect(result.current).toEqual(expect.objectContaining({ name: 'Fix the login bug', as: '12' }));
     act(() => nameOpenTask('13', 'Another'));
-    expect(result.current).toBe('');
+    expect(result.current).toEqual({ name: '', as: '' });
+  });
+
+  it('takes a page that shows its fault out of the list, without barring it once it draws again', () => {
+    noteView(view('page:/company/risk', 'Company', 'Risk'));
+    noteView(view('page:/tasks/product', 'Tasks', 'Product'));
+    pageFaulted('page:/company/risk', true);
+    expect(keys()).toEqual(['page:/tasks/product']);
+    expect(faultedPage()).toBe('page:/company/risk');
+    pageFaulted('page:/company/risk', false);
+    expect(faultedPage()).toBe('');
+    noteView(view('page:/company/risk', 'Company', 'Risk'));
+    expect(keys()).toEqual(['page:/company/risk', 'page:/tasks/product']);
   });
 });

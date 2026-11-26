@@ -1,6 +1,6 @@
 import * as z from 'zod/mini';
 import type { AnyAction, Ctx } from '@/actions';
-import { recentViewsNow, type RecentView } from '@/data';
+import { pageKey, recentViewsNow, viewKey, type RecentView } from '@/data';
 import type { SearchHit, SearchProvider } from './providers';
 
 export interface Group {
@@ -183,13 +183,30 @@ export const viewHit = (v: RecentView): SearchHit => ({
 });
 export const isViewHit = (h: SearchHit) => h.key.startsWith('view:');
 
-/** What Search shows with nothing typed: Recent views, then Search's own Recent items that are not already a row there
-    (the same page by its address, or the same thing by its name). */
+/** Which view a Search row opens, where the row says: a task by its number (`task:<n>`, as Recent views keys it), a
+    page by its address. Else none, and it is never taken for a Recent views row. */
+function viewOf(h: SearchHit): string | undefined {
+  if (/^task:\d+$/.test(h.key)) return h.key;
+  const input = (h.run.input ?? {}) as { to?: unknown; pipeline?: unknown; thread?: unknown; doc?: unknown };
+  const page = (to: string) => {
+    const url = new URL(to, 'http://x');
+    return viewKey(url.pathname, Object.fromEntries(url.searchParams));
+  };
+  if (h.run.id === 'shell.goTo' && typeof input.to === 'string') return page(input.to);
+  if (h.run.id === 'tasks.open' && typeof input.pipeline === 'string') return pageKey(`/tasks/${encodeURIComponent(input.pipeline)}`);
+  if (h.run.id === 'threads.open' && typeof input.thread === 'string') return pageKey(`/threads/${encodeURIComponent(input.thread)}`);
+  if (h.run.id === 'docs.open' && typeof input.doc === 'string') return pageKey(`/library/${encodeURIComponent(input.doc)}`);
+  return undefined;
+}
+
+/** What Search shows with nothing typed: Recent views, then Search's own Recent items that open none of those views
+    (the same task, the same page). Two things that only share a name are both shown. */
 export function empty(views: RecentView[], recent: SearchHit[]): Group[] {
-  const paths = new Set(views.map((v) => v.to.split(/[?#]/)[0]));
-  const names = new Set(views.map((v) => v.trail.at(-1)));
-  const to = (h: SearchHit) => (h.run.input as { to?: unknown } | null)?.to;
-  const own = recent.filter((h) => !names.has(h.title) && !(typeof to(h) === 'string' && paths.has(to(h) as string)));
+  const shown = new Set(views.map((v) => v.key));
+  const own = recent.filter((h) => {
+    const v = viewOf(h);
+    return !v || !shown.has(v);
+  });
   return [...(views.length ? [{ name: VIEWS, hits: views.map(viewHit) }] : []), ...(own.length ? [{ name: RECENT, hits: own }] : [])];
 }
 
