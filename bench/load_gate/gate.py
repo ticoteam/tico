@@ -96,7 +96,8 @@ def db_flight(db_path):
     from backend import flight
 
     def read(since, until):
-        with closing(sqlite3.connect(Path(db_path).as_uri() + "?mode=ro", uri=True)) as c:
+        # The recorder's own file beside the server's database (backend/flight.py `path`).
+        with closing(sqlite3.connect(flight.path(Path(db_path).resolve()).as_uri() + "?mode=ro", uri=True)) as c:
             c.row_factory = sqlite3.Row
             return flight.view(
                 c,

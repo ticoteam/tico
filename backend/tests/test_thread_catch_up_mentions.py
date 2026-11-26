@@ -165,8 +165,9 @@ def test_a_slow_samples_parts_reach_the_database_the_view_and_the_file(recorded,
     rec.drain(minute)
     taken = rec.take(minute)
     store = api.app.state.store
-    with store.transaction() as c:
+    with flight.tables(store, write=True) as c:
         flight.write(c, taken)
+    with store.read() as c:
         slow = flight.view(c, minutes=10, sections={"slow"}, now=int(time.time()) + 60)["slow"]
     named = [r for r in slow if r["route"] == "GET /api/v2/threads/catch-up"]
     assert named and named[0]["parts"] == {"walk": 1200.4}

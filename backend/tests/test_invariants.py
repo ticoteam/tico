@@ -8,6 +8,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+from backend import flight
 from backend import invariants as I
 from backend.scheduler import Scheduler
 from backend.store import H
@@ -172,7 +173,7 @@ def test_a_relay_no_pull_has_reached_for_half_an_hour_fires_and_a_recent_pull_do
 
 def test_more_than_thirty_write_lock_holds_of_five_seconds_in_an_hour_fire_and_name_the_site(api):
     store = api.app.state.store
-    with store.transaction() as c:
+    with flight.tables(store, write=True) as c:
         for _ in range(I.LONG_HOLDS_PER_HOUR + 1):
             flight_event(c, EPOCH - 60)
         flight_event(c, EPOCH - 60, site="backend/other.py:9 in tidy", route=None, hold_s=5.2)
@@ -182,7 +183,7 @@ def test_more_than_thirty_write_lock_holds_of_five_seconds_in_an_hour_fire_and_n
 
 def test_thirty_holds_in_the_hour_and_forty_older_ones_do_not_fire(api):
     store = api.app.state.store
-    with store.transaction() as c:
+    with flight.tables(store, write=True) as c:
         for _ in range(I.LONG_HOLDS_PER_HOUR):
             flight_event(c, EPOCH - 60)
         for _ in range(40):
@@ -192,7 +193,7 @@ def test_thirty_holds_in_the_hour_and_forty_older_ones_do_not_fire(api):
 
 def test_a_runner_route_failing_over_two_percent_of_two_hundred_requests_fires(api):
     store = api.app.state.store
-    with store.transaction() as c:
+    with flight.tables(store, write=True) as c:
         flight_request(c, EPOCH - 120, "POST /api/v2/jobs/claim", 200, 5)  # 2.5%: fires
         flight_request(c, EPOCH - 120, "POST /api/v2/files/uploads", 1000, 10)  # 1%: no
         # The same route from another caller is counted in the route's total.
@@ -203,7 +204,7 @@ def test_a_runner_route_failing_over_two_percent_of_two_hundred_requests_fires(a
 
 def test_a_runner_route_under_two_hundred_requests_or_under_two_percent_does_not_fire(api):
     store = api.app.state.store
-    with store.transaction() as c:
+    with flight.tables(store, write=True) as c:
         flight_request(c, EPOCH - 120, "POST /api/v2/attempts/{aid}/renew", 199, 100)  # too few requests
         flight_request(c, EPOCH - 120, "POST /api/v2/attempts/{aid}/events", 400, 4)  # 1%
         flight_request(c, EPOCH - 7200, "POST /api/v2/files/uploads", 1000, 900)  # an hour and more ago
@@ -212,7 +213,7 @@ def test_a_runner_route_under_two_hundred_requests_or_under_two_percent_does_not
 
 def test_the_recorder_dropping_ten_percent_of_its_samples_in_an_hour_fires(api):
     store = api.app.state.store
-    with store.transaction() as c:
+    with flight.tables(store, write=True) as c:
         flight_minute(c, EPOCH - 120, requests=900, dropped=100)
     assert sweep(api)["recorder_drops"] == 1
     assert "UTC: 100 dropped" in examples(api, "recorder_drops")
@@ -220,7 +221,7 @@ def test_the_recorder_dropping_ten_percent_of_its_samples_in_an_hour_fires(api):
 
 def test_a_few_drops_among_many_samples_or_drops_older_than_an_hour_do_not_fire(api):
     store = api.app.state.store
-    with store.transaction() as c:
+    with flight.tables(store, write=True) as c:
         flight_minute(c, EPOCH - 120, requests=100000, dropped=10)  # under DROPPED_MIN and under 1%
         flight_minute(c, EPOCH - 7200, requests=900, dropped=100)  # older than the hour
     assert sweep(api)["recorder_drops"] == 0

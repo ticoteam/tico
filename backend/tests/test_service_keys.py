@@ -194,6 +194,7 @@ def test_an_update_key_reads_each_routes_speed_since_the_release_and_no_other_me
         stamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(since)) + ".000000Z"
         history = [{"version": "0.1.0", "since": "2026-01-01T00:00:00Z"}, {"version": "0.2.0", "since": stamp}]
         c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('release-history',?)", (json.dumps(history),))
+    with flight.tables(api.app.state.store, write=True) as c:
         # Before the release (in its last hour), the minute it started in (part old, part new: in neither window), in its
         # warm-up (left out), and after it.
         for at, ms in ((since - 600, 100.0), (since, 7000.0), (since + 60, 9000.0), (since + 600, 400.0)):
@@ -209,6 +210,7 @@ def test_an_update_key_reads_each_routes_speed_since_the_release_and_no_other_me
     assert got.status_code == 200, got.text
     body = got.json()
     assert body["release"] == "0.2.0" and body["since"] == since and body["base"] == "0.1.0"
+    assert "baseline" not in body and "flight_db" not in body
     (row,) = body["routes"]
     assert row == {
         "route": "GET /api/v2/tasks",  # route templates and timings, never who asked

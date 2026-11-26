@@ -728,11 +728,16 @@ def db_header(root: Path) -> dict | None:
 # files. The script is fixed; its arguments are a mode, the database's path in the container and numbers this module
 # made or validated. Its answer is one JSON line, checked like anything else from a company.
 EXEC_PYTHON = "/opt/tico/.venv/bin/python"
-CONTAINER_DB = "/data/hub.sqlite"  # also holds flight_sql (backend/flight.py owns it): a move changes "top" here
+CONTAINER_DB = "/data/hub.sqlite"
+# "top" reads flight_sql from the recorder's own file beside it (backend/flight.py `path`: hub.sqlite -> hub.flight.db),
+# and from the server's database on a cell whose server has not made that file yet.
 DB_SCRIPT = r"""
-import json, sqlite3, sys, time
+import json, os, sqlite3, sys, time
 mode, db, budget = sys.argv[1], sys.argv[2], float(sys.argv[3])
 start = time.monotonic()
+flight = os.path.splitext(db)[0] + ".flight.db"
+if mode == "top" and os.path.exists(flight):
+    db = flight
 c = sqlite3.connect("file:" + db + "?mode=ro", uri=True, timeout=1)
 c.execute("PRAGMA query_only=1")
 def cap(seconds):
