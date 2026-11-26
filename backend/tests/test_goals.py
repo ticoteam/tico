@@ -196,8 +196,54 @@ def test_a_closed_task_earns_a_goal_no_credit_only_a_done_one_does(company):
     assert scores["Ship the booking page"] == {
         "status": "gray",
         "basis": "tasks",
-        "reason": "No measure yet: all 1 tasks done",
+        "reason": "No measure yet: 1 task done",
     }
+
+
+def test_the_all_tasks_done_note_reads_right_for_one_two_and_many_tasks(company):
+    """The one line that says why a goal is gray must read as English: "1 task done", "both tasks done", and
+    "all 3 tasks done" only from three up. A closed task is not counted, so 1 done beside 1 closed is "1 task done".
+    A goal stored with the old wording gets the new note on the next pass, and keeps its colour."""
+    from backend import goals as GL
+    from backend.store import H
+    from backend.tests.helpers import engine as X
+
+    with company.transaction() as c:
+        X.bot(c, "ops")
+
+        def goal_with(title, done, closed=0):
+            g = GL.create(c, "human:ana", title, "human:ana")
+            for n in range(done):
+                tid = H.task_create(c, "human:ana", f"{title} {n}", "Work it.", "bot:ops", goal_id=g["id"], lint=False)
+                H.task_done(c, "human:ana", tid["id"], "Done")
+            for n in range(closed):
+                tid = H.task_create(
+                    c, "human:ana", f"{title} dropped {n}", "Work it.", "bot:ops", goal_id=g["id"], lint=False
+                )
+                H.task_close(c, "human:ana", tid["id"], "Not now")
+            return g
+
+        one = goal_with("Ship the booking page", 1)
+        two = goal_with("Ship the price page", 2)
+        three = goal_with("Ship the help pages", 3)
+        one_and_dropped = goal_with("Ship the menu page", 1, closed=1)
+        notes = {g["title"]: GL.score(c, GL.goal(c, g["id"]))["reason"] for g in (one, two, three, one_and_dropped)}
+
+        c.execute(
+            "UPDATE goals SET status='gray', status_note='No measure yet: all 1 tasks done', status_source='auto', "
+            "status_by_id=? WHERE id=?",
+            (GL.AUTO_ACTOR, one["id"]),
+        )
+        GL.refresh(c, [one["id"]])
+        stored = GL.goal(c, one["id"])
+
+    assert notes == {
+        "Ship the booking page": "No measure yet: 1 task done",
+        "Ship the price page": "No measure yet: both tasks done",
+        "Ship the help pages": "No measure yet: all 3 tasks done",
+        "Ship the menu page": "No measure yet: 1 task done",
+    }
+    assert (stored["status"], stored["status_note"]) == ("gray", "No measure yet: 1 task done")
 
 
 def test_finished_tasks_never_make_a_goal_green_only_a_measure_or_a_check_in_does(company):
@@ -253,7 +299,7 @@ def test_finished_tasks_never_make_a_goal_green_only_a_measure_or_a_check_in_doe
         r = rows[title]
         return r["status"], r["status_note"], r["status_source"]
 
-    assert seen("Make Finance useful") == ("gray", "No measure yet: all 1 tasks done", "auto")
+    assert seen("Make Finance useful") == ("gray", "No measure yet: 1 task done", "auto")
     assert seen("Make Growth useful") == ("gray", "No measure yet: 2 of 4 tasks done, latest today", "auto")
     assert seen("Make Threads useful") == ("green", "Check-in today: on track", "auto")
     assert rows["Make Company useful"]["status"] == "green"
