@@ -198,8 +198,10 @@ def test_failures_are_named_from_the_logs_and_by_their_job():
     named = ri.failed_tokens([("python-3", PYTEST_FAILURES), ("release-check", "")])
     assert named == {"backend/tests/test_company_file.py"}
     assert ri.failed_tokens([("product", "")]) == {"product"}
-    # The retired desktop part names nothing a commit could fix: any commit may be the fix.
-    assert ri.failed_tokens([("desktop", "")]) is None
+    # An older run's retired desktop part names nothing and hides nothing: the other parts' failures are still carried.
+    assert ri.failed_tokens([("desktop", "")]) == set()
+    assert ri.failed_tokens([("desktop", ""), ("python-3", PYTEST_FAILURES)]) == {"backend/tests/test_company_file.py"}
+    assert ri.failed_tokens([("desktop", ""), ("product", "")]) == {"product"}
     # a red web journey is named by its job, so a commit to the app or its server wakes the train, not any commit
     assert ri.failed_tokens([("web-journeys", ""), ("python-3", PYTEST_FAILURES)]) == {
         ri.WEB,
@@ -278,6 +280,15 @@ def test_a_test_that_failed_before_its_runner_was_lost_is_a_test_failure():
     )
     # A report that cannot be read cannot show the gate had not answered: no retry.
     assert ri.infrastructure_red([("product", [SPOT], None)]) is None
+
+
+def test_an_older_runs_retired_desktop_part_still_reads_as_a_gate():
+    # A desktop gate that finished red before its runner was lost is a test failure, not infrastructure; one whose
+    # gate had not answered is infrastructure, as for any gate part. New plans never name it (matrix_of refuses it).
+    assert ri.infrastructure_red([("desktop", ["Process completed with exit code 1.", LOST], FAILED_GATE)]) is None
+    assert ri.infrastructure_red([("desktop", [LOST], RUNNING)]) == [("desktop", "runner lost", LOST)]
+    assert ri.infrastructure_red([("desktop", [LOST], None)]) is None
+    assert not ri.JOB_NAME.fullmatch("desktop")
 
 
 def test_a_red_with_any_other_failure_is_not_infrastructure():

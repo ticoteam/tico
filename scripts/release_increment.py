@@ -53,6 +53,9 @@ WEB_INPUTS = (
     "package-lock.json",
 )
 IGNORED_JOBS = {"release-check", "test-timings"}  # a consequence of a failed part, or optional
+# Gate parts no validation runs any more, read only in older runs: the desktop part (cargo test of app/) was retired.
+# A commit can no longer fix or select its failure, so it names nothing, and it never hides the other parts' failures.
+RETIRED_JOBS = {"desktop"}
 FAILED = {"failure", "cancelled", "timed_out", "startup_failure", "action_required"}
 RUNNER = "4cpu-linux-x64"
 MATRIX_KEYS = ("name", "part", "shard", "workers", "runner", "binaries")
@@ -70,7 +73,7 @@ def failed_tokens(jobs):
     failure cannot be named (a build, a VM, a log with no failing test), so any commit could be the fix."""
     tokens = set()
     for name, log in jobs:
-        if name in IGNORED_JOBS:
+        if name in IGNORED_JOBS or name in RETIRED_JOBS:
             continue
         if name in (PRODUCT, WEB):
             tokens.add(name)
@@ -100,7 +103,9 @@ INFRASTRUCTURE = (
 )
 # A product part that failed only because an image build did: it waits for the images before its gate starts (ci.yml).
 CONSEQUENCE = re.compile(r"An image build did not succeed")
-GATE_JOB = re.compile(r"python-\d+|conformance|contracts(-\d+)?|product")
+# The gate parts whose receipts infrastructure_red reads; desktop stays so an older run's retired part still reads
+# as a gate (JOB_NAME, what a new plan may name, leaves it out).
+GATE_JOB = re.compile(r"python-\d+|conformance|contracts(-\d+)?|product|desktop")
 
 
 def infrastructure_cause(messages):
