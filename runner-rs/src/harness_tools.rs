@@ -1768,17 +1768,23 @@ impl Harnesses {
     /// by a runner that stopped before switching it in (or mid-install) is never switched in or removed otherwise.
     fn prune(&mut self, m: &Manifest) {
         let root = self.tools.join(&m.id);
-        let Some(current) = std::fs::read_link(root.join("current"))
-            .ok()
-            .and_then(|t| t.file_name().map(|n| n.to_owned()))
-        else {
-            return;
+        // No `current` at all: no copy is in use (a first install stopped midway). Any other doubt keeps everything.
+        let current = match std::fs::read_link(root.join("current")) {
+            Ok(target) => match target.file_name() {
+                Some(name) => Some(name.to_owned()),
+                None => return,
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(_) => return,
         };
         let mut gone = 0;
         for old in std::fs::read_dir(&root).into_iter().flatten().flatten() {
             let p = old.path();
             let dir = std::fs::symlink_metadata(&p).is_ok_and(|md| md.file_type().is_dir());
-            if dir && old.file_name() != current && std::fs::remove_dir_all(&p).is_ok() {
+            if dir
+                && current.as_deref() != Some(old.file_name().as_os_str())
+                && std::fs::remove_dir_all(&p).is_ok()
+            {
                 gone += 1;
             }
         }
@@ -3198,6 +3204,14 @@ mod tests {
             m.h.detect(&m.h.manifests["claude-code"].clone(), &m.managed(), 15),
             "2.1.300"
         );
+        // A first install that stopped midway: no copy is in use, so its folder goes too.
+        let mut fresh = Machine::new(true);
+        fresh.h.check_every = f64::INFINITY;
+        let half = fresh.h.tools.join("claude-code").join("f00dfeed00");
+        fake_cli(&half.join("node_modules/.bin/claude"), "2.1.299");
+        fresh.h.wanted.clear(); // no install job starts in its place
+        fresh.h.step(HashSet::new);
+        assert!(!half.exists());
     }
 
     #[test]
