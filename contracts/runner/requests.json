@@ -3164,6 +3164,32 @@
      "title": "Ahead",
      "type": "integer"
     },
+    "backed_up": {
+     "anyOf": [
+      {
+       "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Backed Up"
+    },
+    "backup_error": {
+     "anyOf": [
+      {
+       "maxLength": 300,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Backup Error"
+    },
     "behind": {
      "default": 0,
      "minimum": 0,

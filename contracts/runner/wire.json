@@ -16,6 +16,8 @@
   },
   "error": "ErrorEnvelope",
   "gated": {
+    "heartbeat.request.worktrees[].backed_up": "runner-rs/src/lanes.rs refused_field drops it on an older server's 422 (drop_held); the worktree report still goes, without its wip/ copy's state (task #3448)",
+    "heartbeat.request.worktrees[].backup_error": "runner-rs/src/lanes.rs refused_field drops it on an older server's 422 (drop_held); the worktree report still goes, without its wip/ copy's state (task #3448)",
     "browser_commands": "runner-rs/src/browser/host.rs backs off on an older server without this endpoint; expires_in is optional to old readers, and new runners accept its absence from old servers",
     "heartbeat.request.readiness.worktree_recovery": "runner-rs/src/readiness_extra.rs OPTIONAL: an older server's 422 drops this field for ten minutes; retired worktrees are not allocated to computers without this capability",
     "start_place.request.harness_allocated": "runner-rs/src/execute.rs post_allocated: a 422 naming harness_allocated retries without the field",
