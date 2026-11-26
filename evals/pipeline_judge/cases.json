@@ -2766,6 +2766,36 @@
    "expected": "not_met",
    "trap": "unplaced_blocker",
    "source": "E-3516: cut from dev-two-reviews-notes-only, a blocking finding with no file:line"
+  },
+  {
+   "id": "dev-two-reviews-silent",
+   "domain": "dev",
+   "requirement": {
+    "name": "Review page",
+    "rubric": "Two reviews of the newest commit of every linked PR, each naming that commit and its model: use different models and say what each checked. Give each real defect its own finding with file:line, severity, and why it matters; a finding on the PR description may cite the file:line of the guideline it breaks. Skip style nits and diff summaries. Say when there are no findings: a page with no blocking findings meets this when each review names the commit and says what it read, and its non-blocking notes need no file:line."
+   },
+   "work": {
+    "title": "Dark mode toggle on Settings",
+    "spec": "Add a Dark mode toggle to the Settings page. Show it off and on, in light and dark themes.",
+    "work_version": 3,
+    "context": {
+     "heads": {
+      "acme/app#91": "4be1c0de9f2a7a3c5d0e1b2a3c4d5e6f7a8b9c0d"
+     }
+    },
+    "repo": "acme/app",
+    "pr": 91,
+    "author": "bot:builder"
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "review-silent.md",
+    "work_version": 0,
+    "text": "Review of acme/app PR 91 at 4be1c0de9f2a7a3c5d0e1b2a3c4d5e6f7a8b9c0d.\nReviewer 1 (model: Acme-Coder-7, Acme Labs) reviewed 4be1c0de9f2a7a3c5d0e1b2a3c4d5e6f7a8b9c0d. Read: settings/theme.py, settings/views.py, tests/test_theme.py. Ran: pytest tests/test_theme.py, 12 passed.\nReviewer 2 (model: Other-Model-3, Other Labs) reviewed 4be1c0de9f2a7a3c5d0e1b2a3c4d5e6f7a8b9c0d. Read the same three files and the PR description. Ran: the UI test for the toggle, passed.\n"
+   },
+   "expected": "not_met",
+   "trap": "silent_findings",
+   "source": "E-3516 QA: cut from dev-two-reviews-notes-only, the Findings block removed: a page that says nothing about what the reviews found"
   }
  ]
 }

@@ -269,9 +269,11 @@ CHECKS: dict[str, tuple[Part, ...]] = {
         Part(
             "findings",
             "gives each blocking finding its own file:line, a severity and why it matters; a page with no blocking "
-            "finding meets this whether it says so or lists only non-blocking notes, and those notes need no "
-            "file:line; a finding on the PR description may cite the guideline line it breaks as its file:line",
-            "A blocking finding lacks file:line, a severity or why it matters.",
+            "finding meets this when it says so or lists only non-blocking notes, and those notes need no file:line, "
+            "but a page that says nothing about what the reviews found does not; a finding on the PR description may "
+            "cite the guideline line it breaks as its file:line",
+            "A blocking finding lacks file:line, a severity or why it matters, or the page does not say what the "
+            "reviews found.",
             "Can't tell if each blocking finding has file:line, a severity and why it matters.",
             "Each blocking finding has file:line, a severity and why, or none block.",
         ),
