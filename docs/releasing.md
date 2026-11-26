@@ -754,9 +754,11 @@ skipped. A failed desktop build leaves the server release published and the Rele
 the tag (Run workflow, `desktop` checked) once it is fixed. The app's version is the release's (v0.3.6 → app 0.3.6,
 including any prerelease suffix), stamped from the tag at build time.
 
-The Release workflow's `electron-changes` job builds it with `.github/workflows/desktop.yml` when `desktop/` (tests and
-Markdown aside) or that workflow changed since the previous release, or the previous release has no `latest-mac.yml`; otherwise
-`electron-assets` carries the previous release's Electron files forward unchanged. Run the workflow from the tag with
+The Release workflow's `electron-changes` job builds it with `.github/workflows/desktop.yml` unless all of these hold
+for the previous release tag (the newest version tag the new one descends from), in which case `electron-assets`
+carries that release's Electron files forward unchanged: it is not a prerelease (an `-rc` app carries its prerelease
+version), `desktop/` (`*.test.ts` and `*.md` aside) and that workflow did not change since it, and it has all three
+update feeds (`latest-mac.yml`, `latest.yml`, `latest-linux.yml`). Run the workflow from the tag with
 `desktop` checked to force a rebuild. The files are `Tico-<version>-arm64.dmg` and `.zip` (the Mac build
 is Apple-chip only; there is no Intel Mac build), `Tico-<version>-setup.exe` (one installer for Windows x64 and arm64),
 `Tico-<version>-x86_64.AppImage` and `Tico-<version>-amd64.deb`, their `.blockmap` files, and the update feeds
@@ -771,9 +773,10 @@ signed when `DESKTOP_MAC_CERT` (a base64 `.p12`) and `DESKTOP_MAC_CERT_PASSWORD`
 updates. The Windows installer is unsigned for now.
 
 A server offers the installers of its running version's GitHub release (`backend/downloads.py`):
-`Tico-<version>-arm64.dmg`, else `-universal.dmg`; `-setup.exe`; `-x86_64.AppImage`; `-amd64.deb`, never marked signed
-or notarized since the release records neither. GitHub lookups, failures included, are cached for ten minutes and carry
-no credentials. See [Desktop app](desktop.md) for installation.
+`Tico-<version>-arm64.dmg`, else `-universal.dmg`; `-setup.exe`; `-x86_64.AppImage`, never marked signed or notarized
+since the release records neither. Its GitHub lookups carry no credentials. A lookup that found the installers is
+cached for ten minutes; one that found none (the files arrive a few minutes after the release) is asked again after a
+minute. See [Desktop app](desktop.md#downloads-from-your-tico-server).
 
 ## The Release Owner's rollout
 

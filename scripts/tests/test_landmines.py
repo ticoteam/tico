@@ -162,11 +162,43 @@ HUB_PY = "backend/migrations/20261201000000_thing.py"
             "# ALTER TABLE flight_db went to hub.flight.db\n",
         ),
         ("deploy/thing.sql", "CREATE TABLE flight_web(span INTEGER);\n", "CREATE TABLE web(span INTEGER);\n"),
+        (HUB_SQL, 'CREATE TABLE "main"."flight_db"(x INTEGER);\n', 'CREATE TABLE "main"."db_flight"(x INTEGER);\n'),
+        (
+            HUB_SQL,
+            "CREATE VIEW IF NOT EXISTS flight_recent AS SELECT 1;\n",
+            "CREATE VIEW recent AS SELECT * FROM flight_db;\n",
+        ),
+        (
+            HUB_SQL,
+            "CREATE UNIQUE INDEX IF NOT EXISTS k ON `main`.`flight_sql`(n);\n",
+            "CREATE INDEX k ON sql_log(n);\n",
+        ),
+        (
+            HUB_SQL,
+            "CREATE TABLE tasks2(id INTEGER); -- then\nALTER TABLE\n  flight_slow ADD COLUMN x;\n",
+            "CREATE TABLE tasks2(id INTEGER); -- CREATE TABLE flight_slow(x) moved to hub.flight.db\n",
+        ),
+        (
+            HUB_SQL,
+            "CREATE INDEX k ON tasks(id);\nCREATE TRIGGER t AFTER UPDATE OF kind\n  ON flight_events BEGIN SELECT 1; END;\n",
+            "CREATE INDEX k ON tasks(id);\nSELECT * FROM a JOIN b ON flight_events.id = b.id;\n",
+        ),
+        (
+            HUB_PY,
+            'SQL = """\nCREATE TABLE IF NOT EXISTS\n    flight_requests (span INTEGER)\n"""\n',
+            'SQL = """\nDROP TABLE IF EXISTS\n    flight_requests\n"""  # CREATE TABLE flight_requests moved\n',
+        ),
     ],
 )
 def test_no_flight_in_hub_bans_a_flight_table_made_or_changed_and_allows_its_drop(path, bad, good):
     assert hits(path, bad).get("no-flight-in-hub") == 1
     assert "no-flight-in-hub" not in hits(path, good)
+
+
+def test_no_flight_in_hub_names_the_line_a_statement_starts_on():
+    text = "-- one\nCREATE TABLE\n  flight_events(id INTEGER);\nCREATE INDEX k\n  ON flight_events(id);\n"
+    found = landmines.hits_in(HUB_SQL, text, [landmines.BY_ID["no-flight-in-hub"]])["no-flight-in-hub"]
+    assert found == [(2, "CREATE TABLE"), (4, "CREATE INDEX k")]
 
 
 def test_no_flight_in_hub_leaves_the_flight_file_the_shipped_migrations_and_tests_alone():
@@ -223,6 +255,15 @@ def test_no_flight_in_hub_leaves_the_flight_file_the_shipped_migrations_and_test
             "import { bridge } from './bridge';\n",
         ),
         ("clients/tico.py", 'HINT = "run cargo-tauri"\n', 'HINT = "run npm"\n'),
+        ("runner-rs/Cargo.toml", '"tauri" = "2"\n', '"serde" = "1"\n'),
+        (
+            "runner-rs/Cargo.toml",
+            'shell = { package = "tauri", version = "2" }\n',
+            'json = { package = "serde_json" }\n',
+        ),
+        ("runner-rs/Cargo.toml", '[target.x.dependencies."tauri"]\n', '[target.x.dependencies."tokio"]\n'),
+        ("app/bootstrap.sh", "cargo tauri build\n", "npm run build\n"),
+        ("README-build.md", "Build the Tauri shell first.\n", "Build the Electron app first.\n"),
     ],
 )
 def test_no_tauri_bans_the_tauri_app_coming_back(path, bad, good):
@@ -251,6 +292,9 @@ def test_no_tauri_leaves_history_tests_of_its_removal_and_customer_repositories_
         "templates/catalog/builder/README.md",
     ):
         assert "no-tauri" not in hits(path, text), path
+    # A name that only contains the letters is not named for Tauri.
+    for path in ("docs/alpha-centauri.md", "backend/centauri.py"):
+        assert "no-tauri" not in hits(path, "Alpha Centauri is the nearest star.\n"), path
     # A Python comment or a test that names the retired app is not the app coming back.
     removed = '# GLib left with app/ (the Tauri shell)\nTAURI = ["latest.json"]\ndef test_only_the_tauri_app(): pass\n'
     assert "no-tauri" not in hits("backend/tests/test_downloads.py", removed)

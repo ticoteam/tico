@@ -715,7 +715,6 @@ made or revoked is an `events` row (`token.create`, `token.revoke`).
 | `integrations/` | one page per outside system (what it is, how a bot uses it, rules, recipes) and the query lists; served as **Tools** and `tico tool show <service>`, with the learnings bots add |
 | `questions/` | the question sets the decision model answers (`tico_decision_ask`, `tico decision ask`, an automation's decide step, the meeting brain): one versioned JSON file per decision, with its thresholds |
 | `web/` | the web app (React, built by Vite into `build/web` and served at `/`); `desktop/` is the Electron app around it |
-| `app/` | the native macOS shell around hub.acme.example |
 | `infra/` | the EC2 stack, release packaging, deploy and restore scripts |
 | `scripts/` | `tico` (the teamwork CLI bots and people use), `tico-computer` (operate this computer), `hub` (`tico`'s old name), setup, publishing and maintenance |
 | `docs/` | team knowledge |

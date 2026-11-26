@@ -208,14 +208,18 @@ def runner_support_imports(path, text):
 # migrations are never edited (scripts/check_migration_order.py), so the ones that made or changed a flight table stay.
 FLIGHT_SCHEMA = "backend/flight.py"
 FLIGHT_SHIPPED = {"backend/migrations/baseline.sql", "backend/migrations/20261126013526_flight_slow_parts.sql"}
-_FLIGHT_TABLE = r"""["`\[]?(?:main\.)?flight_\w"""
+_FLIGHT_TABLE = r"""(?:["`\[]?main["`\]]?\s*\.\s*)?["`\[]?flight_\w"""
+# Read over the whole file, so a statement split over lines is one statement; a trigger's ON is looked for within its
+# statement (no `;`) and its first 300 characters.
 FLIGHT_IN_HUB = re.compile(
-    rf"\bCREATE\s+(?:TEMP(?:ORARY)?\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?{_FLIGHT_TABLE}"
-    rf"|\bALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?{_FLIGHT_TABLE}"
+    rf"\bCREATE\s+(?:(?:TEMP|TEMPORARY|VIRTUAL)\s+)?(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?{_FLIGHT_TABLE}"
+    rf"|\bALTER\s+TABLE\s+{_FLIGHT_TABLE}"
     rf"|\bRENAME\s+TO\s+{_FLIGHT_TABLE}"
-    rf"|\bCREATE\b.*\bON\s+{_FLIGHT_TABLE}",
+    rf"""|\bCREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?[\w."`\[\]]+\s+ON\s+{_FLIGHT_TABLE}"""
+    rf"|\bCREATE\s+(?:(?:TEMP|TEMPORARY)\s+)?TRIGGER\b[^;]{{0,300}}?\bON\s+{_FLIGHT_TABLE}",
     re.I,
 )
+SQL_COMMENT = re.compile(r"--[^\n]*")
 
 
 def hub_schema(path):
@@ -226,24 +230,33 @@ def hub_schema(path):
 
 
 def flight_in_hub(path, text):
-    """Lines that make or change a flight_* table, read as written (the SQL sits in Python strings), whole-line
-    comments aside. A DROP is not a hit: it is how the old tables leave hub.sqlite."""
-    comment = "--" if path.endswith(".sql") else "#"
-    return [
-        number
-        for number, line in enumerate(text.splitlines(), 1)
-        if not line.lstrip().startswith(comment) and FLIGHT_IN_HUB.search(line)
-    ]
+    """The line each statement that makes or changes a flight_* table starts on. The whole file is read as written (the
+    SQL sits in Python strings, often over several lines), with Python's # comments and SQL's -- comments blanked in
+    place, so line numbers hold. A DROP is not a hit: it is how the old tables leave hub.sqlite."""
+    if path.endswith(".py"):
+        lines = text.splitlines(keepends=True)
+        try:
+            for tok in tokenize.generate_tokens(io.StringIO(text).readline):
+                if tok.type == tokenize.COMMENT:
+                    (row, start), (_, end) = tok.start, tok.end
+                    lines[row - 1] = lines[row - 1][:start] + " " * (end - start) + lines[row - 1][end:]
+        except (tokenize.TokenError, SyntaxError, IndentationError):
+            lines = [line if not line.lstrip().startswith("#") else "\n" for line in text.splitlines(keepends=True)]
+        text = "".join(lines)
+    text = SQL_COMMENT.sub(lambda m: " " * len(m.group()), text)
+    return [text.count("\n", 0, m.start()) + 1 for m in FLIGHT_IN_HUB.finditer(text)]
 
 
 # The Tauri app (app/) is gone; desktop/ (Electron) is the one desktop app. History stays: changelogs and plans here,
 # and, outside the scope, the lessons and runner-rs/src/worktrees.rs, whose Tauri line is about customers' repositories.
-TAURI_ROOTS = ("docs/", "scripts/", "backend/", "clients/", "desktop/", "web/", ".github/workflows/")
-TAURI_DOCS = {"README.md", "CLAUDE.md", "AGENTS.md"}
+TAURI_ROOTS = ("app/", "docs/", "scripts/", "backend/", "clients/", "desktop/", "web/", ".github/workflows/")
 TAURI_BUILD = re.compile(
     r"tauri[.-](?:conf|override|apps|action|cli|build|plugin|bundler|runtime|utils)|cargo[ -]tauri|src-tauri", re.I
 )
-TAURI_CRATE = re.compile(r"^\s*tauri\s*=|\[(?:[\w-]+\.)*dependencies\.tauri\]")  # in a Cargo.toml
+# In a Cargo.toml: `tauri = ...`, `"tauri" = ...`, `[dependencies.tauri]`, or a renamed `x = { package = "tauri" }`.
+TAURI_CRATE = re.compile(
+    r"""^\s*["']?tauri["']?\s*=|\[(?:[\w-]+\.)*dependencies\.["']?tauri["']?\]|\bpackage\s*=\s*["']tauri["']"""
+)
 TAURI_WORD = re.compile(r"(?<![a-z])tauri", re.I)
 
 
@@ -252,9 +265,9 @@ def tauri_scope(path):
     if name.upper().startswith("CHANGELOG") or path.startswith("docs/plans/"):
         return False
     return (
-        "tauri" in path.lower()
+        bool(TAURI_WORD.search(path))
         or path.startswith(TAURI_ROOTS)
-        or path in TAURI_DOCS
+        or ("/" not in path and path.endswith(".md"))
         or name in ("Cargo.toml", "package.json")
     )
 
@@ -263,7 +276,7 @@ def tauri_lines(path, text):
     """A file named for Tauri is a hit on its line 1. In any file a Tauri build input (its config, crates, npm packages,
     CLI or action) is a hit on every line; in a Markdown page or a workflow the word itself is, a workflow's comment
     lines aside (desktop.yml's header recalls the Tauri app)."""
-    if "tauri" in path.lower():
+    if TAURI_WORD.search(path):
         return [1]
     word = path.endswith(".md") or path.startswith(".github/workflows/")
     found = []
@@ -485,16 +498,16 @@ def hits_in(path, text, rules):
     for rule in rules:
         if rule.new_file or not rule.scope(path):
             continue
+        if rule.find is not None:
+            for number in rule.find(path, text):
+                found[rule.id].append((number, raw[number - 1].strip() if number <= len(raw) else ""))
+            continue
         if rule.view == "raw":
             lines = views.setdefault("raw", script_lines(text) if not path.endswith(".py") else _no_comment_lines(raw))
         elif path.endswith(".py"):
             lines = views.setdefault("code", code_lines(text))
         else:
             lines = views.setdefault("script", script_lines(text))
-        if rule.find is not None:
-            for number in rule.find(path, text):
-                found[rule.id].append((number, raw[number - 1].strip() if number <= len(raw) else ""))
-            continue
         for number, line in enumerate(lines, 1):
             if any(pattern.search(line) for pattern in rule.skip):
                 continue
