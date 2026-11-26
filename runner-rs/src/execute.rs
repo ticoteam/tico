@@ -2564,6 +2564,9 @@ impl Runner {
         let mut session: Option<crate::continuity::Session> = None;
         // What the prompt this turn sent did with the task's notes lists (crate::prompt::notes_sent), for the result.
         let mut notes_report: Option<Value> = None;
+        // The prompt a resumed session's replacement is given if the saved one turns out to be missing: its notes
+        // report replaces the resumed prompt's then.
+        let mut replacement_text: Option<String> = None;
         // A turn that ran in a side session (a task-model fallback) never saves its thread over the conversation's own:
         // it keeps its own, per model, under `side_conv` (crate::continuity::side_session).
         let mut side_run = false;
@@ -3361,7 +3364,7 @@ impl Runner {
             // given what a new session that replaces it is given: the repo rules, the checkpoint, the room since its
             // last turn with its own replies, and the new-session note. A new Antigravity conversation also gets the
             // conversation's history, as a fresh one does: agy has no transcript of its own to carry over.
-            h.full_prompt(&th, resumed.then(|| {
+            replacement_text = resumed.then(|| {
                 let mut replacing = attempt.clone();
                 replacing["_replaced"] = json!(true);
                 replacing["_side_ran"] = json!(false);
@@ -3371,7 +3374,8 @@ impl Runner {
                     String::new()
                 };
                 replacement_prompt(&replacing, &names, after.as_deref(), &bot, &key, &replay)
-            }));
+            });
+            h.full_prompt(&th, replacement_text.clone());
             h.compaction_refresh(&th, Some(built.restore.clone()).filter(|r| prompt_turn && !r.is_empty()));
             // A compaction before this prompt (compact_first's own) is already accounted for above.
             let _ = h.compacted(&th);
@@ -3464,6 +3468,12 @@ impl Runner {
                     None,
                 ));
                 self.note_session(&aid, &bot, session.as_ref());
+                // The new session was given the replacement prompt, not the resumed one: report what that did with the notes.
+                if notes_report.is_some() {
+                    if let Some(text) = replacement_text.as_deref() {
+                        notes_report = crate::prompt::notes_sent(&attempt, text);
+                    }
+                }
             }
             let persisted = async {
                 // Resident calls keep their provider state under the call's own job, outside ordinary conversation history.
@@ -3859,7 +3869,8 @@ impl Runner {
                     fresh_text.clone()
                 };
                 // A resumed session that turns out to be missing restarts under its id with what a new one is given.
-                h.full_prompt(&th, side_resumed.then(|| fresh_text.clone()));
+                replacement_text = side_resumed.then(|| fresh_text.clone());
+                h.full_prompt(&th, replacement_text.clone());
                 let live_source = source_continue() && thread_updates();
                 let scope = crate::source_resume::scope(&attempt, selected.as_ref(),
                     place.as_ref().is_some_and(|p| p.session_path.is_some()));
@@ -8843,6 +8854,35 @@ for line in sys.stdin:
         let (kind, why, detail) = session_of(&completions[2]);
         assert_eq!((kind.as_str(), why), ("new", json!("resume_failed")));
         assert_eq!(detail, json!(crate::continuity::TRANSCRIPT_REFUSED));
+    }
+
+    #[tokio::test]
+    async fn a_new_session_in_place_of_a_missing_one_reports_the_notes_its_replacement_prompt_gave()
+    {
+        // Turn 1 resumes, so its prompt holds the notes turn 0 gave, but Claude no longer has the session: the new one
+        // is given the replacement prompt, notes included, and turn 1 reports them as given, not held.
+        let notes = "Notes for Engineering (what we learned; follow them):\n- Big test runs go to RunsOn. Why: a local run took the shared machine offline. Since 2026-11-18 (#4232).";
+        let extra = json!({"pipeline_notes": {"pipeline": notes}});
+        let (_, prompts, completions, _) = claude_rig(
+            &[json!({}), json!({}), json!({})],
+            &[],
+            &[1],
+            &[],
+            extra,
+            |_| (),
+        )
+        .await;
+        assert!(!prompts[1].contains(notes), "{}", prompts[1]);
+        assert!(prompts[2].contains(notes), "{}", prompts[2]);
+        assert_eq!(session_of(&completions[1]).1, json!("not_found"));
+        for n in [0, 1] {
+            assert_eq!(
+                completions[n]["notes"],
+                json!({"pipeline": "given"}),
+                "turn {n}: {}",
+                completions[n]
+            );
+        }
     }
 
     #[tokio::test]
