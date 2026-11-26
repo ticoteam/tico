@@ -10,9 +10,10 @@ while it is being built wait for that build.
 - The key is the caller's whole identity (needs_cache.viewer: actor, role, token, scope, view, ...), so two callers
   who may read different things never share, what the list is asked for (`snoozed`), and the database the connection
   reads.
-- The change mark is read in the caller's own snapshot (`mark`): the newest `needs` change (events._needs: every write
-  that can move anyone's Needs you, an access change to a task's readers included, writes one) and the roster clock
-  (a bot paused or resumed). A list is shared only with a snapshot at the same mark, so a write that moves the list
+- The change mark is read in the caller's own snapshot (`mark`): the newest change of each topic that can move a
+  Needs you (MARK_TOPICS: a `needs` row, events._needs, for every write that moves anyone's list, an access change to a
+  task's readers included; a task's, message's or thread's change, which can end a snooze or change an item's words)
+  and the roster clock (a bot paused or resumed). A list is shared only with a snapshot at the same mark, so a write that moves the list
   starts a new build. A write that moves no mark leaves a shared list at most TTL seconds old, and an ask whose snooze
   ends by the clock alone is listed at most TTL seconds late.
 - A list is kept TTL seconds from when its build began, at most MAX_ENTRIES at once (oldest out first).
@@ -39,8 +40,23 @@ WAIT = 30.0  # seconds a caller waits on another's build before it builds its ow
 
 clock: Callable[[], float] = time.monotonic
 
-NEEDS_MARK_SQL = "SELECT MAX(seq) FROM changes WHERE topic='needs'"
-ROSTER_MARK_SQL = "SELECT value FROM roster_clock WHERE id=1"
+# The change topics whose writes can move a Needs you: a `needs` row names the people whose list moved, and a task's,
+# message's, thread's, bot's, person's or setup change can end a snooze or change what an item says. Run output,
+# computers, presence and the like (most of the log) never move it.
+MARK_TOPICS = ("needs", "tasks", "messages", "threads", "bots", "people", "setup")
+# The whole mark in one statement: each topic's newest change, the roster clock (a bot paused or resumed), every
+# pipeline's settings (a stage's OK whose words change asks something else, which ends its snoozes) and the team's
+# access settings.
+MARK_SQL = (
+    "SELECT "
+    + ", ".join(f"(SELECT MAX(seq) FROM changes WHERE topic='{topic}')" for topic in MARK_TOPICS)
+    + ", (SELECT value FROM roster_clock WHERE id=1), (SELECT COUNT(*) FROM pipelines)"
+    + ", (SELECT TOTAL(settings_version) FROM pipelines)"
+    # Who may read what beyond a task's own readers: the owner, the Admins, bot access and the people roster
+    # (backend/access.py). A person made a plain member reads no more as an Admin from a list kept before.
+    + ", (SELECT group_concat(key || '=' || value, char(10)) FROM registry_metadata"
+    + " WHERE key IN ('owner', 'access', 'bot_access', 'people'))"
+)
 
 Items = list[dict[str, Any]]
 Key = tuple[Any, ...]
@@ -56,27 +72,37 @@ builds = 0
 
 def mark(c: Any) -> tuple[Any, ...] | None:
     """The change mark of the caller's snapshot, or None when its list must not be shared (see the module's notes)."""
-    if getattr(c, "pool_file", None) is None or getattr(c, "read_cache", None) is None:
+    if getattr(c, "store_token", None) is None or getattr(c, "read_cache", None) is None:
         return None
     if getattr(c, "write_transaction", False) or c.total_changes != getattr(c, "provenance_changes", None):
         return None
     try:
-        needs = c.execute(NEEDS_MARK_SQL).fetchone()
-        roster = c.execute(ROSTER_MARK_SQL).fetchone()
+        found = c.execute(MARK_SQL).fetchone()
     except sqlite3.OperationalError:  # a file made before these tables: nothing shared
         return None
-    return (needs[0] if needs else None, roster[0] if roster else None)
+    return tuple(found) if found else None
 
 
-def items(c: Any, viewer: str, snoozed: str, build: Callable[[], Items], alone: Callable[[], Items]) -> Items:
+def items(
+    c: Any, viewer: str, snoozed: str, build: Callable[[], Items], alone: Callable[[], Items], wakes: Any = None
+) -> Items:
     """`build()`'s list for this viewer at the caller's change mark: kept, being built by another caller, or built here
-    and kept; a copy of the caller's own each time. `alone()` when the list is not shared: the caller's own build."""
+    and kept; a copy of the caller's own each time. `alone()` when the list is not shared: the caller's own build.
+    `wakes()` is when the caller's next snoozed ask comes back (ask_snoozes.next_end): part of the key, so the list
+    the app reads again at that moment holds it, with no write to move the mark."""
     if getattr(_local, "building", False):
         return alone()
     at = mark(c)
     if at is None:
         return _counted(alone)
-    key: Key = (getattr(c, "pool_file", None), viewer, snoozed, at)
+    key: Key = (
+        c.store_token,
+        getattr(c, "pool_file", None),
+        viewer,
+        snoozed,
+        at,
+        wakes() if wakes is not None else None,
+    )
     now = clock()
     with _lock:
         for old in [k for k, (began, _) in _held.items() if now - began >= TTL]:

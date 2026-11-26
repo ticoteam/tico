@@ -1015,7 +1015,6 @@ def prime(conn: "sqlite3.Connection", task_ids: Iterable[str], *, slim: bool = F
     ids = [str(row["id"]) for row in rows]
     if not ids:
         return returned
-    R.prime_reviews(conn, ids)  # what each task's linked PRs' reviews covered (task_requirements._new_heads)
     R.prime(conn, rows)
     task_wakes.prime_holds(conn, ids)  # each task's worktree wait and held run: a bot's turn may be Paused on it
     task_depends.prime(conn, ids)  # the tasks each depends on that are still open
@@ -1650,6 +1649,9 @@ def _lists(
     from . import paid_renders
 
     cards = paid_renders.cards(conn) if shots else {}
+    # What each task's linked PRs' reviews covered (task_requirements._new_heads, which a page's ask reads): Needs you's
+    # lists alone, where every candidate is read; a pass that reads no page would pay for it.
+    R.prime_reviews(conn, task_ids)
     read = prime(conn, task_ids)
     for task_id in task_ids:
         row = read[str(task_id)] if str(task_id) in read else E.task(conn, task_id)

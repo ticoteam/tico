@@ -1997,7 +1997,7 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
 
     One build serves every caller at the same change (backend/needs_share.py): opening the app asks for it from up to
     eight requests at once. A shared build is the whole list, which a `count_only` caller counts as it counts its own."""
-    from . import needs_cache, needs_share
+    from . import ask_snoozes, needs_cache, needs_share
 
     if not H.is_human(who.actor):
         return []
@@ -2007,6 +2007,7 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
         snoozed,
         lambda: _needs_items(c, auth, who, False, snoozed),
         alone=lambda: _needs_items(c, auth, who, count_only, snoozed),
+        wakes=lambda: ask_snoozes.next_end(c, who),
     )
 
 
