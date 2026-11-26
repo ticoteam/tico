@@ -170,7 +170,7 @@ _REVIEW_RUBRIC_BEFORE_DESCRIPTION = (
     "and say what each checked. Give each real defect its own finding with file:line, severity, and why it matters. "
     "Skip style nits and diff summaries. Say when there are no findings."
 )
-# Every text the combined Review rubric has shipped with: asked whole, with its parts (pipeline_judges.EXPLAINED).
+# Every text the combined Review rubric has shipped with: asked as pipeline_judges.CHECKS["two_reviews"].
 COMBINED_REVIEW_RUBRICS = (REVIEW_RUBRIC, _REVIEW_RUBRIC_BEFORE_DESCRIPTION)
 # The single-review line the presets shipped before the one Review stage (still recognised, EARLIER).
 # Judged from the page alone (Jev is shown the linked PRs' newest commits beside it), and true of a good review of a
@@ -1700,6 +1700,41 @@ def save(
         after = read(conn, pid)
         assert after is not None
     return after
+
+
+NEAR_BAR = (
+    "The {line} bar on {stage} is close to Tico's {bar} bar but not the same, so it is now judged as one whole question, "
+    "not as Tico's {parts} calibrated parts. To keep the calibrated check, save Tico's text for this bar: tico "
+    "requirement update {requirement} --rubric {text}"
+)
+
+
+def near_bar_notes(record: Row) -> list[str]:
+    """What a save says, and never refuses, about each page bar that is close to one of Tico's bars but not the same
+    (pipeline_judges.near_bar): it is judged whole from now on, and how to put Tico's text back. Nothing is changed."""
+    from . import pipeline_judges as PJ
+
+    notes: list[str] = []
+    for stage in cast("list[Row]", record.get("stages") or []):
+        for req in cast("list[Row]", stage.get("requirements") or []):
+            if req.get("kind") != "page":
+                continue
+            settings = cast(Row, req.get("settings") or {})
+            near = PJ.near_bar(settings.get("rubric"))
+            if near is None:
+                continue
+            check = near[0]
+            notes.append(
+                NEAR_BAR.format(
+                    line=req.get("line") or "page",
+                    stage=stage.get("name") or "a stage",
+                    bar=PJ.BAR_NAMES[check],
+                    parts=len(PJ.CHECKS[check]),
+                    requirement=req.get("id") or "<requirement>",
+                    text=json.dumps(near[1], ensure_ascii=False),
+                )
+            )
+    return notes
 
 
 def _add_late_rules(conn: "sqlite3.Connection", pipeline_id: str, record: Row) -> None:

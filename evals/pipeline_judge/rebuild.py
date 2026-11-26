@@ -33,9 +33,28 @@ from backend import page_verdicts as V
 from backend import pipeline_judges as P
 from backend import pipeline_settings as S
 
-CHECK_OF = {"Spec": "spec", "Review": "review", "QA": "qa", "Checked in production": "validate"}
-NAME_OF = {"spec": "Spec page", "review": "Review page", "qa": "QA page", "validate": "Checked in production"}
-RUBRIC_OF = {"spec": S.SPEC_RUBRIC, "review": S.LEGACY_REVIEW_RUBRIC, "qa": S.QA_RUBRIC, "validate": S.VALIDATE_RUBRIC}
+# "Two reviews" is the one Review stage's page since Nov 18 (REVIEW_RUBRIC, task #3451); "Review" the single review before.
+CHECK_OF = {
+    "Spec": "spec",
+    "Review": "review",
+    "Two reviews": "two_reviews",
+    "QA": "qa",
+    "Checked in production": "validate",
+}
+NAME_OF = {
+    "spec": "Spec page",
+    "review": "Review page",
+    "two_reviews": "Review page",
+    "qa": "QA page",
+    "validate": "Checked in production",
+}
+RUBRIC_OF = {
+    "spec": S.SPEC_RUBRIC,
+    "review": S.LEGACY_REVIEW_RUBRIC,
+    "two_reviews": S.REVIEW_RUBRIC,
+    "qa": S.QA_RUBRIC,
+    "validate": S.VALIDATE_RUBRIC,
+}
 # The bars tried: a part is yes at met_at or more. Below 0.5 a yes would be likelier no than yes, so the grid starts there.
 GRID = tuple(round(0.5 + 0.05 * i, 2) for i in range(10))  # 0.5 .. 0.95
 UNSURE_UNDER = 0.10
@@ -51,12 +70,14 @@ def outcome(row):
 
 
 def verdict_at(check, parts, met_at, not_met_at=P.NOT_MET_AT):
-    """The verdict the server gives these part probabilities at this bar (pipeline_judges._part_lines): not met when any
-    part is no, unsure when any part is neither or missing, else met. No parts (the call failed) is unsure."""
+    """The verdict the server gives these part probabilities at this bar (pipeline_judges._part_lines; a part with its
+    own stricter yes line keeps it, `part_bar`): not met when any part is no, unsure when any part is neither or
+    missing, else met. No parts (the call failed) is unsure."""
     if not parts:
         return "unsure"
     said = [
-        P._band(parts[part.key], (met_at, not_met_at)) if part.key in parts else "unsure" for part in P.CHECKS[check]
+        P._band(parts[part.key], P.part_bar(part, (met_at, not_met_at))) if part.key in parts else "unsure"
+        for part in P.CHECKS[check]
     ]
     return "not_met" if "no" in said else "unsure" if "unsure" in said else "met"
 
@@ -321,7 +342,7 @@ def main(argv=None):
     parser.add_argument("--labels", required=True)
     parser.add_argument("--cache", required=True)
     parser.add_argument("--context")
-    parser.add_argument("--only", help="checks to take, comma-separated: spec,review,qa,validate")
+    parser.add_argument("--only", help="checks to take, comma-separated: spec,review,two_reviews,qa,validate")
     parser.add_argument("--out", help="bars: write the result here as .json and .md")
     args = parser.parse_args(argv)
     rows = load_labels(args.labels)

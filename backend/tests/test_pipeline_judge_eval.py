@@ -527,7 +527,8 @@ def test_the_eval_asks_each_check_in_parts_and_scores_the_servers_verdict(monkey
         p, cost, ms, said = adapter.judge_once(engine, by_check[check])
         assert said == "met" and p == 0.9 and cost == 0.0001, check
         assert calls[-1] == sorted(f"part_{part.key}" for part in P.CHECKS[check]), check
-    between = (P.BARS["qa"][0] + P.BARS["qa"][1]) / 2
+    lines = [P.part_bar(part, P.BARS["qa"]) for part in P.CHECKS["qa"]]
+    between = (min(yes for yes, _ in lines) + max(no for _, no in lines)) / 2  # between every part's own two lines
     monkeypatch.setattr(J, "gateway", _gateway_answering(between, calls))
     engine = adapter._decide("jev", "k", "http://gateway.acme.example")
     assert adapter.judge_once(engine, by_check["qa"])[3] == "unsure"
@@ -551,16 +552,20 @@ def test_a_call_that_fails_twice_is_unsure_never_a_false_met():
 
 
 def test_the_committed_rebuild_result_is_the_bar_the_server_uses():
-    """BARS and the eval result beside it say the same bar for each check (the rebuild's, or the one the eval raised it
-    to), so editing one without the other fails."""
+    """BARS and the eval results beside it say the same bar for each check (the rebuild's, the one the eval raised it to,
+    or the one a later eval set: task #3451's two reviews and QA), each result in date order over the one before, so
+    editing one without the other fails."""
     import json
     from pathlib import Path
 
     from backend import pipeline_judges as P
 
-    result = json.loads((Path(run.__file__).parent / "results" / "bars-2026-11-13.json").read_text())
-    bars = {check: tuple(r["bar"]) for check, r in result["checks"].items()}
-    bars.update({check: tuple(r["bar"]) for check, r in result.get("raised_by_eval", {}).items()})
+    bars: dict[str, tuple[float, ...]] = {}
+    for path in sorted((Path(run.__file__).parent / "results").glob("bars-*.json")):
+        result = json.loads(path.read_text())
+        bars.update({check: tuple(r["bar"]) for check, r in result["checks"].items() if r["bar"]})
+        bars.update({check: tuple(r["bar"]) for check, r in result.get("raised_by_eval", {}).items()})
+        bars.update({check: tuple(bar) for check, bar in result.get("set_by_eval", {}).items()})
     assert bars == P.BARS
 
 

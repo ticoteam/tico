@@ -134,8 +134,10 @@ def register(app: "FastAPI", auth: Any, mutate: "Callable[..., Any]", store: Any
                     409,
                     extra={"stages": gone, "move_to": pipeline_settings.move_to_hint(c, given)},
                 )
-            pipeline_settings.save(c, who.actor, given, seen, move_to)
-            return {"pipeline": record(c, who, pipeline_id)}
+            saved = pipeline_settings.save(c, who.actor, given, seen, move_to)
+            # A page bar close to one of Tico's but not the same is saved as it is, and the reply says so.
+            notes = pipeline_settings.near_bar_notes(saved)
+            return {"pipeline": record(c, who, pipeline_id), **({"notes": notes} if notes else {})}
 
         return mutate(request, body, write)
 

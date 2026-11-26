@@ -478,15 +478,14 @@ def test_each_shipped_check_is_asked_as_its_parts_now_and_as_it_read_before():
     from backend import pipeline_settings as PS
 
     assert P.check_of(PS.SPEC_RUBRIC) == "spec" and P.check_of(PS.LEGACY_REVIEW_RUBRIC) == "review"
-    assert P.check_of(PS.REVIEW_RUBRIC) is None, "the combined review needs the whole rubric"
+    assert P.check_of(PS.REVIEW_RUBRIC) == "two_reviews", "the one Review stage's two reviews are asked as parts"
     before = PS._REVIEW_RUBRIC_BEFORE_DESCRIPTION
-    assert P.check_of(before) is None, "the combined review's earlier text is still asked whole"
-    assert P.explain_parts(before) == P.EXPLAINED["two_reviews"], "and explained by the same parts"
+    assert P.check_of(before) == "two_reviews", "and its text before the PR-description line too"
     assert P.check_of(PS.QA_RUBRIC) == "qa" and P.check_of(PS.VALIDATE_RUBRIC) == "validate"
     assert P.check_of(PS.EARLIER["product-spec/page/rubric"][0]) == "spec", "an unedited older line is the same check"
     assert P.check_of("  " + PS.SPEC_RUBRIC.replace(" ", "\n", 3)) == "spec", "spacing does not matter"
     assert P.check_of(REQ["rubric"]) is None, "a company's own rubric is asked whole"
-    assert [len(P.CHECKS[c]) for c in ("spec", "review", "qa", "validate")] == [4, 3, 8, 3]
+    assert [len(P.CHECKS[c]) for c in ("spec", "review", "two_reviews", "qa", "validate")] == [4, 3, 5, 8, 3]
     assert P.check_of(PS._QA_RUBRIC_FOUR) == "qa", "the four-part QA line before task #389 is asked the same parts"
     assert set(P.BARS) == set(P.CHECKS), "every check has its bar, in one place"
     req = {"id": "r", "name": "Checked in production", "rubric": PS.VALIDATE_RUBRIC}
@@ -501,37 +500,98 @@ REVIEW_TEXT = (
 )
 
 
-def test_a_review_page_refused_names_the_unmet_item_and_the_line_the_model_read():
-    """Task #614: the shipped Review rubric is asked whole, as before, with its parts and the page line the answer rests
-    on beside it in the same call. A refusal names the part scored no and quotes the line the model picked, whichever
-    line that is (here not the one that shares the item's words); a pick that is not one of the lines quotes nothing;
-    an unsure part is never said to be missing; an OK keeps today's line. The parts never change the verdict."""
+def test_a_good_review_page_is_met_on_its_parts_and_one_review_alone_is_told_it_lacks_the_second():
+    """Task #3451: Tico's Review bar (two reviews on one page) is asked as its five calibrated parts, each yes at 0.5 and
+    no at 0.4 (BARS, from the eval on Nov 18 to 25's pages), not whole at 0.75, where no page passed. A page with every
+    part is met by itself; a page with one review is not met and told only that the second is missing, not also that
+    the two models don't differ."""
     from backend import pipeline_settings as PS
 
     req = {"id": "r", "name": "Review page", "rubric": PS.REVIEW_RUBRIC}
     page = {**ATTACHMENT, "text": REVIEW_TEXT}
-    assert P.check_of(PS.REVIEW_RUBRIC) is None and P.explain_parts(PS.REVIEW_RUBRIC) == P.EXPLAINED["two_reviews"]
     asked = []
+    good = P.judge_once(None, req, page, engine=_parts_engine(dict.fromkeys(("two", "commit", "findings"), 0.6), asked))
+    assert sorted(asked[-1]) == sorted(f"part_{part.key}" for part in P.CHECKS["two_reviews"]), "only the parts"
+    assert (good["verdict"], good["reason"]) == ("met", "Every part is there."), "0.6 is a yes on the 0.5 bar"
+    one = P.judge_once(None, req, page, engine=_parts_engine({"two": 0.05, "models": 0.05}))
+    assert (one["verdict"], one["reason"]) == ("not_met", "No second review that names its model.")
+    hedged = P.judge_once(None, req, page, engine=_parts_engine({"models": 0.45}))
+    assert (hedged["verdict"], hedged["reason"]) == ("unsure", "Can't tell if the two reviews are by different models.")
+    low = P.judge_once(None, req, page, engine=_parts_engine({"models": 0.4}))
+    assert (low["verdict"], low["reason"]) == ("not_met", "No second review from a different model."), "no at 0.4"
+    old = P.judge_once(None, req, page, engine=_parts_engine({"commit": 0.1}))
+    assert (old["verdict"], old["reason"]) == ("not_met", "A review doesn't name the PR's newest commit.")
+    assert all(part.found for part in P.CHECKS["two_reviews"]), "a passed page's OK lists each part found"
 
-    refused = P.judge_once(None, req, page, engine=_parts_engine({"met": 0.1, "models": 0.05}, asked, read="L1"))
-    want = ["met", P.READ] + sorted(f"part_{part.key}" for part in P.EXPLAINED["two_reviews"])
-    assert sorted(asked[-1]) == sorted(want)
-    assert asked[-1][P.READ]["criteria"]["L3"] == REVIEW_TEXT.splitlines()[2], "each line is offered as itself"
-    assert refused["verdict"] == "not_met" and refused["p"] == 0.1, "the whole question is the verdict"
-    assert refused["reason"] == (
-        'Doesn\'t meet "Review page". No second review from a different model. Read: "Review 1 by GPT-6.1 Terra at '
-        'd34ae47."'
-    ), refused["reason"]
-    unpicked = P.judge_once(None, req, page, engine=_parts_engine({"met": 0.1, "models": 0.05}, read="L9"))
-    assert unpicked["reason"] == 'Doesn\'t meet "Review page". No second review from a different model.', "no guess"
-    nothing = P.judge_once(None, req, page, engine=_parts_engine({"met": 0.1, "models": 0.05}, read=P.NO_LINE))
-    assert nothing["reason"].endswith("Read: no line of the page bears on it."), nothing["reason"]
-    hedged = P.judge_once(None, req, page, engine=_parts_engine({"met": 0.1, "models": 0.5}))
-    assert hedged["verdict"] == "not_met"
-    assert "Can't tell if the two reviews are by different models." in hedged["reason"], "unsure is never 'missing'"
-    assert "No second review" not in hedged["reason"]
-    passed = P.judge_once(None, req, page, engine=_parts_engine({"met": 0.9, "models": 0.05}, read="L3"))
-    assert (passed["verdict"], passed["reason"]) == ("met", 'Meets "Review page".'), "an OK keeps today's wording"
+
+def test_a_qa_page_passes_its_parts_at_0_6_but_its_checks_only_at_0_75():
+    """Task #3451: QA's parts are yes at 0.6 (24% of Nov 19 to 25's pages were unsure at 0.75, 9% at 0.6), but the checks
+    part keeps 0.75: a page reporting an older commit's checks scored 0.57 to 0.71 and was met below it."""
+    from backend import pipeline_settings as PS
+
+    req = {"id": "r", "name": "QA report", "rubric": PS.QA_RUBRIC}
+    strip = P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({"strip": 0.62, "how": 0.65}))
+    assert (strip["verdict"], strip["reason"]) == ("met", "Every part is there.")
+    old_head = P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({"checks": 0.71}))
+    assert (old_head["verdict"], old_head["reason"]) == (
+        "unsure",
+        "Can't tell if the checks at the newest commit passed.",
+    )
+    assert P.part_bar(P.CHECKS["qa"][2], P.BARS["qa"]) == (0.75, P.NOT_MET_AT) and P.CHECKS["qa"][2].key == "checks"
+
+
+def test_a_qa_page_without_one_reviewers_findings_is_not_met_even_when_that_part_reads_0_3():
+    """Review of #5299: QA pages with Reviewer 2's lines cut scored that part 0.22 to 0.32, unsure under QA's 0.2 no
+    line. A reviewer part is no under 0.4 (no real QA page from Nov 19 to 25 scored one between 0.2 and 0.4)."""
+    from backend import pipeline_settings as PS
+
+    req = {"id": "r", "name": "QA report", "rubric": PS.QA_RUBRIC}
+    cut = P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({"reviewer_2": 0.32}))
+    assert (cut["verdict"], cut["reason"]) == ("not_met", "Reviewer 2's findings are missing."), cut
+    assert P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({"reviewer_1": 0.45}))["verdict"] == "unsure"
+    assert P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({"how": 0.32}))["verdict"] == "unsure", "others 0.2"
+
+
+def test_framing_lines_of_a_companys_own_bar_are_never_quoted_as_missing():
+    """Task #3451: a bar edited from Tico's QA bar is a company's own, explained sentence by sentence. Its framing lines
+    (what the page is, which items count, that a page without them fails) name nothing a page shows: they are never
+    asked as a part, so a refusal never quotes them (27 of 36 QA reasons on Nov 18 and 19 did)."""
+    from backend import pipeline_settings as PS
+
+    framing = (
+        "A QA page that must meet this bar before the change ships.",
+        "Only these seven count.",
+        "A page that leaves any of them out, such as one reviewer's findings or the rollback, does not meet it.",
+    )
+    rubric = " ".join(
+        (framing[0], PS.QA_RUBRIC.split(". ", 1)[1].split(" Only these seven count.")[0], framing[1], framing[2])
+    )
+    assert P.check_of(rubric) is None and all(P.framing(one) for one in framing)
+    explained = P.explain_parts(rubric)
+    assert explained and not any(one in part.ask for part in explained for one in framing)
+    req = {"id": "r", "name": "QA report", "rubric": rubric}
+    page = {**ATTACHMENT, "text": "<h1>QA</h1><p>All checks pass at the newest commit.</p>"}
+    for p in (0.05, 0.5):
+        said = P.judge_once(None, req, page, engine=_parts_engine({"met": p, **{f"s{n}": p for n in range(1, 9)}}))
+        assert said["verdict"] in ("not_met", "unsure")
+        assert not any(one[:40] in said["reason"] for one in framing), said["reason"]
+    every = "Only these two count. A page that leaves any of them out does not meet it."
+    assert len(P.explain_parts(every)) == 2, "a bar of framing lines alone keeps its sentences rather than none"
+    named = (
+        "A page without a rollback plan does not meet it.",
+        "A page that lacks a diagram does not meet it.",
+        "A page that omits any of the screenshots does not meet it.",
+        "A report a person approves only if it shows test output.",
+        "A QA page that must meet this bar with the screenshots attached.",
+    )
+    for line in (*PS.QA_RUBRIC.split(". ")[1:2], "Shows the checks at the newest commit.", PS.VALIDATE_RUBRIC, *named):
+        assert not P.framing(line), line
+    assert any("rollback" in part.ask for part in P.explain_parts(f"Shows the checks. {named[0]}")), (
+        "a named item is a part"
+    )
+    for one in named[2:4]:  # review of #5299: a framing match must not drop the evidence a sentence names
+        asks = [part.ask for part in P.explain_parts(f"{one} Shows the rollback command.")]
+        assert len(asks) == 2 and one.rstrip(".") in asks[0], (one, asks)
 
 
 def test_a_company_rubric_refused_names_its_unmet_sentence_and_a_one_sentence_rubric_its_only_item():
@@ -569,7 +629,7 @@ def test_no_verdict_says_a_probability_a_band_or_the_whole_check():
     reasons = []
     for p in (0.95, 0.5, 0.05):
         reasons.append(P.judge_once(None, REQ, ATTACHMENT, engine=_engine(p, reason=""))["reason"])
-        for rubric in (PS.SPEC_RUBRIC, PS.LEGACY_REVIEW_RUBRIC, PS.QA_RUBRIC, PS.VALIDATE_RUBRIC):
+        for rubric in (PS.SPEC_RUBRIC, PS.LEGACY_REVIEW_RUBRIC, PS.REVIEW_RUBRIC, PS.QA_RUBRIC, PS.VALIDATE_RUBRIC):
             req = {"id": "r", "name": "Page", "rubric": rubric}
             for key in [part.key for part in P.CHECKS[P.check_of(rubric)]]:
                 reasons.append(P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({key: p}))["reason"])
