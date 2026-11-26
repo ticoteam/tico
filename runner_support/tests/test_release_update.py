@@ -1327,7 +1327,8 @@ class Launchctl:
     def __call__(self, cmd, **kw):
         self.calls.append(cmd)
         bad = cmd[1] == "kickstart" and cmd[-1].rsplit("/", 1)[-1] in self.fail_kickstart
-        return subprocess.CompletedProcess(cmd, 1 if bad else 0, "", "")
+        gone = cmd[1] == "print"  # `launchctl print` fails once a booted-out job has stopped
+        return subprocess.CompletedProcess(cmd, 1 if bad or gone else 0, "", "")
 
 
 def install_plists(agents, *labels):
@@ -1417,6 +1418,198 @@ def test_only_installed_helper_units_are_restarted_through_systemctl_and_connect
     assert ru.restart_helpers_systemd(
         {"TICO_SYSTEMD_UNIT": "tico-acme-bot.service"}, Systemctl(), unit_dir=units, say=lambda line: None
     ) == ["close-calls"]
+
+
+# -- installed jobs move from `python -m runner` to `python -m runner_support` ------------------------------------
+
+
+def legacy_plist(label, command, module="runner"):
+    """A plist as scripts/tico-computer install wrote it before runner_support/ was named (one job per file)."""
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>{label}</string>
+  <key>ProgramArguments</key><array>
+    <string>/py</string><string>-m</string><string>{module}</string>
+    <string>--config</string><string>/cfg/runner.json</string><string>{command}</string>
+  </array>
+  <key>WorkingDirectory</key><string>/hub</string>
+  <key>EnvironmentVariables</key><dict>
+    <key>HOME</key><string>/Users/ana</string><key>PATH</key><string>/usr/bin:/bin</string>
+  </dict>
+  <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
+</dict></plist>
+""".encode()
+
+
+def legacy_unit(kind, module="runner"):
+    """A unit as runner_support/systemd_units.py rendered it before runner_support/ was named."""
+    from runner_support import systemd_units as su
+
+    text = su.render(kind, python="/py", config="/cfg/runner.json", root="/hub", log="/l", path="/usr/bin")
+    return text.replace('"-m" "runner_support"', f'"-m" "{module}"')
+
+
+def test_a_mac_update_moves_the_legacy_plists_to_runner_support_reloads_them_and_can_put_them_back(tmp_path):
+    import plistlib
+
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    old = {
+        "team.tico.tico-bot": legacy_plist("team.tico.tico-bot", "run"),
+        "team.tico.tico-importers": legacy_plist("team.tico.tico-importers", "importers"),
+        # Already moved (a fresh install): neither rewritten nor reloaded.
+        "team.tico.tico-close-calls": legacy_plist("team.tico.tico-close-calls", "close-calls", "runner_support"),
+    }
+    for label, text in old.items():
+        (agents / f"{label}.plist").write_bytes(text)
+        (agents / f"{label}.plist").chmod(0o600)
+    launchctl, said = Launchctl(), []
+    undo = ru.move_units({}, mac=True, run=launchctl, agents=agents, uid=501, say=said.append)
+    for label, command in (("team.tico.tico-bot", "run"), ("team.tico.tico-importers", "importers")):
+        path = agents / f"{label}.plist"
+        data = plistlib.loads(path.read_bytes())
+        assert data["ProgramArguments"] == ["/py", "-m", "runner_support", "--config", "/cfg/runner.json", command]
+        assert data["Label"] == label and data["KeepAlive"] is True and data["EnvironmentVariables"]["HOME"]
+        assert (path.stat().st_mode & 0o777) == 0o600
+    assert (agents / "team.tico.tico-close-calls.plist").read_bytes() == old["team.tico.tico-close-calls"]
+
+    def reload(label):
+        # launchd keeps the definition it loaded: only a bootout and a bootstrap make it read the new file.
+        return [
+            ["launchctl", "bootout", f"gui/501/{label}"],
+            ["launchctl", "print", f"gui/501/{label}"],
+            ["launchctl", "bootstrap", "gui/501", str(agents / f"{label}.plist")],
+        ]
+
+    assert launchctl.calls == reload("team.tico.tico-bot") + reload("team.tico.tico-importers")
+    assert len(said) == 2
+    # A rollback (to a release that may have only runner/) gets the files exactly as they were, loaded again.
+    launchctl.calls.clear()
+    undo()
+    for label, text in old.items():
+        assert (agents / f"{label}.plist").read_bytes() == text
+    assert launchctl.calls == reload("team.tico.tico-bot") + reload("team.tico.tico-importers")
+
+
+def test_a_mac_reload_waits_for_launchd_to_let_go_and_retries_the_bootstrap_once(tmp_path, monkeypatch):
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / "team.tico.tico-bot.plist").write_bytes(legacy_plist("team.tico.tico-bot", "run"))
+    slept, answers = [], {"print": [0, 0, 1], "bootstrap": [5, 0]}
+    monkeypatch.setattr(ru, "_sleep", slept.append)
+
+    def launchctl(cmd, **kw):
+        left = answers.get(cmd[1])
+        return subprocess.CompletedProcess(cmd, left.pop(0) if left else 0, "", "")
+
+    ru.move_units({}, mac=True, run=launchctl, agents=agents, uid=501, say=lambda line: None)
+    assert answers == {"print": [], "bootstrap": []} and slept == [1, 1, 2]
+
+
+def test_a_linux_update_moves_the_legacy_units_to_runner_support_reloads_systemd_and_can_put_them_back(tmp_path):
+    units = tmp_path / "units"
+    units.mkdir()
+    old = {
+        "tico-bot.service": legacy_unit("bot"),
+        "tico-importers.service": legacy_unit("importers"),
+        "tico-close-calls.service": legacy_unit("close-calls", "runner_support"),
+    }
+    for name, text in old.items():
+        (units / name).write_text(text)
+        (units / name).chmod(0o600)
+    systemctl, said = Systemctl(), []
+    undo = ru.move_units(SYSTEMD, mac=False, run=systemctl, unit_dir=units, say=said.append)
+    for name, kind in (("tico-bot.service", "bot"), ("tico-importers.service", "importers")):
+        assert (units / name).read_text() == legacy_unit(kind, "runner_support")
+        assert ((units / name).stat().st_mode & 0o777) == 0o600
+    assert (units / "tico-close-calls.service").read_text() == old["tico-close-calls.service"]
+    # One daemon-reload, before the update's `systemctl --user restart`s, so they start the new ExecStart.
+    assert systemctl.calls == [["systemctl", "--user", "daemon-reload"]] and len(said) == 2
+    systemctl.calls.clear()
+    undo()
+    for name, text in old.items():
+        assert (units / name).read_text() == text
+    assert systemctl.calls == [["systemctl", "--user", "daemon-reload"]]
+
+
+def test_nothing_is_rewritten_or_reloaded_without_a_legacy_job(tmp_path):
+    agents, units = tmp_path / "agents", tmp_path / "units"
+    agents.mkdir()
+    units.mkdir()
+    (agents / "team.tico.tico-bot.plist").write_bytes(legacy_plist("team.tico.tico-bot", "run", "runner_support"))
+    (agents / "team.tico.tico-importers.plist").write_bytes(b"not a plist")  # left alone, not an error
+    (units / "tico-bot.service").write_text(legacy_unit("bot", "runner_support"))
+    launchctl, systemctl = Launchctl(), Systemctl()
+    ru.move_units({}, mac=True, run=launchctl, agents=agents, uid=501, say=lambda line: None)()
+    ru.move_units(SYSTEMD, mac=False, run=systemctl, unit_dir=units, say=lambda line: None)()
+    assert launchctl.calls == [] and systemctl.calls == []
+    # A Linux runner that systemd does not run (no TICO_SYSTEMD_UNIT) has no units to move.
+    (units / "tico-bot.service").write_text(legacy_unit("bot"))
+    ru.move_units({}, mac=False, run=systemctl, unit_dir=units, say=lambda line: None)()
+    assert systemctl.calls == [] and (units / "tico-bot.service").read_text() == legacy_unit("bot")
+
+
+class Units:
+    """`units` for update(): records when the jobs move and when a rollback puts them back."""
+
+    def __init__(self, calls):
+        self.calls, self.order = calls, []
+        restart = calls.restart
+
+        def restarted():
+            self.order.append("restart")
+            restart()
+
+        calls.restart = restarted
+
+    def __call__(self):
+        self.order.append("move")
+        return lambda: self.order.append("put back")
+
+
+def test_the_jobs_move_before_the_restart_and_a_rollback_puts_them_back_before_restarting_the_old_release(repos):
+    public, checkout, state = repos
+    calls = Calls()
+    units = Units(calls)
+    result, _ = run_apply(checkout, state, calls=calls, units=units)
+    assert result["state"] == "healthy" and units.order == ["move", "restart"]
+    sh(checkout, "git", "reset", "-q", "--hard", "v0.1.0")
+    calls = Calls(healthy=(False, True))
+    units = Units(calls)
+    result, _ = run_apply(checkout, state, calls=calls, units=units)
+    assert result["state"] == "rolled_back" and units.order == ["move", "restart", "put back", "restart"]
+
+
+def test_a_failed_move_of_the_jobs_does_not_stop_the_update(repos, capsys):
+    public, checkout, state = repos
+
+    def units():
+        raise OSError("read-only file system")
+
+    result, calls = run_apply(checkout, state, units=units)
+    assert result["state"] == "healthy" and calls.restarts == 1
+    assert "could not move the jobs to runner_support: OSError" in capsys.readouterr().out
+
+
+def test_the_update_moves_the_jobs_of_a_mac_or_a_systemd_runner_only(monkeypatch, tmp_path):
+    seen = []
+    monkeypatch.setattr(ru, "in_flight", lambda directory: False)
+    monkeypatch.setattr(ru, "apply", lambda root, version, directory, **kw: seen.append(kw["units"]) or {"state": "x"})
+    monkeypatch.setattr(ru, "move_units", lambda env=None, **kw: ("moved", kw["mac"]))
+    args = SimpleNamespace(state_dir=tmp_path, pid=42, root=tmp_path, version="0.2.0", started="")
+    for runner_kind, unit, expect in (
+        ("mac", "", ("moved", True)),
+        ("linux", "tico-bot.service", ("moved", False)),
+        ("linux", "", None),
+        ("docker", "tico-bot.service", None),
+    ):
+        monkeypatch.setattr(ru, "kind", lambda: runner_kind)
+        monkeypatch.setattr(ru, "systemd_unit", lambda env=None: unit)
+        ru.run_update(args)
+        units = seen.pop()
+        assert (units() if units else None) == expect, runner_kind
 
 
 @pytest.mark.slow

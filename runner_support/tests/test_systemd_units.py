@@ -71,9 +71,10 @@ def test_a_unit_file_is_private_and_lands_where_systemd_looks(tmp_path):
 
 
 def run_through_forwarder(argv):
-    """Runs a saved unit's command (its python swapped for this one) with --help, and the same under runner_support's
-    name: both parse it alike. `run` would exec the Rust runner, so for it the top-level help must offer `run`."""
-    assert argv[1:3] == ["-m", "runner"], argv
+    """Runs a unit's command (its python swapped for this one) with --help, and the same under the legacy `runner` name
+    that units written before this release still say: both parse it alike. `run` would exec the Rust runner, so for it
+    the top-level help must offer `run`."""
+    assert argv[1:3] == ["-m", "runner_support"], argv
     command = argv[-1]
     args = [*argv[3:-1], "--help"] if command == "run" else [*argv[3:], "--help"]
     old, new = (
@@ -85,16 +86,17 @@ def run_through_forwarder(argv):
 
 
 @pytest.mark.parametrize("kind", ["bot", "close-calls", "importers"])
-def test_a_unit_starts_its_job_by_the_runner_name_an_older_release_also_has(kind):
-    # Units outlive this release: a computer moved back to a release from before runner_support/ must still start.
+def test_a_unit_starts_its_job_through_runner_support(kind):
+    # Every release a computer may run (MIN_RUNNER_RELEASE 0.6.0) has runner_support/ (since 0.5.94), so a new unit
+    # names it and not the legacy runner/ forwarder, which is to be deleted.
     exec_line = next(line for line in su.render(kind, **KW).splitlines() if line.startswith("ExecStart="))
     argv = shlex.split(exec_line.removeprefix("ExecStart="))
-    assert argv == [KW["python"], "-m", "runner", "--config", KW["config"], su.COMMANDS[kind]]
+    assert argv == [KW["python"], "-m", "runner_support", "--config", KW["config"], su.COMMANDS[kind]]
     run_through_forwarder(argv)
 
 
 @pytest.mark.parametrize("kind", ["bot", "close-calls", "importers"])
-def test_a_launchd_plist_starts_its_job_by_the_runner_name_an_older_release_also_has(kind):
+def test_a_launchd_plist_starts_its_job_through_runner_support(kind):
     # The plist scripts/tico-computer install writes on a Mac, rendered by bash from the script's own heredoc.
     script = (ROOT / "scripts" / "tico-computer").read_text()
     body = re.search(r'cat > "\$file" <<PL\n(.*?)\nPL\n', script, re.S).group(1)
@@ -117,7 +119,7 @@ def test_a_launchd_plist_starts_its_job_by_the_runner_name_an_older_release_also
         },
     )
     argv = plistlib.loads(rendered.stdout)["ProgramArguments"]
-    assert argv == ["/py", "-m", "runner", "--config", "/cfg/runner.json", command]
+    assert argv == ["/py", "-m", "runner_support", "--config", "/cfg/runner.json", command]
     run_through_forwarder(argv)
 
 

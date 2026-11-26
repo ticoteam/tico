@@ -419,7 +419,7 @@ cleanly; raise the limit for that hub rather than turning the check off.
 ## The runner
 
 Every computer runs the Rust runner (`tico-runner`, from `runner-rs/`). The launchd job and the systemd unit start
-`python -m runner run`, which execs the binary; the Docker image runs the binary directly.
+`python -m runner_support run`, which execs the binary; the Docker image runs the binary directly.
 
 - **Docker:** the image ships the binary (`/usr/local/bin/tico-runner`), built from the same tree.
 - **Mac or Linux checkout:** a checkout on a release tag downloads that release's `tico-runner-<os>-<arch>.gz` from
@@ -436,11 +436,12 @@ A binary is only run when it was built from this checkout's `runner-rs` sources.
 had, the runner does not start: it logs why and launchd or systemd tries again. A bot on a model CLI the runner does
 not drive is not ready, with the reason on that bot; the other bots on the computer run.
 
-The Python runner is gone. `"engine": "python"` in `runner.json` and `TICO_RUNNER_ENGINE=python` are ignored. Python
-still runs the side jobs (Close calls, meeting importers), the catalog set-up and the update process, from
-`runner_support/`. A small `runner/` package forwards the two entry points saved things start: `python -m runner ...`
-(the launchd plists and systemd units `scripts/tico-computer install` writes, `python -m runner --config <path> <job>`)
-and `python -m runner.cloud_machine boot` (cloud machine images).
+The Python runner is gone; an `"engine"` setting in `runner.json` or `TICO_RUNNER_ENGINE` is not read. Python still runs
+the side jobs (Close calls, meeting importers), the catalog set-up and the update process, from `runner_support/`. A
+small `runner/` package forwards the two entry points older installs saved, until it is deleted: `python -m runner ...`
+(launchd plists and systemd units, `python -m runner --config <path> <job>`) and `python -m runner.cloud_machine boot`
+(cloud machine images). An update points installed plists and units at `python -m runner_support` and reloads them
+(`launchctl bootout` and `bootstrap`, or `systemctl --user daemon-reload`); a rollback puts the old files back.
 
 ## A Docker runner
 

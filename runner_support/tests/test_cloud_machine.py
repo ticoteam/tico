@@ -316,8 +316,8 @@ def test_base_gives_sudo_and_the_boot_service_only_on_the_machine_it_prepares(ma
     assert fake.named("visudo") and ["systemctl", "enable", cm.UNIT] in fake.calls
     assert [c for c in fake.calls if "runner_support.engine" in c and "prepare" in c]
     unit = (tmp_path / "units" / cm.UNIT).read_text()
-    # `runner.cloud_machine`: a saved image may boot a checkout moved back to a release from before runner_support/.
-    assert f"ExecStart={m.python} -m runner.cloud_machine boot" in unit.splitlines()
+    # runner_support's own name: every release a machine may boot (MIN_RUNNER_RELEASE 0.6.0) has it (since 0.5.94).
+    assert f"ExecStart={m.python} -m runner_support.cloud_machine boot" in unit.splitlines()
     assert "Restart=on-failure" in unit and "WantedBy=multi-user.target" in unit
     marker = json.loads(cm.marker_path(machine.etc).read_text())
     assert marker == {"user": "user", "root": str(m.root), "release": "0.5.7"}
@@ -329,7 +329,8 @@ def test_base_gives_sudo_and_the_boot_service_only_on_the_machine_it_prepares(ma
 
 
 def test_the_boot_units_command_runs_through_the_runner_forwarder():
-    # What the saved unit starts, `python -m runner.cloud_machine boot`, reaches runner_support's boot (--help: no root).
+    # What an image saved before this release starts, `python -m runner.cloud_machine boot`, reaches runner_support's
+    # boot (--help: no root).
     root = Path(__file__).resolve().parents[2]
     old, new = (
         subprocess.run(

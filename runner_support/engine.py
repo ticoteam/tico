@@ -1,6 +1,6 @@
 """`python -m runner_support run` is a shim: it execs this checkout's Rust runner (runner-rs/). launchd plists and systemd
-units from every install start it (as `python -m runner run`, runner/__main__.py), and the binary's path changes with
-the checkout, so no unit names the binary.
+units from every install start it (older installs as `python -m runner run`, which runner/__main__.py forwards here), and
+the binary's path changes with the checkout, so no unit names the binary.
 
 The binary is $TICO_RUNNER_BIN (the Docker image's), else this checkout's runner-rs/target/release/tico-runner, else
 the one downloaded for this release (runner-rs/target/dist/<source id>/tico-runner), and only one whose `--version` is
@@ -8,8 +8,7 @@ this checkout's RUNNER_VERSION and whose `--build-id` is this checkout's source 
 runner-rs/build.rs), so a checkout that moved on while the binary stayed put is never run. Without one, a checkout on
 a release tag downloads that release's binary from GitHub (checked against the release's tico-runner-SHA256SUMS);
 otherwise, with cargo on PATH, it is built now, behind a lock. When neither works the shim says why and exits 75, so
-launchd or systemd starts it again. `"engine": "python"` in runner.json and TICO_RUNNER_ENGINE=python are ignored with
-a warning: there is no Python runner any more.
+launchd or systemd starts it again. There is no Python runner any more.
 
 `python -m runner_support.engine prepare` gets the binary ready (scripts/tico-computer install, a release update) and exits non-zero
 with the reason when it cannot; `python -m runner_support.engine path` prints the ready binary's path.
@@ -18,7 +17,6 @@ with the reason when it cannot; `python -m runner_support.engine path` prints th
 import fcntl
 import gzip
 import hashlib
-import json
 import os
 import platform
 import shutil
@@ -43,14 +41,6 @@ RETRY_EXIT = 75  # EX_TEMPFAIL: the supervisor starts the shim again
 def log(line):
     """To stderr: `doctor` and `enroll` print JSON on stdout, and a unit's stderr goes to the same log."""
     print(time.strftime("%Y-%m-%d %H:%M:%S") + " " + line, file=sys.stderr, flush=True)
-
-
-def ignored(config, env):
-    """Warn once per start about a Python-engine setting left from an older release."""
-    if str(env.get("TICO_RUNNER_ENGINE") or "").strip().lower() == "python":
-        log("Tico runner: TICO_RUNNER_ENGINE=python is ignored; the Python runner was removed")
-    if str((config or {}).get("engine") or "").strip().lower() == "python":
-        log('Tico runner: "engine": "python" in runner.json is ignored; the Python runner was removed')
 
 
 def _ask(binary, flag):
@@ -250,20 +240,10 @@ def prepare(root, env):
     return None, f"no Rust runner for this checkout ({missing}); {fetched}; {built}"
 
 
-def read_config(path):
-    try:
-        data = json.loads(Path(path).read_text())
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
-        return {}
-
-
-def exec_binary(argv, config_path=None, env=None, execv=os.execve, root=ROOT):
+def exec_binary(argv, env=None, execv=os.execve, root=ROOT):
     """Become the Rust runner with `argv` (its arguments, --config included). Never returns: when no binary can be
     had it exits RETRY_EXIT, so launchd or systemd tries again shortly."""
     env = dict(os.environ if env is None else env)
-    if config_path is not None:
-        ignored(read_config(config_path), env)
     binary, why = prepare(root, env)
     if binary is None:
         log(f"Tico runner: cannot start: {why}. Trying again shortly.")

@@ -13,6 +13,7 @@ import fcntl
 import hashlib
 import json
 import os
+import plistlib
 import re
 import signal
 import shutil
@@ -22,6 +23,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
+from xml.parsers.expat import ExpatError
 
 from . import checkout_links, release_branch
 from .regular_file import SMALL, read as read_regular, lock as open_regular_lock
@@ -566,6 +568,133 @@ def restart_helpers_systemd(env=os.environ, run=subprocess.run, unit_dir=None, s
     return restarted
 
 
+# -- installed jobs move from `python -m runner` to `python -m runner_support` ----------------------------------
+# Plists and units written by older installs start `python -m runner ...`, through the runner/ forwarder that is to be
+# deleted. Every release a computer may run has runner_support/ (since 0.5.94; MIN_RUNNER_RELEASE is 0.6.0), so an
+# update points them at it and reloads them; a rollback puts the old files back (and reloads them), so the release it
+# returns to, whatever it has, starts the jobs exactly as before.
+LEGACY_UNIT = re.compile(r'(?<=\s)("?)-m\1(\s+)("?)runner\3(?=\s|$)')
+
+
+def moved_plist(content):
+    """The plist with `-m runner` made `-m runner_support`, or None when it has none (or is not a plist)."""
+    try:
+        data = plistlib.loads(content)
+    except (ValueError, ExpatError):
+        return None
+    args = data.get("ProgramArguments") if isinstance(data, dict) else None
+    if not isinstance(args, list):
+        return None
+    for i, word in enumerate(args[:-1]):
+        if word == "-m" and args[i + 1] == "runner":
+            args[i + 1] = "runner_support"
+            return plistlib.dumps(data)
+    return None
+
+
+def moved_unit(content):
+    """The unit with `-m runner` in its ExecStart= made `-m runner_support`, or None when it has none."""
+    lines, changed = content.decode().split("\n"), False
+    for n, line in enumerate(lines):
+        if line.startswith("ExecStart="):
+            new = LEGACY_UNIT.sub(lambda m: f"{m[1]}-m{m[1]}{m[2]}{m[3]}runner_support{m[3]}", line, count=1)
+            changed, lines[n] = changed or new != line, new
+    return "\n".join(lines).encode() if changed else None
+
+
+def replace_file(path, content, mode):
+    """Write `content` over `path` in one step (a reader never sees half a file), keeping its permission bits."""
+    temp = path.with_name(f".{path.name}.tico-{uuid.uuid4().hex}")
+    fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(content)
+        os.chmod(temp, mode)
+        os.replace(temp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            temp.unlink()
+        raise
+
+
+def reload_job(label, plist, domain, run=subprocess.run):
+    """`launchctl bootout` and `bootstrap` (scripts/tico-computer `bootstrap`): launchd keeps the definition it loaded, so
+    only this makes a job start what its plist now says. A KeepAlive job starts again at once (RunAtLoad). Returns the
+    bootstrap's outcome."""
+    run(["launchctl", "bootout", f"{domain}/{label}"], capture_output=True, text=True, timeout=60)
+    for _ in range(15):  # the label stays taken until the old process has stopped; bootstrap fails until then
+        if run(["launchctl", "print", f"{domain}/{label}"], capture_output=True, text=True, timeout=60).returncode:
+            break
+        _sleep(1)
+    done = run(["launchctl", "bootstrap", domain, str(plist)], capture_output=True, text=True, timeout=60)
+    if done.returncode:  # launchd can hold a just-removed label a moment longer
+        _sleep(2)
+        done = run(["launchctl", "bootstrap", domain, str(plist)], capture_output=True, text=True, timeout=60)
+    return done
+
+
+def move_units(env=os.environ, *, mac, run=subprocess.run, agents=None, unit_dir=None, uid=None, say=None):
+    """Point this computer's installed jobs (the runner's own and its helpers) at `python -m runner_support` and reload
+    them: on a Mac each moved job is booted out and bootstrapped again, which also restarts it on the checkout as it is
+    now; under systemd one `daemon-reload` makes the update's restarts start the new ExecStart=. Returns `undo`, which
+    puts the files back as they were and reloads them the same way. A file that cannot be read or written is skipped."""
+    from .systemd_units import helper_units, user_unit_dir
+
+    say = say or (lambda line: print(time.strftime("%Y-%m-%d %H:%M:%S") + " " + line, flush=True))
+    if mac:
+        directory = Path(agents) if agents else Path.home() / "Library" / "LaunchAgents"
+        names = [f"{label}.plist" for label in helper_labels(env, ("bot", *HELPERS)).values()]
+        rewrite = moved_plist
+    else:
+        unit = systemd_unit(env)
+        directory = Path(unit_dir) if unit_dir else user_unit_dir(env)
+        names = [unit, *helper_units(unit).values()] if unit else []
+        rewrite = moved_unit
+    domain = f"gui/{os.getuid() if uid is None else uid}"
+    moved = []  # (path, the content it had, its mode)
+    for name in names:
+        path = directory / name
+        try:
+            before = read_regular(path)
+            after = rewrite(before)
+            if after is None:
+                continue
+            mode = stat.S_IMODE(path.lstat().st_mode)
+            replace_file(path, after, mode)
+        except (OSError, ValueError):  # unreadable, not UTF-8, or not writable: it keeps starting through runner/
+            continue
+        moved.append((path, before, mode))
+        say(f"Tico update: {name} now starts python -m runner_support")
+
+    def reload(paths):
+        if not paths:
+            return
+        if not mac:
+            done = run(["systemctl", "--user", "daemon-reload"], capture_output=True, text=True, timeout=60)
+            if done.returncode:
+                say(f"Tico update: systemctl daemon-reload exited {done.returncode}")
+            return
+        for path in paths:
+            done = reload_job(path.stem, path, domain, run)
+            if done.returncode:
+                say(f"Tico update: could not reload {path.stem}: launchctl exited {done.returncode}")
+
+    reload([path for path, _, _ in moved])
+
+    def undo():
+        restored = []
+        for path, before, mode in moved:
+            try:
+                replace_file(path, before, mode)
+            except OSError as exc:
+                say(f"Tico update: could not put back {path.name}: {type(exc).__name__}")
+                continue
+            restored.append(path)
+        reload(restored)
+
+    return undo
+
+
 def wait_healthy(directory, commit, since, seconds=HEALTH_S, sleep=time.sleep):
     """True once a runner started on `commit` has heartbeated to the server after `since`."""
     deadline = _now() + seconds
@@ -647,10 +776,13 @@ def update(
     listed=None,
     which=shutil.which,
     repair_links=False,
+    units=None,
 ):
     """Move the checkout to release `version`, get its Rust runner ready (`prepare`), and bring the runner back on
     it; undo that if either fails or the runner does not come back. Once it is healthy, `helpers` restarts the helper jobs so they run the new code too (a rollback
     needs nothing: a helper that saw the new revision exits again when the old one returns).
+    `units` (move_units) points the installed jobs at runner_support just before the restart and returns how to put them
+    back, which a rollback does before it restarts the old release.
     `started` is the commit the runner process started on. A checkout that is already on the release while the
     runner still runs other code (another runner sharing the checkout moved it, or a person did) only needs
     the restart.
@@ -738,6 +870,19 @@ def update(
             return defer_update(directory, version, pending, clock=clock)
     say("updating")
 
+    put_back = []
+
+    def move_jobs():
+        if not units:
+            return
+        try:
+            undo = units()
+        except (OSError, subprocess.SubprocessError, ValueError) as exc:  # they keep starting through runner/
+            print(f"Tico update: could not move the jobs to runner_support: {type(exc).__name__}", flush=True)
+            return
+        if undo:
+            put_back.append(undo)
+
     def restarted_helpers():
         if helpers:
             try:
@@ -752,6 +897,7 @@ def update(
         if error:
             return say("failed", error)
         since = clock()
+        move_jobs()
         restart and restart()
         if healthy and not healthy(target, since):
             return say("failed", f"the runner did not report in within {HEALTH_S} seconds on {tag}")
@@ -765,6 +911,11 @@ def update(
         g("checkout", "--quiet", back)
         note = install(root, target, old) if changed_files(root, old, target, run) else ""
         since = clock()
+        for undo in put_back:
+            try:
+                undo()
+            except (OSError, subprocess.SubprocessError, ValueError) as exc:
+                print(f"Tico update: could not put the jobs back: {type(exc).__name__}", flush=True)
         restart and restart()
         ok = healthy(old, since) if healthy else True
         return say(
@@ -808,6 +959,7 @@ def update(
     if error:
         return back_out(error)
     since = clock()
+    move_jobs()
     restart and restart()
     if healthy and not healthy(target, since):
         return back_out(f"the runner did not report in within {HEALTH_S} seconds on {tag}")
@@ -883,6 +1035,13 @@ def run_update(args):
     if not args.pid:
         return catch_up(args)
     helpers = restart_helpers if kind() == "mac" else restart_helpers_systemd if systemd_unit() else None
+    units = (
+        (lambda: move_units(mac=True))
+        if kind() == "mac"
+        else (lambda: move_units(mac=False))
+        if kind() == "linux" and systemd_unit()
+        else None
+    )
     result = apply(
         args.root,
         args.version,
@@ -892,6 +1051,7 @@ def run_update(args):
         healthy=lambda commit, since: wait_healthy(args.state_dir, commit or "", since),
         helpers=helpers,
         started=args.started,
+        units=units,
     )
     print(json.dumps(result))
     return 0 if result["state"] == "healthy" else 1

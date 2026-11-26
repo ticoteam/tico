@@ -12,42 +12,30 @@ from . import importers
 
 
 # The Rust runner's own commands: `python -m runner_support <one>` execs it with the same arguments (engine.py), so
-# launchd plists and systemd units, which say `python -m runner run|doctor|...` (runner/__main__.py forwards here),
-# keep working.
+# launchd plists and systemd units, which say `python -m runner_support run` (older ones `python -m runner run`, which
+# runner/__main__.py forwards here), keep working.
 BINARY = ("enroll", "profile", "status", "doctor", "adopt", "run")
 
 
 def binary_command(argv):
-    """(command, --config path) when argv names one of the Rust runner's commands, else ("", None)."""
-    config, i = Path.home() / ".config/tico/runner.json", 0
+    """The command when argv names one of the Rust runner's commands (after any --config), else ""."""
+    i = 0
     while i < len(argv):
         if argv[i] == "--config" and i + 1 < len(argv):
-            config, i = Path(argv[i + 1]), i + 2
+            i += 2
         elif argv[i].startswith("--config="):
-            config, i = Path(argv[i].split("=", 1)[1]), i + 1
+            i += 1
         else:
-            return (argv[i], config) if argv[i] in BINARY else ("", None)
-    return "", None
-
-
-def park(block=signal.pthread_sigmask, wait=signal.sigwait):
-    """The retired `connectors` job. A launchd job or systemd unit a computer set up earlier may still start it, and
-    both start a job that exits again at once: so it waits, idle, until it is stopped. An update removes the job
-    (runner_support/release_update.py `retire_helpers`), and the runner deletes the computer's mail copy and Google
-    files on start (runner-rs/src/mail_retire.rs)."""
-    print("connectors: retired, mail and calendar run on the server; waiting until stopped", flush=True)
-    stop = {signal.SIGTERM, signal.SIGINT}
-    block(signal.SIG_BLOCK, stop)  # taken by `wait`, not by a handler: the job ends quietly
-    wait(stop)
+            return argv[i] if argv[i] in BINARY else ""
+    return ""
 
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    command, config_path = binary_command(argv)
-    if command:
+    if binary_command(argv):
         from . import engine
 
-        engine.exec_binary(argv, config_path=config_path if command == "run" else None)
+        engine.exec_binary(argv)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=Path.home() / ".config/tico/runner.json")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -56,7 +44,6 @@ def main(argv=None):
     sub.add_parser(
         "catalog", help="Set up or refresh built-in bots from the catalog (JSON on stdin; for the Rust runner)"
     )
-    sub.add_parser("connectors", help="Retired: mail and calendar run on the server; waits idle until stopped")
     p = sub.add_parser("close-calls", help="Sync Close call and Notetaker transcripts from this machine")
     p.add_argument(
         "--backfill-days",
@@ -79,8 +66,6 @@ def main(argv=None):
     for name in ("close-calls", "importers"):
         if args.command == name and args.backfill_days is not None and not 1 <= args.backfill_days <= 365:
             parser.error("--backfill-days must be between 1 and 365")
-    if args.command == "connectors":
-        return park()
     config = json.loads(args.config.read_text())
     config.setdefault("state_dir", str(args.config.parent / ("state-" + config["runner_id"])))
     client = Client(config["url"], config["token"])

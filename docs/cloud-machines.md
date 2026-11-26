@@ -220,7 +220,7 @@ Explicit **Replace machine** (or replacing the shared machine) clears the marker
    `enrollments` and `cloud_machine_codes`, with the machine's key: the bot, or `_shared`) and asks HQ for a machine.
 2. HQ runs the equivalent of `boat new --from <HQ_BOAT_BASE_SNAPSHOT>` (default `tico-runner-base`) with two
    per-sandbox variables: `TICO_ENROLL_TOKEN` (that code) and `TICO_HUB_URL` (the server).
-3. At boot, `tico-cloud-machine.service` (`python -m runner.cloud_machine boot`, forwarded to runner_support/cloud_machine.py) finds the two variables, enrolls the
+3. At boot, `tico-cloud-machine.service` (`python -m runner_support.cloud_machine boot`) finds the two variables, enrolls the
    moves the checkout to the server's release (the `release` its public `/healthz` names, through
    `python -m runner_support.release_update` with no runner yet: forward only, nothing restarted), so nothing below
    the server's release enrolls. Then it enrolls the runner once with `tico-runner enroll` and runs
