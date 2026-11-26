@@ -1,6 +1,7 @@
 import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
+import { reasonIn, useAction } from '@/actions';
 import { meQuery, useActor, useActors } from '@/data';
 import type { FactoryMap } from '@/api/schema';
 import { Button } from '@/kit/Button';
@@ -17,7 +18,8 @@ import { accessQuery, factoriesQuery, groupsQuery, type Team } from './queries';
 /* Org (pages/3-company/company.js orgPage): who reports to whom, as a light chart. A teammate opens its sheet beside
    the chart (`?panel=mate:<human:id | bot:slug>`, the old ui/app/redesign-org.ts rdoSheet): its group and what it
    leads, Move to another group for the owner (any group, or none) or a lead (within what it leads), its page, and a
-   call for an agent. The built-in agents stay in their group. Under the chart, the factories (ui/app/org-factories.ts):
+   call for an agent. The owner and Admins make a teammate its group's lead there, or stop it leading; they also see
+   which teams have no lead. The built-in agents stay in their group. Under the chart, the factories (ui/app/org-factories.ts):
    each factory's pipelines in the order work moves through them, each opening its tasks; the owner and Admins make a
    factory from the ⋯ (`?panel=factory-new`). */
 
@@ -97,7 +99,7 @@ export function OrgTab({ head, search }: { head: Head; search: { panel?: string 
               <span className="stage-n">{actors.length} teammates</span>
             </header>
             {teams.map((t) => (
-              <OrgTeam key={t.id} team={t} byParent={byParent} open={mate} />
+              <OrgTeam key={t.id} team={t} byParent={byParent} open={mate} admin={maker} />
             ))}
           </div>
           <Factories />
@@ -107,14 +109,27 @@ export function OrgTab({ head, search }: { head: Head; search: { panel?: string 
         search.panel === 'factory-new' && maker ? (
           <NewFactory onClose={() => void close.run({})} />
         ) : (
-          mate && <MateSheet key={mate} who={mate} groups={all} onClose={() => void close.run({})} />
+          mate && <MateSheet key={mate} who={mate} groups={all} admin={maker} onClose={() => void close.run({})} />
         )
       }
     />
   );
 }
 
-function OrgTeam({ team, byParent, open: picked }: { team: Team; byParent: Subgroups; open: string | null }) {
+type Node = { team: Team; byParent: Subgroups; open: string | null; admin: boolean };
+
+/** A team's lead under its name, or "No lead" for the owner and Admins (who can set one). */
+function LeadName({ team, lead, admin }: { team: Team; lead: string | null; admin: boolean }) {
+  if (lead)
+    return (
+      <PanelLink panel={`mate:${lead}`} className="oc-who">
+        <NameOf id={lead} />
+      </PanelLink>
+    );
+  return admin && team.id !== BUILT_IN ? <span className="oc-who oc-none">No lead</span> : null;
+}
+
+function OrgTeam({ team, byParent, open: picked, admin }: Node) {
   const lead = leadOf(team);
   const mates = members(team).filter((m) => m !== lead);
   // The built-in agents stay folded until someone opens them (redesign-org.ts), unless one of them is the open sheet.
@@ -133,18 +148,14 @@ function OrgTeam({ team, byParent, open: picked }: { team: Team; byParent: Subgr
           <h2>
             <FoldButton name={team.name} count={n} open={open} onToggle={() => setOpen(!open)} />
           </h2>
-          {lead && (
-            <PanelLink panel={`mate:${lead}`} className="oc-who">
-              <NameOf id={lead} />
-            </PanelLink>
-          )}
+          <LeadName team={team} lead={lead} admin={admin} />
         </div>
       </header>
       {open && (
         <div className={subs.length ? 'oc-kids has-subs' : 'oc-kids'}>
           {mates.length > 0 && <Mates ids={mates} open={picked} />}
           {subs.map((s) => (
-            <OrgSub key={s.id} team={s} byParent={byParent} open={picked} />
+            <OrgSub key={s.id} team={s} byParent={byParent} open={picked} admin={admin} />
           ))}
         </div>
       )}
@@ -152,18 +163,26 @@ function OrgTeam({ team, byParent, open: picked }: { team: Team; byParent: Subgr
   );
 }
 
-function OrgSub({ team, byParent, open: picked }: { team: Team; byParent: Subgroups; open: string | null }) {
+/** A team inside another: its name, then its lead's face and name as a top-level team shows them. */
+function OrgSub({ team, byParent, open: picked, admin }: Node) {
   const [open, setOpen] = useState(true);
-  const ids = members(team);
+  const lead = leadOf(team);
+  const ids = members(team).filter((m) => m !== lead);
   return (
     <>
       <header className="oc-sub">
         <h3>
           <FoldButton name={team.name} count={memberCount(team, byParent)} open={open} onToggle={() => setOpen(!open)} />
         </h3>
+        {lead && (
+          <PanelLink panel={`mate:${lead}`} className="oc-sub-face" aria-label={`${team.name} lead`}>
+            <Face id={lead} size={22} />
+          </PanelLink>
+        )}
+        <LeadName team={team} lead={lead} admin={admin} />
       </header>
       {open && ids.length > 0 && <Mates ids={ids} open={picked} />}
-      {open && byParent.get(team.id)?.map((s) => <OrgSub key={s.id} team={s} byParent={byParent} open={picked} />)}
+      {open && byParent.get(team.id)?.map((s) => <OrgSub key={s.id} team={s} byParent={byParent} open={picked} admin={admin} />)}
     </>
   );
 }
@@ -219,7 +238,7 @@ function treeOrder(groups: readonly Team[]): Team[] {
 }
 
 /** A teammate's sheet: its group and what it leads, Move to, its page, and a call for an agent. */
-function MateSheet({ who, groups, onClose }: { who: string; groups: readonly Team[]; onClose: () => void }) {
+function MateSheet({ who, groups, admin, onClose }: { who: string; groups: readonly Team[]; admin: boolean; onClose: () => void }) {
   const me = useQuery(meQuery).data;
   const a = useActor(who);
   const move = useDo('org.move');
@@ -230,6 +249,7 @@ function MateSheet({ who, groups, onClose }: { who: string; groups: readonly Tea
   const [to, setTo] = useState(home);
   const name = a?.name ?? who.slice(who.indexOf(':') + 1);
   const agent = who.startsWith('bot:');
+  const team = groups.find((g) => g.id === home);
   return (
     <SidePanel
       title={name}
@@ -262,6 +282,7 @@ function MateSheet({ who, groups, onClose }: { who: string; groups: readonly Tea
           </div>
         )}
       </section>
+      {admin && team && team.id !== BUILT_IN && <LeadRow who={who} team={team} />}
       {targets.length > 0 && (
         <section className="rail-sec">
           <div className="kf">
@@ -273,6 +294,45 @@ function MateSheet({ who, groups, onClose }: { who: string; groups: readonly Tea
         </section>
       )}
     </SidePanel>
+  );
+}
+
+/** Make this teammate its group's one lead (saying whom it replaces), or Stop leading. A refusal stays in the sheet. */
+function LeadRow({ who, team }: { who: string; team: Team }) {
+  const set = useAction('org.lead');
+  const [error, setError] = useState('');
+  const current = leadOf(team);
+  const leads = current === who;
+  const press = async () => {
+    setError('');
+    const r = await set.run({ group: team.id, who: leads ? '' : who });
+    if (!r.ok) setError(reasonIn(r) ?? "Couldn't save");
+  };
+  return (
+    <section className="rail-sec" aria-label="Lead">
+      <div className="kf">
+        <span className="kf-l">Lead</span>
+        <div className="kf-c oc-lead">
+          <Button busy={set.pending} onClick={() => void press()}>
+            {leads ? 'Stop leading' : `Make lead of ${team.name}`}
+          </Button>
+          {leads ? (
+            <p className="oc-lead-note">Leads {team.name}</p>
+          ) : (
+            current && (
+              <p className="oc-lead-note">
+                Replaces <NameOf id={current} />
+              </p>
+            )
+          )}
+          {error && (
+            <p className="oc-lead-err" role="alert">
+              {error}
+            </p>
+          )}
+        </div>
+      </div>
+    </section>
   );
 }
 

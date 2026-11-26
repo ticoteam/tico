@@ -2,6 +2,8 @@
 lead may set spend limits for the bots in the group and the groups nested under it (backend/usage.py); the task caps
 follow the same lead rule (backend/task_caps.py)."""
 
+import json
+
 from backend import groups as Groups
 from backend import people as P
 from backend.store import H
@@ -205,3 +207,16 @@ def test_the_org_chart_carries_each_groups_lead_while_it_is_a_teammate_of_the_gr
     send(api, "PATCH", f"groups/{other}", {"add": {"bots": ["engineering-manager"]}})
     chart = {row["id"]: row for row in get(api, "org")["org_groups"]}
     assert chart[gid]["lead"] == ""
+
+
+def test_a_lead_set_or_cleared_is_counted_on_the_group_updated_event(api):
+    gid = make_engineering(api, lead="")
+    send(api, "PATCH", f"groups/{gid}", {"lead": "bot:engineering-manager"})
+    send(api, "PATCH", f"groups/{gid}", {"lead": ""})
+    send(api, "PATCH", f"groups/{gid}", {"name": "Engineering Team"})
+    with api.app.state.store.read() as c:
+        rows = c.execute(
+            "SELECT detail FROM events WHERE target=? AND action='group.updated' ORDER BY rowid", (gid,)
+        ).fetchall()
+    leads = [json.loads(row["detail"])["lead"] for row in rows]
+    assert leads == ["bot:engineering-manager", "", None]
