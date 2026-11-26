@@ -341,6 +341,14 @@ describe('phone: the bar while typing', () => {
       expect(typing()).toBeNull();
       keyboard(300);
       expect(typing()).toBe('tico');
+      // the keys go down with the box kept, then the box is left and tapped again at once: a new focus, the bar goes
+      keyboard(0);
+      const box = screen.getByRole('textbox', { name: 'Message Tico' });
+      act(() => {
+        box.blur();
+        box.focus();
+      });
+      expect(typing()).toBe('tico');
     } finally {
       delete (window as { visualViewport?: unknown }).visualViewport;
       vi.useRealTimers();

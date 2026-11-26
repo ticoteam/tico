@@ -203,6 +203,7 @@ export function PhoneCards({ page, tico, menu, chat, faces = {}, labels = {}, tu
       update();
     });
     const later = () => {
+      raisedFor = null; // a field focused again starts a new session, whatever its last keyboard did
       clearTimeout(blur);
       blur = window.setTimeout(update, 50);
     };
