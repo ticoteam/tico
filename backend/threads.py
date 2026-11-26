@@ -2844,6 +2844,7 @@ def _post_making(c, principal, thread_id, body, start, parent_message_id, checke
         if v is not None and (not message_readable(c, v, parent) or not can_post(c, v, thread)):
             raise Problem("not_found", "Message not found", 404)
     text = str(body or "")
+    gate = None
     if checked is not None:
         from . import org_rule_check
 
@@ -2878,7 +2879,7 @@ def _post_making(c, principal, thread_id, body, start, parent_message_id, checke
         thread_id = _create_from(c, principal, plan)["id"]
     elif start is None:
         thread_id = sub_thread(c, principal, parent_message_id)["id"]
-    return {"thread_id": thread_id, "body": text}
+    return {"thread_id": thread_id, "body": text, "gate": gate}
 
 
 def post(
@@ -2986,6 +2987,7 @@ def _post(
     ask=None,
 ):
     actor, v = _actor_of(principal)
+    made_gate = None
     if origin and origin.get("origin_id") and start is not None:
         raise Problem("start", "A replicated message posts into a linked thread", 422)
     if ask and (start is not None or parent_message_id):
@@ -3026,6 +3028,7 @@ def _post(
         if made.get("held") is not None:
             return made["held"]
         thread_id, body, parent_message_id, checked = made["thread_id"], made["body"], None, None
+        made_gate = made["gate"]  # the verdict was applied as the thread was made: its breaks go on this message
     thread = thread_row(c, thread_id)
     if thread is None:
         raise Problem("not_found", "Thread not found", 404)
@@ -3151,10 +3154,10 @@ def _post(
         POSTING.reset(token)
     if named and not question_marks.cleared_by(c, named, (message or {}).get("id")):
         raise Problem("answered", question_marks.ANSWERED, 409)  # it did not answer that ❓: write nothing
-    if checked is not None and message:
+    if message and (gate or made_gate):
         from . import rule_breaks
 
-        rule_breaks.link(c, gate, message=message["id"], task=(refs or {}).get("task") or "")
+        rule_breaks.link(c, gate or made_gate, message=message["id"], task=(refs or {}).get("task") or "")
     # Here and not in the upload route, so a held message released later (the replay of this post) keeps its files.
     # A picture, video or PDF the preview worker can read gets its row here too (never in blobs.register, which every
     # stored byte goes through), so its /thumb is made for the chat to draw.

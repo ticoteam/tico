@@ -244,3 +244,46 @@ def test_an_answer_is_block_or_pass(ruled, value):
     color_rule(api, if_broken="warn")
     _, _, found = one_break(api)
     assert answer(api, found["id"], value).status_code == 422
+
+
+def post_in(api, conv, text, token="ops-test"):
+    r = api.post(f"/api/v2/threads/{conv}/messages", json={"text": text}, headers=headers(token))
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_a_post_on_a_tasks_own_chat_that_names_no_task_is_saved_on_that_task(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    task = task_for_ops(api)
+    conv = sql(api, "SELECT conversation_id FROM tasks WHERE id=?", (task["id"],))[0]["conversation_id"]
+    posted = post_in(api, conv, COLORED)
+    [b] = breaks(api)
+    assert (b["message_id"], b["task_id"], b["conversation_id"]) == (posted["id"], task["id"], conv)
+
+
+def test_a_thread_whose_first_message_breaks_the_rule_saves_the_break_on_that_message(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    r = api.post(
+        "/api/v2/threads",
+        json={"title": "Launch", "members": ["human:ana"], "body": COLORED},
+        headers=headers("ops-test"),
+    )
+    assert r.status_code == 200, r.text
+    [b] = breaks(api)
+    [first] = sql(api, "SELECT id, conversation_id FROM messages WHERE id=?", (b["message_id"],))
+    assert first["conversation_id"] == r.json()["id"] == b["conversation_id"] and b["task_id"] == ""
+
+
+def test_an_edit_that_breaks_the_rule_saves_the_break_on_the_edited_message(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    task = task_for_ops(api)
+    conv = sql(api, "SELECT conversation_id FROM tasks WHERE id=?", (task["id"],))[0]["conversation_id"]
+    posted = post_in(api, conv, PLAIN)
+    assert breaks(api) == []
+    r = api.patch(f"/api/v2/messages/{posted['id']}", json={"text": COLORED}, headers=headers("ops-test"))
+    assert r.status_code == 200, r.text
+    [b] = breaks(api)
+    assert (b["message_id"], b["task_id"]) == (posted["id"], task["id"])

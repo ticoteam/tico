@@ -1267,6 +1267,7 @@ def install(app, store, auth, mutate, rule_check):
             reach.check_edit(c, who, message_id, body.text, viewer)
             edited = threads.edit_message(c, viewer, message_id, body.text)
             assert edited is not None  # the message just edited
+            rule_breaks.link(c, gate, message=message_id)  # an edit that breaks a Warn rule is asked too
             return {**_pages_as_read(c, auth, who, _thread_message(edited)), **org_rule_check.answer(gate)}
 
         return mutate(request, body, work)

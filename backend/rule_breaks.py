@@ -87,6 +87,9 @@ def link(c: Any, gate: Row | None, *, message: str = "", task: str = "") -> None
         return
     found = c.execute("SELECT conversation_id FROM messages WHERE id=?", (message,)).fetchone()
     conversation = found[0] if found else ""
+    if not task and conversation:  # a post on a task's own chat that named no task is still on that task
+        owner = c.execute("SELECT id FROM tasks WHERE conversation_id=?", (conversation,)).fetchone()
+        task = str(owner[0]) if owner else ""
     c.execute(
         "UPDATE org_rule_breaks SET message_id=?, task_id=?, conversation_id=? "
         "WHERE id IN (SELECT value FROM json_each(?))",

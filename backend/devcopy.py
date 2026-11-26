@@ -558,6 +558,7 @@ KEEP = (
             "recording_source_refs",
             "recording_transcripts",
             "org_rules",
+            "org_rule_breaks",  # each Warn rule break and the answer a person gave, kept with its rule
             "matters",  # a risk's facts on a task, kept with its task (backend/risk.py)
             "matter_dates",  # a matter's key dates, kept with its task (backend/risk.py)
             "risk_links",  # the rules and documents linked to a risk (a tag)
