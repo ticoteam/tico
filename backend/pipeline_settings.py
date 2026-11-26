@@ -277,6 +277,19 @@ _QA_PURPOSE_PERSON = (
     "submits it; a person approves it to ship. To change it, write the next version; Tico asks the person again when "
     "there are new commits."
 )
+# The texts of stages a company of the pair before Nov 26 keeps but the preset no longer has in that shape: Merge, and a
+# QA a person still signs. `_follow` moves their unedited lines to these, where the stage's requirements (and which of
+# them are people only) are these.
+_MERGE_PURPOSE = (
+    "The PRs are in the merge queue. If GitHub takes one out, queue it again, fix it on its branch, or send the task "
+    "back to QA."
+)
+KEPT_TEXTS: dict[str, dict[str, tuple[str, list[tuple[str, bool]]]]] = {
+    "engineering": {
+        "engineering-merge/purpose": (_MERGE_PURPOSE, [("item:github.pr_merged", False)]),
+        "engineering-qa/purpose": (_QA_PURPOSE_PERSON, [("item:github.checks_pass", False), ("page", True)]),
+    },
+}
 RELEASE_PURPOSE = (
     "Entering Release queues the PRs to merge. If GitHub takes one out, queue it again, fix it on its branch, or send "
     "the task back to QA. The task leaves when a published release holds the merge."
@@ -332,7 +345,10 @@ PRESETS["engineering"] = {
             "QA",
             QA_PURPOSE,
             240,
-            [github("checks_pass"), _approval("QA report", QA_RUBRIC)],  # the decision model's: no person signs it
+            [
+                github("checks_pass"),
+                {**_approval("QA report", QA_RUBRIC), "who_oks": "none"},
+            ],  # the decision model's alone
         ),
         _stage(
             "engineering-release",
@@ -2056,6 +2072,15 @@ def _follow(conn: "sqlite3.Connection", key: str, pipeline_id: str) -> list[str]
                 settings.update({n: texts[f"{at}/{n}"] for n in moved})
                 paths.extend(f"{at}/{n}" for n in moved)
                 writes.append(("UPDATE requirements SET settings=? WHERE id=?", (_h()._dump(settings), mine["id"])))
+    for path, (text, wanted_signs) in KEPT_TEXTS.get(key, {}).items():
+        sid = path.partition("/")[0]
+        have = work.get(sid)
+        if not have or path in paths:
+            continue
+        signed = sorted((requirement_key(r), R.people_only(r)) for r in R.on_stage(conn, sid))
+        if signed == sorted(wanted_signs) and _behind(path, have.get("purpose"), text):
+            paths.append(path)
+            writes.append(("UPDATE stages SET purpose=?, updated_at=? WHERE id=?", (text, ts, sid)))
     if not paths:
         return []
     before = read(conn, pipeline_id)

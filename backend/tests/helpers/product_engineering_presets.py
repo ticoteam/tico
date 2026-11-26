@@ -89,10 +89,7 @@ def legacy_review_stages(c, record):
     return record
 
 
-MERGE_PURPOSE = (
-    "The PRs are in the merge queue. If GitHub takes one out, queue it again, fix it on its branch, or send the task "
-    "back to QA."
-)
+MERGE_PURPOSE = PS._MERGE_PURPOSE
 RELEASE_PURPOSE_BEFORE = PS.EARLIER["engineering-release/purpose"][-1]
 
 

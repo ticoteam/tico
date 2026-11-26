@@ -136,4 +136,15 @@ def test_a_new_company_on_the_default_chart_is_staffed_while_its_release_manager
         "engineering",
         "product",
     ]
-    assert _staffing(api) == {}
+    # The default chart has no Builder yet: its stages wait with the Engineering Manager (the spec's named risk).
+    assert _staffing(api) == {
+        "product": ("product-manager", dict.fromkeys(PRODUCT, "feature-owner")),
+        "engineering": (
+            "engineering-manager",
+            {
+                **dict.fromkeys(ENGINEERING, "engineering-manager"),
+                "engineering-review-1": "reviewer-1",
+                "engineering-release": "release-owner",
+            },
+        ),
+    }

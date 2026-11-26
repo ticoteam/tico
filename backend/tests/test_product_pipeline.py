@@ -210,6 +210,10 @@ def test_in_development_files_one_engineering_task_and_product_moves_on_when_it_
     eng = E.task(c, filed[0])
     assert (eng["pipeline_id"], eng["stage_id"]) == ("engineering", "engineering-on-deck")
     assert E.task(c, row["id"])["stage_id"] == "product-in-development", "it waits while Engineering builds"
+    # Its PR merged and in a release are never pushed past: withdrawn here, as no PR is linked.
+    c.execute(
+        "UPDATE requirements SET withdrawn_at=? WHERE stage_id='engineering-release' AND visit_id IS NULL", (H.now(),)
+    )
     E.move(c, eng["id"], "engineering-done", ANA, "Shipped")
     assert E.task(c, row["id"])["stage_id"] == "product-validate"
     assert _filed(c, row["id"]) == filed, "nothing more is filed: no duplicate Engineering task"

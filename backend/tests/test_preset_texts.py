@@ -215,7 +215,7 @@ def test_a_stage_whose_requirements_changed_keeps_its_purpose_and_a_retired_pipe
 
 @pytest.fixture
 def one_review(company):
-    """A company set up with today's presets: Product's one Review stage asks its page the combined rubric."""
+    """A company set up with today's presets: Engineering's one Review stage asks its page the combined rubric."""
     with company.transaction() as conn:
         _team(conn)
         _answers(conn, software="yes")
@@ -229,13 +229,13 @@ def test_an_unedited_combined_review_rubric_follows_to_the_one_that_places_a_pr_
     c = one_review
     before = PS._REVIEW_RUBRIC_BEFORE_DESCRIPTION
     assert "PR description" in PS.REVIEW_RUBRIC and before != PS.REVIEW_RUBRIC
-    _rubric(c, "product-review-1", before)
+    _rubric(c, "engineering-review-1", before)
     PS.ensure_presets(c)
-    assert _page(PS.read(c, "product"), "product-review-1")["settings"]["rubric"] == PS.REVIEW_RUBRIC
-    assert "product-review-1/page/rubric" in _follows(c)[-1]["newer_preset_text"]
-    _rubric(c, "product-review-1", "Our own check: " + before)
+    assert _page(PS.read(c, "engineering"), "engineering-review-1")["settings"]["rubric"] == PS.REVIEW_RUBRIC
+    assert "engineering-review-1/page/rubric" in _follows(c)[-1]["newer_preset_text"]
+    _rubric(c, "engineering-review-1", "Our own check: " + before)
     PS.ensure_presets(c)
-    assert _page(PS.read(c, "product"), "product-review-1")["settings"]["rubric"] == "Our own check: " + before
+    assert _page(PS.read(c, "engineering"), "engineering-review-1")["settings"]["rubric"] == "Our own check: " + before
 
 
 def test_an_unedited_combined_review_rubric_follows_to_the_one_a_page_with_no_blocking_findings_meets(one_review):
