@@ -161,7 +161,7 @@ def _people_only(requirement: Row) -> Row:
 REVIEW_RUBRIC = (
     "Two reviews of the newest commit of every linked PR, each naming that commit and its model: use different models "
     "and say what each checked. Give each real defect its own finding with file:line, severity, and why it matters; "
-    "a finding on the PR description gives the file:line of the guideline it breaks. Skip style nits and diff "
+    "a finding on the PR description may cite the file:line of the guideline it breaks. Skip style nits and diff "
     "summaries. Say when there are no findings."
 )
 # The combined Review rubric before a PR-description finding could cite its guideline line (EARLIER, `_follow`).
