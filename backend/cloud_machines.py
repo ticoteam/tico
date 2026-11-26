@@ -1296,17 +1296,19 @@ def unplaced(c, bot):
     target = machine.get("runner_id")
     if not target:
         return False
-    placed_on = c.execute(PLACED_ON, (bot,)).fetchone()
-    if placed_on and placed_on["return_pending"]:
-        return machine["state"] not in DEAD and bool(
-            c.execute("SELECT 1 FROM runners WHERE id=? AND revoked_at IS NULL", (target,)).fetchone()
-        )
+    # Its own machine's computer was revoked: `bind` deletes that machine once no turn is out on it, a return from a
+    # burst computer pending or not (that return resumes when the new machine enrolls and binds it).
     if (
         machine.get("bot") == bot
         and not machine.get("deleting")
         and not c.execute("SELECT 1 FROM runners WHERE id=? AND revoked_at IS NULL", (target,)).fetchone()
     ):
-        return True  # its own machine's computer was revoked: `bind` deletes that machine once no turn is out on it
+        return True
+    placed_on = c.execute(PLACED_ON, (bot,)).fetchone()
+    if placed_on and placed_on["return_pending"]:
+        return machine["state"] not in DEAD and bool(
+            c.execute("SELECT 1 FROM runners WHERE id=? AND revoked_at IS NULL", (target,)).fetchone()
+        )
     return not placed_on or (placed_on["runner_id"] != target and placed_on["return_pending"] != "")
 
 

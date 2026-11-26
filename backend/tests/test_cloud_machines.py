@@ -4433,6 +4433,25 @@ def test_a_revoked_own_machine_whose_history_is_not_on_github_is_kept(cloud):
     assert cloud.hq.machines[old_machine]["state"] != "deleted" and not cloud.row("ops")["deleting"]
 
 
+def test_a_revoked_own_machine_is_replaced_while_its_bots_return_from_a_burst_computer_is_pending(cloud):
+    """#3587 review: a bot whose return from a burst computer is pending was never bound again, so its own machine
+    with a revoked computer was neither deleted nor replaced."""
+    shared = shared_for(cloud, "cpo")["runner_id"]
+    computer = own_computer(cloud, "ops")
+    change_as(cloud, "ops", mode="cloud", placement="shared")
+    assert placed(cloud)["ops"] == shared
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), computer["runner_id"]))
+        CM.save(c, "ops", placement="own")
+        generation = c.execute("SELECT generation FROM assignments WHERE bot='ops'").fetchone()[0]
+        c.execute(
+            "INSERT INTO burst_guests(bot,runner_id,generation,base_runner,return_pending) VALUES(?,?,?,?,?)",
+            ("ops", shared, generation, shared, "settled"),
+        )
+    assert ticked(cloud, CM.SYNC) == ["create"] and cloud.hq.calls[-1][1] == "ops" and cloud.row("ops")["deleting"]
+    assert ticked(cloud, 1) == ["delete"]
+
+
 def ticked(cloud, seconds):
     """HQ's calls from this one tick (`cloud.tick` returns every call so far), heartbeats left out."""
     before = len(cloud.hq.actions())
