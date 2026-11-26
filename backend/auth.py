@@ -1174,6 +1174,10 @@ class Auth:
                 # A person's chat form: she and the run both read it (task_privacy.principals_read).
                 else f"(({audience}) AND (coalesce(private,1)=0 OR ({theirs})))"
             )
+        elif who.actor == H.assistant_actor(c) and not who.agent:
+            # The Assistant outside any run and not a signed-in agent (an automation's Only if, a background read) is
+            # for nobody in particular: it reads no private task, never everyone's private Assistant tasks at once.
+            audience = f"(coalesce(private,1)=0 AND {audience})"
         elif who.task_actor:
             actor = A.q(who.task_actor)
             carried = A.qlist(sorted(private_subjects(c, who.task_actor)))

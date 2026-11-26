@@ -422,6 +422,7 @@ def test_the_declared_answers_match_the_live_ones(api):
         json={"title": "Draft the launch plan", "body": "Please draft it.", "owner": "human:ana"},
     )["task"]
     api.post("/api/v2/tasks/%s/links" % task["id"], headers=headers(), json={"url": "https://docs.acme.example/launch"})
+    call("listPullRequests", "get", "/api/v2/prs", params={"repo": "acme/app", "idle_hours": "48"})
     call("listTasks", "get", "/api/v2/tasks")
     call("listTasks", "get", "/api/v2/tasks", params={"counts": "stage", "limit": "1"})
     detail = call("getTask", "get", "/api/v2/tasks/" + task["id"])

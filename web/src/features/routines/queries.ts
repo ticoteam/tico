@@ -260,6 +260,12 @@ export const RUN_STATUSES = ['failed', 'waiting', 'running', 'done'] as const;
 export type RunStatus = (typeof RUN_STATUSES)[number];
 export type AnyRun = AutomationOverviewRuns['runs'][number];
 
+/** The team's repositories, for an Only if's pull request picker. */
+export const reposQuery = queryOptions({
+  queryKey: ['routines', 'repos'] as const,
+  queryFn: ({ signal }) => api.get<{ repositories: { full_name: string }[] }>('/api/v2/repositories', { signal }),
+});
+
 /** Runs across every routine the person may see, newest first, fifty a page; `next` is the next page's `before`. */
 export const allRunsQuery = (range: RunRange, status?: RunStatus) =>
   infiniteQueryOptions({

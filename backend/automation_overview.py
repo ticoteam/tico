@@ -296,6 +296,8 @@ def run_row(run, row, flow):
     except (TypeError, ValueError):
         state = None
     kind = kind_of(flow)
+    # Why a run its trigger's Only if skipped did not start (backend/automation_only_if.py).
+    skipped = ((state or {}).get("only_if") or {}).get("reason") if run["status"] == "skipped" else None
     return {
         "id": run["id"],
         "automation_id": row["id"],
@@ -312,6 +314,7 @@ def run_row(run, row, flow):
         "outcome": outcome(run["status"], state, flow),
         "step_count": len((state or {}).get("steps") or []) if state else None,
         "count": 1,
+        **({"reason": skipped} if skipped else {}),
     }
 
 

@@ -117,6 +117,33 @@ def claimable_match(c, auth, who):
     )
 
 
+def stages_named(c, stage):
+    """A stage named without its pipeline: the rowids of the live stages of that name in any live pipeline (an
+    Only if check's `tasks?stage=Release ready`), or none when `stage` is a stage's id or names none."""
+    if c.execute("SELECT 1 FROM stages WHERE id=?", (stage,)).fetchone():
+        return []
+    return [
+        int(r[0])
+        for r in c.execute(
+            "SELECT s.rowid FROM stages s JOIN pipelines p ON p.id=s.pipeline_id WHERE lower(s.name)=lower(?) "
+            "AND s.retired_at IS NULL AND p.retired_at IS NULL",
+            (str(stage).strip(),),
+        )
+    ]
+
+
+def stage_ids(c, stage):
+    """The ids of the stages `stage` names: its id, or its name in any live pipeline; none when it names none."""
+    if c.execute("SELECT 1 FROM stages WHERE id=?", (stage,)).fetchone():
+        return [stage]
+    named = stages_named(c, stage)
+    return (
+        [r[0] for r in c.execute(f"SELECT id FROM stages WHERE rowid IN ({','.join('?' * len(named))})", named)]
+        if named
+        else []
+    )
+
+
 def register(app, auth, mutate, rule_check, rule_target, store, task_filters, task_idents, visible_tasks):
     @app.get(
         "/api/v2/tasks",
@@ -145,6 +172,8 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 "first. A priority read is whole, one answer of up to `limit` (500) rows with `truncated: true` past "
                 "them, never paged (not with after, offset or changed_after: 422), and adds `sorting` and "
                 "`sorting_until`. `after` pages in the same sort",
+                "stage": "A stage's id, or its name: within `pipeline` when given, else in every pipeline (the tasks in "
+                "any stage of that name)",
                 "claimable": "The person's team work and public Support work with no assignee or an off assignee. "
                 "Use a full read because team membership and availability can change independently of tasks",
             },
@@ -190,7 +219,8 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
         entity: str | None = None,
         claimable: bool = False,
     ):
-        """Tasks this reader may read. `pipeline` and `stage` (ids) keep a pipeline's or a stage's tasks;
+        """Tasks this reader may read. `pipeline` (an id) and `stage` (an id, or a name: in `pipeline`, else in any
+        pipeline) keep a pipeline's or a stage's tasks;
         `waiting_on` (a person or a bot) keeps the open tasks with a wait on them (waiting_on.py: a person's or a
         bot's turn, or a bot that can't run); `pushed_past=true` keeps the tasks that entered their stage pushed past
         a requirement (false, the rest). `search`, `owners`, `stages`, `requesters`, `labels`, `turn`, `due` and
@@ -376,7 +406,16 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                     filters["ids"] = [t for t in filters["ids"] if t in set(kept)] if "ids" in filters else kept
                 sorting = None
                 if sort == "priority":
-                    stage_id = stage_row(c, pipeline, stage)["id"]
+                    named = stages_named(c, stage) if pipeline is None and stage is not None else []
+                    if len(named) > 1:
+                        raise Problem(
+                            "stage", "That stage name is in more than one pipeline: give its pipeline or its id", 422
+                        )
+                    stage_id = (
+                        c.execute("SELECT id FROM stages WHERE rowid=?", (named[0],)).fetchone()[0]
+                        if named
+                        else stage_row(c, pipeline, stage)["id"]
+                    )
                     rows, sorting = priority_list(c, who, owner, requester, stage_id, filters, limit)
                     last = next_offset = None
                 else:
@@ -526,7 +565,12 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 raise Problem("pipeline", "No such pipeline", 422)
             parts.append(f"pipeline_id=(SELECT id FROM pipelines WHERE rowid={int(found[0])})")
         if stage is not None:
-            parts.append(f"stage_id=(SELECT id FROM stages WHERE rowid={int(stage_row(c, pipeline, stage)['rowid'])})")
+            named = [] if pipeline is not None else stages_named(c, stage)
+            if named:
+                parts.append(f"stage_id IN (SELECT id FROM stages WHERE rowid IN ({','.join(str(n) for n in named)}))")
+            else:
+                rowid = int(stage_row(c, pipeline, stage)["rowid"])
+                parts.append(f"stage_id=(SELECT id FROM stages WHERE rowid={rowid})")
         if pushed_past is not None:
             parts.append(
                 ("" if pushed_past else "NOT ")
