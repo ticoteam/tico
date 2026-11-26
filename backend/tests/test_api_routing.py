@@ -2,14 +2,18 @@
 reads its own app's store and services (backend/deps.py), never one captured when the module was imported.
 backend/report_order.py is the first such module."""
 
+import contextlib
 import json
+from collections.abc import AsyncIterable
 from pathlib import Path
 
 import pytest
 from fastapi import APIRouter, FastAPI
 from fastapi.routing import APIRoute
+from pydantic import BaseModel
 
 from backend import api_routing, openapi_v2, report_order, shared_reads
+from backend.api_contract import api_v2
 from backend.tests.helpers.api import get, headers, post, put, setup_attempt
 from backend.tests.helpers.org_chart import revision, roster
 
@@ -55,13 +59,103 @@ def test_a_router_route_answers_like_any_app_route_on_any_app():
         return {"attempt_id": "a1", "at": float("nan")}
 
     app = FastAPI()
-    app.state.store = None  # nothing here reads it: no identity, so no shared read and no display names
     api_routing.include(app, made)
     route = next(r for r in app.routes if getattr(r, "path", "") == "/api/v2/jobs")
     assert isinstance(route, api_routing.TicoRoute) and route.endpoint is jobs and route is not made.routes[0]
     with TestClient(app) as client:
         answer = client.get("/api/v2/jobs")
     assert answer.status_code == 200 and answer.content == b'{"run_id":"a1","at":null}'
+
+
+class Item(BaseModel):
+    name: str
+
+
+def test_a_typed_stream_keeps_its_item_type_through_include():
+    """A route left at FastAPI's defaults keeps them: its stream items are validated (an extra field dropped) and
+    documented, as when the route is declared on the app itself."""
+    from fastapi.testclient import TestClient
+
+    made = api_routing.router()
+
+    @made.get("/api/v2/items")
+    async def items() -> AsyncIterable[Item]:
+        yield {"name": "a", "secret": "kept out"}  # pyright: ignore[reportReturnType]
+
+    app = FastAPI()
+    api_routing.include(app, made)
+    route = next(r for r in app.routes if getattr(r, "path", "") == "/api/v2/items")
+    assert route.stream_item_type is Item
+    with TestClient(app) as client:
+        body = client.get("/api/v2/items").text
+    assert "secret" not in body and '"name":"a"' in body.replace(" ", "")
+    assert "Item" in json.dumps(app.openapi()["paths"]["/api/v2/items"])
+
+
+def stable_router(operation="getThing"):
+    made = api_routing.router()
+
+    @made.get("/api/v2/things", **api_v2("Team chart", operation, "Things"))
+    def things():
+        return {}
+
+    return made
+
+
+def test_include_refuses_a_stable_operation_twice_and_installs_nothing_partly(api):
+    routes = list(api.app.routes)
+    api_routing.include(api.app, stable_router())
+    added = len(api.app.routes)
+    for again in (stable_router(), stable_router("getOtherThing")):  # the same router; the same path and method
+        with pytest.raises(ValueError, match="declared twice"):
+            api_routing.include(api.app, again)
+    same_id = api_routing.router()
+    same_id.get("/api/v2/other-things", **api_v2("Team chart", "getThing", "Things"))(lambda: {})
+    with pytest.raises(ValueError, match="getThing"):
+        api_routing.include(api.app, same_id)
+    # A router whose last route is not a TicoRoute adds none of its routes.
+    mixed = stable_router("getMixed")
+    mixed.routes.append(APIRoute("/api/v2/plain", lambda: {}))
+    with pytest.raises(TypeError, match="TicoRoute"):
+        api_routing.include(api.app, mixed)
+    assert len(api.app.routes) == added == len(routes) + 1
+    # Unrelated stable reads still answer, and the late route is a stable path with display names.
+    assert get(api, "org/order/assistant")["manager"] == "assistant"
+    assert openapi_v2.stable_path(api.app).fullmatch("/api/v2/things")
+
+
+def test_a_late_include_renews_the_stable_paths(api):
+    assert not openapi_v2.stable_path(api.app).fullmatch("/api/v2/things")  # built and kept on first use
+    api_routing.include(api.app, stable_router())
+    assert openapi_v2.stable_path(api.app).fullmatch("/api/v2/things")
+
+
+def test_a_router_with_lifecycle_hooks_is_refused():
+    async def start():
+        pass
+
+    @contextlib.asynccontextmanager
+    async def life(app):
+        yield
+
+    for hooks in ({"on_startup": [start]}, {"on_shutdown": [start]}, {"lifespan": life}):
+        with pytest.raises(TypeError, match="lifespan"):
+            api_routing.router(**hooks)
+    made = api_routing.router()
+    made.add_event_handler("startup", start)
+    with pytest.raises(TypeError, match="lifespan"):
+        api_routing.include(FastAPI(), made)
+
+
+def test_a_route_on_an_app_with_no_store_answers():
+    from fastapi.testclient import TestClient
+
+    made = api_routing.router()
+    made.get("/api/v2/plain")(lambda: {"attempt_id": "a1"})
+    app = FastAPI()
+    api_routing.include(app, made)
+    with TestClient(app) as client:
+        assert client.get("/api/v2/plain").json() == {"run_id": "a1"}
 
 
 def test_report_order_routes_come_from_its_router_in_their_old_slot(api):
@@ -114,9 +208,14 @@ def test_who_may_order_is_unchanged_through_the_router(api):
     # The write went through the app's own mutation: a retry with the same key answers the same, once.
     key = headers()["Idempotency-Key"]
     body = {"reports": ["finance", "ops"]}
+    with api.app.state.store.read() as c:
+        before = c.execute("SELECT COUNT(*) FROM events WHERE action='org.order_set'").fetchone()[0]
     first = api.put("/api/v2/org/order/assistant", json=body, headers=headers(key=key))
     again = api.put("/api/v2/org/order/assistant", json=body, headers=headers(key=key))
     assert first.status_code == again.status_code == 200 and first.json() == again.json()
+    with api.app.state.store.read() as c:
+        after = c.execute("SELECT COUNT(*) FROM events WHERE action='org.order_set'").fetchone()[0]
+    assert after - before == 1, "the keyed retry replayed the answer; the write ran once"
 
 
 def test_two_apps_each_answer_from_their_own_store(tmp_path, api_database, monkeypatch):
