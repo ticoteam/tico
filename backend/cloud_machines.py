@@ -1330,13 +1330,17 @@ def bind(c, execution, bot, lasting=False):
         # go to (#3587: binding to it was refused "Computer is not registered"), and it can never check in again. The
         # bot waits where it is; its own such machine is deleted, and its want makes a new one. Not while a turn is
         # still out on that computer: its work is on that disk, so the deletion waits for a later look, as a person's
-        # removal waits (`remove`).
+        # removal waits (`remove`). Never when that computer last said the bot's history is not on GitHub
+        # (`stranded`): the disk is its only copy, so it stays for a person to recover.
+        from .execution import stranded
+
         if (
             machine["bot"] == bot
             and machine.get("machine_id")
             and not c.execute(
                 "SELECT 1 FROM attempts WHERE runner_id=? AND state IN ('leased','running') LIMIT 1", (target,)
             ).fetchone()
+            and not stranded(c, execution.store.settings, bot, target, None)
         ):
             intend_delete(c, machine, "computer_revoked")
         target = None

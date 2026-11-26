@@ -4416,6 +4416,23 @@ def test_a_revoked_own_machine_with_a_turn_still_out_is_not_deleted_until_the_tu
     assert ticked(cloud, 1) == ["delete"] and cloud.hq.machines[old_machine]["state"] == "deleted"
 
 
+def test_a_revoked_own_machine_whose_history_is_not_on_github_is_kept(cloud):
+    """#3587 review: the old machine's disk is the only copy of history its computer last reported as not on GitHub.
+    Choosing the bot's own machine again saves the choice and deletes nothing."""
+    shared = shared_for(cloud, "cpo")["runner_id"]
+    computer = own_computer(cloud, "ops")
+    old_machine = cloud.row("ops")["machine_id"]
+    change_as(cloud, "ops", mode="cloud", placement="shared")
+    assert placed(cloud)["ops"] == shared
+    report_repo(cloud.api, computer, "ops", published=False)
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), computer["runner_id"]))
+    change_as(cloud, "ops", mode="cloud", placement="own", size="large")
+    assert cloud.row("ops")["size"] == "large" and placed(cloud)["ops"] == shared
+    assert "delete" not in ticked(cloud, CM.SYNC) + ticked(cloud, CM.SYNC)
+    assert cloud.hq.machines[old_machine]["state"] != "deleted" and not cloud.row("ops")["deleting"]
+
+
 def ticked(cloud, seconds):
     """HQ's calls from this one tick (`cloud.tick` returns every call so far), heartbeats left out."""
     before = len(cloud.hq.actions())
