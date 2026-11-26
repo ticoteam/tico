@@ -49,7 +49,7 @@ export function PageActionDialog({ action, data, onClose, onLeave, onDuplicate }
     try {
       if (action === 'access') await changePage(id, { audience });
       if (action === 'archive') await changePage(id, { archived: !page.archived });
-      if (action === 'pin' && place) await changePagePin(id, `bot:${place}`, pin);
+      if (action === 'pin' && place) await changePagePin(id, `bot:${place}`, pin ?? undefined);
       if (action === 'delete') {
         await deleteLibraryPage(id);
         await onLeave();
