@@ -29,7 +29,6 @@ LOG = logging.getLogger("tico.file_use")
 ACTIONS = ("list", "open", "search", "review")
 _is_bot = cast(Callable[[object], bool], H.is_bot)
 _is_human = cast(Callable[[object], bool], H.is_human)
-_now = cast(Callable[[], str], H.now)
 
 
 def record(c: sqlite3.Connection, actor: str, action: str, at: str | None = None) -> None:
@@ -40,7 +39,7 @@ def record(c: sqlite3.Connection, actor: str, action: str, at: str | None = None
     kind = "bot" if _is_bot(actor) else "person" if _is_human(actor) else None
     if not kind:
         return
-    day = str(at or _now())[:10]
+    day = str(at or H.now())[:10]
     c.execute(
         "INSERT INTO file_use_daily(day,kind,action,actor,uses) VALUES(?,?,?,?,1) "
         "ON CONFLICT(day,kind,action,actor) DO UPDATE SET uses=uses+1",
