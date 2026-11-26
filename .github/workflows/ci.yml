@@ -546,7 +546,8 @@ jobs:
               carried = json.load(open(f"{web}/carried-assets.json"))["carried"]
           except FileNotFoundError:
               carried = {}
-          print("\n".join(sorted(set(os.listdir(f"{web}/assets")) - set(carried))))'
+          for name in sorted(set(os.listdir(f"{web}/assets")) - set(carried)):
+              print(name)'
           }
           new="ghcr.io/ticoteam/tico@$(cat "$d/tico-amd64")"
           # Listed to files first: a failed listing stops the step instead of comparing nothing.
