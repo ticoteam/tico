@@ -241,4 +241,24 @@ describe('One watch', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
     expect(await screen.findByText('No matches yet')).toBeTruthy();
   });
+
+  it('with more matches than a page says how many of how many, and Show more reads on until all are shown', async () => {
+    const at = new Date(Date.now() - 3 * 86_400_000).toISOString();
+    const match = (n: number) => ({ id: `m${n}`, source: 'r1', site: 'Reddit', title: `Post ${n}`, text: '', status: 'kept', created_at: at, posted_at: at });
+    const asked: string[] = [];
+    record((u) => {
+      if (!u.includes('/listening/items')) return nothing();
+      asked.push(u);
+      const from = u.includes('cursor=c100') ? 100 : 0;
+      const items = Array.from({ length: from ? 50 : 100 }, (_, i) => match(from + i));
+      return ok({ items, total: 150, counts: { kept: 150 }, next_cursor: from ? null : 'c100' });
+    });
+    queryClient.setQueryData(watchQuery('w1').queryKey, watch());
+    show('/company/listening?watch=w1');
+    expect(await screen.findByText('Showing 100 of 150')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+    expect(await screen.findByText('Showing 150 of 150')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Show more' })).toBeNull();
+    expect(asked.map((u) => new URL(u, 'http://x').searchParams.get('cursor'))).toEqual([null, 'c100']);
+  });
 });

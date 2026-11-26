@@ -827,10 +827,23 @@ export const watchQuery = (id: string) =>
     queryFn: ({ signal }) => api.get<Routine>(`/api/v2/automations/${enc(id)}`, { signal }),
   });
 
+/** One page of a watch's matches: the true total and counts by status, and the cursor of the next page (null on the last). */
+export interface MatchPage {
+  items: Match[];
+  total: number;
+  counts: Record<string, number>;
+  next_cursor: string | null;
+}
+
+export const MATCH_PAGE = 100;
+
 export const matchesQuery = (id: string) =>
-  queryOptions({
+  infiniteQueryOptions({
     queryKey: ['listening', 'items', id],
-    queryFn: async ({ signal }) => (await api.get<{ items: Match[] }>(`/api/v2/listening/items?automation=${enc(id)}&limit=100`, { signal })).items,
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam, signal }) =>
+      api.get<MatchPage>(`/api/v2/listening/items?automation=${enc(id)}&limit=${MATCH_PAGE}${pageParam ? `&cursor=${enc(pageParam)}` : ''}`, { signal }),
+    getNextPageParam: (page) => page.next_cursor ?? undefined,
   });
 
 export const sourcesQuery = (id: string) =>

@@ -22,6 +22,8 @@ merged PR or release), and a Push address anyone holding its token may post to.
 the copy comparison run between short transactions, never inside one.
 """
 
+import base64
+import binascii
 import hashlib
 import json
 import logging
@@ -85,7 +87,7 @@ PUSH_PER_MINUTE = 60
 PUSH_PATH = "/api/v2/listening/in/"
 RECENT_MAX = 25
 RECENT_TEXT = 240
-LIST_MAX = 500
+LIST_MAX = 500  # items in one answer; a longer list goes on with its next_cursor
 DEFAULT_AT = "08:00"
 
 # The Page source's reader: `backend.market_watch.read`, or a test's own.
@@ -1163,6 +1165,82 @@ def item_view(row, sources):
     }
 
 
+def _gathered(value, param):
+    """A `since` or `until` the caller sent, in the stored timestamps' format (UTC; a date is its midnight)."""
+    try:
+        at = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        at = at.replace(tzinfo=timezone.utc) if at.tzinfo is None else at.astimezone(timezone.utc)
+    except (ValueError, OverflowError):
+        raise Problem(
+            "validation", f"{param} is an ISO 8601 time, such as 2026-11-20T00:00:00Z", 422, extra={"param": param}
+        ) from None
+    return at.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+
+
+def item_cursor(row):
+    """Where the next page starts: just after this item in the list's order (newest gathered first, then rowid)."""
+    raw = json.dumps([row["created_at"], row["rowid"]], separators=(",", ":"))
+    return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+
+
+def _after(cursor):
+    try:
+        at, rowid = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
+        if isinstance(at, str) and type(rowid) is int:
+            return at, rowid
+    except (binascii.Error, ValueError, TypeError, UnicodeDecodeError):
+        pass
+    raise Problem(
+        "validation", "cursor is not one this list gave; pass next_cursor as it came", 422, extra={"param": "cursor"}
+    )
+
+
+def list_items(c, automation, sources, status="", run="", source="", since="", until="", cursor="", limit=100):
+    """One page of a listening's items, newest gathered first, and how many match: `total` for these filters, `counts`
+    by status for the same filters but status. The cursor is a position, not an offset, so an item that changes status
+    or arrives while someone pages is neither repeated nor skipped."""
+    if source and source not in sources:
+        raise Problem("validation", "source is not one of this listening's sources", 422, extra={"param": "source"})
+    since, until = since and _gathered(since, "since"), until and _gathered(until, "until")
+    if since and until and since > until:
+        raise Problem("validation", "since is after until", 422, extra={"param": "since"})
+    after = _after(cursor) if cursor else None
+    where, args = ["automation_id=?"], [automation]
+    for clause, value in (
+        ("source_id=?", source),
+        ("created_at>=?", since),
+        ("created_at<?", until),
+        ("run_id=?", run),
+    ):
+        if value:
+            where.append(clause)
+            args.append(value)
+    if run:
+        where.append("status IN ('sending','sent')")
+    counts: dict[str, int] = dict.fromkeys(ITEM_STATUSES, 0)
+    for r in c.execute(
+        f"SELECT status, count(*) FROM listening_items WHERE {' AND '.join(where)} GROUP BY status", args
+    ):
+        counts[r[0]] = r[1]
+    if status:
+        where.append("status=?")
+        args.append(status)
+    if after:
+        where.append("(created_at<? OR (created_at=? AND rowid<?))")
+        args += [after[0], after[0], after[1]]
+    size = max(1, min(int(limit), LIST_MAX))
+    rows = c.execute(
+        f"SELECT rowid, * FROM listening_items WHERE {' AND '.join(where)} ORDER BY created_at DESC, rowid DESC LIMIT ?",
+        (*args, size + 1),
+    ).fetchall()
+    return {
+        "items": [item_view(r, sources) for r in rows[:size]],
+        "total": counts.get(status, 0) if status else sum(counts.values()),
+        "counts": counts,
+        "next_cursor": item_cursor(rows[size - 1]) if len(rows) > size else None,
+    }
+
+
 def _visible(c, who):
     """The listenings `who` may see, by id: the automations' own rule."""
     from . import automations as A
@@ -1317,12 +1395,23 @@ def install(app, store, auth, mutate):
             return {"seen": out["seen"], "saved": out["saved"]}
 
     @app.get("/api/v2/listening/items")
-    def items_list(request: Request, automation: str, status: str = "", run: str = "", limit: int = 100):
-        """A listening's items, newest first, for its run page and for looking into what it did."""
+    def items_list(
+        request: Request,
+        automation: str,
+        status: str = "",
+        run: str = "",
+        source: str = "",
+        since: str = "",
+        until: str = "",
+        cursor: str = "",
+        limit: int = 100,
+    ):
+        """A listening's items, newest gathered first, for its run page and for looking into what it did: at most
+        LIST_MAX a page, with the total, the counts by status and the cursor of the next page (null on the last)."""
         who = request.state.identity
         auth.domain(who)
         if status and status not in ITEM_STATUSES:
-            raise Problem("validation", f"status is one of {', '.join(ITEM_STATUSES)}", 422)
+            raise Problem("validation", f"status is one of {', '.join(ITEM_STATUSES)}", 422, extra={"param": "status"})
         with store.read() as c:
             row = A._row(c, automation)
             if not row or not A.may_see(c, who, A.flow_of(row)):
@@ -1331,19 +1420,7 @@ def install(app, store, auth, mutate):
                 r["id"]: dict(r)
                 for r in c.execute("SELECT * FROM listening_sources WHERE automation_id=?", (automation,))
             }
-            rows = c.execute(
-                "SELECT * FROM listening_items WHERE automation_id=?"
-                + (" AND status=?" if status else "")
-                + (" AND run_id=? AND status IN ('sending','sent')" if run else "")
-                + " ORDER BY created_at DESC, rowid DESC LIMIT ?",
-                (
-                    automation,
-                    *((status,) if status else ()),
-                    *((run,) if run else ()),
-                    max(1, min(int(limit), LIST_MAX)),
-                ),
-            ).fetchall()
-            return {"items": [item_view(r, sources) for r in rows]}
+            return list_items(c, automation, sources, status, run, source, since, until, cursor, limit)
 
     @app.get("/api/v2/listening/stats")
     def stats_route(request: Request, since: str | None = None):
