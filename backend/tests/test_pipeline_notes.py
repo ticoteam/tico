@@ -4,6 +4,8 @@ task's turn is handed; and the why a guard's refusal quotes.
 The org (backend/tests/helpers/org_rules.py): Ana owns the company, Ben and Cara are plain members, Ops and Finance are
 bots. Engineering is managed by the bot Finance; Product by nobody."""
 
+import pytest
+
 from backend import pipeline_notes as N
 from backend import run_triggers as RT
 from backend.models import RunNotes
@@ -180,7 +182,8 @@ def test_a_run_records_the_lists_its_claim_offered_and_what_the_runner_says_its_
     assert unreported["rows"] == [[older["id"], "cpo", "pipeline"]]
 
 
-def test_a_command_turn_is_offered_no_notes_and_a_late_result_still_records_its_report(api):
+@pytest.mark.parametrize("refs", ['{"command": "compact"}', '{"goal_action": "set", "goal_objective": "Ship it."}'])
+def test_a_command_turn_is_offered_no_notes_and_a_late_result_still_records_its_report(api, refs):
     engineering(api)
     r = runner(api)
     assign(api, r, "ops")
@@ -190,10 +193,9 @@ def test_a_command_turn_is_offered_no_notes_and_a_late_result_still_records_its_
     post(api, f"pipelines/{task['pipeline_id']}/notes", HEAVY)
     assert turn_notes(api, task["id"])  # the task has notes a plain turn would be offered
     with api.app.state.store.transaction() as c:
-        # The person typed a command (/compact) to the bot on its task: its prompt is only that.
-        c.execute(
-            "UPDATE messages SET refs=? WHERE conversation_id=?", ('{"command": "compact"}', task["conversation_id"])
-        )
+        # The person typed a command (/compact) to the bot on its task, its prompt only that; or a goal control, which
+        # sends the harness its objective and not the prompt.
+        c.execute("UPDATE messages SET refs=? WHERE conversation_id=?", (refs, task["conversation_id"]))
     typed = claim(api, r)
     assert typed["task"]["id"] == task["id"] and "pipeline_notes" not in typed
     start(api, r, typed)

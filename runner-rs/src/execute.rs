@@ -3301,15 +3301,26 @@ impl Runner {
             let prompt_turn = !side_run && !truthy(refs.get("command")) && !truthy(refs.get("goal_action")) && h.reports_compaction();
             let last_context = self.state.repo_rules(&crate::continuity::context_key(&th), None)?.and_then(|c| c.parse::<i64>().ok());
             // A stateless bot gets its whole prompt each turn: the short form points at state.md, which it does not keep.
-            let mut seen = if !stateless && prompt_turn && told && last_context.is_some() && !compacted_first && !side_ran && !after_interrupt {
+            // A task-model fallback's side session is given its whole prompt each turn but for the notes lists, which it
+            // holds as a primary session does: the turns between are the primary's, and take nothing out of it.
+            let notes_turn = prompt_turn
+                || (side_run && !truthy(refs.get("command")) && !truthy(refs.get("goal_action")) && h.reports_compaction());
+            let notes_seen = || -> Result<(String, String), Fail> {
                 let notes = self.state.repo_rules(&crate::continuity::notes_key(&th), None)?.unwrap_or_default();
                 let (pipeline_notes, stage_notes) = notes.split_once('\n').unwrap_or_default();
+                Ok((pipeline_notes.to_string(), stage_notes.to_string()))
+            };
+            let mut seen = if !stateless && prompt_turn && told && last_context.is_some() && !compacted_first && !side_ran && !after_interrupt {
+                let (pipeline_notes, stage_notes) = notes_seen()?;
                 crate::prompt::Seen {
                     standing: self.state.repo_rules(&crate::continuity::standing_key(&th), None)?.unwrap_or_default(),
                     task: self.state.repo_rules(&crate::continuity::task_key(&th), None)?.unwrap_or_default(),
-                    pipeline_notes: pipeline_notes.to_string(),
-                    stage_notes: stage_notes.to_string(),
+                    pipeline_notes,
+                    stage_notes,
                 }
+            } else if !stateless && side_run && notes_turn && told && last_context.is_some() && !compacted_first && !after_interrupt {
+                let (pipeline_notes, stage_notes) = notes_seen()?;
+                crate::prompt::Seen { pipeline_notes, stage_notes, ..Default::default() }
             } else {
                 crate::prompt::Seen::default()
             };
@@ -3376,9 +3387,10 @@ impl Runner {
                 replacement_prompt(&replacing, &names, after.as_deref(), &bot, &key, &replay)
             });
             h.full_prompt(&th, replacement_text.clone());
-            h.compaction_refresh(&th, Some(built.restore.clone()).filter(|r| prompt_turn && !r.is_empty()));
+            h.compaction_refresh(&th, Some(built.restore.clone()).filter(|r| notes_turn && !r.is_empty()));
             // A compaction before this prompt (compact_first's own) is already accounted for above.
             let _ = h.compacted(&th);
+            let _ = h.refreshed(&th);
             let t = if let Some(_one) = cold_guard {
                 // Held only until the sign-in this turn triggers has landed, not for the length of the turn: the
                 // others follow a few seconds behind, warm.
@@ -3424,6 +3436,10 @@ impl Runner {
             // The harness compacted the session during the turn, or began a new one in place of a missing one, or the
             // turn did not complete: the next turn is given everything again, the repo rules included.
             let kept = !h.compacted(&th) && !h.restored(&th) && drove.outcome == "completed";
+            // A compaction gave the turn back what its prompt left out (`compaction_refresh`): lists it held were given.
+            if h.refreshed(&th) && notes_report.is_some() {
+                notes_report = crate::prompt::notes_sent(&attempt, &format!("{prompt}\n\n{}", built.restore));
+            }
             // A thread told everything again (`refresh`) holds it once this turn has completed with it, unless agy moved
             // it to a new conversation again during the turn (the host keeps that mark then).
             if refresh && drove.outcome == "completed" {
@@ -3435,12 +3451,14 @@ impl Runner {
             if kept && !digest.is_empty() && (held || (built.rules && !truthy(refs.get("goal_action")))) {
                 self.state.repo_rules(&th, Some(&digest))?;
             }
-            if kept && prompt_turn {
-                self.state.repo_rules(&crate::continuity::standing_key(&th), Some(&built.standing))?;
-                self.state.repo_rules(&crate::continuity::task_key(&th), Some(&built.task))?;
+            if kept && notes_turn {
                 self.state.repo_rules(&crate::continuity::notes_key(&th), Some(&format!("{}\n{}", built.pipeline_notes, built.stage_notes)))?;
                 let context = h.context_tokens(&th).map(|c| c.to_string()).unwrap_or_default();
                 self.state.repo_rules(&crate::continuity::context_key(&th), Some(&context))?;
+            }
+            if kept && prompt_turn {
+                self.state.repo_rules(&crate::continuity::standing_key(&th), Some(&built.standing))?;
+                self.state.repo_rules(&crate::continuity::task_key(&th), Some(&built.task))?;
             }
             // A runtime that cannot sign itself in is as unavailable as one out of quota: a bot with a fallback
             // harness runs the turn there instead of losing it.
@@ -3853,21 +3871,37 @@ impl Runner {
                     format!("{primary} was unavailable")
                 };
                 let note = crate::fallback::prompt_note(&because, &primary, &hop);
-                let fresh_text = crate::prompt::before_header(&attempt, &crate::prompt::replayed(&attempt, &names, None, false, &replay), &format!("\n\n{note}"));
+                let fresh = crate::prompt::build(&attempt, &names, None, false, &replay, &crate::prompt::Seen::default(), "");
+                let fresh_text = crate::prompt::before_header(&attempt, &fresh.text, &format!("\n\n{note}"));
                 // A side session agy moved to a new conversation holds only its last hop: told everything again, once.
                 let side_refresh = side_resumed && h.needs_history(&th);
-                let text = if side_resumed && !side_refresh {
+                // A resumed side session holds the notes lists its last completed turn gave (saved below), as a primary
+                // session does: unchanged ones are left out, on a host that says when it compacts and gives them back.
+                let side_seen = if side_resumed && !side_refresh && h.reports_compaction() {
+                    let notes = self.state.repo_rules(&crate::continuity::notes_key(&th), None).map_err(Fail::runtime)?.unwrap_or_default();
+                    let (pipeline_notes, stage_notes) = notes.split_once('\n').unwrap_or_default();
+                    crate::prompt::Seen { pipeline_notes: pipeline_notes.into(), stage_notes: stage_notes.into(), ..Default::default() }
+                } else {
+                    crate::prompt::Seen::default()
+                };
+                // Until this hop completes with no compaction, the side session may not hold what it is given.
+                self.state.repo_rules(&crate::continuity::notes_key(&th), Some("")).map_err(Fail::runtime)?;
+                let (text, side_notes, side_restore) = if side_resumed && !side_refresh {
                     // Resumed: the checkpoint and the room since its last turn here, its own replies included, not the
                     // replay a new thread needs; the repo rules again, since nothing records that this thread holds them.
                     let mut resuming = attempt.clone();
                     resuming["_side_ran"] = json!(true);
                     resuming["_repo_rules_changed"] = json!(true);
                     let after = self.state.cursor(&th, None).map_err(Fail::runtime)?;
-                    let built = crate::prompt::replayed(&resuming, &names, after.as_deref(), true, "");
-                    crate::prompt::before_header(&resuming, &built, &format!("\n\n{note}\n\n{}", crate::continuity::SIDE_RESUMED))
+                    let built = crate::prompt::build(&resuming, &names, after.as_deref(), true, "", &side_seen, "");
+                    let text = crate::prompt::before_header(&resuming, &built.text, &format!("\n\n{note}\n\n{}", crate::continuity::SIDE_RESUMED));
+                    (text, format!("{}\n{}", built.pipeline_notes, built.stage_notes), built.restore)
                 } else {
-                    fresh_text.clone()
+                    (fresh_text.clone(), format!("{}\n{}", fresh.pipeline_notes, fresh.stage_notes), String::new())
                 };
+                h.compaction_refresh(&th, Some(side_restore.clone()).filter(|r| !r.is_empty()));
+                let _ = h.compacted(&th);
+                let _ = h.refreshed(&th);
                 // A resumed session that turns out to be missing restarts under its id with what a new one is given.
                 replacement_text = side_resumed.then(|| fresh_text.clone());
                 h.full_prompt(&th, replacement_text.clone());
@@ -3921,6 +3955,13 @@ impl Runner {
                 drove = self.during_drain(&aid, self.drive(&d, rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal)).await?;
                 if side_refresh && drove.outcome == "completed" {
                     h.history_told(&th);
+                }
+                // A compaction gave the hop back what its prompt left out: lists it held were given.
+                if h.refreshed(&th) && notes_report.is_some() {
+                    notes_report = crate::prompt::notes_sent(&attempt, &format!("{text}\n\n{side_restore}"));
+                }
+                if !h.compacted(&th) && !h.restored(&th) && drove.outcome == "completed" {
+                    self.state.repo_rules(&crate::continuity::notes_key(&th), Some(&side_notes)).map_err(Fail::runtime)?;
                 }
                 if side_resumed && h.restored(&th) {
                     // Claude Code finds out only as the turn runs that the saved session is gone: it began a new one.
@@ -7763,6 +7804,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_resumed_fallback_side_session_is_not_given_unchanged_notes_again() {
+        // The first fallback starts the side session, given both lists; the next resumes it and holds them; the one
+        // after that, once the stage's list has changed, is given that list alone. For a limit hop and a task model.
+        let eng = "Notes for Engineering (what we learned; follow them):\n- Big test runs go to RunsOn. Why: a local run took the shared machine offline. Since 2026-11-18 (#4232).";
+        let qa = "Notes for QA (what we learned; follow them):\n- A pending approval is the ask. Why: approvers got two cards for one decision. Since 2026-11-18 (#4237).";
+        let qa2 = "Notes for QA (what we learned; follow them):\n- Attach the QA page at the head. Why: a page at an older head was approved. Since 2026-11-20 (#4301).";
+        for base in [
+            limit_hop("kimi-k3-fallback"),
+            json!({"task_model_fallback": true}),
+        ] {
+            let hop = |stage: &str| {
+                let mut c = base.clone();
+                c["attempt"] = json!({"pipeline_notes": {"pipeline": eng, "stage": stage}});
+                c
+            };
+            let ran = session_turns(
+                true,
+                true,
+                &[
+                    ("m1", json!({}), json!({})),
+                    ("m2", json!({}), hop(qa)),
+                    ("m4", json!({}), hop(qa)),
+                    ("m4", json!({}), hop(qa2)),
+                ],
+            )
+            .await;
+            assert_ne!(
+                ran.sessions[1], ran.sessions[0],
+                "{base}: {:?}",
+                ran.sessions
+            );
+            assert_eq!(
+                ran.sessions[2], ran.sessions[1],
+                "{base}: {:?}",
+                ran.sessions
+            );
+            assert_eq!(
+                ran.sessions[3], ran.sessions[1],
+                "{base}: {:?}",
+                ran.sessions
+            );
+            assert!(
+                ran.prompts[1].contains(eng) && ran.prompts[1].contains(qa),
+                "{base}: {}",
+                ran.prompts[1]
+            );
+            assert_eq!(
+                ran.completions[1]["notes"],
+                json!({"pipeline": "given", "stage": "given"}),
+                "{base}"
+            );
+            assert!(
+                !ran.prompts[2].contains("Notes for"),
+                "{base}: {}",
+                ran.prompts[2]
+            );
+            assert_eq!(
+                ran.completions[2]["notes"],
+                json!({"pipeline": "held", "stage": "held"}),
+                "{base}"
+            );
+            assert!(
+                ran.prompts[3].contains(qa2) && !ran.prompts[3].contains(eng),
+                "{base}: {}",
+                ran.prompts[3]
+            );
+            assert_eq!(
+                ran.completions[3]["notes"],
+                json!({"pipeline": "held", "stage": "given"}),
+                "{base}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn a_primary_out_of_quota_mid_turn_resumes_the_tasks_side_session_on_its_fallback() {
         // Turn 2's login is held: its fallback starts the side session. Turn 3's primary runs, and pi refuses it for
         // its usage limit (prompt 2): the hop resumes that side session and says why it hopped (AC-3).
@@ -9024,6 +9140,36 @@ for line in sys.stdin:
                 && !injected[1].contains("an AI teammate at"),
             "{}",
             injected[1]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_compaction_that_gives_back_the_notes_a_turn_held_reports_them_as_given() {
+        // Turn 1 resumes, so its prompt holds the notes turn 0 gave; it compacts, and the notes are given back at once.
+        let notes = "Notes for Engineering (what we learned; follow them):\n- Big test runs go to RunsOn. Why: a local run took the shared machine offline. Since 2026-11-18 (#4232).";
+        let extra = json!({"pipeline_notes": {"pipeline": notes}});
+        let turns = [json!({}), json!({})];
+        let (_, prompts, completions, _) =
+            claude_rig(&turns, &[], &[], &[], extra.clone(), |_| ()).await;
+        assert!(!prompts[1].contains(notes), "{}", prompts[1]);
+        assert_eq!(
+            completions[1]["notes"],
+            json!({"pipeline": "held"}),
+            "{}",
+            completions[1]
+        );
+        let (_, prompts, completions, injected) =
+            claude_rig(&turns, &[1], &[], &[], extra, |_| ()).await;
+        assert!(
+            !prompts[1].contains(notes) && injected[1].contains("Big test runs go to RunsOn"),
+            "{}",
+            injected[1]
+        );
+        assert_eq!(
+            completions[1]["notes"],
+            json!({"pipeline": "given"}),
+            "{}",
+            completions[1]
         );
     }
 

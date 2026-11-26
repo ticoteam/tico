@@ -53,11 +53,13 @@ first turn after the task enters a stage reads the stage's, in the turn's own me
 resumed session keeps its cached start). A later turn in the same session does not repeat them; a fresh session, an edit
 to a list, or a compaction during the turn sends them again. When a list the session was given becomes empty (its last
 note retired, or a stage with none), the next turn says so in one line; a session never given notes is told nothing.
-Side stages carry notes too, with no rules.
+A fallback's side session keeps its own record of the lists it holds, as the primary session does. Side stages carry
+notes too, with no rules.
 
 To check that a turn got them, read its run (`tico run list <bot>`): `notes_offered` names the lists Tico handed the
 turn (`pipeline`, `stage`), and `notes_sent` what its prompt did with each (`given` in full, `held` because the session
-already had it, `retracted`). A run export does not show them: it keeps only the message the turn answered, not the
+already had it, `retracted`; a list held, then given back after a compaction during the turn, reads `given`). A goal
+control or a typed command is offered none. A run export does not show them: it keeps only the message the turn answered, not the
 prompt built around it. `notes_sent` is empty from a runner before this change.
 
 People who may change the pipeline add, edit and retire notes; an edit or a retire says in one line what changed and

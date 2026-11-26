@@ -6355,8 +6355,10 @@ class Execution:
         runner_wire.conversation(c, conv)
         runner_wire.conversation(c, conversation)  # the claim's copy (thread_payload) was made before
         wire_task = runner_wire.task(task)
-        # A command's turn is only what the person wrote (runner-rs/src/prompt.rs build): it is offered no notes.
-        typed = bool((msg.get("refs") or {}).get("command")) if msg else False
+        # A command's turn is only what the person wrote (runner-rs/src/prompt.rs build), and a goal control sends the
+        # harness its objective, not the prompt (runner-rs/src/execute.rs start_turn): neither is offered notes.
+        said = (msg.get("refs") or {}) if msg else {}
+        typed = bool(said.get("command") or said.get("goal_action"))
         learned_here = pipeline_notes.for_task(c, task) if task and not relationship and not typed else {}
         if learned_here:
             # The run's record says which lists its claim carried (backend/run_triggers.py `notes_offered`).

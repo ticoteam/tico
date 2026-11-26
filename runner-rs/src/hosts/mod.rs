@@ -1472,6 +1472,15 @@ impl Host {
         }
     }
 
+    /// Whether a turn on `thread_id` was given what its prompt left out after a compaction (`compaction_refresh`)
+    /// since the runner last asked; false on a host that gives nothing back.
+    pub fn refreshed(&self, thread_id: &str) -> bool {
+        match self {
+            Host::Claude(h) => h.refreshed(thread_id),
+            _ => false,
+        }
+    }
+
     /// The size in tokens of `thread_id`'s context after its last turn here (its newest model request of the bot's
     /// own, else the turn's usage), once; None when the host does not say.
     pub fn context_tokens(&self, thread_id: &str) -> Option<i64> {
