@@ -192,19 +192,6 @@ def maintenance_runs_end(pooled_connections_closed, tmp_path):
 
 
 @pytest.fixture(autouse=True)
-def rule_part_calls_end(pooled_connections_closed):
-    """A write a rule holds starts its part call (which part broke the rule) on its own thread once the hold commits
-    (backend/org_rule_check.py `_start_parts`), and that thread holds a pooled read while it asks. A test that ends
-    right after the held write left it running: on a busy runner past the guard's 2 s join, which failed the release
-    validation of v0.6.314 (run 45889585966, test_a_task_room_reply_held_before_done_keeps_its_text_nowhere). Wait for
-    them here, before the guard checks. Takes the guard as a parameter, so it tears down before the guard."""
-    yield
-    module = sys.modules.get("backend.org_rule_check")
-    if module is not None:
-        module.settle_parts()
-
-
-@pytest.fixture(autouse=True)
 def store_pools_close(pooled_connections_closed):
     """A store's idle connections stay open until the store is freed, and a store in a reference cycle is freed only by
     the garbage collector, possibly during a later test, which then warns about the connections. Closing every store
