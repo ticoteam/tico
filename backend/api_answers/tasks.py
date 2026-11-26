@@ -641,6 +641,8 @@ class TaskDetail(TypedDict):
     stopped_agent: NotRequired[StoppedAgent | None]
     """The agent this task is the stop notice for, when the reader may release it (POST /api/v2/bots/{bot}/release)"""
     mover: NotRequired[bool]
+    can_close: NotRequired[bool]
+    """Whether the reader may close the task now (POST /api/v2/tasks/{tid}/move to closed): false once it is closed"""
     runs: NotRequired[list[TaskRun]]
     run_model: NotRequired[TaskRunChoice | None]
     comment_delivery: NotRequired[CommentDelivery | None]

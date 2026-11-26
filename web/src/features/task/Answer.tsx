@@ -112,23 +112,14 @@ interface AnswerProps {
   hold?: (r: TaskRequirement | null, sending?: boolean) => void;
 }
 
-/** Whether the person may close the task from its card: only a stage's own OK (an email's, a rule's or an action's OK
-    is about that one thing, not the task), on an open task they work (a person who moves tasks, its requester or its
-    owner; the server still decides, task_calls.can_work, so a manager it would let close sees the stage menu's Close). */
-function mayClose(t: TaskData, r: TaskRequirement, me: string | undefined): boolean {
-  if (t.status !== 'open' || r.shows?.some((s) => /^(email|rule|outbound):/.test(s))) return false;
-  return t.mover || (!!me && (t.requester_id === me || t.owner_id === me));
-}
-
-/** "until tomorrow", "until next week": Snooze's choice as the toast says it. */
-const untilWords = (label: string) => `until ${label.charAt(0).toLowerCase()}${label.slice(1)}`;
+/** Snooze's choices as the toast says them: a day for the first two, a stretch for the others. */
+const SNOOZED: Record<string, string> = { Tomorrow: 'until tomorrow', 'Next week': 'until next week', 'In two weeks': 'for two weeks', 'In a month': 'for a month' };
 
 /** The decision itself: the thing's name, who asks, what Approve does, then Snooze, Close, Request changes and Approve. */
 export function Answer({ t, r, onAsking, hold }: AnswerProps) {
   const approve = useAction('task.approve');
   const request = useAction('task.requestChanges');
   const closing = useAction('task.move');
-  const me = useQuery(meQuery).data?.id;
   const { error, here, refused, moveOn, start } = useAnswering();
   const shown = useQuery(decisionShownQuery(t.id, r.requirement_id, t.version, emailOf(r), !!r.shows?.some((s) => s.startsWith('outbound:'))));
   const { name, effect, send, recipients, files } = useNamed(t, r);
@@ -142,7 +133,6 @@ export function Answer({ t, r, onAsking, hold }: AnswerProps) {
   const [askedOn, setAskedOn] = useState<AnswerKey | undefined>(undefined);
   const may = (v: 'ok' | 'no') => r.may.includes(v);
   const busy = approve.pending || request.pending || closing.pending || snoozing;
-  const closable = mayClose(t, r, me);
 
   // What Approve binds to, and what the person first saw: when it moves while the box is open, it says Changed.
   const preview = shown.data;
@@ -153,6 +143,9 @@ export function Answer({ t, r, onAsking, hold }: AnswerProps) {
   const changed = key !== null && seen !== null && key !== seen;
   // A refusal, or what Approve binds to did not load: said in place of what Approve does, never over it.
   const fault = !!error || shown.isError || (preview?.complete === false && !shown.isPlaceholderData);
+  // Close only on a stage's own OK, about the task itself: an OK bound to one thing (an email, a letter, a webhook, a rule,
+  // an action) has a grant, and closing the task is not its answer. Shown to whoever the server would let close it.
+  const closable = t.can_close && t.status === 'open' && !send && ready && preview?.stage === true;
 
   useEffect(() => {
     if (!open) return;
@@ -235,7 +228,7 @@ export function Answer({ t, r, onAsking, hold }: AnswerProps) {
       return refused({ error: 'Couldn’t snooze it. Try again.' });
     }
     setSnoozing(false);
-    toast({ text: `Snoozed ${untilWords(label)}`, name });
+    toast({ text: `Snoozed ${SNOOZED[label] ?? ''}`.trim(), name });
     moveOn();
   };
 

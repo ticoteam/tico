@@ -86,7 +86,7 @@ const mail = {
 };
 
 function base(url: string): Reply {
-  if (url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1')) return { body: { task: shown, runs: [], children: [], can_comment: true, mover: true } };
+  if (url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1')) return { body: { task: shown, runs: [], children: [], can_comment: true, mover: true, can_close: true } };
   if (url.endsWith('/files?all=1')) return { body: { files: [] } };
   if (url.endsWith('/api/v2/email/sends/s1')) return { body: mail };
   if (url.endsWith('/api/v2/oks/r1')) return { body: { requirement_id: 'r1', subject: 'email_send:s1', content: {}, shown_hash: 'h-grant', standing: 'waiting', task_id: 't1' } };
@@ -1061,7 +1061,7 @@ describe('Close and Snooze beside Approve', () => {
     reply = (url, method) => (method === 'POST' && url.endsWith('/move') ? { body: { task: specTask({ status: sent.at(-1)?.body.to === 'reopen' ? 'open' : 'closed' }) } } : quietReads(url));
     show(<TaskPage task="12" />, '/tasks/p1/12');
     const box = await decision();
-    fireEvent.click(within(box).getByRole('button', { name: 'Close' }));
+    fireEvent.click(await within(box).findByRole('button', { name: 'Close' }));
     expect(within(box).getByRole('textbox', { name: 'Why close? (optional)' })).toBeTruthy();
     fireEvent.click(within(box).getByRole('button', { name: 'Close task' }));
     await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/tasks/t1/move', body: { to: 'closed' } }));
@@ -1076,7 +1076,7 @@ describe('Close and Snooze beside Approve', () => {
     reply = (url, method) => (method === 'POST' && url.endsWith('/move') ? { body: { task: specTask({ status: 'closed' }) } } : quietReads(url));
     show(<TaskPage task="12" />, '/tasks/p1/12');
     const box = await decision();
-    fireEvent.click(within(box).getByRole('button', { name: 'Close' }));
+    fireEvent.click(await within(box).findByRole('button', { name: 'Close' }));
     fireEvent.click(within(box).getByRole('button', { name: 'Cancel' }));
     expect(within(box).getByRole('button', { name: 'Approve' })).toBeTruthy();
     fireEvent.click(within(box).getByRole('button', { name: 'Close' }));
@@ -1100,30 +1100,53 @@ describe('Close and Snooze beside Approve', () => {
     expect(await screen.findByText(/^Snoozed until tomorrow/)).toBeTruthy();
   });
 
-  it('an email’s, a rule’s or an action’s OK has no Close, and Snooze stays @approvals', async () => {
-    for (const shows of [['email:s1'], ['rule:o7'], ['outbound:a1']]) {
-      // a mover, so only the kind of OK keeps Close away
-      shown = { ...task({ visit_id: 'v4', to_leave: [req({ shows })] } as Partial<TaskData>), children: [], mover: true };
+  it('an OK bound to one thing (an email, a rule, an action, a letter, a webhook) has no Close, and Snooze stays @approvals', async () => {
+    for (const subject of ['email:s1', 'rule:o7', 'outbound:a1', 'letter:l1', 'webhook:hooks-in']) {
+      // one the server lets close the task, so only the kind of OK keeps Close away
+      shown = { ...task({ visit_id: 'v4', to_leave: [req({ shows: [subject] })] } as Partial<TaskData>), children: [], can_close: true, mover: true };
+      reply = (url) =>
+        url.endsWith('/api/v2/oks/r1') && !subject.startsWith('email:')
+          ? { body: { requirement_id: 'r1', subject, content: {}, shown_hash: 'h-bound', standing: 'waiting', task_id: 't1' } }
+          : null;
       queryClient.clear();
       queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'person', slug: null });
       show(<Answer t={shown} r={shown.to_leave?.[0] as TaskRequirement} />, '/tasks/p1/12');
       expect(await screen.findByRole('button', { name: 'Snooze' })).toBeTruthy();
-      expect(screen.queryByRole('button', { name: 'Close' })).toBeNull();
+      // what it is bound to has been read: Close stays away for good, not only while loading
+      await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+      expect(screen.queryByRole('button', { name: 'Close' }), subject).toBeNull();
       cleanup();
     }
   });
 
-  it('a task the person may not close has no Close, and Snooze stays @approvals', async () => {
-    const t = { ...specTask({ requester_id: 'bot:po' } as Partial<TaskData>), children: [], mover: false } as TaskData;
+  it('a task the server would not let the person close has no Close, and Snooze stays @approvals', async () => {
+    reply = quietReads;
+    const t = { ...specTask(), children: [], can_close: false, mover: true } as TaskData;
     show(<Answer t={t} r={t.to_leave?.[0] as TaskRequirement} />, '/tasks/p1/12');
     expect(await screen.findByRole('button', { name: 'Snooze' })).toBeTruthy();
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
     expect(screen.queryByRole('button', { name: 'Close' })).toBeNull();
   });
 
-  it('the task’s requester may close it without moving tasks @approvals', async () => {
-    const t = { ...specTask({ requester_id: 'human:me' } as Partial<TaskData>), children: [], mover: false } as TaskData;
+  it('whoever the server lets close it sees Close, a pipeline’s manager who moves no tasks included @approvals', async () => {
+    reply = quietReads;
+    const t = { ...specTask({ requester_id: 'bot:po' } as Partial<TaskData>), children: [], can_close: true, mover: false } as TaskData;
     show(<Answer t={t} r={t.to_leave?.[0] as TaskRequirement} />, '/tasks/p1/12');
     expect(await screen.findByRole('button', { name: 'Close' })).toBeTruthy();
+  });
+
+  it('the Snooze toast says a day for Next week and a stretch for In two weeks @approvals', async () => {
+    for (const [choice, said] of [['Next week', 'Snoozed until next week'], ['In two weeks', 'Snoozed for two weeks']] as const) {
+      shown = specTask();
+      reply = (url, method) => (method === 'POST' && url.endsWith('/needs-you/snooze') ? { body: { ok: true } } : quietReads(url));
+      show(<TaskPage task="12" />, '/tasks/p1/12');
+      fireEvent.click(within(await decision()).getByRole('button', { name: 'Snooze' }));
+      fireEvent.click(await screen.findByRole('menuitem', { name: choice }));
+      expect(await screen.findByText(new RegExp(`^${said}`))).toBeTruthy();
+      cleanup();
+      queryClient.clear();
+      queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'person', slug: null });
+    }
   });
 });
 
