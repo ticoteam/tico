@@ -11,7 +11,7 @@ import pytest
 
 from backend.migrations import renames_data
 from backend import outbound_slack as OS
-from backend import devcopy
+from backend import devcopy, flight
 from backend.auth import Identity
 from backend.config import Settings
 from backend.execution import Execution
@@ -127,6 +127,19 @@ def source_db(tmp_path, booted):
         c.close()
     store.pool.clear()
     return store.settings.db_path
+
+
+def test_a_dev_copy_never_carries_the_flight_recorders_own_file(tmp_path, booted):
+    source = source_db(tmp_path, booted)
+    beside = flight.path(source)
+    with closing(sqlite3.connect(beside)) as c:
+        for statement in flight.SCHEMA:
+            c.execute(statement)
+        c.execute("INSERT INTO flight_events(created_at,kind,detail) VALUES(1,'start','{}')")
+        c.commit()
+    dest = tmp_path / "copy" / "hub.sqlite"
+    devcopy.build(source, dest, days=30)
+    assert not flight.path(dest).exists() and not any("flight" in p.name for p in dest.parent.iterdir())
 
 
 def test_a_dev_copy_keeps_history_empties_what_acts_and_refuses_runners(tmp_path, booted):

@@ -295,7 +295,8 @@ class Settings:
     trusted_proxies: tuple[str, ...] = ("127.0.0.1/32", "::1/128")
     lease_seconds: int = 90
     scheduler_enabled: bool = False
-    # The flight recorder (backend/flight.py): request, process and database history in this database. On unless
+    # The flight recorder (backend/flight.py): request, process and database history in <stem>.flight.db beside this
+    # database. On unless
     # TICO_FLIGHT_RECORDER=0; off by default here so tests opt in.
     flight_recorder: bool = False
     blob_dir: Path | None = None

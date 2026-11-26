@@ -63,7 +63,7 @@ def test_requests_and_sql_are_aggregated_per_minute_route_and_caller(store):
         c.execute(many, (3,)).fetchmany(2)
     rec.drain(MINUTE)
     taken = rec.take(MINUTE)
-    with store.transaction() as c:
+    with flight.tables(store, write=True) as c:
         flight.write(c, taken)
         rows = {r["caller"]: dict(r) for r in c.execute("SELECT * FROM flight_requests")}
         slow = c.execute("SELECT route,caller,actor,status,sql_ms,wait_ms,queries FROM flight_slow").fetchall()
@@ -100,7 +100,7 @@ def test_a_slow_request_names_its_costliest_statements_and_keeps_no_values(store
     rec.request("GET /api/status", "human", 200, 1600, 10, "human:ana", [900.0, 0.0, 40])  # an older-shaped cost
     rec.drain(MINUTE)
     taken = rec.take(MINUTE)
-    with store.transaction() as c:
+    with flight.tables(store, write=True) as c:
         flight.write(c, taken)
         slow = flight.view(c, minutes=10, sections={"slow"}, now=int(time.time()) + 60)["slow"]
     named = next(r for r in slow if r.get("top"))
@@ -127,8 +127,8 @@ def test_a_slow_request_names_how_a_person_reached_the_server():
 
 def test_a_stall_behind_the_write_lock_reaches_the_file_and_the_summary(store, capsys):
     """The write lock is held elsewhere, a writer waits for it, the event loop stops waking: the stall is in the file
-    (class `lock`, with the waiting thread's stack) although the recorder's own table write could not get the lock,
-    and the summary reads it from the file alone."""
+    (class `lock`, with the waiting thread's stack) and in the recorder's own database, whose lock the server's held
+    lock does not touch, and the summary reads it from the file alone."""
     folder = store.settings.db_path.parent / "flight"
     sampler = flight.Flight(store.recorder, store, store.settings, folder=folder, stall_s=0.05, db_wait=0.05)
     sampler.file.start()
@@ -151,7 +151,7 @@ def test_a_stall_behind_the_write_lock_reaches_the_file_and_the_summary(store, c
         time.sleep(0.1)
         store.recorder.beat = time.monotonic() - 1
         stall = sampler.step()
-        assert stall["class"] == "lock" and stall["threads"]["busy"] and sampler.db_failed == 1
+        assert stall["class"] == "lock" and stall["threads"]["busy"] and sampler.db_failed == 0
         store.recorder.beat = time.monotonic()
         sampler.step()
         sampler.file.close()
@@ -208,7 +208,7 @@ def test_table_sizes_are_reused_for_a_day_even_after_a_restart(store, monkeypatc
     sampler = flight.Flight(store.recorder, store, store.settings)
     with measuring(sizing):
         sampler.size_db(MINUTE)
-    with store.read() as c:
+    with flight.tables(store) as c:
         first = flight._db(c, MINUTE)
     assert first["objects"]["size_fixture"] > 0
     one_pass = len(sizing)  # one short read per table and its indexes, so many statements make one pass
@@ -221,7 +221,7 @@ def test_table_sizes_are_reused_for_a_day_even_after_a_restart(store, monkeypatc
     sampler = flight.Flight(store.recorder, store, store.settings)
     with measuring(sizing):
         sampler.size_db(MINUTE + 7200)
-    with store.read() as c:
+    with flight.tables(store) as c:
         reused = flight._db(c, MINUTE + 7200)
     assert len(sizing) == one_pass
     assert reused["objects"] == first["objects"] and reused["objects_at"] == MINUTE
@@ -230,7 +230,7 @@ def test_table_sizes_are_reused_for_a_day_even_after_a_restart(store, monkeypatc
 
     with measuring(sizing):
         sampler.size_db(MINUTE + 86400)
-    with store.read() as c:
+    with flight.tables(store) as c:
         refreshed = flight._db(c, MINUTE + 86400)
         assert [r[0] for r in c.execute("SELECT name FROM pragma_table_info('flight_db')")] == [
             "created_at",
@@ -286,7 +286,7 @@ def test_owners_admins_and_bots_read_the_metrics(tmp_path):
         rec = app.state.flight
         rec.drain()
         taken = rec.take(int(time.time() // 60 * 60) - 120)
-        with app.state.store.transaction() as c:
+        with flight.tables(app.state.store, write=True) as c:
             flight.write(c, taken)
         # A request's SQL time reaches its route's row through the threads it ran on (the file's per-route copy).
         health = [r for r in taken["file"][1]["routes"] if r["route"] == "GET /api/v2/health"]
@@ -294,14 +294,14 @@ def test_owners_admins_and_bots_read_the_metrics(tmp_path):
         # The start event comes from the recorder's thread; on a busy machine it lands after the first requests.
         deadline = time.time() + 10
         while time.time() < deadline:
-            with app.state.store.transaction() as c:
+            with flight.tables(app.state.store) as c:
                 if flight.last_start(c):
                     break
             time.sleep(0.05)
         else:
             raise AssertionError("the recorder's start event never reached the flight table")
         assert get("cara-test").status_code == 403 and get("runner-test").status_code in (401, 403)
-        with app.state.store.transaction() as c:
+        with flight.tables(app.state.store, write=True) as c:
             c.execute(
                 "INSERT INTO flight_slow(created_at,route,caller,actor,ms,bytes,status) VALUES(?,?,?,?,?,?,?)",
                 (int(time.time()), "GET /api/v2/tasks", "human", "human:cara", 1500, 10, 200),
@@ -318,6 +318,11 @@ def test_owners_admins_and_bots_read_the_metrics(tmp_path):
         window = get("ana-test", "/api/v2/system/metrics?section=requests&since=100&until=160&routes=3").json()
         assert (window["since"], window["until"], window["requests"]["n"]) == (100, 160, 0)
         assert get("ana-test", "/api/v2/system/metrics?since=160&until=100").status_code == 422
+        # The live server recorded all of it in its own file: the server's database took no recorder row.
+        with app.state.store.read() as c:
+            assert {t: c.execute(f"SELECT count(*) FROM {t}").fetchone()[0] for t in flight.TABLES} == dict.fromkeys(
+                flight.TABLES, 0
+            )
 
 
 def test_a_client_that_hangs_up_during_the_body_read_is_a_499_not_a_5xx(tmp_path, caplog):
@@ -416,7 +421,7 @@ def test_a_client_that_hangs_up_during_the_body_read_is_a_499_not_a_5xx(tmp_path
 def test_a_window_reads_only_its_own_minutes(store):
     """The load gate (bench/load_gate) reads its steady window, not the ramp before it or the cool-down after."""
     t0 = 1_800_000_000 // 60 * 60
-    with store.transaction() as c:
+    with flight.tables(store, write=True) as c:
         for i, ms in enumerate((4000, 10, 3000)):  # ramp, steady, after
             hist = {}
             flight._add(hist, ms)
@@ -441,7 +446,7 @@ def test_minutes_become_hours_and_old_rows_go(store):
     now = 1_800_000_000
     old = now - 3 * 86400
     hour = old // 3600 * 3600
-    with store.transaction() as c:
+    with flight.tables(store, write=True) as c:
         for i, ms in enumerate((10, 20, 4000)):
             hist = {}
             flight._add(hist, ms)
@@ -457,7 +462,7 @@ def test_minutes_become_hours_and_old_rows_go(store):
         c.execute("INSERT INTO flight_sql VALUES(?,?,?,?,?,?,?)", (now - 91 * 86400, "SELECT N", 1, 1, 1, 1, "{}"))
         c.execute("INSERT INTO flight_process(created_at) VALUES(?)", (now - 60,))
     flight.sweep(store, now)
-    with store.read() as c:
+    with flight.tables(store) as c:
         rows = [dict(r) for r in c.execute("SELECT * FROM flight_requests")]
         assert c.execute("SELECT count(*) FROM flight_slow").fetchone()[0] == 0
         assert c.execute("SELECT count(*) FROM flight_sql").fetchone()[0] == 0
@@ -524,10 +529,10 @@ def test_a_minute_the_lock_kept_out_is_written_with_the_next_one_or_named_as_mis
     `recorder_gap` event names them."""
     rec = store.recorder
     sampler = flight.Flight(rec, store, store.settings, folder=store.settings.db_path.parent / "flight", db_wait=0.05)
-    holder = sqlite3.connect(str(store.settings.db_path), isolation_level=None)
+    holder = flight.connect(store.settings.db_path)  # the recorder's own file, and its lock
 
     def minutes():
-        with store.read() as c:
+        with flight.tables(store) as c:
             return [r[0] for r in c.execute("SELECT created_at FROM flight_process ORDER BY created_at")]
 
     def errors(minute):
@@ -544,7 +549,7 @@ def test_a_minute_the_lock_kept_out_is_written_with_the_next_one_or_named_as_mis
     assert minutes() == [] and sampler.db_failed == 2
     errors(MINUTE + 120)
     assert minutes() == [MINUTE, MINUTE + 60, MINUTE + 120] and sampler.pending == []
-    with store.read() as c:
+    with flight.tables(store) as c:
         assert c.execute("SELECT sum(errors) FROM flight_requests").fetchone()[0] == 3  # every 503 counted
     monkeypatch.setattr(flight, "PENDING_MAX", 1)
     holder.execute("BEGIN IMMEDIATE")
@@ -556,7 +561,7 @@ def test_a_minute_the_lock_kept_out_is_written_with_the_next_one_or_named_as_mis
         holder.close()
     errors(MINUTE + 300)
     assert minutes()[-2:] == [MINUTE + 240, MINUTE + 300] and MINUTE + 180 not in minutes()
-    with store.read() as c:
+    with flight.tables(store) as c:
         gap = c.execute("SELECT detail FROM flight_events WHERE kind='recorder_gap'").fetchall()
     assert [json.loads(g[0]) for g in gap] == [{"minutes": [MINUTE + 180], "count": 1}]
 
@@ -571,7 +576,7 @@ def test_a_start_or_stall_the_lock_kept_out_keeps_the_time_it_happened(store, mo
     sampler = flight.Flight(
         rec, store, store.settings, folder=store.settings.db_path.parent / "flight", stall_s=0.05, db_wait=0.05
     )
-    holder = sqlite3.connect(str(store.settings.db_path), isolation_level=None)
+    holder = flight.connect(store.settings.db_path)
     holder.execute("BEGIN IMMEDIATE")
     try:
         sampler.record_start()
@@ -584,7 +589,7 @@ def test_a_start_or_stall_the_lock_kept_out_keeps_the_time_it_happened(store, mo
     clock[0] += 180
     rec.drain(MINUTE + 180)
     sampler.flush(MINUTE + 180)
-    with store.read() as c:
+    with flight.tables(store) as c:
         when = dict(c.execute("SELECT kind,created_at FROM flight_events WHERE kind IN ('start','stall')").fetchall())
         assert when == {"start": MINUTE + 5, "stall": MINUTE + 5} and flight.last_start(c)["at"] == MINUTE + 5
 
@@ -610,7 +615,7 @@ def test_a_retry_after_a_failing_write_keeps_order_drops_only_the_bad_batch_and_
             ).fetchone()[0],
         )
 
-    holder = sqlite3.connect(str(store.settings.db_path), isolation_level=None)
+    holder = flight.connect(store.settings.db_path)
     holder.execute("BEGIN IMMEDIATE")
     try:
         minute(MINUTE)
@@ -619,11 +624,11 @@ def test_a_retry_after_a_failing_write_keeps_order_drops_only_the_bad_batch_and_
         holder.execute("ROLLBACK")
         holder.close()
     assert sampler.write_db(lambda c: c.execute("INSERT INTO no_such_table VALUES(1)"), MINUTE + 90) is False
-    with store.read() as c:
+    with flight.tables(store) as c:
         assert tables(c) == ([], 0, None)  # the try rolled back: nothing half-written
     assert [m for m, _ in sampler.pending] == [MINUTE, MINUTE + 60] and sampler.lost == [MINUTE + 90]
     minute(MINUTE + 120)
-    with store.read() as c:
+    with flight.tables(store) as c:
         assert tables(c) == ([MINUTE, MINUTE + 60, MINUTE + 120], 3, 3)  # replayed in reverse, n would end at 1 or 2
         gap = [json.loads(r[0]) for r in c.execute("SELECT detail FROM flight_events WHERE kind='recorder_gap'")]
     assert gap == [{"minutes": [MINUTE + 90], "count": 1}] and sampler.pending == [] and sampler.lost == []
@@ -631,8 +636,8 @@ def test_a_retry_after_a_failing_write_keeps_order_drops_only_the_bad_batch_and_
 
 def test_a_real_request_holding_the_lock_is_named_while_held_and_after(tmp_path, monkeypatch, caplog):
     """A sync handler's write held across a recorder flush on another thread: the open hold names the route template
-    (from the middleware's context, through the threadpool) and the handler's line before it ends, and the event the
-    busy lock kept out lands once it does."""
+    (from the middleware's context, through the threadpool) and the handler's line before it ends. The held lock is
+    the server database's, so the recorder's own write is not kept out by it."""
     registry = tmp_path / "registry"
     registry.mkdir()
     (registry / "hub-access.yaml").write_text(yaml.safe_dump({"owner": "ana@acme.example"}))
@@ -677,7 +682,7 @@ def test_a_real_request_holding_the_lock_is_named_while_held_and_after(tmp_path,
         held = [r.getMessage() for r in caplog.records if "(still held)" in r.getMessage()]
         assert len(held) == 1 and "POST /api/v2/test-hold/{key}" in held[0]
         assert "test_flight.py" in held[0] and "hold_the_lock" in held[0]
-        assert sampler.pending  # the handler still has the lock: the event waits
+        assert not sampler.pending  # the handler holds the server's lock, not the recorder's: nothing waits
     finally:
         release.set()
         request.join(10)
@@ -685,7 +690,7 @@ def test_a_real_request_holding_the_lock_is_named_while_held_and_after(tmp_path,
     rec.drain(MINUTE + 60)
     sampler.flush(MINUTE + 60)
     sampler.file.close()
-    with store.read() as c:
+    with flight.tables(store) as c:
         holds = [json.loads(r[0]) for r in c.execute("SELECT detail FROM flight_events WHERE kind='long_hold'")]
     opened = [h for h in holds if h.get("open")]
     assert opened and opened[0]["route"] == "POST /api/v2/test-hold/{key}" and "hold_the_lock" in opened[0]["site"]

@@ -19,6 +19,7 @@ import pytest
 from backend import (
     bot_settings as BS,
     diagnostics,
+    flight,
     health,
     hosted_updates,
     invariants,
@@ -520,7 +521,7 @@ def test_the_monitor_files_for_agent_ops_and_a_task_for_a_person_is_refused(api)
 def test_event_stream_counts_drops_and_not_the_ones_a_server_restart_caused(environment, readers, monkeypatch):
     api, runner = built(environment)
     monkeypatch.setattr(diagnostics.RING, "started", "2026-01-10T23:00:00Z")  # this process: far from the lines
-    with api.app.state.store.transaction() as c:  # an earlier start: the update
+    with flight.tables(api.app.state.store, write=True) as c:  # an earlier start: the update
         c.execute(
             "INSERT INTO flight_events(created_at,kind,detail) VALUES(?,?,'{}')",
             (calendar.timegm(time.strptime("2026-01-10T21:06:44Z", "%Y-%m-%dT%H:%M:%SZ")), "start"),

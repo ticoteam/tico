@@ -129,7 +129,11 @@ def test_a_stop_kills_a_slow_server_after_the_grace_then_lets_litestream_sync(tm
     seen = lines(log)
     assert seen.index("server TERM") < seen.index("litestream TERM") < seen.index("litestream synced"), seen
     assert 0.5 <= took < 3, took  # the grace, Litestream's sync, and not Docker's 10 s
-    assert "shutdown-sync-timeout: 5s" in (tmp_path / "litestream.yml").read_text().splitlines()
+    config = (tmp_path / "litestream.yml").read_text().splitlines()
+    assert "shutdown-sync-timeout: 5s" in config
+    # Litestream replicates the server's database only: the flight recorder's own file (hub.flight.db) is disposable.
+    paths = [line.split("path:", 1)[1].strip() for line in config if line.strip().startswith("- path:")]
+    assert len(paths) == 1 and paths[0].endswith("/hub.sqlite") and "flight" not in "\n".join(config)
 
 
 def test_a_server_that_exits_ends_the_container_with_its_code_after_litestream_syncs(tmp_path):

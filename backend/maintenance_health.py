@@ -120,6 +120,8 @@ MEANING = {
     "queue_idle": "Work a claim would hand out stayed queued 15 minutes or more (a person's message: 2) on an online "
     "computer with room and no limit.",
     "worktree_error": "A task worktree failed on its computer.",
+    "flight_recorder": "The server's performance recording (its flight recorder file) is there but cannot be read, so "
+    "its speed and idle-CPU checks measure nothing.",
     "server_cpu": f"The server averaged {SERVER_CPU:g}% CPU or more for an hour with under {QUIET_REQUESTS} requests.",
     "local_busy": "A process or container on a computer running Tico was busy in two hourly checks in a row while idle.",
     "run_hold": "Tico stopped a bot after five runs in a row failed within a minute of starting.",
@@ -135,6 +137,7 @@ MEANING = {
 BUG_FIX = {
     "queue_idle": "Tico bug: queued work should start within a minute while its computer has room.",
     "server_cpu": "Tico bug: a background loop is working while nobody uses the server.",
+    "flight_recorder": "Tico bug: the server replaces a flight recorder file it cannot read at its next minute.",
     "local_busy": "Tico bug: a Tico process or container should be quiet while no turn runs.",
     **{p[0]: p[5] for p in LOG_PATTERNS if p[1] == BUG},
 }
@@ -939,6 +942,19 @@ def _server_checks(c):
         else []
     )
     seen = flight.view(c, minutes=60, sections=("requests", "process", "sql"))
+    if seen.get("flight_db") == "unreadable":
+        # Not "no finding": the checks below read nothing. A missing file is a new server's or a recorder turned off.
+        return out + [
+            _finding(
+                "flight_recorder",
+                "flight_recorder",
+                BUG,
+                "The server's performance recording cannot be read",
+                "The flight recorder file beside the server's database is there but cannot be read, so the idle-CPU "
+                "check and the release speed comparison measure nothing until it is replaced.",
+                BUG_FIX["flight_recorder"],
+            )
+        ]
     cpu, requests = (seen.get("process") or {}).get("cpu_avg"), (seen.get("requests") or {}).get("n") or 0
     if cpu is None or cpu < SERVER_CPU or requests >= QUIET_REQUESTS:
         return out

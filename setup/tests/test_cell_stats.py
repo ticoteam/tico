@@ -8,11 +8,12 @@ import sqlite3
 import subprocess
 import sys
 from collections import namedtuple
+from contextlib import closing
 from pathlib import Path
 
 import pytest
 
-from backend import flight_file, migrations
+from backend import flight, flight_file, migrations
 from setup import cell, cell_stats as cs
 from setup.cell import Result
 
@@ -832,6 +833,23 @@ def test_db_reads_read_only_and_flight_reads_the_files(box):
     assert r["ok"] and got["stalls_total"] == 1 and got["routes"][0]["route"] == "GET /api/v2/slow"
     r = cs.run_tool(box, "db", {"company": "stuck"})
     assert r["ok"] is False and "no database" in r["output"]
+
+
+def test_sql_top_reads_the_recorders_own_file_and_the_servers_database_on_a_cell_without_one(box):
+    name = "tico-boatyard-server-1"
+    older = [r["shape"] for r in cs.sql_top(box, name, NOW)]  # no hub.flight.db yet: flight_sql in hub.sqlite
+    assert "UPDATE jobs SET x = ? WHERE id = ?" in older
+    target = box.cell_root / "companies" / "boatyard" / "data" / "hub.flight.db"
+    with closing(sqlite3.connect(target)) as c:  # as the server leaves it between writes: WAL, no connection open
+        c.execute("PRAGMA journal_mode=WAL")
+        for statement in flight.SCHEMA:
+            c.execute(statement)
+        c.execute(
+            "INSERT INTO flight_sql VALUES(?,?,?,?,?,?,?)",
+            (int(NOW) // 3600 * 3600, "SELECT moved", 7, 70.0, 1, 9, "{}"),
+        )
+        c.commit()
+    assert [r["shape"] for r in cs.sql_top(box, name, NOW)] == ["SELECT moved"]
 
 
 # --- SQLite: never on the host ----------------------------------------------------------------------------------------
