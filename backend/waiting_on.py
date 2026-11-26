@@ -1649,6 +1649,9 @@ def _lists(
     from . import paid_renders
 
     cards = paid_renders.cards(conn) if shots else {}
+    # What each task's linked PRs' reviews covered (task_requirements._new_heads, which a page's ask reads): Needs you's
+    # lists alone, where every candidate is read; a pass that reads no page would pay for it.
+    R.prime_reviews(conn, task_ids)
     read = prime(conn, task_ids)
     for task_id in task_ids:
         row = read[str(task_id)] if str(task_id) in read else E.task(conn, task_id)

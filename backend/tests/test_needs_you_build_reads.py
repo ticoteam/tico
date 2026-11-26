@@ -11,7 +11,7 @@ import json
 import pytest
 
 from backend import item_metadata as IM
-from backend import needs_cache, read_cache
+from backend import needs_cache, needs_share, read_cache
 from backend import question_marks as Q
 from backend import task_engine as E
 from backend import task_pages as P
@@ -142,6 +142,8 @@ def build(api, person, how, **kw):
     primed or kept between reads and each item reads its own rows."""
     store, seen = api.app.state.store, []
     with pytest.MonkeyPatch.context() as patched:
+        # A build of its own each time: what is measured here is the build's reads, not a list kept from the last.
+        patched.setattr(needs_share, "mark", lambda c: None)
         if how == "rows":
             patched.setattr(read_cache, "cache", lambda c: None)
         with store.read_transaction() as c:
