@@ -60,7 +60,7 @@ def record(c: Any, people: list[Row], row: Row) -> Row:
     return {
         "reports": reports(people, row["id"]),
         "to": row.get("reports_to") or "",
-        "plans": [{"name": p["name"], "kind": p["kind"]} for p in found],
+        "plans": [{"name": p["name"], "kind": p["kind"], "bots": list(p["bots"])} for p in found],
         "bots": sorted({b for p in found for b in p["bots"]}),
     }
 
@@ -122,9 +122,10 @@ def preview(c: Any, roster: Row, pid: str) -> Row:
     }
 
 
-def last_record(c: Any, pid: str) -> Row | None:
+def last_record(c: Any, pid: str) -> tuple[Row, int] | None:
+    """The newest `person.left` record for `pid`, with its event's rowid (what came after it is newer)."""
     row = c.execute(
-        "SELECT detail FROM events WHERE action=? AND target=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        "SELECT detail,rowid FROM events WHERE action=? AND target=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
         (LEFT, pid),
     ).fetchone()
     if not row:
@@ -133,24 +134,59 @@ def last_record(c: Any, pid: str) -> Row | None:
         found: Any = json.loads(row[0] or "{}")
     except ValueError:
         return None
-    return cast(Row, found) if isinstance(found, dict) else None
+    return (cast(Row, found), int(row[1])) if isinstance(found, dict) else None
+
+
+def moved_by_hand(c: Any, rid: str, after: int) -> bool:
+    """Whether someone set `rid`'s manager since the event at rowid `after`: in Settings (or the API), or through a
+    directory sync. A move back to the same manager still counts: that person chose where they report."""
+    for action, detail in c.execute(
+        "SELECT action,detail FROM events WHERE target=? AND rowid>? AND action IN"
+        " ('person.updated','directory.person_updated')",
+        (rid, after),
+    ):
+        try:
+            seen: Any = json.loads(detail or "{}")
+        except ValueError:
+            continue
+        if not isinstance(seen, dict):
+            continue
+        said = cast(Row, seen)
+        if action == "person.updated" and said.get("reports_to") is not None:
+            return True
+        if action == "directory.person_updated" and "manager" in (said.get("fields") or []):
+            return True
+    return False
 
 
 def restore(c: Any, people: list[Row], pid: str) -> Row:
     """Move `pid`'s reports back to them, in `people` (the caller's list, mutated), and say what could not come back.
-    A report whose manager is no longer the one they were moved to was moved by hand since: it stays."""
-    kept: Row = last_record(c, pid) or {}
+    A report someone gave a manager by hand since the removal stays where they put them, as does one whose manager is
+    no longer the one Remove moved them to. A report who has left since moves back too, so restoring two people in
+    either order rebuilds the chart between them."""
+    found = last_record(c, pid)
+    kept: Row = found[0] if found else {}
+    after = found[1] if found else 0
     index = {p["id"]: i for i, p in enumerate(people)}
     moved: list[Row] = []
     ids: list[str] = kept.get("reports") or []
     for rid in ids:
         i = index.get(rid)
-        if i is None or people[i].get("hidden") or (people[i].get("reports_to") or "") != (kept.get("to") or ""):
+        if i is None or (people[i].get("reports_to") or "") != (kept.get("to") or "") or moved_by_hand(c, rid, after):
             continue
         people[i] = {**people[i], "reports_to": pid}
-        moved.append({"id": rid, "name": people[i].get("name") or people[i].get("email") or rid})
+        if not people[i].get("hidden"):
+            moved.append({"id": rid, "name": people[i].get("name") or people[i].get("email") or rid})
+    # Each plan with the bots that ran on it. A record from before plans named their bots lists them once, beside.
+    plans: list[Row] = [
+        {
+            "name": p.get("name") or "",
+            "kind": p.get("kind") or "",
+            **({"bots": [_bot(c, b) for b in p["bots"]]} if "bots" in p else {}),
+        }
+        for p in cast(list[Row], kept.get("plans") or [])
+    ]
     lost: list[str] = kept.get("bots") or []
-    bots = [_bot(c, b) for b in lost]
     me: Row = people[index[pid]] if pid in index else {}
     name = me.get("name") or me.get("email") or pid
-    return {"name": name, "reports": moved, "plans": list(kept.get("plans") or []), "bots": bots}
+    return {"name": name, "reports": moved, "plans": plans, "bots": [_bot(c, b) for b in lost]}

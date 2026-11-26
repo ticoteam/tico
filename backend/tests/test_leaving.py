@@ -9,7 +9,8 @@ from backend import views
 from backend.store import H
 from backend.tests.helpers.api import get, post
 from backend.tests.helpers.credentials import setup
-from backend.tests.helpers.model_subscriptions import add, company, pick
+from backend.tests.helpers.tasks_board import bot_token
+from backend.tests.helpers.model_subscriptions import OTHER, add, company, pick
 
 
 def chart(api, **reports_to):
@@ -125,3 +126,62 @@ def test_restore_after_a_directory_sync_moves_the_reports_back(api):
         D.apply(c, H.TICO_ACTOR, "google", plan, views.roster(c), settings=settings)
     assert manager(api, "cara") == manager(api, "dee") == "ben"
     assert bot_id(api, "ops")  # the bots are still there, without Ben's plan
+
+
+def test_restore_leaves_a_report_moved_away_and_back_by_hand(api):
+    ben_leaves_with_a_plan_and_two_reports(api)
+    post(api, "humans/ben", {"left": True})
+    post(api, "humans/dee", {"reports_to": "cara"})
+    post(api, "humans/dee", {"reports_to": "ana"})  # back where Remove put them, but by a person's choice: stays
+    back = post(api, "access/humans/ben", {"left": False})["restored"]
+    assert manager(api, "dee") == "ana" and manager(api, "cara") == "ben"
+    assert [r["id"] for r in back["reports"]] == ["cara"]
+
+
+def test_restore_names_the_bots_of_each_plan(api):
+    setup(api)
+    company(api)
+    first = add(api, token="ben-test", name="Ben's Claude")["id"]
+    second = add(api, token="ben-test", secret=OTHER, name="Ben's other Claude")["id"]
+    pick(api, "ops", "claude", first)
+    pick(api, "cpo", "claude", second)
+    seen = get(api, "humans/ben/leaving")
+    assert {p["name"]: [b["slug"] for b in p["bots"]] for p in seen["plans"]} == {
+        "Ben's Claude": ["ops"],
+        "Ben's other Claude": ["cpo"],
+    }
+    post(api, "humans/ben", {"left": True})
+    back = post(api, "access/humans/ben", {"left": False})["restored"]
+    assert {p["name"]: [b["slug"] for b in p["bots"]] for p in back["plans"]} == {
+        "Ben's Claude": ["ops"],
+        "Ben's other Claude": ["cpo"],
+    }
+
+
+def test_restoring_a_chain_in_either_order_rebuilds_it(api):
+    """Ana > Ben > Cara > Dee. Ben leaves, then Cara: restoring them in either order puts the chart back."""
+    for first, then in (("ben", "cara"), ("cara", "ben")):
+        chart(api, ben="ana", cara="ben", dee="cara")
+        post(api, "humans/ben", {"left": True})
+        post(api, "humans/cara", {"left": True})
+        assert manager(api, "dee") == "ana"
+        post(api, f"access/humans/{first}", {"left": False})
+        post(api, f"access/humans/{then}", {"left": False})
+        assert (manager(api, "ben"), manager(api, "cara"), manager(api, "dee")) == ("ana", "ben", "cara"), first
+
+
+def operated_by(api, slug, person):
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET owner_id=? WHERE bot IN (?,?)", (person, slug, H.resolve_bot(c, slug)["id"]))
+
+
+def test_a_bot_run_for_the_owner_reads_the_preview_and_one_run_for_a_member_may_not(api):
+    ben_leaves_with_a_plan_and_two_reports(api)
+    token = bot_token(api, "ops")  # a real run's credential, through the server's own sign-in
+    operated_by(api, "ops", "ana")
+    seen = get(api, "humans/ben/leaving", token=token)
+    assert sorted(r["id"] for r in seen["reports"]) == ["cara", "dee"]
+    assert sorted(b["slug"] for b in seen["bots"]) == ["cpo", "ops"]
+    operated_by(api, "ops", "cara")
+    get(api, "humans/ben/leaving", token=token, expected=403)
+    post(api, "humans/ben", {"left": True}, token=token, expected=403)  # reading never lets a bot remove

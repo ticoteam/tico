@@ -1681,6 +1681,18 @@ def rename_argv(argv):
         return ["note", "create"] + argv[1:], '"tico note <bot> <text>" is now "tico note create <bot> <text>"'
     if argv[:1] == ["notice"] and len(argv) > 1 and (argv[1] in NOTICE_COMMANDS or argv[1].startswith("-")):
         return argv, None  # `tico notice list` is new; only `tico notice <text>` is the old send
+    if argv[:2] == ["human", "remove"] and "--preview" in argv:
+        # `tico human remove <person> --preview` is the read `tico human leaving <person>`: it removes no one, even
+        # with --confirm beside it.
+        rest, i = [], 2
+        while i < len(argv):
+            if argv[i] == "--confirm":
+                i += 2
+                continue
+            if argv[i] not in ("--preview", "--delete") and not argv[i].startswith("--confirm="):
+                rest.append(argv[i])
+            i += 1
+        return ["human", "leaving"] + rest, None
     from clients.commands.org import ORG_COMMANDS
 
     if argv[:1] == ["org"] and argv[1:2] and argv[1] in ORG_COMMANDS:

@@ -517,10 +517,11 @@ def _leaving_lines(seen):
     "tico_human_leaving",
     "What removing a person would do, changing nothing: the model plans they connected that go and the bots that lose "
     "their model, the reports that move and to whom, their open tasks and asks, their message bot and the groups they "
-    "lead. The owner or an admin, or an agent acting for one; the remove itself stays a person's own (tico_human_remove).",
+    "lead. The owner or an admin, or a bot run for one; the remove itself stays a person's own (tico_human_remove). "
+    "On the command line `tico human remove <person> --preview` runs this.",
     {"human": _s("The person: their id, email or exact name")},
     required=("human",),
-    audience=REQUESTER,
+    audience=PEOPLE + ("bot", "botops", "agent"),
 )
 def human_leaving(api, args):
     person = _person(api, args["human"], _roles(api))

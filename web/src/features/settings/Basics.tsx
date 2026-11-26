@@ -302,9 +302,15 @@ function RemoveDialog({ p, onClose }: { p: AccessPerson; onClose: () => void }) 
           <Button variant="quiet" onClick={onClose}>
             Cancel
           </Button>
+          {seen.isError && (
+            <Button variant="quiet" onClick={() => void seen.refetch()} disabled={seen.isFetching}>
+              Try again
+            </Button>
+          )}
           <Button
             variant="primary"
-            disabled={seen.isPending}
+            // Remove waits for the list: the person removing someone sees what goes before it goes.
+            disabled={!seen.isSuccess}
             onClick={() => {
               onClose();
               void act('settings.removePerson', { person: p.id });
@@ -315,6 +321,11 @@ function RemoveDialog({ p, onClose }: { p: AccessPerson; onClose: () => void }) 
         </>
       }
     >
+      {seen.isError && (
+        <p role="alert" data-testid="leaving-error">
+          Could not load what removing {p.name} moves, so Remove is off. Try again.
+        </p>
+      )}
       {v && moves && (
         <div className="leaving" data-testid="leaving">
           {v.plans.map((plan) => (

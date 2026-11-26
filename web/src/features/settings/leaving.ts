@@ -19,7 +19,7 @@ export type Leaving = {
 };
 
 /** What Restore brought back and what it could not (POST /api/v2/access/humans/{pid} with left: false). */
-export type Restored = { name?: string; reports: Named[]; plans: { name: string; kind: string }[]; bots: LeavingBot[] };
+export type Restored = { name?: string; reports: Named[]; plans: { name: string; kind: string; bots?: LeavingBot[] }[]; bots: LeavingBot[] };
 
 export const leavingQuery = (pid: string) =>
   queryOptions({
@@ -69,7 +69,10 @@ export function restoredText(out: { restored?: Restored } | undefined, fallback:
   const parts = [`${name} is back.`];
   if (r.reports.length) parts.push(`${count(r.reports.length, 'report', 'reports')} moved back: ${r.reports.map((p) => p.name).join(', ')}.`);
   for (const plan of r.plans) {
-    const bots = r.bots.length ? `, then set ${andList(r.bots.map((b) => b.name))} to it` : '';
+    // Each plan's own bots. A removal recorded before plans named theirs lists the bots once: they belong to the plan
+    // only when it was the one plan.
+    const mine = plan.bots ?? (r.plans.length === 1 ? r.bots : []);
+    const bots = mine.length ? `, then set ${andList(mine.map((b) => b.name))} to it` : '';
     parts.push(`Their ${plan.name} was removed: ${name} reconnects it in Settings > Models${bots}.`);
   }
   return parts.join(' ');

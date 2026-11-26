@@ -7,6 +7,7 @@ from . import access as Access
 from .store import H
 from . import models as M
 from .store import Problem
+from .auth import OPERATOR_SQL
 from fastapi import Request
 from . import account_routes
 from . import org_routes
@@ -280,8 +281,21 @@ def register_people(admin_only, app, auth, delegated_identity, mutate, propose_c
         that move and to whom, their open tasks and asks, their message bot and the groups they lead
         (backend/leaving.py). Owners and admins, and an agent acting for one; Remove itself stays the owner's press."""
         who = request.state.identity
-        admin_only(who, "sees what removing someone moves")
         with store.read() as c:
+            if who.role == "bot":
+                # A bot reads it for the person it works for: its operator, who must be the owner or an admin.
+                auth.domain(who)
+                row = c.execute(OPERATOR_SQL, (H.actor_id(who.actor),)).fetchone()
+                try:
+                    boss = auth.identity_for_actor(c, "human:" + row["owner_id"]) if row and row["owner_id"] else None
+                except Problem:
+                    boss = None
+                if not boss or not auth.bot_admin(boss):
+                    raise Problem(
+                        "forbidden", "Only an owner's or an admin's bot sees what removing someone moves", 403
+                    )
+            else:
+                admin_only(who, "sees what removing someone moves")
             roster = views.roster(c)
             person = P.person(pid, roster)
             if not person or person.get("hidden"):

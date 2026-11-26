@@ -883,13 +883,44 @@ describe('Settings › People: joining, left and adds @s1073', () => {
     await waitFor(() => expect(sent).toContainEqual({ url: '/api/v2/humans/p2', method: 'POST', body: { left: true } }));
   });
 
+  it('Remove stays off until the list loads; a failed list says so and Try again reads it again', async () => {
+    let calls = 0;
+    serveFull((url) => {
+      if (url !== '/api/v2/humans/p2/leaving') return undefined;
+      calls += 1;
+      return calls === 1 ? { status: 403, body: { code: 'forbidden', message: 'No' } } : ok(NOTHING);
+    });
+    show(<People open="p2" />, '/settings/people');
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+    const dlg = await screen.findByRole('alertdialog', { name: 'Remove Ben Sample?' });
+    expect(await within(dlg).findByTestId('leaving-error')).toBeTruthy();
+    const press = within(dlg).getByRole('button', { name: 'Remove' }) as HTMLButtonElement;
+    expect(press.disabled).toBe(true);
+    fireEvent.click(press);
+    fireEvent.click(within(dlg).getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect((within(dlg).getByRole('button', { name: 'Remove' }) as HTMLButtonElement).disabled).toBe(false));
+    expect(within(dlg).queryByTestId('leaving-error')).toBeNull();
+    expect(calls).toBe(2);
+    expect(sent).toEqual([]);
+  });
+
   it('Restore says which plan went and which bots to set to it again', async () => {
-    const restored = { name: 'Cal Former', reports: [{ id: 'p4', name: 'Sam' }], plans: [{ name: 'Company Max', kind: 'Claude' }], bots: [bot('builder', 'Builder')] };
+    const restored = {
+      name: 'Cal Former',
+      reports: [{ id: 'p4', name: 'Sam' }],
+      plans: [
+        { name: 'Company Max', kind: 'Claude', bots: [bot('builder', 'Builder')] },
+        { name: 'Cal Codex', kind: 'Codex', bots: [bot('support', 'Support')] },
+      ],
+      bots: [bot('builder', 'Builder'), bot('support', 'Support')],
+    };
     serveFull((url, method) => (url === '/api/v2/access/humans/p3' && method === 'POST' ? ok({ person: 'p3', restored }) : undefined));
     show(<People />, '/settings/people');
     const left = await unfold('Left');
     fireEvent.click(within(left).getByRole('button', { name: 'Restore' }));
-    expect(await screen.findByText(/Cal Former is back\..*Company Max was removed.*set Builder to it/)).toBeTruthy();
+    const said = (await screen.findByText(/Cal Former is back\./)).textContent ?? '';
+    // Each plan names only its own bots.
+    expect(said).toMatch(/Company Max was removed: [^.]*then set Builder to it\. Their Cal Codex was removed: [^.]*then set Support to it\./);
   });
 
   it('widening who can join, raising the limit and restoring are closed to Tico; tightening is open', async () => {

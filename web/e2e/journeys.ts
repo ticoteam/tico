@@ -612,6 +612,56 @@ test('settings: change the model a new agent uses; add a Cloud agent', async ({ 
   clean(page);
 });
 
+test('settings: Remove lists the plan, its bot and the report that move; Restore moves the report back and names the bot', async ({ browser, hub }) => {
+  // Priya connects a Claude plan the Engineering Lead runs on, and Omar reports to her.
+  const plan = await fetch(`${hub.url}/api/v2/model-subscriptions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${hub.tokens.priya}`, 'Content-Type': 'application/json', 'Idempotency-Key': `e2e-plan-${Date.now()}` },
+    body: JSON.stringify({ kind: 'claude_token', secret: `sk-ant-oat01-${'a'.repeat(24)}`, name: "Priya's Claude" }),
+  });
+  expect(plan.ok, `add a plan: ${plan.status}`).toBe(true);
+  const { id } = (await plan.json()) as { id: string };
+  const lead = await fetch(`${hub.url}/api/v2/bots/engineering-manager/subscriptions`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${hub.tokens.dana}`, 'Content-Type': 'application/json', 'Idempotency-Key': `e2e-pick-${Date.now()}` },
+    body: JSON.stringify({ subscriptions: { claude: { kind: 'plan', subscription_id: id } } }),
+  });
+  expect(lead.ok, `set the lead to it: ${lead.status}`).toBe(true);
+  await post(hub, 'humans/omar', { reports_to: 'priya' });
+
+  for (const options of [PHONE, DESKTOP]) {
+    const page = await open(browser, hub, '/settings/people?open=priya', options);
+    await page.getByRole('button', { name: 'Remove', exact: true }).click();
+    const dialog = page.getByRole('alertdialog', { name: 'Remove Priya?' });
+    const list = dialog.getByTestId('leaving');
+    await expect(list).toContainText("Priya's Claude");
+    await expect(list.getByRole('link')).toHaveCount(1);
+    await expect(list).toContainText('1 report moves to Dana: Omar.');
+    const press = dialog.getByRole('button', { name: "Remove, and stop 1 bot's model" });
+    await expect(press).toBeEnabled();
+    await page.screenshot({ path: test.info().outputPath(`remove-${options.viewport!.width}.png`) });
+    if (options === PHONE) {
+      await dialog.getByRole('button', { name: 'Cancel' }).click();
+      await expect(dialog).toHaveCount(0);
+      clean(page);
+      await page.context().close();
+      continue;
+    }
+    // Cancel changed nothing: the plan is still there on the desktop's own read.
+    expect(await sql<{ n: number }>(hub, `SELECT COUNT(*) AS n FROM model_subscriptions WHERE id='${id}'`)).toEqual([{ n: 1 }]);
+    await press.click();
+    await expect.poll(async () => (await sql<{ n: number }>(hub, `SELECT COUNT(*) AS n FROM model_subscriptions WHERE id='${id}'`))[0]?.n).toBe(0);
+    const left = page.locator('[data-target="setting:left"]');
+    await left.getByRole('button', { expanded: false }).first().click();
+    await left.getByRole('button', { name: 'Restore' }).click();
+    const said = page.getByText(/Priya is back\./);
+    await expect(said).toContainText('1 report moved back: Omar.');
+    await expect(said).toContainText("Their Priya's Claude was removed");
+    await page.screenshot({ path: test.info().outputPath(`restored-${options.viewport!.width}.png`) });
+    clean(page);
+  }
+});
+
 test("a read that failed says why in the page's one line; a restart has no Try again (it is read again by itself)", async ({ browser, hub }) => {
   const page = await open(browser, hub, '/tasks');
   await expect(page.locator('.pk-head h1')).toHaveText('Tasks');
