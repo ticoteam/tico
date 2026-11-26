@@ -1527,12 +1527,14 @@ impl Lanes {
             .clone()
     }
 
-    /// One git step at a time on a checkout's task worktrees: they all write the repository they share.
+    /// One git step at a time on a checkout's task worktrees: they all write the repository they share. Keyed by the
+    /// checkout's resolved path, so a path read back from Git and one from the runner's configuration share it.
     pub fn git_lock(&self, main: &Path) -> Lock {
+        let key = main.canonicalize().unwrap_or_else(|_| main.to_path_buf());
         self.git_locks
             .lock()
             .unwrap()
-            .entry(main.display().to_string())
+            .entry(key.display().to_string())
             .or_default()
             .clone()
     }
@@ -1603,6 +1605,11 @@ impl crate::worktrees::Host for Lanes {
 
     fn task_busy(&self, task: &str) -> bool {
         self.attempts.lock().unwrap().values().any(|t| t.on(task))
+    }
+
+    fn try_git_lock(&self, main: &Path) -> Option<Box<dyn Send>> {
+        let held = self.git_lock(main).try_lock_owned().ok()?;
+        Some(Box::new(held))
     }
 }
 

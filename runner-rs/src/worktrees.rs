@@ -3103,6 +3103,11 @@ pub trait Host: Send + Sync + 'static {
     fn task_busy(&self, _task: &str) -> bool {
         false
     }
+    /// The lock every Git step on checkout `main`'s task worktrees takes (sessions.rs `git_lock`), not waited for:
+    /// None while a step holds it.
+    fn try_git_lock(&self, _main: &Path) -> Option<Box<dyn Send>> {
+        Some(Box::new(()))
+    }
 }
 
 #[derive(Default)]
