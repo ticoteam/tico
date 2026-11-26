@@ -192,8 +192,9 @@ function PipelineList({ pipeline, open, stage, end }: { pipeline: string; open: 
   const at = head?.open === open ? head.at : undefined;
   const want = head?.open === open ? head.stage : undefined;
   const showing = read.find((g) => g.id === want)?.id ?? (page ? (read.find((g) => g.items.length) ?? read[0])?.id : undefined);
-  // Priority: the stage shown is read on its own, in Tico's order for the person, whole (no More)
-  const ranks = !filters.sort && !!showing;
+  // the board's order by default, the pipeline's read as the board draws it; Priority (picked): the stage shown is read
+  // on its own, in Tico's order for the person, whole (no More)
+  const ranks = filters.sort === 'priority' && !!showing;
   const byPriority = useQuery({ ...stagePriorityQuery(pipeline, showing ?? '', filters), enabled: !!p && ranks });
   const ranked = faultHides(byPriority) ? undefined : byPriority.data;
   // failed: unless the stage shown is read on its own by priority, the pipeline's read is the list
