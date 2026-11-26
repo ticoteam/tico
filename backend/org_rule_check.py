@@ -74,6 +74,7 @@ from clients import judge as J
 from . import bot_settings as BS
 from . import judge as B
 from . import org_rules as R
+from . import rule_breaks
 from . import groups as G
 from . import team_rules
 from . import threads as T
@@ -958,8 +959,8 @@ def _structured_hold_verdict(c, hold, people, place):
     )
 
 
-def _warn_structured(c, verdict, warned, tell):
-    """A structured Warn rule's line on the recipient's copy, written and told as a judged warn is."""
+def _warn_structured(c, verdict, warned, tell, payload=None):
+    """A structured Warn rule's line on the recipient's copy, written, saved and told as a judged warn is."""
     author, operation = verdict["author"], verdict["operation"]
     strictest = max(warned, key=lambda r: STRICT[r["if_broken"]])
     H.event(
@@ -974,9 +975,14 @@ def _warn_structured(c, verdict, warned, tell):
         f"Your {OPERATIONS.get(operation, operation)} was delivered with a warning: it may break the rule "
         f"'{strictest['text']}'."
     )
-    if tell:
+    saved = rule_breaks.record(c, verdict, warned, payload)
+    if tell and not saved:
         _tell_bot(c, author, told)
-    return {"warn": line, "warned": {"rules": [{"id": r["id"], "text": r["text"]} for r in warned], "text": told}}
+    return {
+        "warn": line,
+        "warned": {"rules": [{"id": r["id"], "text": r["text"]} for r in warned], "text": told},
+        **({"breaks": saved} if saved else {}),
+    }
 
 
 def _structured_apply(c, verdict, payload, replay, tell, judged_text=None, private_to=None):
@@ -1014,7 +1020,7 @@ def _structured_apply(c, verdict, payload, replay, tell, judged_text=None, priva
         )
         judged_held = []  # not refused: nothing holds it
     if now["outcome"] != "held" and not judged_held:
-        return _warn_structured(c, verdict, now["warned"], tell) if now["outcome"] == "warn" else None
+        return _warn_structured(c, verdict, now["warned"], tell, payload) if now["outcome"] == "warn" else None
     found: dict[str, dict] = {}
     for r in [*now["held"], *judged_held]:
         found.setdefault(
@@ -1656,7 +1662,7 @@ def apply(
         )
     if verdict["outcome"] not in ("broken", "too_large"):
         return (
-            _warn_structured(c, verdict, verdict["structured_warned"], tell)
+            _warn_structured(c, verdict, verdict["structured_warned"], tell, payload)
             if verdict.get("structured_warned")
             else None
         )
@@ -1706,9 +1712,16 @@ def apply(
             f"Your {OPERATIONS.get(operation, operation)} was delivered with a warning: it may break the rule "
             f"'{strictest['text']}'."
         )
-        if tell:
+        # Each Warn rule broken is saved, for a person to answer "Yes, block" or "Don't block" (backend/rule_breaks.py):
+        # that answer is what the bot hears, so no note goes now.
+        saved = rule_breaks.record(c, verdict, broken, payload)
+        if tell and not saved:
             _tell_bot(c, author, told)
-        return {"warn": line, "warned": {"rules": [{"id": r["id"], "text": r["text"]} for r in broken], "text": told}}
+        return {
+            "warn": line,
+            "warned": {"rules": [{"id": r["id"], "text": r["text"]} for r in broken], "text": told},
+            **({"breaks": saved} if saved else {}),
+        }
     return _write_hold(
         c,
         verdict,
@@ -2123,11 +2136,21 @@ def run_late(store, primary, row):
             return None  # another pass ran it
         if not verdict:
             return None
-        gate = apply(c, {**verdict, "rules": [{**r, "if_broken": "warn"} for r in verdict["rules"]]}, late=True)
+        gate = apply(
+            c, {**verdict, "rules": [{**r, "if_broken": "warn"} for r in verdict["rules"]]}, row["output"], late=True
+        )
         if gate and gate.get("warn"):
-            _warn_saved(c, json.loads(row["target"] or "{}"), gate)
+            target = json.loads(row["target"] or "{}")
+            _warn_saved(c, target, gate)
+            if target.get("kind") == "message":
+                rule_breaks.link(c, gate, message=target.get("message") or "", task=target.get("task") or "")
+            elif target.get("task"):
+                c.execute(
+                    "UPDATE org_rule_breaks SET task_id=? WHERE id IN (SELECT value FROM json_each(?))",
+                    (target["task"], json.dumps(gate.get("breaks") or [])),
+                )
             told = (gate.get("warned") or {}).get("text") or ""
-            if H.is_bot(verdict["author"]):
+            if H.is_bot(verdict["author"]) and not gate.get("breaks"):
                 _tell_bot(c, verdict["author"], told)
             elif H.is_human(verdict["author"]) and told:
                 H.notice(c, H.TICO_ACTOR, verdict["author"], told, refs={"org_rule": True})

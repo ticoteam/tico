@@ -35,6 +35,7 @@ from . import (
     events,
     flight,
     org_rule_check,
+    rule_breaks,
     page_owners,
     reach,
     secret_drop,
@@ -1801,6 +1802,7 @@ def register_messages(
             return org_rule_check.held_answer(c, who, rule, auth=auth)
         sent = body.model_copy(update={"text": org_rule_check.warned_text(rule, body.text)}) if rule else body
         message = send(c, who, sent)
+        rule_breaks.link(c, rule, message=str(message.get("id") or ""))
         return {**message, **org_rule_check.answer(rule)}
 
     def message_checks(who, body, retry=False, place=None, operation="message"):

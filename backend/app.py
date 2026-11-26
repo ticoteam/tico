@@ -27,6 +27,7 @@ from . import sources as SRC
 from . import ask_ingest, owner_link, setup_handoff
 from . import org_rule_check
 from . import cors, roadmaps
+from . import rule_breaks
 from . import task_rule_gate
 from . import bot_home_merge
 from . import cloud_access
@@ -2441,6 +2442,7 @@ def _install_features(
     org_rule_check.AUDIENCE.update(rule_audiences())
     org_rule_check.AUDIENCE["automation"] = replay_audience
     org_rule_check.install(app, store, auth, mutate)
+    rule_breaks.install(app, store, auth, mutate)
     thread_api.install(
         app, store, auth, mutate, rule_check
     )  # thread routes (§3.4); /threads/search before /threads/{id}

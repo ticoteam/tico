@@ -3108,6 +3108,7 @@ def _post(
         # A post on a task's own thread is written to the first bot it gives a turn (its job, ride-along and
         # delegation key off it); the rest of whom it reaches get theirs from `deliver`.
         target = _task_primary(c, thread, actor, found, in_reply_to, refs)
+    gate = None
     if checked is not None:
         # The org-rule verdict its preflight returned, applied inside the write: a hold writes nothing (no message, no
         # delivery) and answers with the hold; a warning goes on the recipients' copy. The payload is the body the
@@ -3150,6 +3151,10 @@ def _post(
         POSTING.reset(token)
     if named and not question_marks.cleared_by(c, named, (message or {}).get("id")):
         raise Problem("answered", question_marks.ANSWERED, 409)  # it did not answer that ❓: write nothing
+    if checked is not None and message:
+        from . import rule_breaks
+
+        rule_breaks.link(c, gate, message=message["id"], task=(refs or {}).get("task") or "")
     # Here and not in the upload route, so a held message released later (the replay of this post) keeps its files.
     # A picture, video or PDF the preview worker can read gets its row here too (never in blobs.register, which every
     # stored byte goes through), so its /thumb is made for the chat to draw.
@@ -5714,6 +5719,9 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None, flat=Fal
     quotes = reply_quotes(c, v, every)
     routes = routed(c, shown)
     known = v.known(c)
+    from . import rule_breaks
+
+    ruled = rule_breaks.for_messages(c, v.auth, v.who, shown)
 
     def block(item):
         if item["id"] in marks and not item.get("deleted"):
@@ -5721,6 +5729,8 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None, flat=Fal
         if not item.get("hidden") and "seq" in item:
             item["reply_to"] = quotes.get(item["id"])
             item["routed"] = routes.get(item["id"])
+            if item["id"] in ruled and not item.get("deleted"):
+                item["rule_breaks"] = ruled[item["id"]]  # a Warn rule's question on it (backend/rule_breaks.py)
         found = branches.get(item["id"])
         if not found:
             return [item]
