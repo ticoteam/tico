@@ -1993,11 +1993,27 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
     question: a bot's ❓), `id`, `line`, `since` and the brief `task`; an ask also has the fields of its requirement in `to_leave` (`ask`). `count_only` leaves out the brief
     task and the ask's fields: a count needs neither. `task_view` is the callers' and not read here. An ask the person
     snoozed for themselves (backend/ask_snoozes.py) is out until its time; `snoozed` "only" lists just those, each with
-    its `snoozed_until`."""
-    from . import question_marks, waiting_on
+    its `snoozed_until`.
+
+    One build serves every caller at the same change (backend/needs_share.py): opening the app asks for it from up to
+    eight requests at once. A shared build is the whole list, which a `count_only` caller counts as it counts its own."""
+    from . import needs_cache, needs_share
 
     if not H.is_human(who.actor):
         return []
+    return needs_share.items(
+        c,
+        needs_cache.viewer(who),
+        snoozed,
+        lambda: _needs_items(c, auth, who, False, snoozed),
+        alone=lambda: _needs_items(c, auth, who, count_only, snoozed),
+    )
+
+
+def _needs_items(c, auth, who, count_only, snoozed):
+    """needs_items, built (no sharing)."""
+    from . import question_marks, waiting_on
+
     visible = auth.task_sql(c, who)
     raw = list(waiting_on.needs(c, who.actor, snoozed, shots=True))  # with paid shots to reconcile: shown only
     mentions = []  # an @ is not a wait: it is in Threads' Needs attention, not here (#4762)
