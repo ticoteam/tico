@@ -12,6 +12,7 @@ from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import assign, claim, get, post, ready, runner
 from backend.tests.helpers.org_rules import org
 from backend.tests.helpers.run_triggers import USAGE, start
+from backend.tests.helpers.sql import query
 
 BUILD, QA = "eng-build", "eng-qa"
 HEAVY = {
@@ -167,6 +168,16 @@ def test_a_run_records_the_lists_its_claim_offered_and_what_the_runner_says_its_
     task_for("cpo", "Fix the smoke test")
     second = claim(api, r)
     assert run(second, {"pipeline": "given"}) == ("pipeline", '{"pipeline": "given"}')
+    # An older runner sends no report: the query docs/hub-sql.md gives finds that run, through tico sql.
+    task_for("cpo", "Fix the flaky upload")
+    older = claim(api, r)
+    assert run(older) == ("pipeline", None)
+    unreported = query(
+        api,
+        "SELECT a.id, a.bot_id, n.offered FROM attempt_notes n JOIN attempts a ON a.id = n.attempt_id "
+        "WHERE n.offered IS NOT NULL AND n.sent IS NULL AND a.settled_at IS NOT NULL",
+    )
+    assert unreported["rows"] == [[older["id"], "cpo", "pipeline"]]
 
 
 def test_a_command_turn_is_offered_no_notes_and_a_late_result_still_records_its_report(api):
