@@ -9,6 +9,8 @@ import { changeWords, forgetPlaces, openOf, openTasksOver } from '@/lib';
 import { PageTabs } from '@/pagekinds/_parts/PageTabs';
 import type { TaskData } from './queries';
 import { taskRefQuery } from './queries';
+import { forgetRecentViews, noteView, readRecentViews, setRecentHere, useOpenTask } from '@/data/recentViews';
+import { renderHook } from '@testing-library/react';
 import { TaskModal } from './TaskModal';
 
 /* The task open over a page (plan: the task modal): its panes on a phone, what Esc closes first, the keyboard on a
@@ -51,10 +53,13 @@ const task = (more: Partial<TaskData> = {}): TaskData =>
 let shown = task();
 /** The task read held back until `let go` is called, where a test says so. */
 let held: Promise<void> | null = null;
+/** The task was deleted elsewhere: its read is not found. */
+let deleted = false;
 function serve() {
   vi.stubGlobal('fetch', async (url: string) => {
     const u = String(url);
     if (u.includes('/api/v2/tasks/%2312') || u.endsWith('/api/v2/tasks/t1')) {
+      if (deleted) return json({ status: 404, body: { error: { code: 'not_found', message: 'No such task' } } });
       if (held) await held;
       return json(ok({ task: shown, runs: [], children: [], comments: [], events: [], messages: [], has_more: false, can_comment: true, mover: true }));
     }
@@ -109,6 +114,7 @@ beforeEach(() => {
   queryClient.setQueryData(['directory'], { actors: [], byId: {} });
   shown = task();
   held = null;
+  deleted = false;
   serve();
 });
 afterEach(() => {
@@ -283,6 +289,32 @@ describe('closed', () => {
     await act(() => router.navigate({ to: '.', search: changeWords((w) => ({ ...w, tab: 'packing-list' })) as never }));
     await act(() => new Promise((r) => setTimeout(r, 450)));
     expect(vi.mocked(recordVisit).mock.calls).toEqual([['/task/12', 'Ship the order']]);
+  });
+});
+
+describe('Recent views', () => {
+  const ME = 'Fernhill\u0000human:me';
+  afterEach(() => {
+    forgetRecentViews();
+    setRecentHere('', '');
+  });
+
+  it('names the task by its number, whether its address used the number or the id', async () => {
+    const hook = renderHook(() => useOpenTask('t1'));
+    show('/tasks?task=t1');
+    await screen.findByRole('dialog', { name: 'Ship the order' });
+    await waitFor(() => expect(hook.result.current).toEqual(expect.objectContaining({ name: 'Ship the order', as: '12' })));
+  });
+
+  it('drops a task deleted elsewhere when its page finds it gone, though its address was read before in this tab', async () => {
+    setRecentHere(ME, '');
+    noteView({ key: 'task:12', to: '/tasks?task=12', trail: ['Tasks', 'Ship the order'] });
+    noteView({ key: 'page:/needs-you', to: '/needs-you', trail: ['Needs you'] });
+    // read earlier in this tab: its address is known, and stays so
+    queryClient.setQueryData(taskRefQuery('12').queryKey, 't1');
+    deleted = true;
+    show('/tasks?task=12');
+    await waitFor(() => expect(readRecentViews(ME).map((r) => r.key)).toEqual(['page:/needs-you']));
   });
 });
 

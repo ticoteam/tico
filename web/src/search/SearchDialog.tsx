@@ -8,7 +8,7 @@ import { useTopLayer } from '@/kit/Toast';
 import { Dot } from '@/tico/dot';
 import * as copy from './copy';
 import { loadProviders, providers, type Lead, type SearchHit } from './providers';
-import { gather, highlight, remember, RECENT, type Group } from './results';
+import { gather, highlight, isViewHit, remember, RECENT, VIEWS, type Group } from './results';
 import './search.css';
 import { caught, closeSearch, released, useSearchState } from './state';
 
@@ -128,7 +128,8 @@ function Palette({ n, opened }: { n: number; opened: string }) {
     closeSearch();
     const hit = hits[i];
     if (hit) {
-      remember(hit);
+      // a Recent views row is that list's own, not Search's
+      if (!isViewHit(hit)) remember(hit);
       void run(hit.run.id, hit.run.input, { via: 'search' });
     } else if (ask) void run('tico.ask', { text: ask }, { via: 'search' });
   };
@@ -186,7 +187,7 @@ function Palette({ n, opened }: { n: number; opened: string }) {
           <div key={g.name} role="group" aria-label={g.name} className="pal-set">
             <div className="pal-group t-label">
               <span>{g.name}</span>
-              {g.name !== RECENT && <span className="count">{g.hits.length}</span>}
+              {g.name !== RECENT && g.name !== VIEWS && <span className="count">{g.hits.length}</span>}
             </div>
             {g.hits.map((h, k) => row(h, (starts[gi] ?? 0) + k))}
           </div>

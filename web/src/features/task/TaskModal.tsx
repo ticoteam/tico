@@ -2,7 +2,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter, useRouterState } from '@tanstack/react-router';
 import { useEffect, useEffectEvent, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent } from 'react';
 import { flushSync } from 'react-dom';
-import { meQuery, recordVisit } from '@/data';
+import { ApiError } from '@/api/client';
+import { forgetTask, meQuery, nameOpenTask, recordVisit } from '@/data';
 import { useFileOpen } from '@/features/library/routing';
 import { DockSlot } from '@/kit/Dock';
 import { Icon } from '@/kit/Icon';
@@ -66,6 +67,18 @@ export function TaskModal() {
     const at = setTimeout(() => recordVisit(`/task/${visit}`, title), 400);
     return () => clearTimeout(at);
   }, [visit, title]);
+  // its name ends its row in Recent views, keyed by its number whichever way the address names it; a task not found or
+  // refused is dropped from them, whether its address failed to read or the read the task's page forces as it opens
+  const canonical = t ? String(t.number ?? t.id) : '';
+  useEffect(() => {
+    if (visit && title && canonical) nameOpenTask(visit, title, canonical);
+  }, [visit, title, canonical]);
+  const goneErr = (e: unknown) => e instanceof ApiError && (e.status === 403 || e.status === 404);
+  const missing = !!visit && (goneErr(ref.error) || goneErr(read.error));
+  const number = t?.number;
+  useEffect(() => {
+    if (missing) forgetTask(visit, id, number);
+  }, [missing, visit, id, number]);
 
   // a phone shows the task or its chat, chosen once the task is read (never flipped after by itself): the chat when the
   // address names it or a ❓ in it waits on the person. Then what the person picks shows: a session (Details) raises

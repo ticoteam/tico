@@ -6,9 +6,16 @@ import { reportCallToDesktop, useCallWindow } from '@/desktop';
 import { AppActSheet, ticoRoomQuery } from '@/conversation';
 import {
   configQuery,
+  forgetView,
   meQuery,
+  noteView,
+  pageKey,
   pageOwnersQuery,
   recordVisit,
+  setRecentHere,
+  faultedPage,
+  useFaultedPage,
+  useOpenTask,
   useActor,
   useDirectory,
   useHeldCount,
@@ -110,8 +117,15 @@ export const Route = createRootRouteWithContext<RouterContext>()({
     if (add) out.add = add;
     return out;
   },
-  notFoundComponent: () => <Placeholder title="Not found" />,
+  notFoundComponent: () => <NotFound />,
 });
+
+/** The router's not-found page: an address that names nothing is no recent view. */
+function NotFound() {
+  const path = useLocation({ select: (l) => l.pathname });
+  useEffect(() => forgetView(pageKey(path)), [path]);
+  return <Placeholder title="Not found" />;
+}
 
 /* An open task's chat comes with the task's own code: the first load carries the shell only. So does every part the
    root mounts over a page: each loads the first time it has something to show (Later), never before the first paint. */
@@ -226,6 +240,7 @@ function App() {
   const arrangement = arrangementFor(at.path, at.chat ? { chat: at.chat } : {}, isActor);
   useNotePlaces();
   const trail = useTrailParts(at.path, who);
+  useRecentHere(trail, me.data?.id);
   // a task open over the page (`?task=`, lib/taskAddress): the task modal, over whatever page is under it
   const taskOpen = useLocation({ select: (l) => !!openOf(l.search as Record<string, unknown>) });
 
@@ -402,6 +417,34 @@ function useTrailParts(path: string, who: string): TrailPart[] {
   const call = useQuery({ ...callQuery(room ? decodeURIComponent(room) : ''), enabled: !!room, select: (c) => c.title });
   const page = room ? call.data || head : head;
   return trailOf(path, { company: config?.company_name || config?.app_name || '', pipelines, who: name, page });
+}
+
+/** Recent views (data/recentViews.ts): whose list it is, which view is open, and each view the person opens, noted as
+    soon as the router has settled on it (an address that only passes on never settles) and named again as its trail
+    fills in, by its trail without the company, and a task open over the page by its own name and number. Not before
+    the company is known: a list read for no company would be written over. Not while the page shows its fault
+    (PageFault): drawn again, it is noted then. On a phone as well: no trail is drawn there, Search lists them. */
+function useRecentHere(trail: readonly TrailPart[], me: string | undefined) {
+  const { data: config, isSuccess: known } = useQuery(configQuery);
+  const who = me && known ? `${config?.company_name || config?.app_name || ''}\u0000${me}` : '';
+  const settled = useRouterState({ select: (s) => s.status === 'idle' && !s.isLoading });
+  const path = useLocation({ select: (l) => l.pathname });
+  const href = useLocation({ select: (l) => l.href });
+  const task = useLocation({ select: (l) => openOf(l.search as Record<string, unknown>)?.task ?? '' });
+  const open = useOpenTask(task);
+  const key = task ? `task:${open.as || task}` : pageKey(path);
+  useEffect(() => setRecentHere(who, key), [who, key]);
+  const named = trail.slice(1).map((p) => p.label);
+  if (open.name) named.push(open.name);
+  const text = named.join('\u0000');
+  const dev = /^(?:\/next)?\/_dev(?:\/|$)/.test(path);
+  const faulted = useFaultedPage();
+  useEffect(() => {
+    if (!who || !settled || dev || !text || (task && !open.name)) return;
+    // the page's own effects ran first: one that has just shown its fault has said so
+    if (faultedPage() === pageKey(path)) return;
+    noteView({ key, to: href, trail: text.split('\u0000') }, who);
+  }, [who, settled, dev, key, href, text, task, open.name, path, faulted]);
 }
 
 /* ---------------------------------------------------------------- the menu, from the directory */

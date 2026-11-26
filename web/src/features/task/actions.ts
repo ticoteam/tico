@@ -2,6 +2,7 @@ import type { AnyRouter } from '@tanstack/react-router';
 import { changeWords, closeTask, openOf, type Steps, type TaskWords } from '@/lib';
 import * as z from 'zod/mini';
 import { defineAction } from '@/actions';
+import { forgetTask } from '@/data';
 import {
   addSubtask,
   answerAsk,
@@ -460,6 +461,8 @@ export const remove = defineAction({
   run: async ({ router, queryClient }, i) => {
     const held = queryClient.getQueryData<{ number?: number | null }>(['tasks', 'detail', i.task]);
     await said(deleteTask(i.task));
+    // gone from Recent views by either name its address may use
+    forgetTask(i.task, held?.number);
     // still open over the page, it closes; closed meanwhile, or another task open in its place, nothing moves
     const open = openOf(router.state.location.search as Record<string, unknown>)?.task;
     if (open && (open === i.task || open === String(held?.number ?? ''))) closeTask(router as unknown as Steps);

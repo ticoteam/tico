@@ -1,5 +1,6 @@
 import * as z from 'zod/mini';
 import type { AnyAction, Ctx } from '@/actions';
+import { pageKey, recentViewsNow, viewKey, type RecentView } from '@/data';
 import type { SearchHit, SearchProvider } from './providers';
 
 export interface Group {
@@ -12,6 +13,8 @@ export interface Group {
 const RECENT_KEY = 'tico-next:search-recent';
 const RECENT_MAX = 6;
 export const RECENT = 'Recent';
+/** The top bar's Recent views (data/recentViews.ts), first in Search with nothing typed. */
+export const VIEWS = 'Recent views';
 export const ACTIONS = 'Actions';
 
 const words = (q: string) => q.toLowerCase().split(/\s+/).filter(Boolean);
@@ -145,10 +148,7 @@ export async function gather(
   signal: AbortSignal,
   early?: (groups: Group[]) => void,
 ): Promise<Group[]> {
-  if (!q.trim()) {
-    const recent = readRecent();
-    return recent.length ? [{ name: RECENT, hits: recent }] : [];
-  }
+  if (!q.trim()) return empty(recentViewsNow(), readRecent());
   const wait = from.some((p) => p.remote) ? pause(REMOTE_WAIT_MS, signal) : undefined;
   const found = new Map<SearchProvider, Group>();
   const acts = { name: ACTIONS, hits: actionHits(q, actions, ctx) };
@@ -172,6 +172,42 @@ export async function gather(
     }),
   );
   return groups();
+}
+
+/** A Recent views row as a Search row: it opens the view as it was last seen. */
+export const viewHit = (v: RecentView): SearchHit => ({
+  key: `view:${v.key}`,
+  title: v.trail.join(' › '),
+  lead: { icon: 'clock' },
+  run: { id: 'shell.openView', input: { to: v.to } },
+});
+export const isViewHit = (h: SearchHit) => h.key.startsWith('view:');
+
+/** Which view a Search row opens, where the row says: a task by its number (`task:<n>`, as Recent views keys it), a
+    page by its address. Else none, and it is never taken for a Recent views row. */
+function viewOf(h: SearchHit): string | undefined {
+  if (/^task:\d+$/.test(h.key)) return h.key;
+  const input = (h.run.input ?? {}) as { to?: unknown; pipeline?: unknown; thread?: unknown; doc?: unknown };
+  const page = (to: string) => {
+    const url = new URL(to, 'http://x');
+    return viewKey(url.pathname, Object.fromEntries(url.searchParams));
+  };
+  if (h.run.id === 'shell.goTo' && typeof input.to === 'string') return page(input.to);
+  if (h.run.id === 'tasks.open' && typeof input.pipeline === 'string') return pageKey(`/tasks/${encodeURIComponent(input.pipeline)}`);
+  if (h.run.id === 'threads.open' && typeof input.thread === 'string') return pageKey(`/threads/${encodeURIComponent(input.thread)}`);
+  if (h.run.id === 'docs.open' && typeof input.doc === 'string') return pageKey(`/library/${encodeURIComponent(input.doc)}`);
+  return undefined;
+}
+
+/** What Search shows with nothing typed: Recent views, then Search's own Recent items that open none of those views
+    (the same task, the same page). Two things that only share a name are both shown. */
+export function empty(views: RecentView[], recent: SearchHit[]): Group[] {
+  const shown = new Set(views.map((v) => v.key));
+  const own = recent.filter((h) => {
+    const v = viewOf(h);
+    return !v || !shown.has(v);
+  });
+  return [...(views.length ? [{ name: VIEWS, hits: views.map(viewHit) }] : []), ...(own.length ? [{ name: RECENT, hits: own }] : [])];
 }
 
 export function readRecent(): SearchHit[] {

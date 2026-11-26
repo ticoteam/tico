@@ -2,7 +2,7 @@ import * as z from 'zod/mini';
 import { defineAction } from '@/actions';
 import type { Ctx } from '@/actions';
 import { refused, run } from '@/actions/run';
-import { meQuery } from '@/data';
+import { forgetRecentViews, meQuery } from '@/data';
 import { desktopApp, tellDesktopSigningOut } from '@/desktop';
 import { agentsQuery, computersQuery, moveAgentWithFeedback, routeTo } from '@/features/team/routing';
 import { setMotionChoice } from '@/motion';
@@ -177,6 +177,8 @@ export const signOut = defineAction({
   // the desktop app hears first, so it drops the person's count and small call window before the page leaves
   run: async () => {
     await tellDesktopSigningOut();
+    // nothing of the person's is left on this device: their Recent views go (data/recentViews.ts)
+    forgetRecentViews();
     location.assign('/api/v2/logout');
   },
 });
