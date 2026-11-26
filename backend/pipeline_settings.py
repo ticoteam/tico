@@ -279,15 +279,15 @@ _QA_PURPOSE_PERSON = (
 )
 # The texts of stages a company of the pair before Nov 26 keeps but the preset no longer has in that shape: Merge, and a
 # QA a person still signs. `_follow` moves their unedited lines to these, where the stage's requirements (and which of
-# them are people only) are these.
+# them are people only) are these and every stage the text names is there (Merge's sends a task back to QA).
 _MERGE_PURPOSE = (
     "The PRs are in the merge queue. If GitHub takes one out, queue it again, fix it on its branch, or send the task "
     "back to QA."
 )
-KEPT_TEXTS: dict[str, dict[str, tuple[str, list[tuple[str, bool]]]]] = {
+KEPT_TEXTS: dict[str, dict[str, tuple[str, list[tuple[str, bool]], tuple[str, ...]]]] = {
     "engineering": {
-        "engineering-merge/purpose": (_MERGE_PURPOSE, [("item:github.pr_merged", False)]),
-        "engineering-qa/purpose": (_QA_PURPOSE_PERSON, [("item:github.checks_pass", False), ("page", True)]),
+        "engineering-merge/purpose": (_MERGE_PURPOSE, [("item:github.pr_merged", False)], (QA_STAGE,)),
+        "engineering-qa/purpose": (_QA_PURPOSE_PERSON, [("item:github.checks_pass", False), ("page", True)], ()),
     },
 }
 RELEASE_PURPOSE = (
@@ -2092,10 +2092,10 @@ def _follow(conn: "sqlite3.Connection", key: str, pipeline_id: str) -> list[str]
                 settings.update({n: texts[f"{at}/{n}"] for n in moved})
                 paths.extend(f"{at}/{n}" for n in moved)
                 writes.append(("UPDATE requirements SET settings=? WHERE id=?", (_h()._dump(settings), mine["id"])))
-    for path, (text, wanted_signs) in KEPT_TEXTS.get(key, {}).items():
+    for path, (text, wanted_signs, named) in KEPT_TEXTS.get(key, {}).items():
         sid = path.partition("/")[0]
         have = work.get(sid)
-        if not have or path in paths:
+        if not have or path in paths or any(n not in work for n in named):
             continue
         signed = sorted((requirement_key(r), R.people_only(r)) for r in R.on_stage(conn, sid))
         if signed == sorted(wanted_signs) and _behind(path, have.get("purpose"), text):

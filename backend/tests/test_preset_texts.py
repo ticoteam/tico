@@ -197,6 +197,20 @@ def test_the_qa_upgrade_does_not_recreate_a_removed_review_stage(c):
     assert _stage(new, "engineering-fixes-2")["purpose"] == FIXES_2_PURPOSE_RC3
 
 
+def test_merge_keeps_sending_a_task_back_to_fixes_2_where_the_company_removed_qa(c):
+    """A company that removed QA: its unedited Merge line still names Fixes 2, and moving it to the line that names QA
+    would send a task back to a stage it does not have."""
+    record = PS.read(c, "engineering")
+    record["stages"] = [s for s in record["stages"] if s["id"] != PS.QA_STAGE]
+    PS.save(c, ANA, record)
+    _purpose(c, "engineering-merge", MERGE_PURPOSE_RC3)
+    before = PS.read(c, "engineering")
+    PS.ensure_presets(c)
+    assert PS.read(c, "engineering") == before
+    assert _stage(before, "engineering-merge")["purpose"] == MERGE_PURPOSE_RC3
+    assert _follows(c) == []
+
+
 def test_a_stage_whose_requirements_changed_keeps_its_purpose_and_a_retired_pipeline_is_left_alone(c):
     record = PS.read(c, "engineering")
     _stage(record, "engineering-fixes-2")["requirements"].append(PS.github("pr_open"))

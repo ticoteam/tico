@@ -69,8 +69,9 @@ architecture) and C (the screens).
   then its manager bot; then the ladder rests and the quiet-task rule tells the manager.
 - **One ask:** everything you are asked is the task. You see the page itself, then Approve, or Send back with notes. The
   notes go to the bot.
-- **Person approvals** on Product: the Spec, the QA report and the Release report. The rest is bots and the decision
-  model. There is no pitch: a feature starts as a chat, and its first approval is the Spec (Nov 16).
+- **Person approvals** in the default pair: the Spec, on Product's Approval, and nothing else. The rest is bots and
+  the decision model. There is no pitch: a feature starts as a chat, and its first approval is the Spec (Nov 16).
+  Features (the old one-pipeline preset, `LEGACY`) had three: the Spec, the QA report and the Release report.
 - **Stage approvals name a document** (Nov 16). A stage that asks a person to approve names the task document it
   approves (a page requirement with `settings.document`: Spec, QA report, Release report, Invoice, Proposal,
   Results or Checked in production, `task_requirements.APPROVED`) and who approves it: any person (people only) or one person. The stage editor (✎) sets
@@ -84,8 +85,8 @@ architecture) and C (the screens).
   `approval`), and Flow shows the newer version. A newer version moves the approval to it. Not approving is a reply in
   the chat; approving moves the task on.
 - **Person OK setting:** "People only" or "People, with exceptions". Default: with exceptions. Product's person
-  approvals are people only. An approval that is people only and names nobody is any person's: Product's Spec and
-  Release report.
+  approvals are people only. An approval that is people only and names nobody is any person's: Product's Spec (and
+  Features' Release report).
 - **Push past** is a switch on each requirement.
 - Tasks leave Product's **Ideas** by hand, except a request a person files: it goes into Spec when Spec has room. Later
   is dropped. Growth's and Success's Ideas hold every idea, a person's too, until someone starts it.
