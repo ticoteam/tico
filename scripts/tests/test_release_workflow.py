@@ -665,25 +665,46 @@ def test_each_main_validation_hands_its_run_to_main_red_which_waits_for_it_to_fi
 
 
 @pytest.mark.parametrize(
-    "gate, images, failed",
+    "gate, images, web, failed",
     [
-        ("success", "success", None),
-        ("failure", "success", "gate (failure)"),
-        ("success", "skipped", "images (skipped)"),
+        ("success", "success", "success", None),
+        ("failure", "success", "success", "gate (failure)"),
+        ("success", "skipped", "success", "images (skipped)"),
+        ("success", "success", "failure", "web journeys (failure)"),
     ],
 )
-def test_the_release_check_step_name_never_reads_as_a_result_and_its_exit_code_is_the_verdict(gate, images, failed):
+def test_the_release_check_step_name_never_reads_as_a_result_and_its_exit_code_is_the_verdict(
+    gate, images, web, failed
+):
     """A red gate once showed a step named "...passed" followed by exit 1: the name is neutral, the log names the part."""
     jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
     (step,) = jobs["release-check"]["steps"]
     assert "pass" not in step["name"].lower() and "fail" not in step["name"].lower()
-    assert jobs["release-check"]["needs"] == ["gate", "images"] and jobs["release-check"]["if"] == "always()"
+    assert (
+        jobs["release-check"]["needs"] == ["gate", "images", "web-journeys"]
+        and jobs["release-check"]["if"] == "always()"
+    )
     done = subprocess.run(
         ["bash", "-e", "-c", step["run"]],
-        env={**os.environ, "GATE": gate, "IMAGES": images},
+        env={**os.environ, "GATE": gate, "IMAGES": images, "WEB": web},
         capture_output=True,
         text=True,
     )
     assert done.returncode == (0 if failed is None else 1)
     if failed:
         assert f"::error::Release gate failed: {failed}" in done.stdout
+
+
+def test_every_validation_opens_the_app_in_a_browser_and_a_red_journey_fails_the_release():
+    """v0.6.278-282 shipped with every /next page broken: no part of the release check opened the app. The web
+    journeys (web/e2e) run in every validation, full or incremental, on the candidate's build, and the verdict needs them."""
+    ci, _ = _workflow("ci.yml")
+    jobs = ci["jobs"]
+    web = jobs["web-journeys"]
+    assert web["needs"] == "candidate" and "if" not in web and "continue-on-error" not in web
+    assert "runs-on=" in str(web["runs-on"])
+    checkout = next(step for step in web["steps"] if "actions/checkout" in step.get("uses", ""))
+    assert checkout["with"]["ref"] == "${{ needs.candidate.outputs.sha }}"
+    run = next(step for step in web["steps"] if step.get("name") == "The web app's journeys")
+    assert run["working-directory"] == "web" and "npm run e2e" in run["run"]
+    assert "web-journeys" in jobs["release-check"]["needs"]

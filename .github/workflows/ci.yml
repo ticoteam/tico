@@ -662,29 +662,77 @@ jobs:
           if [ -f scripts/osv_gate.py ]; then python3 scripts/osv_gate.py scan
           else echo "::notice::this candidate predates scripts/osv_gate.py; advisories were not checked"; fi
 
-  # The one verdict: the release passes only when every part passed and the Linux binaries and images built.
+  # The web app's journeys (web/e2e/journeys.ts): Playwright clicks through the candidate's built app on a made-up
+  # company (web/e2e/hub/seeded.py), as a person does, and fails on any page error, console error or refused call.
+  # Part of the verdict, in every validation: v0.6.278-282 shipped with every /next page broken (an import cycle left
+  # one feature's actions undefined at load) because no part of this check opened the app. One 4-vCPU VM beside the
+  # gate, about 5 minutes; the journeys run one at a time, each on a fresh company, with no retries.
+  web-journeys:
+    needs: candidate
+    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/runner=4cpu-linux-x64/family=m8+m7+m6+r8+r7/volume=30gb:gp3:125mbs:3000iops/extras=s3-cache', github.run_id) }}
+    timeout-minutes: 25
+    env:
+      TICO_BROWSER_CHANNEL: ''
+      TICO_E2E_OUT: ${{ github.workspace }}/build/web-e2e
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.candidate.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.15'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.22.3'
+          cache: npm
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - name: Install (Python, npm and Playwright's Chromium)
+        run: |
+          bash scripts/ci_install.sh browser
+          ln -s "$RUNNER_TEMP/venv" .venv
+      - name: The web app's journeys
+        working-directory: web
+        run: |
+          npm ci --no-audit --no-fund
+          npm run e2e
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: web-journeys
+          path: build/web-e2e
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # The one verdict: the release passes only when every part, the web journeys and the Linux binaries and images passed.
   release-check:
-    needs: [gate, images]
+    needs: [gate, images, web-journeys]
     if: always()
     # Only compares results: GitHub-hosted starts in seconds, where a RunsOn VM boots for ~20 s at the run's very end.
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       # A neutral name: the step list must not read "passed" on a red gate. The exit code is the verdict.
-      - name: Release gate verdict (needs gate and images to succeed)
+      - name: Release gate verdict (needs gate, images and web journeys to succeed)
         env:
           GATE: ${{ needs.gate.result }}
           IMAGES: ${{ needs.images.result }}
+          WEB: ${{ needs.web-journeys.result }}
         run: |
-          echo "Release gate parts: $GATE; images: $IMAGES"
+          echo "Release gate parts: $GATE; images: $IMAGES; web journeys: $WEB"
           failed=""
           test "$GATE" = success || failed="$failed gate ($GATE)"
           test "$IMAGES" = success || failed="$failed images ($IMAGES)"
+          test "$WEB" = success || failed="$failed web journeys ($WEB)"
           if [ -n "$failed" ]; then
             echo "::error::Release gate failed:$failed"
             exit 1
           fi
-          echo "Release gate passed: gate and images succeeded"
+          echo "Release gate passed: gate, images and web journeys succeeded"
 
   # The train dispatches this workflow with GITHUB_TOKEN, and GitHub starts no workflow_run for a run that token started,
   # so main-red.yml never heard of the train's validations (none ran from Nov 16 to Nov 18). A dispatch from GITHUB_TOKEN
