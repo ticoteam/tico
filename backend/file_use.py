@@ -1,3 +1,4 @@
+# pyright: strict
 """Files use counts: how often people and bots list, open, search and review files, for the weekly Files review.
 
 Each answered Files request adds one use to a row per UTC day, person or bot, action and actor (`file_use_daily`), from
@@ -19,12 +20,16 @@ the request.
 
 import logging
 import sqlite3
-from typing import Any
+from collections.abc import Callable
+from typing import Any, cast
 
 from .store import H
 
 LOG = logging.getLogger("tico.file_use")
 ACTIONS = ("list", "open", "search", "review")
+_is_bot = cast(Callable[[object], bool], H.is_bot)
+_is_human = cast(Callable[[object], bool], H.is_human)
+_now = cast(Callable[[], str], H.now)
 
 
 def record(c: sqlite3.Connection, actor: str, action: str, at: str | None = None) -> None:
@@ -32,10 +37,10 @@ def record(c: sqlite3.Connection, actor: str, action: str, at: str | None = None
     Only a person or a bot counts: a service, support or Tico itself is no team member using Files."""
     if action not in ACTIONS:
         raise ValueError("Unknown Files action " + repr(action))
-    kind = "bot" if H.is_bot(actor) else "person" if H.is_human(actor) else None
+    kind = "bot" if _is_bot(actor) else "person" if _is_human(actor) else None
     if not kind:
         return
-    day = str(at or H.now())[:10]
+    day = str(at or _now())[:10]
     c.execute(
         "INSERT INTO file_use_daily(day,kind,action,actor,uses) VALUES(?,?,?,?,1) "
         "ON CONFLICT(day,kind,action,actor) DO UPDATE SET uses=uses+1",
@@ -47,7 +52,7 @@ def count(store: Any, who: Any, action: str) -> None:
     """One use by the caller of an answered request, in its own short write. Never raises."""
     try:
         actor = str(getattr(who, "actor", "") or "")
-        if not (H.is_bot(actor) or H.is_human(actor)):
+        if not (_is_bot(actor) or _is_human(actor)):
             return
         with store.transaction() as c:
             record(c, actor, action)
