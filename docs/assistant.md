@@ -408,7 +408,7 @@ Names come with ids (`sender_name`, `owner_name`, and an `actors` map), as elsew
 Its rulebook is one page, `templates/catalog/assistant/AGENTS.md`: the routing table (answer a question from the record
 itself, make a one-call change as you, hand real work to the bot that owns it with `tico task create --owner`), its
 authority (never beyond you, never an OK, a card for what the server holds) and its receipts (one line per change with
-its link and how to undo it, about 120 words a reply). Its playbooks are procedures it opens when a job needs one, never
+its link and how to undo it, about 90 words a reply). Its playbooks are procedures it opens when a job needs one, never
 before each turn: `jobs.md` (the command per job), `assistant-chat.md` (cards, clearing a queue, goals),
 `acting-for-them.md` (bots' questions, inbox routines, email), `tico-map.md` (how Tico is organised) and
 `daily-sweep.md` (the morning message). Its MCP tool list is the short set those files name (`ASSISTANT_TOOLS` in
