@@ -78,14 +78,16 @@ def big_t(match):
 # against the first name under backend/ (a module or a package). finance.actions is the one bridge Core may import: the
 # agent budget's hold and settle on a run (execution.finance_run_hold) and Finance's setup and grants go through it.
 NON_CORE = re.compile(
-    r"finance|bookkeeper|bills_address|growth\w*|market\w*|company_page|lenses|calendar_\w+|call_\w+|calls"
+    r"finance\w*|bookkeeper|bills_address|growth\w*|market\w*|company_page|lenses|calendar_\w+|call\w*"
     r"|live_meetings|meeting\w*|mail\w*|email_\w+|letters|postal_mail|slack_\w+|granola_mcp"
 )
 CORE_BRIDGE = ("finance", "actions")
 
 
 def py_prod(path):
-    return path.endswith(".py") and not py_test(path)
+    """Shipped Python: not under a tests/ folder and not a conftest.py. A module named test_*.py elsewhere ships
+    (backend/test_receipts.py)."""
+    return path.endswith(".py") and "/tests/" not in f"/{path}" and not path.endswith("conftest.py")
 
 
 def core_backend(path):
@@ -104,7 +106,7 @@ def runner_support_source(path):
 
 
 def import_statements(text):
-    """(line number, dotted target) for each name a Python file imports, read token by token so a string,
+    """(statement index, line number, dotted target) for each name a Python file imports, read token by token so a string,
     a comment and a multi-line `from . import (...)` are read as Python reads them. A relative target keeps its leading
     dots ("..mail" from `from .. import mail`); resolve() makes it absolute."""
     out = []
@@ -116,7 +118,7 @@ def import_statements(text):
         ]
     except (tokenize.TokenError, SyntaxError, IndentationError):
         return out
-    statement = []
+    statement, index = [], 0
     for tok in [*tokens, None]:
         if (
             tok is None
@@ -124,8 +126,8 @@ def import_statements(text):
             or (tok.type == tokenize.OP and tok.string in ";:")
         ):
             if statement and statement[0].type == tokenize.NAME and statement[0].string in ("import", "from"):
-                out += [(statement[0].start[0], target) for target in _targets(statement)]
-            statement = []
+                out += [(index, statement[0].start[0], target) for target in _targets(statement)]
+            statement, index = [], index + 1
             continue
         statement.append(tok)
     return out
@@ -176,10 +178,10 @@ def resolve(path, target):
 def imports_matching(path, text, wanted):
     """The line numbers of `path`'s import statements, one per distinct module `wanted` maps an absolute target to."""
     lines, seen = [], set()
-    for number, target in import_statements(text):
+    for index, number, target in import_statements(text):
         key = wanted(resolve(path, target).split("."))
-        if key is not None and (number, key) not in seen:
-            seen.add((number, key))
+        if key is not None and (index, key) not in seen:
+            seen.add((index, key))
             lines.append(number)
     return lines
 
@@ -322,7 +324,7 @@ RULES = [
         runner_support_source,
         [],
         "runner_support/ is frozen: no new file goes in it (tests excepted). Build the runner side in runner-rs; a "
-        "helper the hub needs goes in backend/ or clients/.",
+        "server or CLI helper goes in backend/ or clients/.",
         "L35",
         new_file=True,
     ),
@@ -419,11 +421,15 @@ def tracked_files(root=ROOT):
 
 
 def new_files(root, base, rules=RULES):
-    """{path: {rule id: [(1, ...)]}} for each tracked file a new-file rule takes that the tree at `base` does not have."""
+    """{path: {rule id: [(1, ...)]}} for each tracked file a new-file rule takes that the branch added: one the tree at
+    the merge base of HEAD and `base` does not have (or `base` itself when there is none), so a file `base` deleted
+    after the branch point is not new."""
     rules = [rule for rule in rules if rule.new_file]
     if not rules:
         return {}
-    listed = baseline_files.git(root, "ls-tree", "-r", "-z", "--name-only", base, text=False)
+    fork = baseline_files.git(root, "merge-base", "HEAD", base)
+    tree = fork.stdout.strip() if fork.returncode == 0 and fork.stdout.strip() else base
+    listed = baseline_files.git(root, "ls-tree", "-r", "-z", "--name-only", tree, text=False)
     if listed.returncode != 0:
         raise SystemExit(f"landmines: cannot list the tree at {base}: {listed.stderr.decode().strip()}")
     before = set(listed.stdout.decode().split("\0"))

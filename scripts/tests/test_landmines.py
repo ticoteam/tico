@@ -114,7 +114,7 @@ CORE = "backend/tasks.py"
         ("core-imports-app", CORE, "from .finance.reads import bills_email\n", "from .finance import actions as FA\n"),
         ("core-imports-app", CORE, "from .finance import reads as FR\n", "from .finance.actions import run_hold\n"),
         ("core-imports-app", CORE, "from .mail_lib.parse import parts\n", "from .tasks_lib import parts\n"),
-        ("core-imports-app", CORE, "from backend import calls\n", "from backend import callbacks\n"),
+        ("core-imports-app", CORE, "from backend import calls\n", "from backend import cards\n"),
         ("core-imports-app", CORE, "import backend.slack_app\n", "import backend.slack\n"),
         ("core-imports-app", "backend/app.py", "from . import live_meetings\n", "from . import routing\n"),
         ("core-imports-app", "backend/entities/person.py", "from .. import bookkeeper\n", "from . import bookkeeper\n"),
@@ -135,10 +135,10 @@ def test_core_imports_app_names_every_non_core_family():
     families = (
         "finance bookkeeper bills_address growth growth_sync market marketing_tasks market_sources company_page lenses "
         "calendar_api call_notes calls live_meetings meetings meeting_items mail mail_lib mailboxes mailbox_access "
-        "email_sending letters postal_mail slack_app granola_mcp"
+        "email_sending letters postal_mail slack_app granola_mcp finance_routes finance_ads_routes call_ring callbacks"
     ).split()
     assert hits(CORE, "".join(f"from . import {name}\n" for name in families)) == {"core-imports-app": len(families)}
-    core = "tasks people entities turn_budgets calendar emails callback settings_admin finance_routes".split()
+    core = "tasks people entities turn_budgets calendar emails settings_admin".split()
     assert hits(CORE, "".join(f"from . import {name}\n" for name in core)) == {}
 
 
@@ -151,6 +151,18 @@ def test_core_imports_app_reads_only_core_backend_code():
         "clients/x.py",
     ):
         assert "core-imports-app" not in hits(path, text), path
+
+
+def test_a_production_module_named_like_a_test_is_read_and_a_test_folder_is_not():
+    text = "from .mail import send\nimport runner_support.op\n"
+    assert hits("backend/test_receipts.py", text) == {"core-imports-app": 1, "no-runner-support-import": 1}
+    for path in ("backend/tests/helpers/fake.py", "backend/conftest.py", "clients/tests/test_x.py"):
+        assert hits(path, text) == {}, path
+
+
+def test_each_statement_on_one_line_is_its_own_hit():
+    text = "import runner_support.engine; import runner_support.op\nfrom . import mail; from . import mailboxes\n"
+    assert hits(CORE, text) == {"no-runner-support-import": 2, "core-imports-app": 2}
 
 
 def test_an_import_inside_a_string_is_not_an_import():
@@ -183,6 +195,26 @@ def test_a_new_file_under_runner_support_is_banned_and_an_old_or_test_file_is_no
     problems = landmines.compare(found, {})
     assert len(problems) == 2
     assert all("no-new-runner-support-module" in p and "runner-rs" in p for p in problems)
+
+
+def test_a_file_main_deleted_after_the_branch_point_is_not_new(tmp_path):
+    git(tmp_path, "init", "-q", "-b", "base")
+    git(tmp_path, "config", "user.email", "t@example.com")
+    git(tmp_path, "config", "user.name", "t")
+    (tmp_path / "runner_support").mkdir()
+    for name in ("engine.py", "old_job.py"):
+        (tmp_path / "runner_support" / name).write_text("x = 1\n")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "commit", "-qm", "branch point")
+    git(tmp_path, "checkout", "-qb", "work")
+    git(tmp_path, "checkout", "-q", "base")
+    git(tmp_path, "rm", "-q", "runner_support/old_job.py")
+    git(tmp_path, "commit", "-qm", "main deletes a module")
+    git(tmp_path, "checkout", "-q", "work")
+    (tmp_path / "runner_support/new_job.py").write_text("x = 2\n")
+    git(tmp_path, "add", "-A")
+
+    assert sorted(landmines.new_files(tmp_path, "base")) == ["runner_support/new_job.py"]
 
 
 def test_a_pattern_inside_a_string_or_a_comment_is_not_a_hit():
