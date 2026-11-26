@@ -1,5 +1,6 @@
 {
   "backend/app.py": {
-    "core-imports-app": 36
+    "core-imports-app": 36,
+    "no-install-closure": 3
   }
 }

@@ -1,6 +1,5 @@
 {
   "backend/demo.py": {
-    "core-imports-app": 2,
-    "no-install-closure": 1
+    "core-imports-app": 2
   }
 }

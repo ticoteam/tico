@@ -1,5 +1,0 @@
-{
-  "backend/cors.py": {
-    "no-install-closure": 1
-  }
-}

@@ -24,12 +24,14 @@ the tracked paths with the --base ref's tree, so it runs only with --base, as CI
 out: no-flight-in-hub (the flight recorder's tables are made only in hub.flight.db) and no-tauri (desktop/, Electron, is
 the one desktop app).
 
-Three more hold the lifespan and the routes, also read token by token: backend/app.py starts no raw asyncio task (its
-loops are lifespan workers), backend/ adds no install(app, ...) / register*(app, ...) closure (a ratchet: modules move
-to api_routing.router()), and only backend/api_routing.py builds an APIRouter or calls include_router.
+Three more hold the lifespan and the routes, read from the syntax tree with each scope's imports: backend/app.py starts
+no raw asyncio task (its loops are lifespan workers), backend/ adds no install(app, ...) / register*(app, ...) closure
+that adds routes (a ratchet: modules move to api_routing.router()), and only backend/api_routing.py builds an
+APIRouter, subclasses it or calls include_router.
 """
 
 import argparse
+import ast
 import collections
 import functools
 import io
@@ -301,94 +303,226 @@ def tauri_lines(path, text):
 
 
 @functools.lru_cache(maxsize=1)
-def code_tokens(text):
-    """`text`'s Python tokens without comments and layout (a NEWLINE ends each statement), so a string is one STRING
-    token and a call or a def split over lines reads as one run. Empty when the file does not tokenize. The rules that
-    read a file's tokens run one after another on it, so they share one tokenize."""
+def parsed(text):
+    """`text` as a Python syntax tree, or None when it does not parse. A string or a comment is never code here, a
+    one-line suite (`if x: import y; y()`) is read as Python reads it, and the rules that read a file's tree run one
+    after another on it, so they share one parse."""
     try:
-        return tuple(
-            t
-            for t in tokenize.generate_tokens(io.StringIO(text).readline)
-            if t.type not in (tokenize.NL, tokenize.COMMENT, tokenize.INDENT, tokenize.DEDENT)
-        )
-    except (tokenize.TokenError, SyntaxError, IndentationError):
-        return ()
+        return ast.parse(text)
+    except (SyntaxError, ValueError):
+        return None
 
 
-def _is(tok, string, kind=tokenize.OP):
-    return tok is not None and tok.type == kind and tok.string == string
+SCOPES = (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
 
 
-def imported_names(tokens, modules, names):
-    """The local names `from <module> import <name> [as <alias>]` binds, for a module in `modules` and a name in
-    `names`."""
-    bound, statement = set(), []
-    for tok in [*tokens, None]:
-        if tok is not None and tok.type not in (tokenize.NEWLINE, tokenize.ENDMARKER) and not _is(tok, ";"):
-            statement.append(tok.string)
-            continue
-        if statement[:1] == ["from"] and "import" in statement:
-            split = statement.index("import")
-            if "".join(statement[1:split]) in modules:
-                words = [w for w in statement[split + 1 :] if w not in "()"]
-                for k, word in enumerate(words):
-                    if word in names and (k == 0 or words[k - 1] == ","):
-                        bound.add(words[k + 2] if words[k + 1 : k + 2] == ["as"] else word)
-        statement = []
-    return bound
+class Bindings(ast.NodeVisitor):
+    """What each name means in each scope: `wanted[(module, name)]` for a `from <module> import <name> [as x]`, and
+    None for any other binding (an assignment, a parameter, a def, another import), so a name bound in one function
+    never colours another, and a local name hides a module-level import of the same name. `calls` and `classes` are
+    each call and class with the scope it is read in: a def's or a class's body in its own scope, its decorators,
+    defaults, annotations and bases in the scope around it."""
+
+    def __init__(self, tree, wanted):
+        self.wanted = wanted
+        self.scopes = {tree: {}}  # scope node -> {name: meaning}
+        self.parent = {tree: None}  # scope node -> enclosing scope node (a class scope is skipped, as Python skips it)
+        self.stack = [tree]
+        self.calls, self.classes = [], []
+        for statement in tree.body:
+            self.visit(statement)
+
+    def bind(self, name, meaning=None):
+        table = self.scopes[self.stack[-1]]
+        if table.get(name) is None:
+            table[name] = meaning
+
+    def enter(self, node, outer, inner, args=None):
+        for child in outer:
+            if child is not None:
+                self.visit(child)
+        enclosing = [scope for scope in self.stack if not isinstance(scope, ast.ClassDef)]
+        self.parent[node] = enclosing[-1]
+        self.scopes[node] = {}
+        self.stack.append(node)
+        if args is not None:
+            for arg in [*args.posonlyargs, *args.args, *args.kwonlyargs, args.vararg, args.kwarg]:
+                if arg is not None:
+                    self.bind(arg.arg)
+        for child in inner:
+            self.visit(child)
+        self.stack.pop()
+
+    @staticmethod
+    def outside(args):
+        every = [*args.posonlyargs, *args.args, *args.kwonlyargs, args.vararg, args.kwarg]
+        return [*args.defaults, *args.kw_defaults, *(a.annotation for a in every if a is not None)]
+
+    def visit_FunctionDef(self, node):
+        self.bind(node.name)
+        self.enter(node, [*node.decorator_list, *self.outside(node.args), node.returns], node.body, node.args)
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+    def visit_Lambda(self, node):
+        self.enter(node, self.outside(node.args), [node.body], node.args)
+
+    def visit_ClassDef(self, node):
+        self.bind(node.name)
+        self.classes.append((node, self.stack[-1]))
+        self.enter(node, [*node.decorator_list, *node.bases, *node.keywords], node.body)
+
+    def visit_ImportFrom(self, node):
+        for alias in node.names:
+            self.bind(
+                alias.asname or alias.name, self.wanted.get((node.module if not node.level else None, alias.name))
+            )
+
+    def visit_Import(self, node):
+        for alias in node.names:
+            self.bind(alias.asname or alias.name.split(".")[0])
+
+    def visit_Name(self, node):
+        if isinstance(node.ctx, ast.Store):
+            self.bind(node.id)
+
+    def visit_Call(self, node):
+        self.calls.append((node, self.stack[-1]))
+        self.generic_visit(node)
+
+    def meaning(self, scope, name):
+        """What `name` means where `scope` reads it: the innermost scope that binds it decides."""
+        while scope is not None:
+            if name in self.scopes[scope]:
+                return self.scopes[scope][name]
+            scope = self.parent[scope]
+        return None
 
 
-def calls(tokens, attributes=(), bare=()):
-    """The line of each call `x.<attribute>(` and `<bare>(`, where a bare name is a call of its own (not `x.name(`)
-    and not a definition (`def name(`)."""
-    lines = []
-    for i, tok in enumerate(tokens[:-1]):
-        if tok.type != tokenize.NAME or not _is(tokens[i + 1], "("):
-            continue
-        before = tokens[i - 1] if i else None
-        if (tok.string in attributes and _is(before, ".")) or (
-            tok.string in bare and not _is(before, ".") and not _is(before, "def", tokenize.NAME)
-        ):
-            lines.append(tok.start[0])
-    return lines
+ASYNCIO = {("asyncio", "create_task"), ("asyncio", "ensure_future"), ("asyncio.tasks", "create_task")}
+
+
+def task_groups(tree):
+    """The names an `async with asyncio.TaskGroup() as g` binds: a TaskGroup waits for its tasks when it exits."""
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncWith):
+            for item in node.items:
+                made = item.context_expr
+                func = made.func if isinstance(made, ast.Call) else None
+                named = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+                if named == "TaskGroup" and isinstance(item.optional_vars, ast.Name):
+                    names.add(item.optional_vars.id)
+    return names
 
 
 def lifespan_tasks(path, text):
-    """Raw tasks: `asyncio.create_task(`, `loop.create_task(`, `asyncio.ensure_future(`, and a bare call of a name
-    imported from asyncio. The app's own `create_task(...)` (it creates a Tico task) is not one."""
-    tokens = code_tokens(text)
-    spawn = imported_names(tokens, {"asyncio", "asyncio.tasks"}, {"create_task", "ensure_future"})
-    return calls(tokens, attributes={"create_task", "ensure_future"}, bare=spawn)
+    """Raw tasks: `asyncio.create_task(`, `loop.create_task(`, `asyncio.ensure_future(`, and a call of a name imported
+    from asyncio in the scope that calls it. The app's own `create_task(...)` (it creates a Tico task) is not one, nor
+    a TaskGroup's `group.create_task(...)`."""
+    tree = parsed(text)
+    if tree is None:
+        return []
+    names = Bindings(tree, dict.fromkeys(ASYNCIO, "asyncio"))
+    groups = task_groups(tree)
+    lines = []
+    for node, scope in names.calls:
+        func = node.func
+        if isinstance(func, ast.Attribute) and func.attr in ("create_task", "ensure_future"):
+            if not (isinstance(func.value, ast.Name) and func.value.id in groups):
+                lines.append(node.lineno)
+        elif isinstance(func, ast.Name) and names.meaning(scope, func.id) == "asyncio":
+            lines.append(node.lineno)
+    return sorted(lines)
 
 
-INSTALLER = re.compile(r"(install|register)\w*")
+INSTALLER = re.compile(r"_?(install|register)\w*")
+INSTALLER_DEF = re.compile(r"\bdef\s+_?(install|register)")  # a file without one needs no parse
+# What an installer calls on the app to add a route: `@app.get(...)`, `app.add_api_route(...)`, `app.mount(...)`.
+ROUTE_CALLS = frozenset(
+    "get post put patch delete options head trace api_route route websocket websocket_route add_api_route add_route "
+    "add_websocket_route add_api_websocket_route mount include_router".split()
+)
+
+
+def _first_parameter(func, method):
+    args = func.args
+    positional = [*args.posonlyargs, *args.args]
+    static = any(getattr(d, "id", None) == "staticmethod" for d in func.decorator_list)
+    if method and not static and positional:
+        positional = positional[1:]  # self or cls, however it is named or typed
+    if positional:
+        return positional[0].arg
+    return args.kwonlyargs[0].arg if args.kwonlyargs else None
+
+
+def _adds_routes(func):
+    """Whether `func`'s body (nested defs and their decorators included) calls a route method on `app`."""
+    for node in ast.walk(func):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in ROUTE_CALLS:
+            root = node.func.value
+            while isinstance(root, ast.Attribute):
+                root = root.value  # app.router.add_api_route
+            if isinstance(root, ast.Name) and root.id == "app":
+                return True
+    return False
 
 
 def install_closures(path, text):
-    """The line of each `def install*(app, ...)` / `def register*(app, ...)`, however its parameters are laid out
-    and typed; in a method, `app` first after `self`."""
-    tokens = code_tokens(text)
-    lines = []
-    for i, tok in enumerate(tokens[:-3]):
-        if not (
-            _is(tok, "def", tokenize.NAME) and INSTALLER.fullmatch(tokens[i + 1].string) and _is(tokens[i + 2], "(")
-        ):
-            continue
-        first = i + 3
-        if _is(tokens[first], "self", tokenize.NAME) and first + 2 < len(tokens) and _is(tokens[first + 1], ","):
-            first += 2
-        after = tokens[first + 1] if first + 1 < len(tokens) else None
-        if _is(tokens[first], "app", tokenize.NAME) and after is not None and after.string in (",", ":", ")", "="):
-            lines.append(tok.start[0])
-    return lines
+    """The line of each `def [_]install*(app, ...)` / `def [_]register*(app, ...)` that adds a route to `app`; in a
+    method, `app` is first after self or cls, and a keyword-only `app` counts when nothing comes before it. An installer
+    that only adds middleware, or a `register(app: str)` that adds no route, is not one."""
+    if not INSTALLER_DEF.search(text):
+        return []
+    tree = parsed(text)
+    if tree is None:
+        return []
+    methods = {
+        id(node)
+        for owner in ast.walk(tree)
+        if isinstance(owner, ast.ClassDef)
+        for node in owner.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    return sorted(
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and INSTALLER.fullmatch(node.name)
+        and _first_parameter(node, id(node) in methods) == "app"
+        and _adds_routes(node)
+    )
+
+
+ROUTER_IMPORTS = {(module, "APIRouter"): "APIRouter" for module in ("fastapi", "fastapi.routing")}
+
+
+def _is_router(node, scope, names):
+    if isinstance(node, ast.Attribute):
+        return node.attr == "APIRouter"
+    if isinstance(node, ast.Name):
+        meaning = names.meaning(scope, node.id)
+        return meaning == "APIRouter" or (node.id == "APIRouter" and meaning is None)
+    return False
 
 
 def bare_routers(path, text):
-    """`APIRouter(` however it is reached (`fastapi.APIRouter(`, an alias imported from fastapi or fastapi.routing),
-    and `x.include_router(`."""
-    tokens = code_tokens(text)
-    routers = {"APIRouter"} | imported_names(tokens, {"fastapi", "fastapi.routing"}, {"APIRouter"})
-    return calls(tokens, attributes={"include_router", "APIRouter"}, bare=routers)
+    """`APIRouter(` however it is reached (`fastapi.APIRouter(`, an alias imported from fastapi or fastapi.routing), a
+    class built on APIRouter (its routes are plain APIRoutes too), and `x.include_router(`."""
+    if "APIRouter" not in text and "include_router" not in text:
+        return []  # neither can be reached without its name in the file
+    tree = parsed(text)
+    if tree is None:
+        return []
+    names = Bindings(tree, ROUTER_IMPORTS)
+    lines = [
+        node.lineno
+        for node, scope in names.calls
+        if _is_router(node.func, scope, names)
+        or (isinstance(node.func, ast.Attribute) and node.func.attr == "include_router")
+    ]
+    lines += [node.lineno for node, scope in names.classes if any(_is_router(b, scope, names) for b in node.bases)]
+    return sorted(lines)
 
 
 @dataclass
@@ -564,9 +698,9 @@ RULES = [
         "ban",
         lambda path: path == "backend/app.py",
         [],
-        "A raw asyncio task in the app dies silently and is never awaited at shutdown. Register background work in the "
-        "lifespan workers (backend/lifespan_workers.py, Workers.add): a crash is logged and stops the app, and "
-        "shutdown unwinds every worker.",
+        "A raw asyncio task in the app dies silently and is never awaited at shutdown. Start background work as a "
+        "lifespan worker (backend/lifespan_workers.py: Workers.task, Workers.thread or Workers.job): a crash is logged, "
+        "recorded and raised on Health (worker_died) while the other workers run on, and shutdown unwinds every one.",
         "L40",
         find=lifespan_tasks,
     ),
@@ -575,7 +709,7 @@ RULES = [
         "ratchet",
         lambda path: path.startswith("backend/") and py_prod(path),
         [],
-        "No new install(app, ...) or register*(app, ...) closure. Build the module's routes on api_routing.router(), "
+        "No new install(app, ...) or register*(app, ...) closure that adds routes to the app. Build the module's routes on api_routing.router(), "
         "take services as a deps.Injected parameter, and add them in create_app with api_routing.include(app, "
         "router), as backend/report_order.py does.",
         "L41",
