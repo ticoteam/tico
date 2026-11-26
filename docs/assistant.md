@@ -201,8 +201,9 @@ someone else), comments and changes on tasks that are yours alone, and marking u
 including what you ask for in your DM. An assistant run's credential works only while its lease is live.
 
 **OKs are yours, unless you say so.** The Assistant answers asks on your words, but by default it never gives an OK.
-Turn on **Give OKs for me when I tell you to** (Settings > General > Assistant, `POST /api/v2/assistant/settings
-{"gives_oks": true}`; only your own click changes it, never the Assistant, Agent Ops or a personal token) and it gives a
+Turn on **Give OKs for me when I tell you to** with `POST /api/v2/assistant/settings {"gives_oks": true}` from your own
+signed-in session (its switch in Settings > General > Assistant is coming; only your own click changes it, never the
+Assistant, Agent Ops or a personal token) and it gives a
 plain OK on a stage, or a page only you approve, when you tell it to in your own words (backend/assistant_oks.py). The
 server checks your words, not the Assistant: your own message in your own Assistant chat (spoken in a call counts), no
 more than 15 minutes old, naming the task (its number, such as `#3555`, or at least two of its title's own words and
@@ -211,7 +212,8 @@ version other than the one you were shown is refused, as it would be for your ow
 "via assistant" and quotes your words with the message they came from (`data.delegation`: `words`, and `cited` with
 its `message_id` and `conversation_id`), and your Assistant chat gets a receipt, "OK'd: <title>, <stage>", whose
 `refs.assistant_ok` carries the `answer_id` to undo (`POST /api/v2/answers/{id}/undo`), the task, its title and the
-stage; Undo works as for your own OK, while the task's `may` for that requirement still lists `undo`. What stays your
+stage. Until the chat shows an Undo button on that receipt, undo it on the task, as for your own OK, while the task's
+`may` for that requirement still lists `undo`. What stays your
 own click, whatever the setting: an OK on something that leaves the company, spends money, or touches a file or access
 (any OK bound to a preview, [Asks and OKs](tasks.md#asks-and-oks)), a page several people approve, and an OK on your
 own ask. A walk through Needs you (`tico needs-you commit`) answers, sends back, finishes and closes, but never OKs.
