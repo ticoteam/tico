@@ -400,7 +400,8 @@ new commit to borrow an old run. Roll back this tooling change by reverting it; 
 Open the pull request as a draft and run tests on your computer while you work: a draft runs no checks, so pushes are
 free. When the change is done, mark it ready with `gh pr ready`: its checks run the tests the plan selects. Running
 them first on your computer is optional and never waited for: when a heavy slot is free,
-`python3 scripts/pr_checks.py local --ready` runs the same selection (through `scripts/heavy.sh`), prints a receipt line
+`python3 scripts/pr_checks.py local --ready` applies the same selection rules (through `scripts/heavy.sh`; CI caps with
+recent queue timings and diffs from the merge base, so the files kept can differ when the time cap applies), prints a receipt line
 naming the full head sha and the result for the task's review, and marks the draft ready after a pass; without
 `--ready` it only runs and prints. It names what only CI runs (Rust conformance). A change that reaches most of
 the suite (a catalog template, a shared module) selects most of it: with `TICO_HEAVY_REMOTE=1` each part runs on a RunsOn
@@ -495,7 +496,7 @@ checks on that merge commit, and moves main only when they pass.
 - **Required check**: `checks` on main. It fails when a job it needs failed or was cancelled; a skipped job passes.
 
 Agents open pull requests as drafts and mark them ready with `gh pr ready` once the change is done; the PR checks run
-the selected tests (`python3 scripts/pr_checks.py local` runs the same plan locally, optional and never waited for), and the
+the selected tests (`python3 scripts/pr_checks.py local` applies the same rules locally, optional and never waited for), and the
 queue runs the selected set once per group.
 
 **Enqueue once.** A pull request needs no rebase to be current: the queue merges it onto the current main. Rebase only when

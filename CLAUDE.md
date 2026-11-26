@@ -17,8 +17,9 @@ A Tico bot working a task on this repository follows these where the rest of thi
 - While you work, test only what the change can break, one file at a time: `.venv/bin/python -m pytest -q -n 2 <file>`.
   Never the whole suite by hand.
 - PR checks run in CI; never wait for a local test slot. Push the finished draft (a draft runs no CI) and mark it ready
-  with `gh pr ready`: the ready PR's checks run the same light plan `python3 scripts/pr_checks.py local` selects for the
-  diff. That local run (in the computer's shared slots, `scripts/heavy.sh`) is optional: run it only when it starts at
+  with `gh pr ready`: the ready PR's checks run the light plan's tests for the diff. `python3 scripts/pr_checks.py local`
+  applies the same narrowing rules, but CI caps with recent queue timings and diffs from the PR's merge base, so the
+  files each keeps can differ when the time cap applies. That local run (in the computer's shared slots, `scripts/heavy.sh`) is optional: run it only when it starts at
   once, and never hold the PR back for it. When `checks` is green at the head, put
   `CI checks passed at head <full sha> (<run link>)` in your reply on the task. A red run is fixed before review; a
   check that did not run is "not checked", with the reason.
@@ -86,8 +87,9 @@ when the branch would not merge into origin/main and names the files. A person m
 ## How we work
 Trunk-based: branches are `<who>/<topic>` (a Tico bot's: `tico/...`), one ticket per PR. Draft PRs run no CI. The flow: open the PR as a draft
 (`gh pr create --draft`) and push freely; when done, mark it ready with `gh pr ready`: its checks run the tests the PR
-checks select for your diff. `python3 scripts/pr_checks.py local --ready` runs the same selection on this computer first
-and prints a receipt line with the head sha; it is optional, for when a heavy slot is free, and never waited for. Mark ready once: each push to a ready PR runs CI again, so batch later fixes. Wait for
+checks select for your diff (a fork's pull request runs the cheap checks only). `python3 scripts/pr_checks.py local --ready`
+applies the same selection rules on this computer first and prints a receipt line with the head sha; when the time cap
+applies, the files it keeps can differ from CI's. It is optional, for when a heavy slot is free, and never waited for. Mark ready once: each push to a ready PR runs CI again, so batch later fixes. Wait for
 green `checks` on that run (not skipped), and once it is reviewed, enqueue it with
 `gh pr merge <N> --merge`: the merge queue tests the PR merged onto current main before it lands. Enqueue once. No bot
 enqueues: Tico queues a bot's PR at the checked head when its task reaches Merge, and a queue removal goes to the

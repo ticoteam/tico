@@ -180,10 +180,11 @@ company already owns, so their commits need no sign-off, and their pull requests
 
 - Trunk-based: everything lands on `main` through short-lived branches named `<who>/<topic>`, one ticket per PR.
 - Open the PR as a draft (`gh pr create --draft`). Draft PRs run no CI, so push as often as you like.
-- When it is done, mark it ready with `gh pr ready`. Marking it ready starts its checks (lint and the selected tests);
-  each later push runs them again, so batch your fixes. `python3 scripts/pr_checks.py local --ready` runs the same
-  selected tests on your computer first and prints a receipt line naming the head commit; it is optional, for when a
-  heavy slot is free, and never waited for.
+- When it is done, mark it ready with `gh pr ready`. Marking it ready starts its checks (lint and the selected tests;
+  a fork's pull request runs lint and the other cheap checks only, so a green `checks` there does not mean the tests
+  ran); each later push runs them again, so batch your fixes. `python3 scripts/pr_checks.py local --ready` applies the
+  same selection rules on your computer first and prints a receipt line naming the head commit; when the time cap
+  applies, the files it keeps can differ from CI's. It is optional, for when a heavy slot is free, and never waited for.
 - Once the PR is reviewed and its `checks` pass, enqueue it with `gh pr merge <N> --merge`. The merge queue tests the PR merged onto current main before the change lands.
 - After a queue failure, fix it and get green PR checks before you enqueue again.
 - Enqueue once. Don't rebase or merge main just to be current; rebase only when GitHub reports a conflict.
