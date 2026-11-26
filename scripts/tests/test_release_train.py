@@ -2166,6 +2166,25 @@ def test_an_empty_baseline_is_reported_as_not_compared_never_as_none_slower(inst
     assert line.endswith("3 routes: no v0.6.199 baseline recorded; comparison not checked") and "none twice" not in line
 
 
+@pytest.mark.parametrize(
+    "routes, extra, ending",
+    [
+        # Only a route not judged (it waits on purpose) has requests from before: nothing judged was compared.
+        ([dict(r, before={"n": 0, "p95": None}) for r in ROUTES[1:4]] + [ROUTES[4]], {}, "comparison not checked"),
+        ([], {"flight_db": "unreadable"}, "its flight recorder file is unreadable; not checked"),
+    ],
+    ids=["no-judged-baseline", "recorder-unreadable"],
+)
+def test_a_speed_answer_with_nothing_to_compare_says_not_checked(installs, monkeypatch, routes, extra, ending):
+    gh = FakeGitHub()
+    approval_for(gh, "v0.6.200", approved_by="chris")
+    answer = {"release": "0.6.200", "base": "0.6.199", "since": 1000, "now": 1600, "routes": routes, **extra}
+    speeds(monkeypatch, installs, canary=[answer])
+    assert rt.promote(gh, ENV) == ("v0.6.200", "v0.6.199")
+    line = next(line for line in rt.LOG if line.startswith("Speed: canary,"))
+    assert line.endswith(ending) and "none twice" not in line, line
+
+
 def test_a_hold_put_on_while_the_check_waits_still_holds_stable(installs, monkeypatch):
     gh = FakeGitHub()
     approval_for(gh, "v0.6.200", approved_by="chris")

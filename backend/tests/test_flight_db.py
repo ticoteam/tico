@@ -128,7 +128,7 @@ def test_a_new_file_is_owner_only_before_anything_is_written_to_it(store, monkey
     """Made owner-only when it is made, not chmod-ed afterwards: no moment where others can read it."""
     seen, schema = [], flight._schema
     monkeypatch.setattr(
-        flight, "_schema", lambda target: (seen.append(stat.S_IMODE(os.stat(target).st_mode)), schema(target))
+        flight, "_schema", lambda target, *a: (seen.append(stat.S_IMODE(os.stat(target).st_mode)), schema(target, *a))
     )
     old = os.umask(0o022)
     try:
@@ -215,7 +215,7 @@ def test_a_damaged_file_is_replaced_only_after_its_connection_is_closed(store, m
     replace = flight._replace
     monkeypatch.setattr(flight, "connect", tracked)
     monkeypatch.setattr(
-        flight, "_replace", lambda target: (at_replace.append([closed(c) for c in opened]), replace(target))
+        flight, "_replace", lambda target, *a: (at_replace.append([closed(c) for c in opened]), replace(target, *a))
     )
     sampler = flight.Flight(store.recorder, store, store.settings, folder=tmp_path / "flight")
     assert sampler.write_db(lambda c: flight._event(c, "first", {}, NOW))
@@ -250,7 +250,7 @@ def test_a_connection_never_makes_a_file_without_tables(store, monkeypatch):
     without tables that every later write would fail on."""
     flight.record_event(store, "note", {})
     target = flight.path(store.settings.db_path)
-    monkeypatch.setattr(flight, "_ensure", lambda target, hub_path=None: None)  # it was ready a moment ago
+    monkeypatch.setattr(flight, "_ensure", lambda *a: None)  # it was ready a moment ago
     flight._replace(target)
     with pytest.raises(sqlite3.OperationalError):
         flight.connect(store.settings.db_path)
@@ -342,6 +342,101 @@ def test_cleanup_finishes_its_other_sweeps_when_the_flight_file_fails(store, mon
     assert out["status"] == "ran" and out["details"] == {"flight": "not swept: DatabaseError"} and len(swept) == 1
 
 
+def test_a_file_at_the_current_version_missing_a_table_is_remade_at_the_next_start(store):
+    flight.record_event(store, "note", {})
+    target = flight.path(store.settings.db_path)
+    with closing(sqlite3.connect(target)) as c:
+        c.execute("DROP TABLE flight_web")
+    with store.read() as c:
+        assert flight.state(c) == "unreadable"  # every table is checked, not only flight_requests
+    flight._READY.clear()  # the next start
+    flight.record_event(store, "note", {})
+    with store.read() as c:
+        assert flight.state(c) == "ok"
+
+
+def test_a_table_dropped_while_running_keeps_the_work_for_the_next_write(store, tmp_path):
+    sampler = flight.Flight(store.recorder, store, store.settings, folder=tmp_path / "flight")
+    assert sampler.write_db(lambda c: flight._event(c, "first", {}, NOW))
+    with closing(sqlite3.connect(flight.path(store.settings.db_path))) as c:
+        c.execute("DROP TABLE flight_events")
+    assert sampler.write_db(lambda c: flight._event(c, "second", {}, NOW), NOW) is False
+    assert sampler.lost == [] and len(sampler.pending) == 1  # not dropped as bad work
+    assert sampler.write_db(lambda c: flight._event(c, "third", {}, NOW), NOW + 60)
+    sampler.file.close()
+    with flight.tables(store) as c:
+        assert [r[0] for r in c.execute("SELECT kind FROM flight_events ORDER BY id")] == ["second", "third"]
+
+
+def test_a_late_repair_never_removes_the_file_another_connection_already_made(store):
+    """Two connections find the same damage: the first replaces the file and a write lands in the new one; the
+    second's repair then finds another file at the path and leaves it."""
+    flight.record_event(store, "note", {})
+    stale = flight.connect(store.settings.db_path)
+    stale.close()
+    flight._replace(flight.path(store.settings.db_path), stale.file)  # the first repair
+    flight.record_event(store, "kept", {})  # a new file, with a row
+    flight._replace(flight.path(store.settings.db_path), stale.file)  # the second, late
+    with flight.tables(store) as c:
+        assert [r[0] for r in c.execute("SELECT kind FROM flight_events WHERE kind='kept'")] == ["kept"]
+
+
+def test_the_first_connect_waits_no_longer_than_its_timeout_for_the_files_lock(store, monkeypatch):
+    """The schema check, the WAL switch and the open all wait the recorder's own budget, not a fixed 30 s."""
+    flight.record_event(store, "note", {})
+    waits, connect, wal_mode = [], sqlite3.connect, flight.hubdb.wal_mode
+    monkeypatch.setattr(
+        flight.sqlite3, "connect", lambda *a, **k: (waits.append(k.get("timeout")), connect(*a, **k))[1]
+    )
+    monkeypatch.setattr(flight.hubdb, "wal_mode", lambda c, wait=30.0: (waits.append(wait), wal_mode(c, wait))[1])
+    with closing(connect(flight.path(store.settings.db_path), isolation_level=None)) as holder:
+        holder.execute("BEGIN IMMEDIATE")
+        flight._READY.clear()  # a new process: its first connect checks the schema under the lock
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            flight.connect(store.settings.db_path, timeout=0.2)
+    assert waits == [0.2, 0.2]  # the schema check's open and its WAL switch; it fails there, so no other open
+
+
+def test_stored_values_of_the_wrong_shape_read_as_empty_everywhere(store):
+    flight.record_event(store, "note", {})
+    with flight.tables(store, write=True) as c:
+        c.execute("INSERT INTO flight_events(created_at,kind,detail) VALUES(?,'start','[1,2]')", (NOW,))
+        c.execute("INSERT INTO flight_db VALUES(?,1,0,0,'[3]')", (NOW,))
+        c.execute(
+            "INSERT INTO flight_requests VALUES(?,60,'GET /x','human',3,0,30,30.0,10,10,10,'[4]')", (NOW - 3 * 86400,)
+        )
+    with store.read() as c:
+        assert flight.last_start(c) == {"at": NOW}  # Health's release-image check reads this
+        assert flight.view(c, minutes=5, now=NOW + 60)["events"]["start"] == {"at": NOW}
+    flight.sweep(store, NOW)  # the old minute becomes an hour without its histogram, not a failed sweep
+
+
+def test_health_names_an_unreadable_recorder_file_and_not_a_missing_one(store):
+    with store.read() as c:
+        assert [f["key"] for f in maintenance_health._server_checks(c)] == []  # a new server: no file yet
+    flight.path(store.settings.db_path).write_bytes(b"not a database, " * 512)
+    with store.read() as c:
+        found = maintenance_health._server_checks(c)
+    assert [f["key"] for f in found] == ["flight_recorder"]
+    assert "flight_recorder" in maintenance_health.MEANING
+
+
+def test_the_load_gate_reads_the_recorder_through_the_servers_database(store, tmp_path):
+    from bench.load_gate import gate
+
+    read = gate.db_flight(store.settings.db_path)
+    assert read(NOW, NOW + 60)["flight_db"] == "missing"
+    rec = store.recorder
+    sampler = flight.Flight(rec, store, store.settings, folder=tmp_path / "flight")
+    rec.request("GET /api/v2/tasks", "bot", 200, 15, 100, "bot:finance", [3, 1, 1])
+    minute = int(time.time()) // 60 * 60
+    rec.drain(minute)
+    sampler.flush(minute)
+    sampler.file.close()
+    got = read(minute, minute + 60)
+    assert "flight_db" not in got and got["requests"]["n"] == 1
+
+
 def test_health_invariants_and_metrics_read_empty_without_a_flight_file(store, tmp_path):
     with store.read() as c:
         assert flight.state(c) == "missing"
@@ -409,6 +504,8 @@ def test_the_release_comparison_names_an_empty_baseline(api, monkeypatch):
     got = api.get(flight.SPEED_PATH, headers=headers("ana-test")).json()
     assert (got["base"], got["routes"], got["baseline"]) == ("0.1.0", [], "empty")
     assert got.get("flight_db") in ("missing", None)  # the app's own recorder may have made the file by now
+    first = api.get(flight.SPEED_PATH + "?base=0.0.9", headers=headers("ana-test")).json()  # never ran here
+    assert (first["base"], first["routes"], first["baseline"]) == (None, [], "empty")
 
 
 def test_a_backup_snapshot_carries_the_servers_database_and_not_the_flight_file(store, tmp_path):

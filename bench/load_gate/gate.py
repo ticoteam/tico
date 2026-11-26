@@ -96,9 +96,9 @@ def db_flight(db_path):
     from backend import flight
 
     def read(since, until):
-        # The recorder's own file beside the server's database (backend/flight.py `path`).
-        target = flight.path(db_path).as_uri() + "?mode=ro"
-        with closing(sqlite3.connect(target, uri=True, factory=flight.FlightConnection)) as c:
+        # Read through the server's database: `flight.view` opens the recorder's file beside it, and a missing or
+        # unreadable one reads as empty with `flight_db` naming which (report.py makes the level not valid for it).
+        with closing(sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro", uri=True)) as c:
             c.row_factory = sqlite3.Row
             return flight.view(
                 c,

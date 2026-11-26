@@ -221,7 +221,14 @@ def test_an_update_key_reads_each_routes_speed_since_the_release_and_no_other_me
     assert api.get(flight.SPEED_PATH + "?base=v0.1.0", headers=key).json()["base"] == "0.1.0"
     unknown = api.get(flight.SPEED_PATH + "?base=0.0.9", headers=key).json()
     # One response, compared with its own clock: a second request may land in the next second.
-    assert unknown == {"release": "0.2.0", "since": None, "now": unknown["now"], "base": None, "routes": []}
+    assert unknown == {
+        "release": "0.2.0",
+        "since": None,
+        "now": unknown["now"],
+        "base": None,
+        "routes": [],
+        "baseline": "empty",  # no window to compare against, said outright
+    }
     assert api.get("/api/v2/system/metrics", headers=key).status_code == 403
     tasks_key = {"Authorization": "Bearer " + post(api, "service-keys", {"label": "Billing"})["key"]}
     assert api.get(flight.SPEED_PATH, headers=tasks_key).status_code == 403

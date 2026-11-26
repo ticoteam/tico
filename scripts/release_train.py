@@ -1482,7 +1482,7 @@ def speed_check(target, version, base):
         data = read()
     if not data:
         return ["Speed: %s's speed on v%s against v%s cannot be read; not checked" % (name, want, base)], []
-    regressions, over, judged_routes = [], [], 0
+    regressions, over, judged_routes, compared = [], [], 0, 0
     for r in data["routes"]:
         route = r.get("route") if isinstance(r, dict) else ""
         before, after = (r.get("before") or {}, r.get("after") or {}) if isinstance(r, dict) else ({}, {})
@@ -1498,16 +1498,22 @@ def speed_check(target, version, base):
         if not judged(route) or na < SPEED_MIN:
             continue
         judged_routes += 1
+        compared += nb >= SPEED_MIN
         if a > SPEED_TARGET_MS:
             over.append("%s %.0f ms (%d requests)" % (route, a, na))
         if nb >= SPEED_MIN and b and a / SPEED_BUCKET >= SPEED_SLOWER * b and a - b >= SPEED_FLOOR_MS:
             regressions.append("%s p95 %.0f ms, was %.0f ms on v%s (%d and %d requests)" % (route, a, b, base, na, nb))
     window = "%d minutes on v%s against v%s" % ((data["now"] - data["since"]) // 60, want, base)
+    recorder = data.get("flight_db")  # "missing" or "unreadable": the install's recorder file, not its traffic
     if not judged_routes:
-        return ["Speed: %s, %s: no route had %d requests; not checked" % (name, window, SPEED_MIN)], []
-    # The install recorded nothing in the hour it last ran `base`: no route can be compared, only measured.
-    empty = data.get("baseline") == "empty"
-    verdict = "no v%s baseline recorded; comparison not checked" % base if empty else "none twice as slow"
+        why = "its flight recorder file is %s" % recorder if recorder else "no route had %d requests" % SPEED_MIN
+        return ["Speed: %s, %s: %s; not checked" % (name, window, why)], []
+    # No judged route has enough requests from the hour the install last ran `base` (none recorded at all, or only on
+    # routes not judged): the routes were measured, not compared.
+    if data.get("baseline") == "empty" or not compared:
+        verdict = "no v%s baseline recorded; comparison not checked" % base
+    else:
+        verdict = "none twice as slow"
     lines = [
         "Speed: %s, %s, %d routes: %s"
         % (name, window, judged_routes, "; ".join("SLOWER " + x for x in regressions) or verdict)

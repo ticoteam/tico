@@ -1210,7 +1210,18 @@ _READY: set = set()  # flight files this process has brought to SCHEMA_VERSION
 
 class FlightConnection(sqlite3.Connection):
     """A connection to a flight database: the readers below use it as it is. Any other connection is taken as the
-    server database's, and they open the flight database beside it."""
+    server database's, and they open the flight database beside it. `file` is (device, inode, change time) of the file `connect`
+    opened: a repair removes only that file, never a new one another connection made meanwhile."""
+
+    file: tuple[int, int, int] | None = None
+
+
+def _identity(target):
+    try:
+        st = os.stat(target)
+    except FileNotFoundError:
+        return None
+    return (st.st_dev, st.st_ino, st.st_ctime_ns)  # an inode number is reused at once; with its change time it is not
 
 
 def path(db_path):
@@ -1231,11 +1242,15 @@ def _secure(target):
             os.chmod(name, 0o600)
 
 
-def _replace(target):
+def _replace(target, file=None):
     """Remove a flight database SQLite cannot read, with its -wal and -shm, so the next write makes a new one. Under
     `_LOCK`, after the caller closed its own connection to it: no `_ensure` in this process makes a file meanwhile.
-    A file that cannot be removed stays, logged: the next `connect` finds it damaged again and fails that write."""
+    With `file` (the caller connection's `file`), only while the path still holds that file: when another connection
+    already replaced it, the new file and its rows stay. A file that cannot be removed stays, logged: the next
+    `connect` finds it damaged again and fails that write."""
     with _LOCK:
+        if file is not None and _identity(target) != file:
+            return
         _READY.discard(str(target))
         for name in (str(target), f"{target}-wal", f"{target}-shm"):
             try:
@@ -1251,15 +1266,17 @@ def _damaged(exc):
     return type(exc) is sqlite3.DatabaseError
 
 
-def _schema(target):
-    """Bring `target` to SCHEMA_VERSION in one write transaction: any other version drops the seven tables and makes
-    them again. Raises sqlite3.DatabaseError when the file is not a readable database."""
-    c = sqlite3.connect(f"{target.as_uri()}?mode=rw", uri=True, timeout=30, isolation_level=None)
+def _schema(target, timeout=30.0):
+    """Bring `target` to SCHEMA_VERSION in one write transaction: another version, or the right one with any of the
+    seven tables gone, drops them all and makes them again. Waits at most `timeout` seconds for the file's lock.
+    Raises sqlite3.DatabaseError when the file is not a readable database."""
+    c = sqlite3.connect(f"{target.as_uri()}?mode=rw", uri=True, timeout=timeout, isolation_level=None)
     try:
-        hubdb.wal_mode(c)
+        hubdb.wal_mode(c, wait=timeout)
         c.execute("BEGIN IMMEDIATE")
         try:
-            if c.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
+            have = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if c.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION or not set(TABLES) <= have:
                 for table in TABLES:
                     c.execute(f"DROP TABLE IF EXISTS {table}")
                 for statement in SCHEMA:
@@ -1282,7 +1299,7 @@ def _create(target):
     return True
 
 
-def _ensure(target, hub_path=None):
+def _ensure(target, hub_path=None, timeout=30.0):
     """Make `target` if it is missing (owner-only), bring its schema to SCHEMA_VERSION, replace it when it is not a
     database, and seed a new one from the server's database (`_seed`). Once per file per process, under `_LOCK`."""
     key = str(target)
@@ -1293,21 +1310,21 @@ def _ensure(target, hub_path=None):
             return
         fresh = not target.exists() and _create(target)
         try:
-            _schema(target)
+            _schema(target, timeout)
         except sqlite3.DatabaseError as exc:
             if not _damaged(exc):
                 raise
             LOG.warning("Flight database %s unreadable (%s): starting a new one", target.name, exc)
             _replace(target)
             fresh = _create(target)
-            _schema(target)
+            _schema(target, timeout)
         _secure(target)
         if fresh and hub_path is not None:
-            _seed(target, hub_path)
+            _seed(target, hub_path, timeout=timeout)
         _READY.add(key)
 
 
-def _seed(target, hub_path, now=None):
+def _seed(target, hub_path, now=None, timeout=30.0):
     """A new flight database starts with the server database's recorder rows from the last SEED_SECONDS (SEED_LONGER
     for the size samples), and every start event, read once from the tables the recorder used before it had its own
     file. The release comparison (`speed`) then still has the hour before the update, and Health its starts. Nothing
@@ -1323,7 +1340,7 @@ def _seed(target, hub_path, now=None):
             sqlite3.connect(f"{Path(hub_path).resolve().as_uri()}?mode=rw", uri=True, timeout=1)
         )
         hub.execute("PRAGMA query_only=1")
-        out = sqlite3.connect(f"{target.as_uri()}?mode=rw", uri=True, timeout=30, isolation_level=None)
+        out = sqlite3.connect(f"{target.as_uri()}?mode=rw", uri=True, timeout=timeout, isolation_level=None)
         present = {r[0] for r in hub.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         out.execute("BEGIN IMMEDIATE")
         for table in TABLES:
@@ -1363,11 +1380,12 @@ def connect(db_path, timeout=DB_WAIT):
     target = path(db_path)
     if target is None:
         raise sqlite3.OperationalError("an in-memory database has no flight database beside it")
-    _ensure(target, Path(str(db_path)))
+    _ensure(target, Path(str(db_path)), timeout)
     c = sqlite3.connect(
         f"{target.as_uri()}?mode=rw", uri=True, timeout=timeout, isolation_level=None, factory=FlightConnection
     )
     try:
+        c.file = _identity(target)
         c.row_factory = sqlite3.Row
         c.execute(f"PRAGMA journal_size_limit={WAL_LIMIT}")
     except BaseException:
@@ -1400,7 +1418,7 @@ def tables(store, write=False):
     finally:
         c.close()
         if damaged:
-            _replace(path(store.settings.db_path))
+            _replace(path(store.settings.db_path), c.file)
 
 
 def record_event(store, kind, detail, now=None):
@@ -1460,7 +1478,8 @@ def state(c):
         if f is None:
             return found
         try:
-            f.execute("SELECT 1 FROM flight_requests LIMIT 1").fetchall()
+            for table in TABLES:  # every one: a file missing any of them is not what the readers can trust
+                f.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchall()
         except sqlite3.DatabaseError:
             return "unreadable"
     return "ok"
@@ -1479,12 +1498,14 @@ def _read(c, empty, query):
 
 
 def _loads(text, default=None):
-    """A stored JSON detail, or `default` ({}) for a row whose text is not JSON: one bad row never fails a read."""
+    """A stored JSON value of `default`'s shape ({} when None), or `default` for a row whose text is not JSON or holds
+    another shape (a list where an object belongs): one bad row never fails a read or a sweep."""
+    empty = {} if default is None else default
     try:
         value = json.loads(text or "null")
     except ValueError:
-        return {} if default is None else default
-    return value if value is not None else ({} if default is None else default)
+        return empty
+    return value if isinstance(value, type(empty)) else empty
 
 
 def _blank():
@@ -1716,7 +1737,7 @@ def sweep(store, now=None):
                 m[2] += r[4]
                 m[3] += r[5]
                 m[4] = max(m[4], r[6] or 0)
-                _merge(m[5], json.loads(r[7] or "{}"))
+                _merge(m[5], _loads(r[7]))
             for (route, caller), m in merged.items():
                 old = c.execute(
                     "SELECT n,errors,bytes,total_ms,max_ms,hist FROM flight_requests WHERE created_at=? AND span=3600 "
@@ -1729,7 +1750,7 @@ def sweep(store, now=None):
                     m[2] += old[2]
                     m[3] += old[3]
                     m[4] = max(m[4], old[4] or 0)
-                    _merge(m[5], json.loads(old[5] or "{}"))
+                    _merge(m[5], _loads(old[5]))
                 c.execute(
                     "INSERT OR REPLACE INTO flight_requests VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
@@ -1787,7 +1808,7 @@ def _sweep_web(store, cutoff):
             ):
                 m = merged.setdefault((r[0], r[1]), [0, {}])
                 m[0] += r[2]
-                _merge(m[1], json.loads(r[3] or "{}"))
+                _merge(m[1], _loads(r[3]))
             c.executemany(
                 "INSERT OR REPLACE INTO flight_web VALUES(?,?,?,?,?,?)",
                 [
@@ -1969,6 +1990,11 @@ class Flight(threading.Thread):
             busy = isinstance(exc, sqlite3.OperationalError) and any(w in str(exc) for w in ("locked", "busy"))
             if _damaged(exc):  # the file, not the work: a new one takes the same work at the next try
                 damaged, failing = True, None
+            elif isinstance(exc, sqlite3.OperationalError) and "no such table: flight_" in str(exc):
+                # A table gone from a file this process had checked: the next connect checks it again and remakes
+                # the tables, and the work waits for that.
+                _READY.discard(str(path(self.settings.db_path)))
+                failing = None
             if not busy and failing is not None:
                 # Not the lock: that work would fail every time, so it goes now (named) rather than block the rest.
                 gone, _ = self.pending.pop(failing)
@@ -1979,8 +2005,8 @@ class Flight(threading.Thread):
             return False
         finally:
             c.close()
-            if damaged:  # replaced only once this connection to it is closed
-                _replace(path(self.settings.db_path))
+            if damaged:  # replaced only once this connection to it is closed, and only if it is still that file
+                _replace(path(self.settings.db_path), c.file)
 
     def _trim(self):
         while len(self.pending) > PENDING_MAX:
@@ -2052,7 +2078,7 @@ def _requests(c, since, until=None, top=25, caller=None):
         m["total_ms"] += r[5]
         m["max_ms"] = max(m["max_ms"], r[6] or 0)
         m["callers"][r[1]] = m["callers"].get(r[1], 0) + r[2]
-        _merge(m["_h"], json.loads(r[7] or "{}"))
+        _merge(m["_h"], _loads(r[7]))
     every, rows = {}, []
     for m in merged.values():
         hist = m.pop("_h")
@@ -2096,7 +2122,7 @@ def _web(c, since, until=None):
             continue
         m = merged.setdefault((metric, route), [0, {}])
         m[0] += n
-        _merge(m[1], json.loads(hist or "{}"))
+        _merge(m[1], _loads(hist))
     rows = [
         {
             "metric": metric,
@@ -2120,7 +2146,7 @@ def _sql(c, since):
         m["n"] += r[1]
         m["total_ms"] += r[2]
         m["max_ms"] = max(m["max_ms"], r[3] or 0)
-        _merge(m["_h"], json.loads(r[4] or "{}"))
+        _merge(m["_h"], _loads(r[4]))
     rows = [
         {
             **{k: v for k, v in m.items() if k != "_h"},
@@ -2361,8 +2387,9 @@ def install(app, store, auth):
         now = int(time.time())
         with store.read() as c:
             found = speed_windows(releases.history(c), base.strip().removeprefix("v") if base else None)
-            if found is None:
-                return {"release": releases.version(), "since": None, "now": now, "base": None, "routes": []}
+            if found is None:  # no release ran before this one here (or not `base`): nothing to compare against
+                out = {"release": releases.version(), "since": None, "now": now, "base": None, "routes": []}
+                return {**out, "baseline": "empty"}
             since, end, ran = found
             routes = speed(c, since, end, now)
             out = {"release": releases.version(), "since": since, "now": now, "base": ran, "routes": routes}
