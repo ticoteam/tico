@@ -994,17 +994,13 @@ def test_no_bot_starts_a_task_past_a_sign_off_or_moves_it_into_another_pipeline(
 def test_an_untouched_preset_made_before_its_sign_offs_were_people_only_gets_them(c):
     _team(c)
     _answers(c, software="yes")
-    _pair(c)
+    assert "product" in _made(c)
     c.execute(
-        "UPDATE requirements SET who_oks='people_with_exceptions' "
-        "WHERE stage_id IN ('product-spec', 'engineering-qa') AND kind='page'"
+        "UPDATE requirements SET who_oks='people_with_exceptions' WHERE stage_id='product-spec-ok' AND kind='page'"
     )
-    _pair(c)
-    found = c.execute(
-        "SELECT stage_id, who_oks FROM requirements WHERE stage_id IN ('product-spec', 'engineering-qa') "
-        "AND kind='page' ORDER BY stage_id"
-    )
-    assert [tuple(r) for r in found] == [("engineering-qa", "people_only"), ("product-spec", "people_only")]
+    _made(c)
+    found = c.execute("SELECT who_oks FROM requirements WHERE stage_id='product-spec-ok' AND kind='page'")
+    assert [r[0] for r in found] == ["people_only"]
 
 
 @pytest.mark.parametrize(

@@ -338,6 +338,22 @@ def test_product_added_beside_features_files_into_engineering_whatever_its_id(c)
     assert {s["name"]: s["on_enter"] for s in product["stages"]}["In development"] == {"file_into": "build"}
 
 
+def test_product_added_beside_features_gets_its_role_bots_on_its_numbered_stages_and_features_keeps_its_own(c):
+    _features(c)
+    PS.add_preset(c, ANA, "engineering")
+    PS.add_preset(c, ANA, "product", "decide", "Decide", "D")
+    features = {s["id"]: s["owner"] for s in PS.read(c, "product")["stages"]}
+    # As if added before the Product Owner existed: the General Manager stands in on Spec and Validate.
+    c.execute(
+        "UPDATE stages SET owner=? WHERE pipeline_id='decide' AND id IN ('product-spec-2', 'product-validate-2')",
+        (PS._general_manager(c),),
+    )
+    PS.ensure_presets(c)
+    owners = {s["id"]: s["owner"] for s in PS.read(c, "decide")["stages"]}
+    assert (owners["product-spec-2"], owners["product-validate-2"]) == (OWNER, OWNER)
+    assert {s["id"]: s["owner"] for s in PS.read(c, "product")["stages"]} == features
+
+
 def test_owner_on_the_team_moves_from_features_to_engineering_once_features_is_retired(c):
     _features(c)
     assert SR.get(c, SR.OWNER_ON_TEAM)["pipeline_id"] == "product"

@@ -38,10 +38,13 @@ def _headers(token):
     return {"Authorization": "Bearer " + token, "Idempotency-Key": str(uuid.uuid4())}
 
 
-def default_company(environment):
+def default_company(environment, before=None):
     """The default company as setup makes it (onboarding with no chart picked), with its computer. Returns the API
-    client and the computer's enrolment."""
+    client and the computer's enrolment. `before(conn)` runs in a transaction before setup finishes."""
     api = environment()
+    if before:
+        with api.app.state.store.transaction() as c:
+            before(c)
     done = api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     assert done.status_code == 200, done.text
     return api, machine(api)

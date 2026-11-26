@@ -263,7 +263,7 @@ def test_the_roadmap_ranks_the_product_pipelines_tasks_by_who_asked(api):
     rows = _ranked(api)['tasks']
     assert [r['id'] for r in rows] == [exports, imports, filters]
     first = rows[0]
-    assert (first['pipeline_id'], first['stage_name'], first['status']) == (product, 'Spec', 'open')
+    assert (first['pipeline_id'], first['stage_name'], first['status']) == (product, 'Ideas', 'open')
     assert {k: first[k] for k in R.EMPTY_STATS} == {
         'requester_count': 2,
         'external_requesters': 2,

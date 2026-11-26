@@ -1347,6 +1347,21 @@ def _free_stage_id(conn: "sqlite3.Connection", base: str, taken: set[str]) -> st
     return candidate
 
 
+def _saved_stage_ids(conn: "sqlite3.Connection", pipeline_id: str, ids: list[str]) -> dict[str, str]:
+    """Each of a preset's stage ids, mapped to the id its stage has in `pipeline_id`: the same one, or the `-2`, `-3`...
+    `_free_stage_id` gave it when `add_preset` made the preset beside a pipeline that had the id (Product beside
+    Features: `product-spec-2`). An id with no stage maps to itself."""
+    have = {str(s["id"]) for s in task_engine.stages(conn, pipeline_id)}
+    saved: dict[str, str] = {}
+    for sid in ids:
+        suffixed = sorted(
+            (h for h in have if h.startswith(sid + "-") and h[len(sid) + 1 :].isdigit()),
+            key=lambda h: int(h[len(sid) + 1 :]),
+        )
+        saved[sid] = sid if sid in have else next(iter(suffixed), sid)
+    return saved
+
+
 def _flat(record: Row | None) -> Row:
     """A record as {path: value}, for the log of what changed."""
     if not record:
@@ -1943,6 +1958,7 @@ def _fill(conn: "sqlite3.Connection", key: str, pipeline_id: str) -> None:
     roles = ROLES.get(key)
     if not roles:
         return
+    saved = _saved_stage_ids(conn, pipeline_id, [stage["id"] for stage in record["stages"]])
     owners = {stage["id"]: stage.get("owner") for stage in record["stages"]}
     legacy = roles["stages"].keys() - owners.keys()
     if legacy:
@@ -1955,22 +1971,23 @@ def _fill(conn: "sqlite3.Connection", key: str, pipeline_id: str) -> None:
             conn.execute(
                 "UPDATE stages SET owner=?, updated_at=? WHERE id=? AND pipeline_id=? "
                 "AND (owner IS NULL OR owner=? OR owner=?)",
-                (owner, ts, sid, pipeline_id, *stand_ins),
+                (owner, ts, saved.get(sid, sid), pipeline_id, *stand_ins),
             )
     for stage in record["stages"]:
+        sid = saved[stage["id"]]
         for req in stage["requirements"]:
             if req.get("person_id"):
                 conn.execute(
                     "UPDATE requirements SET person_id=? WHERE stage_id=? AND kind=? AND person_id IS NULL "
                     "AND withdrawn_at IS NULL AND visit_id IS NULL",
-                    (req["person_id"], stage["id"], req["kind"]),
+                    (req["person_id"], sid, req["kind"]),
                 )
             if req.get("who_oks") == "people_only":
                 # A preset made before its sign-offs were people only gets them: a tightening, never a loosening.
                 conn.execute(
                     "UPDATE requirements SET who_oks='people_only' WHERE stage_id=? AND kind=? "
                     "AND who_oks<>'people_only' AND withdrawn_at IS NULL AND visit_id IS NULL",
-                    (stage["id"], req["kind"]),
+                    (sid, req["kind"]),
                 )
 
 
