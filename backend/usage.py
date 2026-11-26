@@ -747,7 +747,11 @@ def install(app, store, auth, mutate, settings):
                 if s
             }
             slugs = {s for s in allowed if (not department or depts.get(s) == department) and (not only or s in only)}
-            total = totals(query(c, "'all'", "", slugs, first, last, filters))
+            # Every run, and each of its measured segments, is one bot's: grouped by bot, the rows add up to the totals
+            # (count(DISTINCT) included), so no second read sums them. Other groupings can split a run (a fallback
+            # segment on another day or model) and keep their own read.
+            by_bot = query(c, "t.bot", "", slugs, first, last, filters) if group == "bot" else None
+            total = totals(by_bot if by_bot is not None else query(c, "'all'", "", slugs, first, last, filters))
             if group == "bot":
                 default = usage_limits.company(c)
                 rows = [
@@ -758,7 +762,7 @@ def install(app, store, auth, mutate, settings):
                         **figures(r),
                         "limit": limit_view(c, who, r["k"], default, allowed),
                     }
-                    for r in query(c, "t.bot", "", slugs, first, last, filters)
+                    for r in by_bot or ()
                 ]
             elif group == "day":
                 rows = [
