@@ -1224,6 +1224,13 @@ def enrolled(c, execution, runner_id, key):
         mark_revoked(c, old, execution=execution if burst else None)
     if not burst:
         replaced(c, key, old, runner_id)
+        from . import performance
+
+        # Its overloads, points and turns follow the machine, newest computer first: a minute both reported keeps
+        # the newer reading. Not a computer a bot merely was assigned to (a person's own, removed).
+        for source in dict.fromkeys([old, *were(c, key)]):
+            if source and source != runner_id:
+                performance.carry_over(c, source, runner_id)
     save(c, key, runner_id=runner_id, enroll_by=0, enroll_fails=0)
     checked_in(c, runner_id)
     H.event(c, H.TICO_ACTOR, "cloud_machine.enrolled", key, {"runner": runner_id})

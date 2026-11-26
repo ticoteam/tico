@@ -600,3 +600,97 @@ def test_repeated_overloads_with_the_same_bot_advise_its_own_large_machine_on_a_
     assert P.advice([over("ops"), over("builder")], busiest) is None
     assert P.advice([over(""), over("")], busiest) is None
     assert P.advice([over("ops"), over("ops")], [{"bot": "ops"}]) is None
+
+
+def test_a_computer_that_replaces_another_keeps_its_own_minute_on_a_clash_and_lists_the_old_ones_turns(api):
+    """A cloud machine made again: the old computer's history moves to the new one. Where both reported the same
+    minute, the new computer's reading stays; the old computer's turns still count among the busiest bots."""
+    r, _, attempt = setup_attempt(api)
+    old = r["runner_id"]
+    new = runner(api, label="New Mac")["runner_id"]
+    t = (int(time.time()) // 60 - 5) * 60
+    with api.app.state.store.transaction() as c:
+        P.ingest(c, old, [P_sample(t, cpu=30.0), P_sample(t + 60, cpu=40.0)])
+        P.ingest(c, new, [P_sample(t + 60, cpu=70.0)])
+        P.carry_over(c, old, new)
+    seen = get(api, f"computers/{new}/performance?hours=1")
+    assert [(p[0], p[1]) for p in seen["points"]] == [(t, 30.0), (t + 60, 70.0)]
+    assert [x["id"] for x in seen["runs"]] == [attempt["id"]]
+    assert [(b["bot"], b["runs"]) for b in seen["busiest"]["bots"]] == [("ops", 1)]
+    assert get(api, f"computers/{old}/performance?hours=1")["points"] == []
+
+
+def test_an_overload_still_open_when_its_computer_is_replaced_ends_at_its_last_loaded_minute(api):
+    r, _, _ = setup_attempt(api)
+    old = r["runner_id"]
+    fresh = runner(api, label="New Mac")
+    start = (int(time.time()) // 60 - 20) * 60
+    busy = [sample(start + 60 * i, cpu=97.0) for i in range(10)]
+    post(api, "runners/performance", {"samples": busy}, token=r["token"])
+    with api.app.state.store.transaction() as c:
+        P.carry_over(c, old, fresh["runner_id"])
+    # The new computer is calm five minutes later: the overload is not stretched to that minute.
+    post(api, "runners/performance", {"samples": [sample(start + 900)]}, token=fresh["token"])
+    (o,) = get(api, f"computers/{fresh['runner_id']}/performance?hours=1")["overloads"]
+    assert (o["started_at"], o["last_seen_at"], o["ended_at"]) == (start, start + 540, start + 600)
+
+
+def test_a_replacement_computers_first_report_in_a_carried_minute_replaces_the_old_reading(api):
+    """Review of the transfer: the old computer's 30% minute moved to the new one, and the new computer's own 70%
+    report for that minute read back as 50%. Its first report replaces the carried minute, process usage too; its own
+    later reports in the minute still average with it."""
+    r, _, _ = setup_attempt(api)
+    old = r["runner_id"]
+    fresh = runner(api, label="New Mac")
+    t = (int(time.time()) // 60 - 5) * 60
+    post(api, "runners/performance", {"samples": [sample(t, cpu=30.0, procs=[("cargo", 400.0)])]}, token=r["token"])
+    with api.app.state.store.transaction() as c:
+        P.carry_over(c, old, fresh["runner_id"])
+    post(api, "runners/performance", {"samples": [sample(t, cpu=70.0, procs=[("cargo", 100.0)])]}, token=fresh["token"])
+    seen = get(api, f"computers/{fresh['runner_id']}/performance?hours=1")
+    assert [(p[0], p[1]) for p in seen["points"]] == [(t, 70.0)]
+    assert [(p["name"], p["cpu_max"]) for p in seen["busiest"]["processes"]] == [("cargo", 100.0)]
+    post(api, "runners/performance", {"samples": [sample(t + 30, cpu=90.0)]}, token=fresh["token"])
+    seen = get(api, f"computers/{fresh['runner_id']}/performance?hours=1")
+    assert [(p[0], p[1]) for p in seen["points"]] == [(t, 80.0)]
+
+
+def test_a_carried_overload_stays_as_it_ended_when_the_new_computer_is_loaded_at_its_end_minute(api):
+    """Review of the transfer: a loaded minute from the new computer at the carried overload's end reopened it, and the
+    next calm minute ended it a minute late. A carried overload is frozen; it does not seed a new one either."""
+    r, _, _ = setup_attempt(api)
+    fresh = runner(api, label="New Mac")
+    start = (int(time.time()) // 60 - 20) * 60
+    post(
+        api, "runners/performance", {"samples": [sample(start + 60 * i, cpu=97.0) for i in range(10)]}, token=r["token"]
+    )
+    with api.app.state.store.transaction() as c:
+        P.carry_over(c, r["runner_id"], fresh["runner_id"])
+    post(api, "runners/performance", {"samples": [sample(start + 600, cpu=97.0)]}, token=fresh["token"])
+    post(api, "runners/performance", {"samples": [sample(start + 660)]}, token=fresh["token"])
+    seen = get(api, f"computers/{fresh['runner_id']}/performance?hours=1")["overloads"]
+    assert [(o["started_at"], o["last_seen_at"], o["ended_at"]) for o in seen] == [(start, start + 540, start + 600)]
+
+
+def test_a_computer_replaced_nine_times_still_lists_the_first_ones_turns(api):
+    """Review of the transfer: after nine replacements the oldest computer's turns left Performance."""
+    r, _, attempt = setup_attempt(api)
+    chain = [r["runner_id"], *(runner(api, label=f"Mac {i}")["runner_id"] for i in range(9))]
+    with api.app.state.store.transaction() as c:
+        for old, new in zip(chain, chain[1:]):
+            P.carry_over(c, old, new)
+    seen = get(api, f"computers/{chain[-1]}/performance?hours=168")
+    assert [x["id"] for x in seen["runs"]] == [attempt["id"]]
+    assert [(b["bot"], b["runs"]) for b in seen["busiest"]["bots"]] == [("ops", 1)]
+
+
+def test_a_computer_that_took_over_two_at_once_lists_both_ones_turns(api):
+    """CodeRabbit on the transfer: a new computer taking over two old ones linked only the first, so the second's
+    turns left Performance while its points stayed."""
+    r, _, attempt = setup_attempt(api)
+    other = runner(api, label="Other Mac")["runner_id"]
+    new = runner(api, label="New Mac")["runner_id"]
+    with api.app.state.store.transaction() as c:
+        P.carry_over(c, other, new)
+        P.carry_over(c, r["runner_id"], new)
+    assert [x["id"] for x in get(api, f"computers/{new}/performance?hours=1")["runs"]] == [attempt["id"]]
