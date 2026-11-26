@@ -2138,8 +2138,8 @@ def _slack(c):
     fix = _fix("Open Slack settings", "#/settings", "cloud")
     if state["state"] == "connected":
         # The service rewrites this line every few minutes while it is up: an older one means it stopped saying so.
-        at = H.parse_ts(state["last_succeeded_at"] or "")
-        if at is None or (H.parse_ts(H.now()) - at).total_seconds() > slack_app.SILENT_SECONDS:
+        at, now = H.parse_ts(state["last_succeeded_at"] or ""), H.parse_ts(H.now())
+        if at is None or now is None or (now - at).total_seconds() > slack_app.SILENT_SECONDS:
             return _check(
                 "slack",
                 "Slack",
