@@ -46,40 +46,52 @@ def _alone(api, monkeypatch, who=ANA, **how):
 
 
 def test_one_open_builds_the_list_once_and_each_answer_is_todays(api, monkeypatch):
-    """Done-when 1: needs-you twice, four live-stream starts, the company floor and two place reads, with no write in
-    between: one build, and each answer equals the answer of a build of its own."""
+    """Done-when 1: needs-you twice, four live-stream starts, the company floor and two place reads arrive together, with
+    no write in between: one build, held until the other eight wait on it, and each answer equals the same request
+    answered with nothing shared (today's answer, built before the open)."""
+    from concurrent.futures import Future
+
     for k in range(3):
         _ask(api, f"Payroll run {k}")
-    whole = get(api, "needs-you")
-    count = get(api, "needs-you?count=1")
-    floor = get(api, "company/floor")
-    place = get(api, "places/dashboard")
     auth = api.app.state.auth
-    baselines = []
-    for _ in range(4):
+    routes = ["needs-you", "needs-you?count=1", "company/floor", "places/dashboard", "places/person:me"]
+
+    def baseline():
         with api.app.state.store.read_transaction() as c:
-            baselines.append(events.needs_baseline(c, auth, ANA, None))
-    first = needs_share.builds
+            return events.needs_baseline(c, auth, ANA, None)
+
+    calls = (
+        [lambda r=r: get(api, r) for r in routes[:2]] + [baseline] * 4 + [lambda r=r: get(api, r) for r in routes[2:]]
+    )
+    assert len(calls) == 9
+    with monkeypatch.context() as alone:
+        alone.setattr(needs_share, "mark", lambda c: None)
+        today = [call() for call in calls]
     needs_share.clear()
 
-    def opened():
-        answers = [get(api, "needs-you"), get(api, "needs-you?count=1")]
-        for _ in range(4):
-            with api.app.state.store.read_transaction() as c:
-                answers.append(events.needs_baseline(c, auth, ANA, None))
-        answers += [get(api, "company/floor"), get(api, "places/dashboard")]
-        return answers
+    waiting = threading.Semaphore(0)
 
+    class Counted(Future):
+        def result(self, timeout=None):
+            waiting.release()
+            return super().result(timeout)
+
+    real = V._needs_items
+
+    def held(*args, **kwargs):
+        for _ in range(len(calls) - 1):
+            assert waiting.acquire(timeout=10), "a request of the open never waited on this build"
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(needs_share, "Future", Counted)
+    monkeypatch.setattr(V, "_needs_items", held)
     before = needs_share.builds
-    answers = opened()
+    with ThreadPoolExecutor(len(calls)) as pool:
+        answers = list(pool.map(lambda call: call(), calls))
     assert needs_share.builds - before == 1
-    assert answers[0]["items"] == whole["items"] and answers[1]["count"] == count["count"] == 3
-    assert answers[2:6] == baselines
-    assert answers[6] == floor and answers[7] == place
-    assert first >= 1
-    # Today's answer, built alone, is the same list.
-    assert _items(api) == _alone(api, monkeypatch)
-    assert len(_items(api, count_only=True)) == len(_alone(api, monkeypatch, count_only=True))
+    assert answers[1]["count"] == 3 and len(answers[0]["items"]) == 3
+    for k, (got, want) in enumerate(zip(answers, today, strict=True)):
+        assert got == want, f"request {k} of the open differs from its answer built alone"
 
 
 def test_callers_that_ask_together_wait_on_one_build(api, monkeypatch):
@@ -186,49 +198,41 @@ def test_a_connection_that_wrote_builds_its_own(api):
     assert len(_items(api)) == 2
 
 
-def test_one_build_reads_each_tasks_prs_metadata_and_reviews_together(api):
-    """Done-when 5, on a small fixture shaped like production: tasks asking the person's OK, each with a linked GitHub
-    PR Tico has read. Their links, saved metadata, current pages and reviews are read for all of them together: at most
-    six statements in all, none per task (live, 18 Nov: about 400 a build)."""
+def test_one_build_reads_each_tasks_prs_metadata_and_reviews_together(api, monkeypatch):
+    """Done-when 5, on the spec's fixture shaped like production (bench/needs-you-132-lookups.py): 132 candidate tasks
+    asking the person's OK, each with a linked GitHub PR Tico has read, its saved metadata and a current QA page, and
+    33 ❓. Their links, metadata, pages and reviews are read for all of them together: at most six statements in all,
+    none per task (live, 18 Nov: about 400 a build; main on this fixture: 135), and the list is the one a build that
+    reads each task's reviews on its own gives."""
+    import importlib.util
+    import pathlib
+
     from backend import item_metadata as IM
     from backend import task_pages as P
     from backend import task_requirements as R
-    from backend.item_sources import github as GS
 
-    from backend.blobs import Blobs
-    from backend.tests.helpers.page_requirement import _page, _say
-
-    store = api.app.state.store
-    store.blobs = store.blobs or Blobs(store.settings)
-    stage = {
-        "name": "QA",
-        "owner": "assignee",
-        "requirements": [{"kind": "page", "line": "QA page", "person": "human:ana"}],
-    }
-    n = 12
-    with store.transaction() as c:
-        X.bot(c, "writer")
-        X.pipeline(c, "eng", "Engineering", (stage,), manager="bot:writer")
-    for k in range(n):
-        with store.transaction() as c:
-            made = X.new_task(c, "human:ana", f"Ship change {k}", "eng", assignee="bot:writer")
-            H.task_link(c, "bot:writer", made["id"], f"https://github.com/acme/app/pull/{100 + k}")
-            GS.save_pr(c, "acme/app", 100 + k, {"title": f"Change {k}", "state": "open", "head_sha": "a" * 40}, 1)
-            fid, _ = _page(c, store, f"<h1>QA {k}</h1>")
-            row = H.task(c, made["id"])
-            _say(c, P.attach(c, made["id"], "QA page", "page:" + fid, "bot:writer", seen_version=row["version"]), "met")
+    path = pathlib.Path(__file__).parents[2] / "bench" / "needs-you-132-lookups.py"
+    spec = importlib.util.spec_from_file_location("needs_you_132_lookups", path)
+    assert spec and spec.loader
+    fixture = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fixture)
+    store, auth = api.app.state.store, api.app.state.auth
+    fixture.seed(store)
+    items, seen = fixture.traced(store, auth)
+    assert len([i for i in items if i["kind"] == "ask"]) == fixture.N == 132
+    assert len([i for i in items if i["kind"] == "question"]) == 33
     one = {IM.OF_TASK_SQL, IM.GET_SQL, P.CURRENT_SQL, R.REVIEWED_SQL, R.NEW_REVIEWED_SQL}
     many = {IM.OF_TASKS_SQL, P.CURRENT_MANY_SQL, R.REVIEWED_MANY_SQL, R.NEW_REVIEWED_MANY_SQL}
-    seen: list[str] = []
-    with api.app.state.store.read_transaction() as c:
-        c.set_trace_callback(seen.append)
-        items = V.needs_items(c, api.app.state.auth, ANA)
-        c.set_trace_callback(None)
-    assert len([i for i in items if i["kind"] == "ask"]) == n, items
     shapes = [_shape(s) for s in seen]
     assert not [s for s in shapes if s in {_shape(q) for q in one}], "a per-task lookup was not read together"
     together = {_shape(q) for q in many}
     assert sum(1 for s in shapes if s in together or s.startswith("SELECT m.* FROM json_each(?) p CROSS JOIN")) <= 6
+    assert sum(fixture.families(seen).values()) <= 6
+    # The same list as a build that reads each task's reviews on its own, sharing nothing.
+    with monkeypatch.context() as alone:
+        alone.setattr(needs_share, "mark", lambda c: None)
+        alone.setattr(R, "prime_reviews", lambda conn, task_ids: None)
+        assert fixture.traced(store, auth)[0] == items
 
 
 def _shape(statement):
