@@ -198,6 +198,11 @@ def test_failures_are_named_from_the_logs_and_by_their_job():
     named = ri.failed_tokens([("python-3", PYTEST_FAILURES), ("release-check", "")])
     assert named == {"backend/tests/test_company_file.py"}
     assert ri.failed_tokens([("product", ""), ("desktop", "")]) == {"product", "desktop"}
+    # a red web journey is named by its job, so a commit to the app or its server wakes the train, not any commit
+    assert ri.failed_tokens([("web-journeys", ""), ("python-3", PYTEST_FAILURES)]) == {
+        ri.WEB,
+        "backend/tests/test_company_file.py",
+    }
 
 
 def test_a_failure_nobody_can_name_is_unknown_so_any_commit_may_fix_it():
@@ -381,6 +386,15 @@ def test_selection_tokens_name_what_the_selection_runs():
     tokens = ri.selection_tokens(sel, ["app/x.rs"])
     assert {"backend/tests/test_a.py", ri.DESKTOP} <= tokens
     assert set(pr_checks.CONTRACT_TESTS) <= tokens
+
+
+def test_a_fix_to_the_app_or_its_server_selects_the_web_journeys_and_a_docs_change_does_not():
+    red = {"sha": "a" * 40, "url": "u", "conclusion": "failure", "failed": {ri.WEB}}
+    for changed in (["web/src/actions/registry.ts"], ["backend/pages.py"]):
+        assert ri.WEB in ri.selection_tokens(selected(), changed)
+        assert ri.red_rule(red, "b" * 40, ri.selection_tokens(selected(), changed))[0]
+    assert ri.WEB not in ri.selection_tokens(selected(), ["docs/pages.md"])
+    assert not ri.red_rule(red, "b" * 40, ri.selection_tokens(selected(), ["docs/pages.md"]))[0]
 
 
 def test_a_fix_to_the_isolation_suite_selects_the_product_part():

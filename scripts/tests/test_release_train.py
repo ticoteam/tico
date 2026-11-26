@@ -2178,3 +2178,11 @@ def test_a_speed_answer_that_cannot_be_read_never_holds_stable(installs):
     approval_for(gh, "v0.6.200", approved_by="chris")
     assert rt.promote(gh, ENV) == ("v0.6.200", "v0.6.199")
     assert any("canary's speed on v0.6.200 against v0.6.199 cannot be read; not checked" in line for line in rt.LOG)
+
+
+def test_a_cancelled_web_journeys_job_is_its_own_failure_never_fail_fast():
+    """Fail fast cancels only the gate's matrix; the web journeys run beside it, so a cancel there (its own timeout, a
+    lost VM) is a failure the run names, never one fail fast left out."""
+    quick = {"conclusion": "cancelled", "started_at": "2026-11-25T10:00:00Z", "completed_at": "2026-11-25T10:05:00Z"}
+    assert rt.fail_fast_cancelled({**quick, "name": "python-3"})
+    assert not rt.fail_fast_cancelled({**quick, "name": "web-journeys"})

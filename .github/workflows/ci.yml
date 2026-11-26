@@ -697,8 +697,10 @@ jobs:
           ln -s "$RUNNER_TEMP/venv" .venv
       - name: The web app's journeys
         working-directory: web
+        # The browsers of web's own Playwright (a no-op when it matches the root's, which ci_install.sh installed)
         run: |
           npm ci --no-audit --no-fund
+          npx --no-install playwright install chromium
           npm run e2e
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
