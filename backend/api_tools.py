@@ -843,6 +843,68 @@ def _call_view(row):
     }
 
 
+def _mark_rows(c, tool_id, floor=None, before=None, limit=RECENT):
+    """An MCP tool's Only reads changes (backend/mcp_connect.py `set_only_reads`), newest first, as activity rows: who
+    marked or unmarked which names. Anyone who may see the tool sees them, as its page shows each mark with who made
+    it. `before` is an activity cursor's (at, id)."""
+    sql, args = "SELECT * FROM events WHERE action='tool.only_reads_changed' AND target=?", [tool_id]
+    if floor:
+        sql, args = sql + " AND created_at>=?", args + [floor]
+    if before:
+        sql, args = sql + " AND created_at<=?", args + [before[0]]
+    rows = []
+    for ev in c.execute(sql + " ORDER BY created_at DESC, id DESC LIMIT ?", (*args, limit + 1)):
+        ident = "mark:" + ev["id"]
+        if before and (ev["created_at"], ident) >= before:
+            continue
+        try:
+            said = json.loads(ev["detail"] or "{}")
+        except ValueError:
+            said = {}
+        said = said if isinstance(said, dict) else {}
+        parts = [
+            f"Only reads {verb}: {', '.join(str(n) for n in said.get(key) or [])}"
+            for key, verb in (("added", "on"), ("removed", "off"))
+            if said.get(key)
+        ]
+        rows.append(
+            {
+                "id": ident,
+                "kind": "mark",
+                "actor": ev["actor"],
+                "bot": None,
+                "result": "marked",
+                "detail": "; ".join(parts) or "Only reads changed",
+                "at": ev["created_at"],
+            }
+        )
+    return rows[:limit]
+
+
+def only_reads_named(c, who, name, admins, auth=None):
+    """The Only reads marks, with who made them, of each MCP tool `name` names (its id, service or name) that `who`
+    may see: what `tico tool show <tool>` lists (backend/integrations.py)."""
+    key = str(name or "").strip().lower()
+    out = []
+    for tool in c.execute(
+        "SELECT * FROM tools WHERE mcp_url IS NOT NULL AND (id=? OR lower(service)=? OR lower(name)=?) ORDER BY name, id",
+        (key, key, key),
+    ):
+        if kind_of(tool) != "api" or not visible(c, who, tool, admins, auth):
+            continue
+        out += [
+            {
+                "tool": tool["name"],
+                "tool_id": tool["id"],
+                "name": m["name"],
+                "by": str(m.get("by") or ""),
+                "at": str(m.get("at") or ""),
+            }
+            for m in mcp_connect.only_reads(tool)
+        ]
+    return out
+
+
 def _call_visible(c, who, auth, admin, row):
     if admin or row["actor"] == who.actor or (row["bot"] and who.actor == "bot:" + row["bot"]):
         return True
@@ -877,6 +939,8 @@ def detail(c, who, tool_id, admins, auth=None):
             recent.append(_call_view(row))
             if len(recent) == RECENT:
                 break
+    if _field(tool, "mcp_url"):
+        recent = sorted(recent + _mark_rows(c, tool_id), key=lambda r: (r["at"], r["id"]), reverse=True)[:RECENT]
     state = state_of(c, tool, keys)
     out = {
         "tool": _tool_view(tool),
@@ -958,6 +1022,8 @@ def activity(c, who, tool_id, admins, auth, cursor="", limit=50, result="", sinc
                         "at": row["used_at"],
                     }
                 )
+    if not result:
+        rows += _mark_rows(c, tool_id, floor, (at, last) if cursor else None, ACTIVITY_MAX * 2)
     rows.sort(key=lambda r: (r["at"], r["id"]), reverse=True)
     shown = rows[:limit]
     more = len(rows) > limit

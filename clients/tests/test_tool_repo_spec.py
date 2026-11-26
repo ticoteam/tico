@@ -66,6 +66,18 @@ def test_tool_show_prints_the_page(monkeypatch):
     assert "  2026-11-01  ana: use EU host" in out and "## Queries (2;" in out
 
 
+def test_tool_show_lists_an_mcp_tools_only_reads_marks_with_who_marked_them(monkeypatch):
+    marks = [
+        {"tool": "HQ", "tool_id": "hq", "name": "get_growth_rows", "by": "human:ana", "at": "2026-12-02T09:00:00Z"}
+    ]
+    monkeypatch.setitem(cli_fixtures.ANSWERS, "GET tools/posthog", _PAGE | {"only_reads": marks})
+    out = run_line(["tool", "show", "posthog"], monkeypatch)["stdout"]
+    assert "## Only reads (1; marked by an administrator, `tico tool edit <tool> --only-reads` sets them)" in out
+    assert "  HQ  get_growth_rows  marked by human:ana 2026-12-02" in out
+    monkeypatch.setitem(cli_fixtures.ANSWERS, "GET tools/posthog", _PAGE | {"only_reads": []})
+    assert "## Only reads" not in run_line(["tool", "show", "posthog"], monkeypatch)["stdout"]
+
+
 def test_tool_query_search_searches_the_page_or_prints_one_query(monkeypatch):
     _answers(monkeypatch)
     found = run_line(["tool", "query-search", "posthog", "accounts"], monkeypatch)

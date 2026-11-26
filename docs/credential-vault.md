@@ -204,10 +204,11 @@ those the server's own `tools/list` marks `readOnlyHint`, and those a credential
 Many servers leave the hint off their reads, and the MCP specification treats hints from a server as untrusted, so the
 decision is the administrator's. Tap the tool count on the tool's page: **What it can do** lists every tool the last
 check found, with **Read-only (vendor)** on hinted ones and an **Only reads** switch on the rest (others see who marked
-it). `tico tool edit <tool> --only-reads a,b` sets the whole list from the command line. Only a name the last check
-listed can be marked; a hinted name is already a read. A marked name the server later drops stays, shown **no longer
+it). `tico tool edit <tool> --only-reads a,b` sets the whole list from the command line, and `tico tool show <tool>` lists
+the marks with who made them. Only a name the last check listed can be marked (a name over 200 characters is left out
+of the listing, never cut short); a hinted name is already a read. A marked name the server later drops stays, shown **no longer
 listed**, and a renamed tool needs a new mark. Each change is a `tool.only_reads_changed` event with what was added
-and removed. The proxy reads the marks from the tool on every call, so they hold across a restart; for the Rules gate a
+and removed, shown in the tool's activity with who made it. The proxy reads the marks from the tool on every call, so they hold across a restart; for the Rules gate a
 marked tool is a read only at the tool's exact MCP address, as a hinted one is. A bot at Read refused on an unmarked
 tool is told an administrator can mark it Only reads, or set Read and write. Mark only a tool you know only reads:
 every Read bot on the tool can call it.

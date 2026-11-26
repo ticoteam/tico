@@ -82,6 +82,7 @@ REFRESH_EARLY = 60  # an access token this close to its end is refreshed before 
 STALE_TRIES = 3  # a refresh whose tokens were dropped (the sign-in changed under it) is read and tried again this often
 LIST_PAGES = 10
 NAMES_MAX = 500
+NAME_MAX = 200  # a tool name longer than this is left out of the listing (and so cannot be marked Only reads)
 SIGN_IN_AGAIN = "Sign in again"
 HEADER = r"^$|^[A-Za-z0-9][A-Za-z0-9-]{0,59}$"
 # Tests set this to an httpx transport: every request here then goes through it, its address still checked and pinned.
@@ -547,9 +548,11 @@ def list_tools(tool: Any, token: str) -> tuple[tuple[bool, int | None, str], lis
             for item in cast(list[object], page.get("tools") or []):
                 entry = _obj(item)
                 name = entry.get("name")
-                if isinstance(name, str) and len(names) < NAMES_MAX:
+                # A name longer than NAME_MAX is left out, never cut: a cut name is one the vendor never listed, and
+                # an administrator could mark it Only reads (set_only_reads trusts this listing).
+                if isinstance(name, str) and len(name) <= NAME_MAX and len(names) < NAMES_MAX:
                     hint = _obj(entry.get("annotations")).get("readOnlyHint")
-                    names.append({"name": name[:200], "read_only": hint is True})
+                    names.append({"name": name, "read_only": hint is True})
             following = page.get("nextCursor")
             if not isinstance(following, str) or not following:
                 break

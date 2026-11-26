@@ -965,6 +965,16 @@ def integration_text(page):
             f"## Queries ({len(page['queries'])}; `tico tool query-search {page['service']} <term>` searches, `--id <id>` prints one)",
         ]
         out += [f"  {q['id']:<44} {q['title']}" for q in page["queries"]]
+    marks = page.get("only_reads") or []
+    if marks:
+        out += [
+            "",
+            f"## Only reads ({len(marks)}; marked by an administrator, `tico tool edit <tool> --only-reads` sets them)",
+        ]
+        out += [
+            f"  {m['tool']}  {m['name']}  marked by {m['by']}" + (f" {m['at'][:10]}" if m.get("at") else "")
+            for m in marks
+        ]
     notes = page.get("learnings") or []
     out += ["", f"## Learnings ({len(notes)}; add one with `tico tool learn {page['service']} \"...\"`)"]
     out += [f"  {n['created_at'][:10]}  {n['actor']}: {n['text']}" for n in notes] or ["  none yet"]

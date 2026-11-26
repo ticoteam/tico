@@ -40,6 +40,7 @@ class Server:
         self.issued = {token} if token else set()
         self.seen, self.codes, self.refreshes, self.n = [], {}, set(), 0
         self.client_auth = []
+        self.extra = []  # more tools on the listing's second page
 
     def mint(self):
         self.n += 1
@@ -81,7 +82,10 @@ class Server:
             }
         elif method == "tools/list":
             # count_errors only reads, but this vendor leaves its hint off (an administrator may mark it Only reads).
-            result = {"tools": [{"name": "get_error", "annotations": {"readOnlyHint": True}}, {"name": "count_errors"}]}
+            result = {
+                "tools": [{"name": "get_error", "annotations": {"readOnlyHint": True}}, {"name": "count_errors"}]
+                + self.extra
+            }
         else:
             result = {"content": [{"type": "text", "text": "3 errors"}]}
         data = json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": result})
@@ -366,6 +370,46 @@ def test_an_administrator_marks_an_unhinted_read_only_reads_and_a_read_bot_calls
     # Taken off: the Read bot is refused again.
     assert mark([]).status_code == 200
     assert mcp_call(api, servers[0], token, "tools/call", {"name": "count_errors", "arguments": {}}).status_code == 403
+
+
+def test_a_mark_shows_in_the_tools_activity_and_tool_show_and_a_name_over_200_characters_is_never_markable(api, server):
+    """Who marked a tool Only reads is a row in the tool's activity (its page's recent list too); `tico tool show` lists
+    the marks with who made them; and a vendor name longer than the listing keeps is left out of it, so neither it nor
+    its first 200 characters can be marked."""
+    from clients.commands.tools import integration_text
+
+    fake = server(oauth=False)
+    long = "count_" + "x" * 250
+    fake.extra = [{"name": long}]
+    post(api, "mcp-tools", {"name": "Acme Errors", "url": MCP, "auth": "token", "token": TOKEN})
+    path = "/api/v2/api-tools/acme-errors"
+    names = get(api, "api-tools/acme-errors")["mcp"]["names"]
+    assert "count_errors" in names and not [n for n in names if n.startswith("count_x")]
+    # The whole name is too long to send; its first 200 characters were never listed.
+    assert api.patch(path, json={"only_reads": [long]}, headers=headers("ana-test")).status_code == 422
+    r = api.patch(path, json={"only_reads": [long[:200]]}, headers=headers("ana-test"))
+    assert r.status_code == 422 and r.json()["error"]["detail"] == f"Acme Errors's last check did not list {long[:200]}"
+    tico(api, "tool", "edit", "acme-errors", "--only-reads", "count_errors")
+    rows = get(api, "api-tools/acme-errors/activity")["rows"]
+    assert [(r["kind"], r["actor"], r["result"], r["detail"]) for r in rows] == [
+        ("mark", "human:ana", "marked", "Only reads on: count_errors")
+    ]
+    assert [r["detail"] for r in get(api, "api-tools/acme-errors")["recent"]] == ["Only reads on: count_errors"]
+    # A filter by a call's result leaves marks out; taking the mark off is a row too, newest first.
+    assert get(api, "api-tools/acme-errors/activity?result=refused")["rows"] == []
+    tico(api, "tool", "edit", "acme-errors", "--only-reads", "")
+    assert [r["detail"] for r in get(api, "api-tools/acme-errors/activity")["rows"]] == [
+        "Only reads off: count_errors",
+        "Only reads on: count_errors",
+    ]
+    tico(api, "tool", "edit", "acme-errors", "--only-reads", "count_errors")
+    shown = tico(api, "tool", "show", "acme-errors")
+    assert [(m["tool"], m["name"], m["by"]) for m in shown["only_reads"]] == [
+        ("Acme Errors", "count_errors", "human:ana")
+    ]
+    text = integration_text(shown)
+    assert "## Only reads (1; marked by an administrator, `tico tool edit <tool> --only-reads` sets them)" in text
+    assert "  Acme Errors  count_errors  marked by human:ana" in text
 
 
 def signed_in(api, server):
