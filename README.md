@@ -138,26 +138,19 @@ reference for the environment directory, profiles, backups and removal.
 
 ## The desktop app
 
-One Rust crate (`app/`, Tauri 2) builds every environment's app for macOS, Windows and Linux: the
-name, icon, identifier and server URL come in at build time, so there is no runtime rename. The
-page itself is Tico's, loaded from the server, so the site changes reach the app with no update;
-the shell updates itself from Tico's published builds when it changes (`backend/downloads.py`,
-`.github/workflows/app.yml`).
+The desktop app is an Electron app (`desktop/`) for macOS (Apple chip), Windows and Linux. The page
+itself is Tico's, loaded from the server, so the site changes reach the app with no update; one app
+connects to any Tico server and holds several companies, each with its own sign-in. CI builds it
+(`.github/workflows/desktop.yml`) on a release whose `desktop/` changed and adds the installers and
+update feeds to the GitHub release; installed apps update themselves from there
+(`desktop/src/main/updater.ts`). Installing and using it: [`docs/desktop.md`](docs/desktop.md).
 
 ```bash
-scripts/app.sh build --env acme      # compile into ~/Applications/<App name>.app
-scripts/app.sh install --env acme    # build, replace the running copy, open it
-scripts/app.sh check                 # compile only, safe while the installed app is running
+cd desktop && npm ci
+npm run dev        # build and open the app from this checkout
+npm test           # unit tests (vitest)
+npm run pack:mac   # an unpacked Mac build under desktop/release/
 ```
-
-Per environment the build changes the app name and window title, the icon (`icon.png` in the
-environment directory, if you put one there), the server URL, and the bundle identifier, which is
-derived from the permanent environment id and never typed by hand. For a local server it also
-records the path to the owner token file, which the app reads on every launch and trades for a
-session cookie, so rotating the token needs no rebuild and the token never enters the bundle.
-`scripts/app.sh release` builds the signed macOS bundles and publishes them to Tico; CI does the
-same for all three platforms whenever `app/` changes on `main`. Anyone can build from source, in
-which case the bundle is ad-hoc signed and Gatekeeper asks for **Open Anyway** the first time.
 
 ## Creating bots
 
@@ -266,13 +259,13 @@ server's variable file; real hostnames, buckets, ARNs and humans live outside th
 | `runner-rs/` | The local runner (`tico-runner`): enrollment, readiness, leases, runs, subscription profiles, updates, and one host per model CLI in `runner-rs/src/hosts/` |
 | `runner_support/` | The runner's Python helpers: the `python -m runner_support run` shim, the connectors, Close transcript and meeting import jobs, catalog set-up and the update process |
 | `clients/` | What bots and owners call: the `tico` CLI, the HTTP client, preflight, routine validation, team documents, and `environments.py` |
-| `web/`, `desktop/`, `app/` | The web app (React, served at `/`); the Electron desktop app; the older Tauri desktop shell (Rust) |
+| `web/`, `desktop/` | The web app (React, served at `/`); the Electron desktop app |
 | `setup/` | the setup wizard (`python3 -m setup`), the guided Docker install of the server and of Linux runners |
 | `infra/` | cloud-init files for a new server or runner (they call `scripts/install.sh`) |
 | `connectors/`, `integrations/`, `skills/` | Shared adapters bots use instead of vendor APIs, one page per outside system, and shared runtime skills |
 | `policies/` | Rules every bot follows: approvals, access, handoffs, writing |
 | `templates/` | `catalog/` is the bot templates setup picks from, one folder per template with its card and its starting repository; `employee-repo/` is the generic starting point, `environment-registry/` seeds a new environment with `assistant` and `agent-ops` |
-| `scripts/` | `tico`, `tico-computer`, `hub` (`tico`'s old name), `setup-runner.sh`, `app.sh`, `publish-employee.sh` and maintenance commands |
+| `scripts/` | `tico`, `tico-computer`, `hub` (`tico`'s old name), `setup-runner.sh`, `publish-employee.sh` and maintenance commands |
 | `docs/` | Documentation: [how it works](docs/how-it-works.md), [using Tico](docs/using-tico.md), [finish setup](docs/onboarding.md), [creating bots](docs/creating-bots.md), [files](docs/files.md), [environments](docs/environments.md), [Hermes agents](docs/hermes-agents.md) and [OpenClaw agents](docs/openclaw-agents.md) (connect a profile in 2 minutes, with a scheduled sync); `history/` holds retired designs |
 
 ### Where a change belongs

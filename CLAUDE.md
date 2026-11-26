@@ -140,9 +140,9 @@ flight file, not the database.
   Granola, the company page, lenses); `finance.actions` is the one bridge.
 - Never add `flight_*` tables to `hub.db`.
 
-`scripts/landmines.py` enforces the `runner_support/` and Core rules (`skills/honest-code/LESSONS.md` L35 to L37). The
-new-file rule needs a base: run `python3 scripts/landmines.py --check --base origin/main` (`scripts/lint.sh` passes
-`LINT_BASE_REF`, as CI does).
+`scripts/landmines.py` enforces the `runner_support/`, Core, `flight_*` and desktop rules (`skills/honest-code/LESSONS.md`
+L35 to L39). The new-file rule needs a base: run `python3 scripts/landmines.py --check --base origin/main`
+(`scripts/lint.sh` passes `LINT_BASE_REF`, as CI does).
 
 ## Conventions
 - Create persistent schema changes with `python3 scripts/new_migration.py name` (`--py` for `up(conn)`):

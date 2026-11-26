@@ -20,7 +20,9 @@ A rule the --base ref's copy of this script does not have yet may bring its own 
 Three rules hold the architecture rather than the tests (CLAUDE.md, "Refactor rules"): Core code in backend/ imports no
 Non-Core module, backend/ and clients/ import no more runner_support, and runner_support/ gets no new file. The import
 rules read import statements token by token (one hit per Non-Core module a statement imports). The new-file rule compares
-the tracked paths with the --base ref's tree, so it runs only with --base, as CI runs it.
+the tracked paths with the --base ref's tree, so it runs only with --base, as CI runs it. Two bans keep retired things
+out: no-flight-in-hub (the flight recorder's tables are made only in hub.flight.db) and no-tauri (desktop/, Electron, is
+the one desktop app).
 """
 
 import argparse
@@ -202,6 +204,77 @@ def runner_support_imports(path, text):
     return imports_matching(path, text, lambda parts: parts[0] if parts[0] == "runner_support" else None)
 
 
+# The flight recorder's tables live in their own file, hub.flight.db (backend/flight.py), not in hub.sqlite. Shipped
+# migrations are never edited (scripts/check_migration_order.py), so the ones that made or changed a flight table stay.
+FLIGHT_SCHEMA = "backend/flight.py"
+FLIGHT_SHIPPED = {"backend/migrations/baseline.sql", "backend/migrations/20261126013526_flight_slow_parts.sql"}
+_FLIGHT_TABLE = r"""["`\[]?(?:main\.)?flight_\w"""
+FLIGHT_IN_HUB = re.compile(
+    rf"\bCREATE\s+(?:TEMP(?:ORARY)?\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?{_FLIGHT_TABLE}"
+    rf"|\bALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?{_FLIGHT_TABLE}"
+    rf"|\bRENAME\s+TO\s+{_FLIGHT_TABLE}"
+    rf"|\bCREATE\b.*\bON\s+{_FLIGHT_TABLE}",
+    re.I,
+)
+
+
+def hub_schema(path):
+    """Where hub.sqlite's tables are made: SQL files and the server's Python, outside tests and the flight file."""
+    if "/tests/" in f"/{path}" or path == FLIGHT_SCHEMA or path in FLIGHT_SHIPPED:
+        return False
+    return path.endswith(".sql") or (path.startswith("backend/") and py_prod(path))
+
+
+def flight_in_hub(path, text):
+    """Lines that make or change a flight_* table, read as written (the SQL sits in Python strings), whole-line
+    comments aside. A DROP is not a hit: it is how the old tables leave hub.sqlite."""
+    comment = "--" if path.endswith(".sql") else "#"
+    return [
+        number
+        for number, line in enumerate(text.splitlines(), 1)
+        if not line.lstrip().startswith(comment) and FLIGHT_IN_HUB.search(line)
+    ]
+
+
+# The Tauri app (app/) is gone; desktop/ (Electron) is the one desktop app. History stays: changelogs and plans here,
+# and, outside the scope, the lessons and runner-rs/src/worktrees.rs, whose Tauri line is about customers' repositories.
+TAURI_ROOTS = ("docs/", "scripts/", "backend/", "clients/", "desktop/", "web/", ".github/workflows/")
+TAURI_DOCS = {"README.md", "CLAUDE.md", "AGENTS.md"}
+TAURI_BUILD = re.compile(
+    r"tauri[.-](?:conf|override|apps|action|cli|build|plugin|bundler|runtime|utils)|cargo[ -]tauri|src-tauri", re.I
+)
+TAURI_CRATE = re.compile(r"^\s*tauri\s*=|\[(?:[\w-]+\.)*dependencies\.tauri\]")  # in a Cargo.toml
+TAURI_WORD = re.compile(r"(?<![a-z])tauri", re.I)
+
+
+def tauri_scope(path):
+    name = path.rsplit("/", 1)[-1]
+    if name.upper().startswith("CHANGELOG") or path.startswith("docs/plans/"):
+        return False
+    return (
+        "tauri" in path.lower()
+        or path.startswith(TAURI_ROOTS)
+        or path in TAURI_DOCS
+        or name in ("Cargo.toml", "package.json")
+    )
+
+
+def tauri_lines(path, text):
+    """A file named for Tauri is a hit on its line 1. In any file a Tauri build input (its config, crates, npm packages,
+    CLI or action) is a hit on every line; in a Markdown page or a workflow the word itself is, a workflow's comment
+    lines aside (desktop.yml's header recalls the Tauri app)."""
+    if "tauri" in path.lower():
+        return [1]
+    word = path.endswith(".md") or path.startswith(".github/workflows/")
+    found = []
+    for number, line in enumerate(text.splitlines(), 1):
+        prose = word and not (path.endswith((".yml", ".yaml")) and line.lstrip().startswith("#"))
+        crate = path.endswith(".toml") and TAURI_CRATE.search(line)
+        if TAURI_BUILD.search(line) or crate or (prose and TAURI_WORD.search(line)):
+            found.append(number)
+    return found
+
+
 @dataclass
 class Rule:
     id: str
@@ -348,6 +421,27 @@ RULES = [
         "(a route, a worker, an event handler) or Core calls it through finance.actions, the one bridge.",
         "L37",
         find=core_imports_app,
+    ),
+    Rule(
+        "no-flight-in-hub",
+        "ban",
+        hub_schema,
+        [],
+        "The flight recorder's tables (flight_*) live in hub.flight.db, made by backend/flight.py; hub.sqlite gets no "
+        "new or changed flight table. Change the table in backend/flight.py. DROP TABLE IF EXISTS flight_* is allowed: "
+        "it takes the old copies out of hub.sqlite.",
+        "L38",
+        find=flight_in_hub,
+    ),
+    Rule(
+        "no-tauri",
+        "ban",
+        tauri_scope,
+        [],
+        "The Tauri app (app/) is retired: desktop/ (Electron) is the one desktop app. No Tauri config, crate, npm "
+        "package, CLI, workflow or doc comes back; build and describe the Electron app instead (docs/desktop.md).",
+        "L39",
+        find=tauri_lines,
     ),
 ]
 BY_ID = {rule.id: rule for rule in RULES}
