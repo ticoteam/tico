@@ -285,6 +285,60 @@ describe('the phone’s chat card', () => {
   });
 });
 
+/* Typing in a chat folds the bar away from the focus alone: jsdom has no visualViewport, as an iPhone whose keyboard
+   was never measured (#3562). The bar's `display:none` is phone.css's, keyed on `data-typing`. */
+describe('phone: the bar while typing', () => {
+  const typing = () => document.querySelector('.phone')?.getAttribute('data-typing') ?? null;
+
+  it("Tico's box: the bar goes with no keyboard measured", () => {
+    render(cards({ tico: <textarea aria-label="Message Tico" /> }));
+    fireEvent.click(icon('Tico'));
+    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Message Tico' }));
+    expect(typing()).toBe('tico');
+  });
+
+  it("a bot's chat box: the bar goes", () => {
+    render(cards({ chat: <textarea aria-label="Message Finance Owner" /> }));
+    fireEvent.click(icon('Finance Owner'));
+    act(() => screen.getByRole('textbox', { name: 'Message Finance Owner' }).focus());
+    expect(typing()).toBe('chat');
+  });
+
+  it("a page's own chat box: the bar goes, and is back once the box loses focus", () => {
+    vi.useFakeTimers();
+    try {
+      render(cards({ page: <div className="chat-page"><textarea aria-label="Message the page" /></div> }));
+      const box = screen.getByRole('textbox', { name: 'Message the page' });
+      act(() => box.focus());
+      expect(typing()).toBe('page');
+      act(() => box.blur());
+      act(() => vi.advanceTimersByTime(100));
+      expect(typing()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a checkbox or a select on the page keeps the bar', () => {
+    render(
+      cards({
+        page: (
+          <>
+            <input type="checkbox" aria-label="Done" />
+            <select aria-label="Stage">
+              <option>Build</option>
+            </select>
+          </>
+        ),
+      }),
+    );
+    act(() => screen.getByRole('checkbox', { name: 'Done' }).focus());
+    expect(typing()).toBeNull();
+    act(() => screen.getByRole('combobox', { name: 'Stage' }).focus());
+    expect(typing()).toBeNull();
+  });
+});
+
 /* The shell as the root draws it on a phone: the arrangement from the address, a second chat when it names one. */
 function PhoneShell() {
   const path = useLocation({ select: (l) => l.pathname });

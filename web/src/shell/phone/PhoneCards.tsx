@@ -63,7 +63,10 @@ export function foldPhoneCard(sheet: string, folded?: boolean): void {
   foldHand?.(sheet, folded);
 }
 
-const EDITABLE = 'input,textarea,select,[contenteditable]:not([contenteditable="false"])';
+/* A field the keyboard types into. A checkbox, a radio or a select takes focus too, but brings no keys up, so the bar
+   stays for them. */
+const TYPED =
+  'textarea,input:not([type]),input:is([type="text"],[type="search"],[type="email"],[type="url"],[type="tel"],[type="password"],[type="number"]),[contenteditable]:not([contenteditable="false"])';
 
 /** A chat's scroller to its newest message. A virtual list draws and measures the rows it comes to, and grows as it
     does, so it is put at its end again on each frame until it stays there. */
@@ -169,15 +172,18 @@ export function PhoneCards({ page, tico, menu, chat, faces = {}, labels = {}, tu
     let frame = 0;
     const update = () => {
       const active = document.activeElement;
-      const inside = active instanceof HTMLElement && el.contains(active) && active.matches(EDITABLE);
-      const ly = inside && keys.up ? active.closest<HTMLElement>('.ly[data-slot], .ph-dock') : null;
-      const where = !inside || !keys.up ? null : (ly?.dataset.slot ?? 'page');
+      const inside = active instanceof HTMLElement && el.contains(active) && active.matches(TYPED);
+      // typing is the focus alone: some iPhones never report the keyboard through visualViewport (#3562), and the bar
+      // must still go. The measurement only lifts what is typed in above the keys.
+      const ly = inside ? active.closest<HTMLElement>('.ly[data-slot], .ph-dock') : null;
+      const where = inside ? (ly?.dataset.slot ?? 'page') : null;
+      const lift = where && keys.up;
       const holder = where === 'page' ? el.querySelector(':scope > .pg') : ly;
       const stuck = stuckToBottom(holder);
       if (where) el.dataset.typing = where;
       else delete el.dataset.typing;
-      el.style.setProperty('--kb', `${where ? keys.kb : 0}px`);
-      el.style.setProperty('--vv-top', `${where ? keys.top : 0}px`);
+      el.style.setProperty('--kb', `${lift ? keys.kb : 0}px`);
+      el.style.setProperty('--vv-top', `${lift ? keys.top : 0}px`);
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => stuck.forEach((s) => (s.scrollTop = s.scrollHeight)));
     };
