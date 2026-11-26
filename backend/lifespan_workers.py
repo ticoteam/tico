@@ -14,7 +14,8 @@ and the way they end.
   thread (a `thread` worker's, or a call a worker made through `offload`) does not stop the thread, so each such thread
   still running is given THREAD_GRACE_SECONDS more, and named in the log if it runs on. Then the cleanups run, each on its
   own and in the order registered, whatever a worker or another cleanup did; the lifespan closes telemetry and the store
-  after them. Every wait on a thread is made from a thread of its own, never the default pool, which the threads waited
+  after them. Each cleanup is given CLEANUP_SECONDS, then named in the log and left; one that runs a blocking call does it
+  on a thread of its own (`on_exit_thread`). Every wait on a thread is made from a thread of its own, never the default pool, which the threads waited
   for may be filling. The way out runs as a task of its own: a cancel of the caller waits for it (it is bounded) and is
   passed on after, so the store never closes under a worker still being waited for.
 - A start that fails part way runs the same way out over what it had started (backend/app.py wraps the start in it).
@@ -38,6 +39,7 @@ log = logging.getLogger("tico.lifespan_workers")
 SHUTDOWN_SECONDS = 120.0
 CANCEL_SECONDS = 5.0  # a cancelled coroutine worker this long without ending is left behind
 THREAD_GRACE_SECONDS = 5.0  # a cancelled worker's thread this long without ending is left running, and named
+CLEANUP_SECONDS = 15.0  # a cleanup this long without ending is named in the log and left; the next one runs
 RECORD_TRIES = (0.2, 1.0)  # the pauses between tries of a death's record: three tries in all (a busy database)
 RECORD_SECONDS = 10.0  # the way out waits this long for deaths still being recorded and filed
 # A worker's name: telemetry takes `worker_<name>` as its source, which must match observability.SOURCE.
@@ -119,6 +121,30 @@ class Workers:
     def on_exit(self, name: str, cleanup: Callable[[], object]) -> None:
         """`cleanup()` (or the awaitable it returns) runs after the workers end, in the order registered."""
         self.cleanups.append((name, cleanup))
+
+    def on_exit_thread(self, name: str, cleanup: Callable[..., object], *args: object) -> None:
+        """`cleanup(*args)` after the workers end, on a thread of its own: never the default pool, which threads left
+        running past the deadline may fill. Waited for up to CLEANUP_SECONDS."""
+
+        async def run() -> None:
+            failed: list[BaseException] = []
+            done = threading.Event()
+
+            def call() -> None:
+                try:
+                    cleanup(*args)
+                except Exception as exc:  # noqa: BLE001 - raised again on the loop, below
+                    failed.append(exc)
+                finally:
+                    done.set()
+
+            threading.Thread(target=call, name=f"tico-exit-{name}", daemon=True).start()
+            if not await wait_events([done], CLEANUP_SECONDS):
+                raise TimeoutError
+            if failed:
+                raise failed[0]
+
+        self.on_exit(name, run)
 
     def _ended(self, name: str, task: asyncio.Task[Any]) -> None:
         if task.cancelled():
@@ -236,7 +262,9 @@ class Workers:
             try:
                 result = cleanup()
                 if inspect.isawaitable(result):
-                    await result
+                    await asyncio.wait_for(asyncio.ensure_future(result), CLEANUP_SECONDS)
+            except TimeoutError:
+                log.error("Cleanup %s still running after %g s on the way out, going on", name, CLEANUP_SECONDS)
             except Exception:
                 log.error("Cleanup %s failed on the way out", name, exc_info=True)
 

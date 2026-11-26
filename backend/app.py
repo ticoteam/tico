@@ -520,7 +520,7 @@ def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions
         telemetry.start()
         from .repositories import stop_sync
 
-        workers.on_exit("repository_sync", lambda: asyncio.to_thread(stop_sync, app.state.github_app))
+        workers.on_exit_thread("repository_sync", stop_sync, app.state.github_app)
         workers.on_stop("repository_sync", app.state.github_app.repository_stop.set)
         workers.on_stop("live_meeting_routing", app.state.live_meeting_routing.stop)
 
@@ -532,7 +532,8 @@ def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions
             start_jobs.run(store, onboarding, telemetry, app.state.vault)
         else:
             # Short, and each job in its own transaction: it has no stop, and the way out lets it finish.
-            workers.thread("start_jobs", start_jobs.run, store, onboarding, telemetry, app.state.vault)
+            # A one-off batch, not a loop: a failure is logged and sent to telemetry, never a dead-worker alert.
+            workers.job("start_jobs", start_jobs.run, store, onboarding, telemetry, app.state.vault)
         stop = asyncio.Event()
         workers.on_stop("loops", stop.set)
         # Always runs: local 90-day retention must not depend on the inbound key or HQ (sync itself stays off).
@@ -552,7 +553,7 @@ def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions
             workers.on_stop(
                 "flight_recorder", recorder_thread.halt.set
             )  # it stops sampling now; joined after the workers
-            workers.on_exit("flight_recorder", lambda: asyncio.to_thread(recorder_thread.stop))
+            workers.on_exit_thread("flight_recorder", recorder_thread.stop)
             # SIGUSR1 (stacks) and SIGUSR2 (memory top 50) for `python -m backend.flight stacks|memory`.
             from .flight_file import install_signals
 
@@ -666,7 +667,7 @@ def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions
 
             # Told to stop with the other stops (a join of no time), then joined after the workers end.
             workers.on_stop("background", lambda: background.stop_all(0))
-            workers.on_exit("background", lambda: asyncio.to_thread(background.stop_all))
+            workers.on_exit_thread("background", lambda: background.stop_all())
         if timers:
             # The outbound gate's worker (backend/outbound_actions.py): rung by each commit that queues an action. A
             # rehearsal copy never runs it, and a dev copy empties its table.

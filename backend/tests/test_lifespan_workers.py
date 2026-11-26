@@ -416,3 +416,60 @@ def test_the_way_out_waits_for_a_thread_without_the_default_pool_it_fills(monkey
         assert "still running after the way out" in said and "['stuck']" in said
     finally:
         release.set()
+
+
+def test_a_start_up_batch_that_fails_is_logged_but_never_a_dead_worker(tmp_path, monkeypatch, caplog):
+    from backend import start_jobs
+
+    app, closed = built(tmp_path, monkeypatch)
+    monkeypatch.delenv("TICO_START_JOBS", raising=False)  # run on a thread, as a served start does
+
+    def fails(*args):
+        raise RuntimeError("a start-up job broke")
+
+    monkeypatch.setattr(start_jobs, "run", fails)
+    recorded = []
+    monkeypatch.setattr(lifespan_workers, "record", lambda *args: recorded.append(args))
+    with caplog.at_level(logging.ERROR, logger="tico.lifespan_workers"):
+        with served(app):
+            pass  # the way out waits for the job
+    assert any("Start-up job start_jobs failed" in r.getMessage() and r.exc_info for r in caplog.records)
+    assert recorded == [], "no worker_died record: nothing needs a restart"
+    assert len(closed) == 1
+
+
+def test_cleanups_run_bounded_and_off_the_default_pool_a_stuck_thread_fills(monkeypatch, caplog):
+    monkeypatch.setattr(lifespan_workers, "SHUTDOWN_SECONDS", 0.1)
+    monkeypatch.setattr(lifespan_workers, "THREAD_GRACE_SECONDS", 0.1)
+    monkeypatch.setattr(lifespan_workers, "CLEANUP_SECONDS", 0.2)
+    began, release = threading.Event(), threading.Event()
+    ran = []
+
+    def stuck():
+        began.set()
+        release.wait(WAY_OUT_SECONDS * 4)
+
+    async def main():
+        loop = asyncio.get_running_loop()
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=1))  # the stuck worker's thread fills it
+        workers = lifespan_workers.Workers(Gone(), Telemetry())
+        workers.thread("stuck", stuck)
+        workers.on_exit_thread("joins", lambda: ran.append("joins"))
+        workers.on_exit_thread("hangs", release.wait, WAY_OUT_SECONDS * 4)
+        workers.on_exit("store", lambda: ran.append("store"))
+        with ThreadPoolExecutor(max_workers=1) as side:
+            assert await loop.run_in_executor(side, began.wait, WAY_OUT_SECONDS)
+        try:
+            await workers.shutdown()
+        finally:
+            release.set()
+
+    try:
+        with caplog.at_level(logging.ERROR, logger="tico.lifespan_workers"):
+            bounded(lambda: asyncio.run(main()), "way out")
+        assert ran == ["joins", "store"], (
+            "a thread cleanup ran with the pool full, and one that hung did not stop the rest"
+        )
+        assert any("Cleanup hangs still running" in r.getMessage() for r in caplog.records)
+    finally:
+        release.set()
