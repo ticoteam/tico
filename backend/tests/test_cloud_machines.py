@@ -4509,6 +4509,53 @@ def test_a_burst_return_never_goes_to_an_own_machine_being_deleted(cloud):
         assert c.execute("SELECT runner_id FROM assignments WHERE bot='ops'").fetchone()[0] == computer["runner_id"]
 
 
+def guest_on_burst(c, burst, base):
+    """Puts ops on computer `burst` as a settled guest whose home was `base`; returns `burst`."""
+    generation = c.execute(
+        "UPDATE assignments SET runner_id=?,generation=generation+1 WHERE bot='ops' RETURNING generation",
+        (burst,),
+    ).fetchone()[0]
+    c.execute(
+        "INSERT INTO burst_guests(bot,runner_id,generation,base_runner,return_pending) VALUES(?,?,?,?,?)",
+        ("ops", burst, generation, base, "settled"),
+    )
+    return burst
+
+
+def test_a_burst_return_skips_a_shared_machine_whose_computer_is_gone(cloud):
+    """#3587 review: a shared machine row whose computer is revoked is no home; the guest goes back to its own
+    computer instead of staying on the burst computer."""
+    from backend import compute_pool
+
+    computer = own_computer(cloud, "ops")
+    dead = runner(cloud.api, label="Dead shared")
+    on = runner(cloud.api, label="Burst")["runner_id"]
+    with cloud.store.transaction() as c:
+        c.execute(
+            "INSERT INTO cloud_machines(bot,mode,placement,machine_id,runner_id,state) VALUES(?,?,?,?,?,?)",
+            (CM.SHARED, "cloud", "shared", "m-shared", dead["runner_id"], "running"),
+        )
+        c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), dead["runner_id"]))
+        burst = guest_on_burst(c, on, computer["runner_id"])
+        assert compute_pool.return_guests(c, burst)
+        assert c.execute("SELECT runner_id FROM assignments WHERE bot='ops'").fetchone()[0] == computer["runner_id"]
+
+
+def test_a_burst_return_never_goes_to_a_base_computer_being_deleted(cloud):
+    """#3587 review: the computer the guest left is no home while its machine has a pending deletion (an HQ refusal
+    can leave the intent with the computer still enrolled)."""
+    from backend import compute_pool
+
+    computer = own_computer(cloud, "ops")
+    on = runner(cloud.api, label="Burst")["runner_id"]
+    with cloud.store.transaction() as c:
+        assert not CM.row(c, CM.SHARED)
+        burst = guest_on_burst(c, on, computer["runner_id"])
+        CM.intend_delete(c, CM.row(c, "ops"), "manual")
+        assert not compute_pool.return_guests(c, burst)
+        assert c.execute("SELECT runner_id FROM assignments WHERE bot='ops'").fetchone()[0] == burst
+
+
 def ticked(cloud, seconds):
     """HQ's calls from this one tick (`cloud.tick` returns every call so far), heartbeats left out."""
     before = len(cloud.hq.actions())

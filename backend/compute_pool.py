@@ -554,10 +554,13 @@ def return_guests(c: Connection, runner: str) -> bool:
         LEFT JOIN cloud_machines m ON m.bot='_shared'
         LEFT JOIN runners shared ON shared.id=m.runner_id AND m.state NOT IN ('deleted','failed')
                                 AND shared.revoked_at IS NULL AND shared.id<>g.runner_id
-        LEFT JOIN runners base ON base.id=g.base_runner AND base.revoked_at IS NULL AND m.bot IS NULL
+        -- No usable shared computer (no shared machine, or its computer is gone): the computer the guest left,
+        -- unless its machine is being deleted.
+        LEFT JOIN runners base ON base.id=g.base_runner AND base.revoked_at IS NULL AND shared.id IS NULL
+                              AND NOT EXISTS (SELECT 1 FROM cloud_machine_deletions d WHERE d.runner_id=base.id)
         -- A base computer revoked since (its own cloud machine's, replaced): the machine's computer now.
         LEFT JOIN cloud_machines o ON o.bot=g.bot AND o.mode='cloud' AND o.placement='own'
-                                  AND o.state NOT IN ('deleted','failed') AND m.bot IS NULL
+                                  AND o.state NOT IN ('deleted','failed') AND shared.id IS NULL
                                   -- Never a machine being deleted: the guest waits on the burst computer until the
                                   -- replacement enrolls, and bind() resumes the return there.
                                   AND NOT EXISTS (SELECT 1 FROM cloud_machine_deletions d WHERE d.machine_id=o.machine_id)
