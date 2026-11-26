@@ -175,8 +175,27 @@ SCHEMAS.update(
                     "items": {"type": "string"},
                     "description": "The root of each item counted, in Catch up's order",
                 },
+                "mentions": {
+                    **items(
+                        obj(
+                            {
+                                "id": "s",
+                                "audience": "s",
+                                "kind": "n",
+                                "task_id": {"type": ["string", "null"]},
+                                "with": {
+                                    "type": "string",
+                                    "description": "For a 1:1 DM, the other member's actor id; never a name",
+                                },
+                            },
+                            required=["id", "audience"],
+                        )
+                    ),
+                    "description": "The roots among `ids` that mention the viewer (a mention, an ask or a reply to "
+                    "them), in the same order: the menu's asks",
+                },
             },
-            ["count", "ids"],
+            ["count", "ids", "mentions"],
         ),
         "ThreadSearch": obj(
             {

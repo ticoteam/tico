@@ -109,23 +109,29 @@ export interface Asks {
   mates: ReadonlySet<string>;
 }
 
+/** A root Catch up's count names as mentioning you: `with` is the other member of a 1:1 DM, never a name. */
+export type Mention = Pick<Thread, 'id' | 'audience'> & Partial<Pick<Thread, 'kind' | 'task_id'>> & { with?: string };
+
 /**
- * A conversation asks you when Catch up flags it `mention` (an @mention, an ask, an assignment, or a person's reply to
- * you, past your read mark), or when it is a DM from a person with something you have not read. An agent's DM counts
- * only through the flag: its unread status lines ask nothing. `catchUp` is Catch up's first page (mentions come first
- * in it); `rows` the loaded list. A task's thread is the task's, not a conversation's.
+ * A conversation asks you when Catch up's count names it among `mentions` (an @mention, an ask, an assignment, or a
+ * person's reply to you, past your read mark), or when it is a DM from a person with something you have not read. An
+ * agent's DM counts only through the mention: its unread status lines ask nothing. `catchUp` is Catch up's count (its
+ * mentions are every one among its first 99 threads); `rows` the loaded list. A task's thread is the task's, not a
+ * conversation's.
  */
-export function asksOf(catchUp: { items: { thread: Thread; mention?: boolean }[] } | undefined, rows: readonly Thread[], me: string | undefined): Asks {
+export function asksOf(catchUp: { mentions?: readonly Mention[] } | undefined, rows: readonly Thread[], me: string | undefined): Asks {
   const threads = new Set<string>();
   const mates = new Set<string>();
-  const add = (t: Thread) => {
-    if (isTaskThread(t)) return;
-    threads.add(t.id);
-    const other = t.audience === 'personal' ? othersOf(t, me)[0] : undefined;
+  const add = (id: string, other: string | undefined) => {
+    threads.add(id);
     if (other) mates.add(other);
   };
-  for (const it of catchUp?.items ?? []) if (it.mention) add(it.thread);
-  for (const t of rows) if (t.audience === 'personal' && unreadOf(t) > 0 && othersOf(t, me)[0]?.startsWith('human:')) add(t);
+  for (const m of catchUp?.mentions ?? []) if (!isTaskThread(m)) add(m.id, m.audience === 'personal' ? m.with : undefined);
+  for (const t of rows) {
+    if (isTaskThread(t) || t.audience !== 'personal' || unreadOf(t) <= 0) continue;
+    const other = othersOf(t, me)[0];
+    if (other?.startsWith('human:')) add(t.id, other);
+  }
   return { threads, mates };
 }
 
