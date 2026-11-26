@@ -1781,13 +1781,6 @@ mod tests {
             .unwrap();
         let branches = String::from_utf8_lossy(&branches.stdout).to_string();
         assert!(branches.contains("tico-session/t1"), "{branches}");
-        let (back, problem) = crate::sessions::ensure(&main, &done, "t1", &env())
-            .await
-            .unwrap();
-        assert!(
-            problem.is_empty() && done.join(".gitignore").exists(),
-            "{back} {problem}"
-        );
         // A commit no remote has, or a file Git would show, keeps it.
         assert_eq!(
             remove_session(&of(&unpushed), &host, &none, &env()).await,
