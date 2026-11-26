@@ -1996,12 +1996,15 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
     its `snoozed_until`.
 
     One build serves every caller at the same change (backend/needs_share.py): opening the app asks for it from up to
-    eight requests at once. A shared build is the whole list, which a `count_only` caller counts as it counts its own."""
+    eight requests at once. A shared build is the whole list, which a `count_only` caller counts as it counts its own.
+    The requests (access, key, key_drop: `request_items`) are read for each caller and never shared: who may settle
+    them follows the credential administrators in the server's settings and the tools' and keys' rows, none of which
+    moves the share's change mark, so a kept list would list a request its reader just lost."""
     from . import ask_snoozes, needs_cache, needs_share
 
     if not H.is_human(who.actor):
         return []
-    return needs_share.items(
+    items = needs_share.items(
         c,
         needs_cache.viewer(who),
         snoozed,
@@ -2009,10 +2012,14 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
         alone=lambda: _needs_items(c, auth, who, count_only, snoozed),
         wakes=lambda: ask_snoozes.next_end(c, who),
     )
+    if snoozed == "only":
+        return items
+    # Sorted again with the requests in: the same order as one sort over the whole list (a stable sort).
+    return sorted(items + request_items(c, auth, who), key=needs_key)
 
 
 def _needs_items(c, auth, who, count_only, snoozed):
-    """needs_items, built (no sharing)."""
+    """needs_items, built (no sharing), without the requests (`request_items`), which needs_items reads per caller."""
     from . import question_marks, waiting_on
 
     visible = auth.task_sql(c, who)
@@ -2102,8 +2109,6 @@ def _needs_items(c, auth, who, count_only, snoozed):
                 **({"snoozed_until": it["snoozed_until"]} if it.get("snoozed_until") else {}),
             }
         )
-    if snoozed != "only":
-        items += request_items(c, auth, who)
     if not count_only:
         # An ask carries its requirement as the task's own read gives it (`to_leave`), with what this person may do:
         # that entry alone (task_calls.ask_entry), not the whole view of its task.
