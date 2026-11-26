@@ -434,13 +434,8 @@ def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions
         """Everything the server starts before it serves. Each worker, the stop that ends it and the cleanup after it go
         on `workers` (backend/lifespan_workers.py) as they start, so the way out covers whatever had started."""
         screen_sessions = get_screen_sessions()
-        # The default pool is min(32, cpus + 4) threads, about 6 on the server. Long waits (every
-        # open chat stream's polls, uploads) filled it, and
-        # every request's sign-in queued behind them for seconds. Give the loop a
-        # roomier pool, and sign-in its own (app.state.auth_pool, made below and shut down on the way out).
         from concurrent.futures import ThreadPoolExecutor
 
-        asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=64, thread_name_prefix="tico"))
         store.initialize()
         from . import lifespan_workers
 
@@ -458,8 +453,8 @@ def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions
 
         finance_vault.use_vault(app.state.vault)
         cloud_access.current(store)  # a lock kept from before the restart holds from the first request
-        asyncio.get_running_loop().run_in_executor(None, auth.warm)  # Cloudflare's keys, before anyone signs in
-        asyncio.get_running_loop().run_in_executor(None, _vault_start, store, app.state.vault.cipher)
+        workers.job("auth_warm", auth.warm)  # Cloudflare's keys, before anyone signs in
+        workers.job("vault_start", _vault_start, store, app.state.vault.cipher)
         # The company file stays before serving: on a first start the first page shows the company it makes, and the
         # owner's first answer must not race it; on any later start it is a quick check.
         if settings.company_file_configured or settings.company_file_data:
@@ -542,17 +537,21 @@ def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions
         workers.on_stop("loops", stop.set)
         # Always runs: local 90-day retention must not depend on the inbound key or HQ (sync itself stays off).
         workers.task("inbound", app.state.inbound.loop(stop))
+        # Before the relay starts, so a start that fails after it still closes the client (closing twice is harmless: the
+        # relay's run closes it too).
+        workers.on_exit("screen_sessions", screen_sessions.http.close)
         if settings.screen_relay_url:
             await asyncio.to_thread(screen_sessions.start)
             workers.task("screen_relay", screen_sessions.run(stop))
-        else:
-            workers.on_exit("screen_sessions", screen_sessions.http.close)
         # The lag probe sleeps half a second at a time; cancel it rather than wait out the sleep.
         timing_task = workers.task("timing", flight.watch_loop(app.state.timing, stop))
         workers.on_stop("timing", timing_task.cancel)
         recorder_thread = flight.Flight(recorder, store, settings) if recorder else None
         if recorder_thread:
             recorder_thread.start()
+            workers.on_stop(
+                "flight_recorder", recorder_thread.halt.set
+            )  # it stops sampling now; joined after the workers
             workers.on_exit("flight_recorder", lambda: asyncio.to_thread(recorder_thread.stop))
             # SIGUSR1 (stacks) and SIGUSR2 (memory top 50) for `python -m backend.flight stacks|memory`.
             from .flight_file import install_signals
@@ -622,14 +621,14 @@ def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions
                 if scheduler.outside is not None:
                     scheduler.outside.wake(ctx.at)
                 try:
-                    await asyncio.to_thread(heartbeat.beat, ctx)
+                    await workers.offload("scheduler", heartbeat.beat, ctx)
                 except Exception as exc:
                     telemetry.capture("heartbeat", exc)
                 # The rest of the pass, at most every 10 s however short the beat (heartbeat.REST_FLOOR). A skipped
                 # pass's beat failures ride on the next one, so they still reach the scheduler's health row.
                 if rest.due(ctx):
                     try:
-                        await asyncio.to_thread(scheduler.tick, ctx.at, ctx)
+                        await workers.offload("scheduler", scheduler.tick, ctx.at, ctx)
                         if scheduler.outside is not None:
                             # The release check, here only while the worker's thread is dead.
                             await asyncio.to_thread(scheduler.outside.rest_fallback)
@@ -647,7 +646,7 @@ def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions
         async def directory_loop():
             while not stop.is_set():
                 try:
-                    await asyncio.to_thread(app.state.directory.tick, True)
+                    await workers.offload("directory", app.state.directory.tick, True)
                 except Exception as exc:
                     telemetry.capture("directory", exc)
                 try:
@@ -706,8 +705,8 @@ def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions
             workers.task("scheduler", schedule_loop())
             workers.task("directory", directory_loop())
             workers.task("granola", app.state.granola.loop(stop))
-        else:
-            workers.on_exit("granola", app.state.granola.close)
+        # Its loop closes it too, but not when the loop is cancelled at the deadline (closing twice is harmless).
+        workers.on_exit("granola", app.state.granola.close)
         if timers and not settings.demo:
             workers.task("docs", app.state.doc_sources.loop(stop))
         workers.on_stop("docs", app.state.doc_sources.stop.set)
@@ -768,9 +767,22 @@ def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions
     async def lifespan(app):
         # The way out (backend/lifespan_workers.py): every stop first, then every worker under one deadline, then the
         # cleanups. It runs over whatever had started, also when the start fails part way or a worker raised.
-        from . import lifespan_workers
+        from concurrent.futures import ThreadPoolExecutor
 
-        workers = lifespan_workers.Workers(store, telemetry)
+        from . import lifespan_workers
+        from .maintenance_steps import check_health
+
+        # The default pool is min(32, cpus + 4) threads, about 6 on the server. Long waits (every
+        # open chat stream's polls, uploads) filled it, and
+        # every request's sign-in queued behind them for seconds. Give the loop a
+        # roomier pool, and sign-in its own (app.state.auth_pool, made in the start and shut down on the way out).
+        pool = ThreadPoolExecutor(max_workers=64, thread_name_prefix="tico")
+        asyncio.get_running_loop().set_default_executor(pool)
+        # A worker's death files its own Agent Ops alert at once: the Maintenance run that files the others runs on the
+        # scheduler, which may be the worker that died.
+        workers = lifespan_workers.Workers(
+            store, telemetry, on_death=lambda: check_health.file_check_now(store, "worker_died")
+        )
         try:
             await start(app, workers)
             yield
@@ -782,6 +794,7 @@ def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions
                 # Every worker has ended or, past the deadline, been named in the log as left behind: no read of
                 # theirs is in flight, and a connection one still holds is closed when it is given back.
                 store.close()
+                pool.shutdown(wait=False, cancel_futures=True)  # nothing queued behind a stuck thread runs after this
 
     return lifespan
 

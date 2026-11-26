@@ -195,7 +195,8 @@ def recorder_drops(c, ctx):
 
 def worker_died(c, ctx):
     """The server's background workers that died of an uncaught error since it started (backend/lifespan_workers.py
-    records each; the next start clears them). One range read on registry_metadata's key."""
+    records each; the next start clears them). One range read on registry_metadata's key. `ctx` is not used: Health and
+    the death's own filing read it without a sweep (LIVE)."""
     return lifespan_workers.dead(c, LIMIT)
 
 
@@ -286,6 +287,9 @@ CHECKS = (
     ),
 )
 BY_ID = {check.id: check for check in CHECKS}
+# Checks Health reads on each view rather than from the sweep's state: the sweep runs on the scheduler, and a dead
+# scheduler is one of the things `worker_died` reports. Their `read` must not use its ctx.
+LIVE = ("worker_died",)
 
 
 def _changed(row, hits):
@@ -348,25 +352,29 @@ def health_checks(c):
     from . import maintenance_health as MH
     from .maintenance_steps import check_health
 
+    def row_for(check, count, examples, since):
+        shown = f"{count}{'+' if count >= LIMIT else ''}"
+        more = f" and {count - len(examples)} more" if count > len(examples) else ""
+        when = f" Since {since} UTC." if since else ""
+        task = check_health.task_of(c, MH.signature("inv:" + check.id))
+        fixes = [{"label": "Open the alert", "href": "#/tasks/" + task, "tab": "", "click": ""}] if task else []
+        return {
+            "id": "invariant:" + check.id,
+            "label": check.label,
+            "status": "warn",
+            "summary": f"{check.says} {shown} found: {', '.join(examples)}{more}.{when}",
+            "fixes": fixes,
+        }
+
     out = []
     for row in c.execute("SELECT * FROM invariant_state WHERE firing=1 ORDER BY check_id"):
         check = BY_ID.get(row["check_id"])
-        if not check:
+        if not check or check.id in LIVE:
             continue
-        examples = json.loads(row["examples"] or "[]")
-        count = row["count"]
-        shown = f"{count}{'+' if count >= LIMIT else ''}"
-        more = f" and {count - len(examples)} more" if count > len(examples) else ""
         since = (row["started_firing_at"] or "")[:16].replace("T", " ")
-        task = check_health.task_of(c, MH.signature("inv:" + check.id))
-        fixes = [{"label": "Open the alert", "href": "#/tasks/" + task, "tab": "", "click": ""}] if task else []
-        out.append(
-            {
-                "id": "invariant:" + check.id,
-                "label": check.label,
-                "status": "warn",
-                "summary": f"{check.says} {shown} found: {', '.join(examples)}{more}. Since {since} UTC.",
-                "fixes": fixes,
-            }
-        )
-    return out
+        out.append(row_for(check, row["count"], json.loads(row["examples"] or "[]"), since))
+    for check_id in LIVE:
+        hits = BY_ID[check_id].read(c, None)
+        if hits:  # each hit names its own time
+            out.append(row_for(BY_ID[check_id], len(hits), hits[:EXAMPLES], ""))
+    return sorted(out, key=lambda row: row["id"])

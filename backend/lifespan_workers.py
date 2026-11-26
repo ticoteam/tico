@@ -3,16 +3,20 @@
 and the way they end.
 
 - A worker that dies of an uncaught exception is never silent. It is logged as an error with its traceback, sent to
-  telemetry (`worker:<name>`, the exception's type only), and recorded in registry_metadata (`worker-died:<name>`: the
-  type and the time, never the message), which the production check `worker_died` (backend/invariants.py) reads: Health
-  shows it, and Check health files it for Agent Ops on its first run. A worker is not restarted; the next start of the
-  server starts them all again, so it clears the records (`forget`).
+  telemetry (`worker_<name>`, the exception's type only), and recorded in registry_metadata (`worker-died:<name>`: the
+  type and the time, never the message; a write that fails is tried RECORD_TRIES times). The production check
+  `worker_died` (backend/invariants.py) reads that record: Health reads it on each view, and `on_death` (the app's: Check
+  health's `file_check_now`) files it for Agent Ops at once. Neither waits for the scheduler, which is itself one of the
+  workers. A worker is not restarted; the next start of the server starts them all again, so it clears the records
+  (`forget`). A start-up job (`job`) that fails is logged and sent to telemetry only: it was never meant to keep running.
 - The way out (`shutdown`) signals every stop first, then waits for every worker together, under one deadline
   (SHUTDOWN_SECONDS). A worker still running at the deadline is cancelled and named in the log. Cancelling the await of a
-  worker on a thread (`thread`) does not stop the thread, so each such thread still running is given THREAD_GRACE_SECONDS
-  more, and named in the log if it runs on. Then the cleanups run, each on its own and in the order registered, whatever a
-  worker or another cleanup did; the lifespan closes telemetry and the store after them, even when the way out is
-  itself cancelled.
+  thread (a `thread` worker's, or a call a worker made through `offload`) does not stop the thread, so each such thread
+  still running is given THREAD_GRACE_SECONDS more, and named in the log if it runs on. Then the cleanups run, each on its
+  own and in the order registered, whatever a worker or another cleanup did; the lifespan closes telemetry and the store
+  after them. Every wait on a thread is made from a thread of its own, never the default pool, which the threads waited
+  for may be filling. The way out runs as a task of its own: a cancel of the caller waits for it (it is bounded) and is
+  passed on after, so the store never closes under a worker still being waited for.
 - A start that fails part way runs the same way out over what it had started (backend/app.py wraps the start in it).
 """
 
@@ -20,6 +24,7 @@ import asyncio
 import inspect
 import json
 import logging
+import re
 import threading
 import time
 from collections.abc import Callable, Coroutine
@@ -33,6 +38,10 @@ log = logging.getLogger("tico.lifespan_workers")
 SHUTDOWN_SECONDS = 120.0
 CANCEL_SECONDS = 5.0  # a cancelled coroutine worker this long without ending is left behind
 THREAD_GRACE_SECONDS = 5.0  # a cancelled worker's thread this long without ending is left running, and named
+RECORD_TRIES = (0.2, 1.0)  # the pauses between tries of a death's record: three tries in all (a busy database)
+RECORD_SECONDS = 10.0  # the way out waits this long for deaths still being recorded and filed
+# A worker's name: telemetry takes `worker_<name>` as its source, which must match observability.SOURCE.
+NAME = re.compile(r"[a-z][a-z_]{0,24}")
 PREFIX = "worker-died:"  # registry_metadata key per dead worker: {"error": type name, "at": ISO time}
 _PREFIX_END = PREFIX[:-1] + chr(
     ord(PREFIX[-1]) + 1
@@ -50,18 +59,24 @@ class Telemetry(Protocol):
 class Workers:
     """One run of the lifespan's workers, the stops that end them and the cleanups after them."""
 
-    def __init__(self, store: Store, telemetry: Telemetry):
+    def __init__(self, store: Store, telemetry: Telemetry, on_death: Callable[[], object] | None = None):
         self.store = store
         self.telemetry = telemetry
+        self.on_death = on_death  # after a death is recorded, on the recording thread
         self.tasks: list[tuple[str, asyncio.Task[Any]]] = []
         self.threads: list[tuple[str, threading.Event, threading.Event]] = []  # (name, started, finished)
+        self.jobs: set[str] = set()  # start-up jobs: they end by themselves, and a failure is not a dead worker
         self.stops: list[tuple[str, Callable[[], object]]] = []
         self.cleanups: list[tuple[str, Callable[[], object]]] = []
-        self.records: list[asyncio.Future[None]] = []
+        self.records: list[threading.Event] = []  # set when a death's record (and its filing) is done
         self.stopping = False
+        self.teardown: asyncio.Task[None] | None = None
 
     def task(self, name: str, work: Coroutine[Any, Any, Any]) -> asyncio.Task[Any]:
         """Starts `work` as a worker named `name`."""
+        if not NAME.fullmatch(name):
+            work.close()
+            raise ValueError(f"a worker's name is lowercase letters and underscores, at most 25: {name!r}")
         task = asyncio.create_task(work, name=f"tico-{name}")
         task.add_done_callback(lambda done: self._ended(name, done))
         self.tasks.append((name, task))
@@ -69,17 +84,33 @@ class Workers:
 
     def thread(self, name: str, work: Callable[..., object], *args: object) -> asyncio.Task[Any]:
         """Starts `work(*args)` on a thread as a worker named `name`; the way out knows whether its thread still runs."""
-        started, finished = threading.Event(), threading.Event()
+        return self.task(name, self.offload(name, work, *args))
 
-        def run() -> object:
+    def job(self, name: str, work: Callable[..., object], *args: object) -> asyncio.Task[Any]:
+        """A start-up job on a thread: waited for on the way out like a worker, but it ends by itself, and a failure is
+        logged and sent to telemetry without counting as a dead worker."""
+        self.jobs.add(name)
+        return self.thread(name, work, *args)
+
+    async def offload(self, name: str, work: Callable[..., Any], *args: object) -> Any:
+        """`await asyncio.to_thread(work, *args)` for worker `name`, fenced on the way out: a thread still running when
+        its await was cancelled gets the grace and the log line a `thread` worker's does."""
+        started, finished = threading.Event(), threading.Event()
+        entry = (name, started, finished)
+
+        def run() -> Any:
             started.set()
             try:
                 return work(*args)
             finally:
                 finished.set()
 
-        self.threads.append((name, started, finished))
-        return self.task(name, asyncio.to_thread(run))
+        self.threads.append(entry)
+        try:
+            return await asyncio.to_thread(run)
+        finally:
+            if finished.is_set() or not started.is_set():
+                self.threads.remove(entry)  # nothing of it runs on; a loop's calls must not pile up here
 
     def on_stop(self, name: str, stop: Callable[[], object]) -> None:
         """`stop()` runs first on the way out, before any worker is waited for."""
@@ -95,21 +126,63 @@ class Workers:
         exc = task.exception()
         if exc is None:
             return
-        log.error("Background worker %s died: %s", name, type(exc).__name__, exc_info=exc)
+        if name in self.jobs:
+            log.error("Start-up job %s failed: %s", name, type(exc).__name__, exc_info=exc)
+        else:
+            log.error("Background worker %s died: %s", name, type(exc).__name__, exc_info=exc)
         try:
-            self.telemetry.capture(f"worker:{name}", exc)
+            self.telemetry.capture(f"worker_{name}", exc)
         except Exception:  # noqa: BLE001 - telemetry must never hide the death it reports
             log.warning("Telemetry could not take worker %s's death", name, exc_info=True)
-        if self.stopping:
+        if self.stopping or name in self.jobs:
             return  # on the way out: the next start runs it again, and would clear the record at once
-        try:
-            loop = asyncio.get_running_loop()
-            self.records.append(loop.run_in_executor(None, record, self.store, name, type(exc).__name__))
-        except RuntimeError:
-            log.error("Worker %s's death could not be recorded for Health", name, exc_info=True)
+        self._record(name, type(exc).__name__)
+
+    def _record(self, name: str, error: str) -> None:
+        """Records the death and files it, on a thread of its own: the default pool may be what is full, and the
+        database may be busy for a moment, so the write is tried again before it is given up, loudly."""
+        done = threading.Event()
+
+        def run() -> None:
+            try:
+                for pause in (*RECORD_TRIES, None):
+                    try:
+                        record(self.store, name, error)
+                        break
+                    except Exception:
+                        if pause is None:
+                            log.error("Worker %s's death could not be recorded for Health", name, exc_info=True)
+                            return
+                        time.sleep(pause)
+                if self.on_death is not None:
+                    try:
+                        self.on_death()
+                    except Exception:
+                        log.error("Worker %s's death could not be filed for Agent Ops", name, exc_info=True)
+            finally:
+                done.set()
+
+        self.records.append(done)
+        threading.Thread(target=run, name=f"tico-death-{name}", daemon=True).start()
 
     async def shutdown(self) -> None:
-        """Every stop, then every worker under one deadline, then every cleanup (see the module docstring)."""
+        """Every stop, then every worker under one deadline, then every cleanup (see the module docstring). A cancel of
+        the caller waits for all of it, then is passed on."""
+        if self.teardown is None:
+            self.teardown = asyncio.ensure_future(self._teardown())
+        cancelled = False
+        while True:
+            try:
+                await asyncio.shield(self.teardown)
+                break
+            except asyncio.CancelledError:
+                if self.teardown.done():
+                    raise
+                cancelled = True
+        if cancelled:
+            raise asyncio.CancelledError
+
+    async def _teardown(self) -> None:
         self.stopping = True
         try:
             for name, stop in self.stops:
@@ -119,8 +192,8 @@ class Workers:
                     log.error("Stopping %s failed", name, exc_info=True)
             await self._wait()
             await self._wait_threads()
-            if self.records:
-                await asyncio.gather(*self.records, return_exceptions=True)
+            if not await wait_events(self.records, RECORD_SECONDS):
+                log.error("Worker deaths still being recorded after %g s, closing regardless", RECORD_SECONDS)
         finally:
             await self._clean_up()
 
@@ -128,6 +201,7 @@ class Workers:
         if not self.tasks:
             return
         together = asyncio.gather(*(task for _, task in self.tasks), return_exceptions=True)
+        together.add_done_callback(_retrieved)  # left unfinished at the deadline, it must not be reported as unread
         try:
             await asyncio.wait_for(asyncio.shield(together), SHUTDOWN_SECONDS)
             return
@@ -152,14 +226,8 @@ class Workers:
         ]
         if not running:
             return
-
-        def grace() -> None:
-            end = time.monotonic() + THREAD_GRACE_SECONDS
-            for _, finished in running:
-                finished.wait(max(0.0, end - time.monotonic()))
-
-        await asyncio.to_thread(grace)
-        left = [name for name, finished in running if not finished.is_set()]
+        await wait_events([finished for _, finished in running], THREAD_GRACE_SECONDS)
+        left = sorted({name for name, finished in running if not finished.is_set()})
         if left:
             log.error("Background worker threads still running after the way out, cleaning up regardless: %s", left)
 
@@ -171,6 +239,41 @@ class Workers:
                     await result
             except Exception:
                 log.error("Cleanup %s failed on the way out", name, exc_info=True)
+
+
+def _retrieved(future: asyncio.Future[Any]) -> None:
+    if not future.cancelled():
+        future.exception()
+
+
+def _settle(future: asyncio.Future[None]) -> None:
+    if not future.done():
+        future.set_result(None)
+
+
+async def wait_events(events: list[threading.Event], seconds: float) -> bool:
+    """Whether every event was set within `seconds`. The wait runs on a thread of its own, never on the default pool:
+    the threads it waits for may be the ones filling that pool, and a wait queued behind them would never start."""
+    if all(event.is_set() for event in events):
+        return True
+    loop = asyncio.get_running_loop()
+    done: asyncio.Future[None] = loop.create_future()
+
+    def wait() -> None:
+        end = time.monotonic() + seconds
+        for event in events:
+            event.wait(max(0.0, end - time.monotonic()))
+        try:
+            loop.call_soon_threadsafe(_settle, done)
+        except RuntimeError:
+            pass  # the loop closed: nobody waits any more
+
+    threading.Thread(target=wait, name="tico-shutdown-wait", daemon=True).start()
+    try:
+        await asyncio.wait_for(asyncio.shield(done), seconds + 1)
+    except TimeoutError:
+        pass
+    return all(event.is_set() for event in events)
 
 
 def record(store: Store, name: str, error: str) -> None:
