@@ -4,16 +4,13 @@ judge. A Block or Escalate rule is still checked first and refuses it, nothing w
 no check (backend/task_comments_routes.py task_question, backend/task_rule_gate.py check)."""
 
 import json
-import statistics
-import time
-
 
 from backend import org_rule_check
 from backend import org_rules as OR
 from backend.tests.helpers.api import headers
 from backend.tests.helpers.org_rule_check import (  # noqa: F401 - fixtures
     COLOR,
-    Judge,
+    checked_after,
     color_rule,
     notes_to,
     ruled,
@@ -21,62 +18,37 @@ from backend.tests.helpers.org_rule_check import (  # noqa: F401 - fixtures
     task_for_ops,
 )
 
-JUDGE_MS = 180  # the P01 bench's fake judge
-
 
 def question(api, task, text, to="ana", token="ops-test"):
     return api.post(f"/api/v2/tasks/{task['id']}/questions", json={"to": to, "text": text}, headers=headers(token))
 
 
-class SlowJudge(Judge):
-    """The judge taking as long to answer as the P01 bench's fake one."""
-
-    def __call__(self, state, questions, label=None):
-        time.sleep(JUDGE_MS / 1000)
-        return super().__call__(state, questions, label)
-
-
-def slow(api):
-    judge = api.app.state.judge = SlowJudge(api.app.state.store)
-    return judge
-
-
-def settle(api, within=10.0):
-    """Wait (at most `within` s) until no late check is left, running them here as the drain thread does."""
-    end = time.monotonic() + within
-    while time.monotonic() < end:
-        org_rule_check.drain_late(api.app.state.store, api.app.state.judge)
-        if not sql(api, "SELECT 1 FROM org_rule_late LIMIT 1"):
-            return
-        time.sleep(0.05)
-    raise AssertionError("a late rule check was still waiting")
+def settle(api):
+    """Run the late checks still waiting, after the drain thread's pass (org_rule_check.drain_late holds one lane)."""
+    checked_after(api)
+    assert not sql(api, "SELECT 1 FROM org_rule_late LIMIT 1"), "a late rule check was still waiting"
 
 
 def events(api, action):
     return [json.loads(e["detail"]) for e in sql(api, "SELECT detail FROM events WHERE action=?", (action,))]
 
 
-def test_a_bots_questions_under_warn_rules_do_not_wait_for_the_judge(ruled):
-    """Criterion 1: with the built-in Warn ask rule and a 180 ms judge, 20 ❓s each answer without its call."""
-    api, _ = ruled
+def test_a_bots_questions_under_warn_rules_do_not_wait_for_the_judge(ruled, monkeypatch):
+    """Criterion 1: with the built-in Warn ask rule, 20 ❓s each answer without asking the judge, and each is still
+    judged right after it is saved. The late checks' drain thread is kept from starting while they are asked, so any
+    call during them would be a request's own."""
+    api, judge = ruled
     assert sql(api, "SELECT if_broken FROM org_rules WHERE text=?", (OR.ASKS_TO_A_PERSON,))[0]["if_broken"] == "warn"
-    judge = slow(api)
+    monkeypatch.setattr(org_rule_check, "kick_late", lambda store, primary: None)
     task = task_for_ops(api)
-    question(api, task, "Which tone should the launch note take, warm or plain?")  # warm the route once
-    settle(api)
-    took = []
     for n in range(20):
-        start = time.perf_counter()
         r = question(api, task, f"Which of the two launch note drafts goes out in week {n + 2}?")
-        took.append((time.perf_counter() - start) * 1000)
         assert r.status_code == 200, r.text
         assert r.json()["question"] and "rule_warning" not in r.json()
+    assert judge.calls == [], "no ❓ waited for the judge"
+    assert sql(api, "SELECT count(*) AS n FROM org_rule_late")[0]["n"] == 20
     settle(api)
-    assert len(judge.calls) >= 20, "each ❓ is still checked, right after it is saved"
-    p95 = sorted(took)[18]
-    # The spec's bench reads median < 15 ms and p95 < 30 ms on its own machine; a shared CI runner is slower, so this
-    # asserts the cause (no judge wait) with room: both stay well under one judge call.
-    assert statistics.median(took) < JUDGE_MS / 2 and p95 < JUDGE_MS, (statistics.median(took), p95)
+    assert len(judge.calls) == 20, "each ❓ is still checked, right after it is saved"
 
 
 def test_a_question_a_warn_rule_finds_broken_reaches_its_person_and_the_bot_is_told_after(ruled):
