@@ -22,7 +22,7 @@ import { Board, BoardColumn, List, PageMore, Section } from '@/pagekinds';
 import { usePref, writePref } from '@/prefs';
 import { ArchivedSections, useShelves } from './Archived';
 import { BoardFit } from './BoardFit';
-import { Capped, CARD_H, COL_CAP, COL_SHOW, LIST_CAP, LIST_SHOW, moreText, PHONE_ROW_H, RowMore, ROW_H } from './capped';
+import { AllRows, CARD_H, PHONE_ROW_H, ReadOn, ROW_H } from './capped';
 import { FilterItems, FilterMenu } from './FilterMenu';
 import { SelectBar, StageMenu } from './many';
 import { useNeedsYou, yoursFirst } from './needs';
@@ -137,16 +137,16 @@ function OpenPage({ pipeline, p, pipes, search, view, head }: PageProps & { view
       }
     : undefined;
   const fold = (id: string, open: boolean) => setFolds(open ? folds.filter((x) => x !== id) : [...folds, id]);
-  const more = cut ? () => void loadMore(pipeline, filters) : undefined;
+  const more = cut ? () => loadMore(pipeline, filters) : undefined;
   const body: BodyProps | null = p
-    ? { p, rows, me, needs, folds, fold, more, cut, countOf, picking, toggle, onNew: (stage) => setNewIn({ stage }), onEdit: () => void edit.run({ pipeline }) }
+    ? { p, rows, me, needs, folds, fold, more, countOf, picking, toggle, onNew: (stage) => setNewIn({ stage }), onEdit: () => void edit.run({ pipeline }) }
     : null;
   const bare = body && !body.rows.length && !filtered && <Bare p={body.p} board={view === 'board'} onNew={onNew} />;
 
   return (
     <>
       {view === 'board' ? (
-        <Board {...page} columns={bare || (body ? <Columns {...body} /> : null)} />
+        <Board {...page} columns={bare || (body ? <Columns {...body} /> : null)} end={!bare && <ReadOn more={body?.more} look="col" />} />
       ) : (
         <List {...page} sections={bare || (body ? <Sections {...body} edit={p?.mayChange} /> : null)} />
       )}
@@ -300,10 +300,8 @@ interface BodyProps {
   needs: ReadonlySet<string> | undefined;
   folds: readonly string[];
   fold: (stage: string, open: boolean) => void;
-  /** Read the next page; only while the server has one. */
-  more: (() => void) | undefined;
-  /** The server holds more than was read. */
-  cut: boolean;
+  /** Read the next page; resolves false when the read failed. Only while the server holds more than was read. */
+  more: (() => Promise<boolean>) | undefined;
   /** A stage's count: what was read when that is all, else the Floor's, else none. */
   countOf: (stage: string, loaded: number) => number | undefined;
   /** Select is on: the picked ids. A click picks instead of opening. */
@@ -398,7 +396,7 @@ function Card({ t, p, me, waits, picked, onPick }: { t: TaskItem; p: Pipeline; m
 /** Where a board card lands: a stage's column. */
 const COLUMN = '.col[data-target^="stage:"]';
 
-function Columns({ p, rows, me, needs, folds, fold, more, cut, countOf, picking, toggle }: BodyProps) {
+function Columns({ p, rows, me, needs, folds, fold, countOf, picking, toggle }: BodyProps) {
   const move = useAction('tasks.move');
   // Dragging only moves: a card let go over another stage's column moves there.
   const drag = useDrag({
@@ -444,11 +442,8 @@ function Columns({ p, rows, me, needs, folds, fold, more, cut, countOf, picking,
               )
             }
           >
-            <Capped
+            <AllRows
               list={yoursFirst(list, needs)}
-              cap={COL_CAP}
-              show={COL_SHOW}
-              more={more}
               height={CARD_H}
               measure
               draw={(t) => (
@@ -462,11 +457,6 @@ function Columns({ p, rows, me, needs, folds, fold, more, cut, countOf, picking,
                   <Card t={t} p={p} me={me} waits={waitsOnMe(t, needs)} picked={picking?.has(t.id)} onPick={picker(toggle, t.id)} />
                 </Movable>
               )}
-              moreRow={(n, open) => (
-                <button key="more" className="col-more" type="button" onClick={open}>
-                  {moreText(n, cut)}
-                </button>
-              )}
             />
           </BoardColumn>
         );
@@ -476,7 +466,7 @@ function Columns({ p, rows, me, needs, folds, fold, more, cut, countOf, picking,
   );
 }
 
-function Sections({ p, rows, needs, folds, fold, more, cut, countOf, picking, toggle, onNew, onEdit, edit }: BodyProps & { edit?: boolean }) {
+function Sections({ p, rows, needs, folds, fold, more, countOf, picking, toggle, onNew, onEdit, edit }: BodyProps & { edit?: boolean }) {
   const cards = useCards();
   const groups = byStage(p.stages, rows);
   const none = p.stages.filter((s) => !groups.get(s.id)?.length);
@@ -501,11 +491,8 @@ function Sections({ p, rows, needs, folds, fold, more, cut, countOf, picking, to
                 </>
               }
             >
-              <Capped
+              <AllRows
                 list={yoursFirst(list, needs)}
-                cap={LIST_CAP}
-                show={LIST_SHOW}
-                more={more}
                 height={cards ? PHONE_ROW_H : ROW_H}
                 measure={cards}
                 draw={(t) => (
@@ -527,11 +514,11 @@ function Sections({ p, rows, needs, folds, fold, more, cut, countOf, picking, to
                     />
                   </Movable>
                 )}
-                moreRow={(n, open) => <RowMore key="more" n={n} cut={cut} onClick={open} />}
               />
             </Section>
           );
         })}
+      <ReadOn more={more} />
       <StageLine stages={none} countOf={countOf} />
     </>
   );

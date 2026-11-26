@@ -2,7 +2,7 @@ import { QueryClientProvider, QueryObserver } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRouteWithContext, createRoute, createRouter, Outlet, RouterProvider } from '@tanstack/react-router';
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { ActionsRoot } from '@/actions';
 import { keys, queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
@@ -11,6 +11,7 @@ import { dispatch, installPatchers, resetPatchState } from '@/live/patch';
 import { follow, resetFollows } from '@/live/follow';
 import { forgetPlaces, hearListClicks, openTasksOver } from '@/lib';
 import { dragTo } from '@/test/drag';
+import { nearEnd, watchNear } from '@/test/near';
 import type * as VirtualListModule from '@/kit/VirtualList';
 import { ArchivedSections } from './Archived';
 import { leaveNeedsYou, needsYouWithout, useNeedsYou } from './needs';
@@ -22,13 +23,15 @@ import { TasksPage } from './TasksPage';
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 type VirtualLists = typeof VirtualListModule;
 // The real long list, with what each draw was asked to do kept (a long Needs you measures its rows).
-const virtual = vi.hoisted(() => ({ measure: [] as (boolean | undefined)[] }));
+const virtual = vi.hoisted(() => ({ measure: [] as (boolean | undefined)[], scrollParent: [] as (string | undefined)[], className: [] as (string | undefined)[] }));
 vi.mock('@/kit/VirtualList', async (orig) => {
   const real = await orig<VirtualLists>();
   return {
     ...real,
     VirtualList: (p: Parameters<typeof real.VirtualList>[0]) => {
       virtual.measure.push(p.measure);
+      virtual.scrollParent.push(p.scrollParent);
+      virtual.className.push(p.className);
       return real.VirtualList(p);
     },
   };
@@ -367,7 +370,7 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
     expect(screen.getByRole('heading', { name: /Inbox/ }).closest('.stage-line')).toBeTruthy();
   });
 
-  it('what waits on you leads its stage past the cap, on the board and in the list; a bulk move keeps the stage order', async () => {
+  it('what waits on you leads its stage, on the board and in the list; a bulk move keeps the stage order', async () => {
     serve(() => ({ status: 200, body: { batch_id: 'b', moved: [], moved_unseen: 0, skipped: [] } }));
     const turn = (who: string) => ({ state: 'person' as const, who, line: 'Approve it', requirement_id: null, since: null, until: null, ask: false });
     const many = Array.from({ length: 13 }, (_, i) => task(`a${i + 1}`, i + 1, `Task ${i + 1}`, 's1'));
@@ -382,7 +385,7 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
       await screen.findByTitle('You approve');
       // Only yours leads: a turn that is someone else's keeps its place.
       expect(titles().slice(0, 2)).toEqual(['You approve', 'Task 1']);
-      expect(titles()).not.toContain('Ana approves'); // still past the cap, behind "more"
+      expect(titles().at(-1)).toBe('Ana approves'); // every row shows; someone else's turn keeps its place
       cleanup();
     }
     seed(many);
@@ -478,9 +481,9 @@ describe('Tasks: more of the page @s0 @s9 @s10', () => {
     expect(reads.map((params) => params.get('brief'))).toEqual(['true', 'true', 'true']);
   });
 
-  it('positions an expanded phone archive using the measured row heights', async () => {
+  it('positions a long phone archive using the measured row heights', async () => {
     const viewportHeight = vi.spyOn(Element.prototype, 'clientHeight', 'get').mockImplementation(function (this: Element) {
-      return this.classList.contains('tk-long') ? 528 : 0;
+      return this.hasAttribute('data-scroll') ? 528 : 0;
     });
     const height = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
       if (this.classList.contains('vl-item')) return this.dataset.index === '0' ? 68 : 44;
@@ -490,8 +493,9 @@ describe('Tasks: more of the page @s0 @s9 @s10', () => {
     try {
       const archived = Array.from({ length: 101 }, (_, i) => task(`d${i}`, i + 1, `Archived task ${i + 1}`, 'sd', { status: 'done' }));
       const empty = { tasks: [], cursor: 'c' };
-      show(<ArchivedSections p={PIPE} filters={{}} shelves={{ snoozed: empty, done: { ...empty, tasks: archived }, closed: empty }} />, '/tasks/eng');
-      fireEvent.click(await screen.findByRole('button', { name: '91 more' }));
+      // in the page's own scroller, as the List page holds it
+      show(<div data-scroll><ArchivedSections p={PIPE} filters={{}} shelves={{ snoozed: empty, done: { ...empty, tasks: archived }, closed: empty }} /></div>, '/tasks/eng');
+      await waitFor(() => expect(screen.getAllByRole('listitem').length).toBeGreaterThan(1));
       const [, second] = screen.getAllByRole('listitem');
       expect(second?.style.transform).toContain(', 68px,');
     } finally {
@@ -726,6 +730,141 @@ describe('Tasks: more of the page @s0 @s9 @s10', () => {
     show(<TasksPage pipeline="eng" search={f} />, '/tasks/eng');
     expect(await screen.findByRole('button', { name: 'Clear Waiting on someone' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Clear Due this week' })).toBeTruthy();
+  });
+});
+
+describe('Task lists run on, with no "more" @3535', () => {
+  const many = (n: number, stage = 's1', from = 0) => Array.from({ length: n }, (_, i) => task(`a${from + i}`, from + i + 1, `Task ${from + i + 1}`, stage));
+  const titles = () => screen.queryAllByTitle(/^Task \d+$/);
+  // "21 more", "21+ more", "More tasks", "Show more": not the stage's or a row's own "More" menu
+  const noMore = () => expect(screen.queryByRole('button', { name: /^\d+\+? more$|^More tasks$|^Show more$/ })).toBeNull();
+
+  it('a List-view stage of 31 tasks shows all 31 rows, with no "more" under it', async () => {
+    serve(() => ({ status: 200, body: {} }));
+    seed(many(31));
+    show(<TasksPage pipeline="eng" search={{ view: 'list' }} />, '/tasks/eng?view=list');
+    await screen.findByTitle('Task 31');
+    expect(titles()).toHaveLength(31);
+    noMore();
+  });
+
+  it('a Board column of 20 cards shows all 20, with no "more" under it', async () => {
+    serve(() => ({ status: 200, body: {} }));
+    seed(many(20));
+    show(<TasksPage pipeline="eng" search={{}} />, '/tasks/eng');
+    const inbox = await screen.findByRole('region', { name: 'Inbox' });
+    await within(inbox).findByTitle('Task 20');
+    expect(within(inbox).getAllByTitle(/^Task \d+$/)).toHaveLength(20);
+    noMore();
+  });
+
+  it('a stage of 300 runs on in the page’s own scroll (the board’s on a board), drawing only the rows near the screen', async () => {
+    serve(() => ({ status: 200, body: {} }));
+    // the page's scroller has a height, so the long list draws what fits in it
+    const tall = vi.spyOn(Element.prototype, 'clientHeight', 'get').mockImplementation(function (this: Element) {
+      return this.hasAttribute('data-scroll') ? 600 : 0;
+    });
+    onTestFinished(() => tall.mockRestore());
+    for (const view of ['list', 'board'] as const) {
+      virtual.scrollParent.length = 0;
+      virtual.className.length = 0;
+      seed(many(300));
+      show(<TasksPage pipeline="eng" search={{ view }} />, `/tasks/eng?view=${view}`);
+      await waitFor(() => expect(titles().length).toBeGreaterThan(0));
+      expect(titles().length).toBeLessThan(300);
+      noMore();
+      // no box of its own: the list scrolls with what holds the page (List's body, the board), which is marked data-scroll
+      expect(virtual.scrollParent.at(-1)).toBe('[data-scroll]');
+      expect(virtual.className.at(-1)).toBeUndefined();
+      const list = screen.getByRole('list');
+      expect(list.closest('[data-scroll]')).toBe(document.querySelector(view === 'board' ? '.board' : '.pk-body'));
+      cleanup();
+    }
+  });
+
+  it('reads the next page by itself as the end nears, adding below with the stage counts kept', async () => {
+    const near = watchNear();
+    const reads: string[] = [];
+    serve((url) => {
+      if (!url.includes('after=next')) return { status: 200, body: {} };
+      reads.push(url);
+      return { status: 200, body: { tasks: [task('b1', 90, 'Review the export', 's2')], cursor: 'c2' } };
+    });
+    seed([]);
+    queryClient.setQueryData(listKey, {
+      tasks: many(31),
+      cursor: 'c1',
+      next_after: 'next',
+      counts: { total: 32, stage: { s1: 31, s2: 1 } },
+      counted: { s1: 31 },
+    });
+    show(<TasksPage pipeline="eng" search={{ view: 'list' }} />, '/tasks/eng?view=list');
+    await screen.findByTitle('Task 31');
+    noMore();
+    expect(reads).toEqual([]); // nothing read until the end comes near
+    // watched against the page's own scroller, a little before the end shows
+    expect(near.watched()).toHaveLength(1);
+    expect(near.inits()[0]?.root).toBe(document.querySelector('.pk-body'));
+    await nearEnd();
+    expect(await screen.findByTitle('Review the export')).toBeTruthy();
+    expect(reads).toHaveLength(1);
+    expect(within(screen.getByRole('heading', { name: /Inbox/ })).getByText('31')).toBeTruthy();
+    expect(within(screen.getByRole('heading', { name: /Doing/ })).getByText('1')).toBeTruthy();
+    // the server has no more: nothing left to watch
+    await waitFor(() => expect(near.watched()).toHaveLength(0));
+  });
+
+  it('on a board, the end of the longest column reads the next page', async () => {
+    watchNear();
+    serve((url) => (url.includes('after=next') ? { status: 200, body: { tasks: [task('b1', 90, 'Review the export', 's2')], cursor: 'c2' } } : { status: 200, body: {} }));
+    seed([]);
+    queryClient.setQueryData(listKey, { tasks: many(20), cursor: 'c1', next_after: 'next' });
+    show(<TasksPage pipeline="eng" search={{}} />, '/tasks/eng');
+    await screen.findByTitle('Task 20');
+    noMore();
+    await nearEnd();
+    expect(await within(screen.getByRole('region', { name: 'Doing' })).findByTitle('Review the export')).toBeTruthy();
+  });
+
+  it('a page that fails to read leaves a "Try again" row that reads it again', async () => {
+    watchNear();
+    let reads = 0;
+    serve((url) => {
+      if (!url.includes('after=next')) return { status: 200, body: {} };
+      if (++reads === 1) return { status: 500, body: {} };
+      return { status: 200, body: { tasks: [task('b1', 90, 'Review the export', 's2')], cursor: 'c2' } };
+    });
+    seed([]);
+    queryClient.setQueryData(listKey, { tasks: [task('a1', 7, 'Fix the export', 's1')], cursor: 'c1', next_after: 'next' });
+    show(<TasksPage pipeline="eng" search={{ view: 'list' }} />, '/tasks/eng?view=list');
+    await screen.findByTitle('Fix the export');
+    await nearEnd();
+    const again = await screen.findByRole('button', { name: 'Try again' });
+    // a failed read is not tried again by scrolling alone
+    await nearEnd();
+    expect(reads).toBe(1);
+    fireEvent.click(again);
+    expect(await screen.findByTitle('Review the export')).toBeTruthy();
+    expect(reads).toBe(2);
+    expect(screen.getByTitle('Fix the export')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+  });
+
+  it('Needs you and Archived past 12 rows show every row, with no "N more" or "Show more"', async () => {
+    serve(() => ({ status: 200, body: { items: [] } }));
+    const rows = Array.from({ length: 13 }, (_, n) => ({ id: `t${n}`, number: n + 1, title: `Task ${n + 1}`, pipeline_id: 'eng', stage_id: 's2', owner_id: null, late: false, stuck: false, since: ago(5) }));
+    queryClient.setQueryData(flowQuery.queryKey, { count: rows.length, items: rows, order: rows.map((r) => r.id) });
+    show(<NeedsYouPage />, '/needs-you');
+    await screen.findByTitle('Task 13');
+    expect(titles()).toHaveLength(13);
+    noMore();
+    cleanup();
+    const empty = { tasks: [], cursor: 'c' };
+    const done = many(13, 'sd').map((t) => ({ ...t, status: 'done' as const }));
+    show(<ArchivedSections p={PIPE} filters={{}} shelves={{ snoozed: empty, done: { ...empty, tasks: done }, closed: empty }} />, '/tasks/eng');
+    await screen.findByTitle('Task 13');
+    expect(titles()).toHaveLength(13);
+    noMore();
   });
 });
 
@@ -975,14 +1114,13 @@ describe('Needs you @s5 @s112', () => {
     expect(queryClient.getQueryData<{ count: number }>(flowCountQuery.queryKey)?.count).toBe(1);
   });
 
-  it('a long Needs you, opened past its cap, measures each row it draws, so a ❓ card never overlaps the rows below', async () => {
+  it('a long Needs you measures each row it draws, so a ❓ card never overlaps the rows below', async () => {
     virtual.measure.length = 0;
     const rows = Array.from({ length: 120 }, (_, n) => ({ ...item, id: `t${n}`, number: n + 1, title: `Task ${n + 1}` }));
     rows[0] = { ...rows[0]!, questions: [{ id: 'qmark:q1', line: 'Ship it on Friday?', choices: ['Yes'], by: 'bot:gm' }] } as (typeof rows)[number];
     queryClient.setQueryData(flowQuery.queryKey, { count: rows.length, items: rows, order: rows.map((r) => r.id) });
     serve(() => ({ status: 200, body: { items: [] } }));
     show(<NeedsYouPage />, '/needs-you');
-    fireEvent.click(await screen.findByRole('button', { name: '110 more' }));
     await waitFor(() => expect(virtual.measure.length).toBeGreaterThan(0));
     expect(virtual.measure.every((m) => m === true)).toBe(true); // a computer as a phone: no fixed 34 px rows
   });
@@ -1050,7 +1188,8 @@ describe('Needs you @s5 @s112', () => {
     show(<NeedsYouPage />, '/needs-you?view=all');
     expect(await screen.findByTitle('Approve the copy')).toBeTruthy();
     await waitFor(() => expect(queryClient.getQueryData<{ count: number }>(flowCountQuery.queryKey)?.count).toBe(2));
-    fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+    // no IntersectionObserver here (jsdom): the list's end is a press
+    fireEvent.click(screen.getByRole('button', { name: 'More tasks' }));
     expect(await screen.findByTitle('Review the agenda')).toBeTruthy();
     done = true;
     act(() => dispatch('tasks', [{ seq: 2, id: active.id, kind: 'update', task: { ...active, status: 'done', version: 2 } }]));

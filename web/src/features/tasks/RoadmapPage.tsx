@@ -1,6 +1,6 @@
 import { useSuspenseQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { useAction } from '@/actions';
 import { useFollow } from '@/live/follow';
 import { Button } from '@/kit/Button';
@@ -14,7 +14,7 @@ import { Row } from '@/kit/Row';
 import { List, PageMore, Section } from '@/pagekinds';
 import { usePref } from '@/prefs';
 import { fmtDate } from '@/lib';
-import { Capped, LIST_CAP, LIST_SHOW, RowMore, ROW_H } from './capped';
+import { AllRows, ReadOn, ROW_H } from './capped';
 import { FilterItems, FilterMenu } from './FilterMenu';
 import { NewTask } from './NewTask';
 import { useNeedsYou } from './needs';
@@ -148,38 +148,40 @@ interface HorizonsProps {
 function Horizons({ p, rows, done, needs, folds, fold, cut, shippedCut, shippedCount, filters }: HorizonsProps) {
   const cards = useCards();
   const groups = { ...byHorizon(p, rows), shipped: [...done] };
-  const more = cut ? () => void loadMore(p.id, filters) : undefined;
-  const moreShipped = shippedCut ? () => void loadMoreOf(shelfParams(p.id, 'done', filters)) : undefined;
+  const more = cut ? () => loadMore(p.id, filters) : undefined;
+  const moreShipped = shippedCut ? () => loadMoreOf(shelfParams(p.id, 'done', filters)) : undefined;
+  const horizon = (h: Horizon, name: string, list: readonly TaskItem[]) => {
+    // A phone folds Shipped to one line that opens the pipeline's Archived (more.js: "14 since Oct 1").
+    if (h === 'shipped' && cards && list.length) {
+      const n = shippedCount ?? list.length;
+      return (
+        <div className="stage-fold">
+          <span className="fold-label">Shipped</span>
+          <Link to="/tasks/$pipeline" params={{ pipeline: p.id }} search={{ view: 'archived' }}>
+            {`${n}${shippedCount === undefined ? '+' : ''} ${n === 1 ? 'feature' : 'features'}`}
+          </Link>
+        </div>
+      );
+    }
+    const count = h === 'shipped' ? shippedCount : cut ? undefined : list.length;
+    return (
+      <Section name={name} count={count} open={!folds.includes(h)} onOpenChange={(o) => fold(h, o)} target={`horizon:${h}`}>
+        <AllRows list={list} height={ROW_H} draw={(t) => <RoadmapRow key={t.id} t={t} p={p} needs={needs} />} />
+        {h === 'shipped' && <ReadOn more={moreShipped} />}
+      </Section>
+    );
+  };
   return (
     <>
       {HORIZONS.map(([h, name]) => {
         const list = groups[h];
         if (!list.length && h !== 'shipped') return null;
-        // A phone folds Shipped to one line that opens the pipeline's Archived (more.js: "14 since Oct 1").
-        if (h === 'shipped' && cards && list.length) {
-          const n = shippedCount ?? list.length;
-          return (
-            <div key={h} className="stage-fold">
-              <span className="fold-label">Shipped</span>
-              <Link to="/tasks/$pipeline" params={{ pipeline: p.id }} search={{ view: 'archived' }}>
-                {`${n}${shippedCount === undefined ? '+' : ''} ${n === 1 ? 'feature' : 'features'}`}
-              </Link>
-            </div>
-          );
-        }
-        const count = h === 'shipped' ? shippedCount : cut ? undefined : list.length;
         return (
-          <Section key={h} name={name} count={count} open={!folds.includes(h)} onOpenChange={(o) => fold(h, o)} target={`horizon:${h}`}>
-            <Capped
-              list={list}
-              cap={LIST_CAP}
-              show={LIST_SHOW}
-              height={ROW_H}
-              more={h === 'shipped' ? moreShipped : more}
-              draw={(t) => <RoadmapRow key={t.id} t={t} p={p} needs={needs} />}
-              moreRow={(n, open) => <RowMore key="more" n={n} cut={h === 'shipped' ? shippedCut : cut} onClick={open} />}
-            />
-          </Section>
+          <Fragment key={h}>
+            {/* Now, Next and Later are one read: where they end, its next page comes in */}
+            {h === 'shipped' && <ReadOn more={more} />}
+            {horizon(h, name, list)}
+          </Fragment>
         );
       })}
     </>
