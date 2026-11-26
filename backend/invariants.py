@@ -138,17 +138,9 @@ def long_holds(c, ctx):
     """Write-lock holds of LONG_HOLD_MS or more in the last hour (flight_events, kind long_hold), when there are more
     than LONG_HOLDS_PER_HOUR: the routes and code sites holding the one write lock, most holds first."""
     since = _hour_ago(ctx)
-    total = c.execute(
-        "SELECT count(*) FROM flight_events WHERE kind='long_hold' AND created_at>=?", (since,)
-    ).fetchone()[0]
-    if total <= LONG_HOLDS_PER_HOUR:
+    if flight.long_hold_count(c, since) <= LONG_HOLDS_PER_HOUR:
         return []
-    rows = c.execute(
-        "SELECT json_extract(detail,'$.route') AS route, json_extract(detail,'$.site') AS site, "
-        "count(*) AS n, max(json_extract(detail,'$.hold_s')) AS worst FROM flight_events "
-        "WHERE kind='long_hold' AND created_at>=? GROUP BY route, site ORDER BY n DESC LIMIT ?",
-        (since, LIMIT),
-    ).fetchall()
+    rows = flight.long_hold_sites(c, since, LIMIT)
     return [
         f"{row['route'] or 'a background job'} at {row['site'] or 'an unknown site'}: {row['n']} holds, "
         f"longest {row['worst']:g} s"
@@ -159,12 +151,7 @@ def long_holds(c, ctx):
 def runner_errors(c, ctx):
     """Runner routes whose 5xx answers in the last hour were more than RUNNER_ERROR_PERCENT of their requests, from at
     least RUNNER_MIN_REQUESTS requests (flight_requests: one row per minute, route and caller)."""
-    marks = ",".join("?" * len(RUNNER_ROUTES))
-    rows = c.execute(
-        f"SELECT route, sum(n) AS n, sum(errors) AS errors FROM flight_requests "
-        f"WHERE span=60 AND created_at>=? AND route IN ({marks}) GROUP BY route",
-        (_hour_ago(ctx), *RUNNER_ROUTES),
-    ).fetchall()
+    rows = flight.route_totals(c, _hour_ago(ctx), RUNNER_ROUTES)
     return [
         f"{row['route']}: {row['errors']} of {row['n']} answered with a 5xx"
         for row in rows
@@ -176,18 +163,11 @@ def recorder_drops(c, ctx):
     """Samples the flight recorder dropped in the last hour (flight_process: one row per minute). A drop is the
     measurement losing data, most on the bad days it exists to show."""
     since = _hour_ago(ctx)
-    totals = c.execute(
-        "SELECT coalesce(sum(dropped),0) AS dropped, coalesce(sum(requests),0) AS requests "
-        "FROM flight_process WHERE created_at>=?",
-        (since,),
-    ).fetchone()
+    totals = flight.drop_totals(c, since)
     dropped, taken = totals["dropped"], totals["requests"] + totals["dropped"]
     if dropped < DROPPED_MIN or dropped * 100 < DROPPED_PERCENT * taken:
         return []
-    rows = c.execute(
-        "SELECT created_at, dropped FROM flight_process WHERE created_at>=? AND dropped>0 ORDER BY dropped DESC LIMIT ?",
-        (since, LIMIT),
-    ).fetchall()
+    rows = flight.worst_drop_minutes(c, since, LIMIT)
     return [
         f"{datetime.fromtimestamp(row['created_at'], timezone.utc):%H:%M} UTC: {row['dropped']} dropped" for row in rows
     ]

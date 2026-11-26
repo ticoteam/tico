@@ -1164,8 +1164,14 @@ def note(conn, kind, detail):
         rec.event(kind, detail)
 
 
+def tables(store, write=False):
+    """A connection to the recorder's tables for a caller that opens its own: today they are in the server's database,
+    so it is the store's (a write is one transaction). `record_event` and `size_db` open them only through here."""
+    return store.transaction() if write else store.read()
+
+
 def record_event(store, kind, detail, now=None):
-    with store.transaction() as c:
+    with tables(store, write=True) as c:
         _event(c, kind, detail, now)
 
 
@@ -1174,6 +1180,73 @@ def last_start(c):
         "SELECT created_at,detail FROM flight_events WHERE kind='start' ORDER BY created_at DESC,id DESC LIMIT 1"
     ).fetchone()
     return {"at": row[0], **json.loads(row[1])} if row else None
+
+
+# ---------------------------------------------------------------------------- reads for Health and invariants
+# Health (backend/health.py, backend/maintenance_health.py) and the invariant sweep (backend/invariants.py) read the
+# recorder's tables only through these, on the connection they hold, so where the tables live is this module's business.
+
+
+def start_times(c):
+    """Every kept start event's time, as epoch seconds."""
+    return [row[0] for row in c.execute("SELECT created_at FROM flight_events WHERE kind='start'")]
+
+
+def long_hold_count(c, since):
+    """Write-lock holds of LONG_HOLD_MS or more logged since `since` (epoch seconds)."""
+    return c.execute(
+        "SELECT count(*) FROM flight_events WHERE kind='long_hold' AND created_at>=?", (since,)
+    ).fetchone()[0]
+
+
+def long_hold_sites(c, since, limit):
+    """Those holds per route and code site, most first: rows of route, site, n and worst (the longest, in seconds)."""
+    return c.execute(
+        "SELECT json_extract(detail,'$.route') AS route, json_extract(detail,'$.site') AS site, "
+        "count(*) AS n, max(json_extract(detail,'$.hold_s')) AS worst FROM flight_events "
+        "WHERE kind='long_hold' AND created_at>=? GROUP BY route, site ORDER BY n DESC LIMIT ?",
+        (since, limit),
+    ).fetchall()
+
+
+def route_totals(c, since, routes):
+    """Requests and 5xx answers per route in `routes` from one-minute rows since `since`, every caller summed: rows of
+    route, n and errors."""
+    marks = ",".join("?" * len(routes))
+    return c.execute(
+        f"SELECT route, sum(n) AS n, sum(errors) AS errors FROM flight_requests "
+        f"WHERE span=60 AND created_at>=? AND route IN ({marks}) GROUP BY route",
+        (since, *routes),
+    ).fetchall()
+
+
+def route_minutes(c, since, routes):
+    """The one-minute rows (route, hist) of `routes` since `since`; None when this database has no flight_requests."""
+    if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='flight_requests'").fetchone():
+        return None
+    marks = ",".join("?" * len(routes))
+    return c.execute(
+        f"SELECT route,hist FROM flight_requests WHERE created_at>=? AND span=60 AND route IN ({marks})",
+        (since, *routes),
+    ).fetchall()
+
+
+def drop_totals(c, since):
+    """Samples the recorder dropped and requests it kept, summed over the process minutes since `since`: one row of
+    dropped and requests, 0 when there are none."""
+    return c.execute(
+        "SELECT coalesce(sum(dropped),0) AS dropped, coalesce(sum(requests),0) AS requests "
+        "FROM flight_process WHERE created_at>=?",
+        (since,),
+    ).fetchone()
+
+
+def worst_drop_minutes(c, since, limit):
+    """The process minutes since `since` that dropped samples, most dropped first: rows of created_at and dropped."""
+    return c.execute(
+        "SELECT created_at, dropped FROM flight_process WHERE created_at>=? AND dropped>0 ORDER BY dropped DESC LIMIT ?",
+        (since, limit),
+    ).fetchall()
 
 
 # ---------------------------------------------------------------------------- the database itself
@@ -1575,8 +1648,8 @@ class Flight(threading.Thread):
     def size_db(self, now):
         started = time.monotonic()
         self.db_next = now + self.db_every
-        with self.store.read() as c:
-            latest = c.execute("SELECT created_at,detail FROM flight_db ORDER BY created_at DESC LIMIT 1").fetchone()
+        with tables(self.store) as c:
+            latest = latest_db_sample(c)
         previous = json.loads(latest["detail"] or "{}") if latest else {}
         # The original scan timestamp travels with each hourly sample, including across recorder restarts.
         objects_at = previous.get("objects_at", latest["created_at"] if latest else None)
@@ -1732,8 +1805,13 @@ def _process(c, since, until=None):
     }
 
 
+def latest_db_sample(c):
+    """The newest hourly database sample (a flight_db row), or None before the first."""
+    return c.execute("SELECT * FROM flight_db ORDER BY created_at DESC LIMIT 1").fetchone()
+
+
 def _db(c, now):
-    latest = c.execute("SELECT * FROM flight_db ORDER BY created_at DESC LIMIT 1").fetchone()
+    latest = latest_db_sample(c)
     if not latest:
         return {}
     day = c.execute(
