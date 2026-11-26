@@ -231,6 +231,12 @@ tico task close <id> -m "Not needed this quarter" --version N
 tico task move <id> reopen -m "The export is wrong again" --version N
 ```
 
+A reopen is a new visit to the stage: what the stage needs starts over and its owner is told. The **Undo** on an
+approval card's Close is not: it gives back the visit the close ended, with the page attached and the OK still waiting
+on the same person, and nobody is woken (`POST /api/v2/tasks/{id}/move` with `{"to": "reopen", "why": "...",
+"undo": true}`). It works for whoever closed it, within two minutes; later, or for someone else, it is a plain reopen.
+A close that also closed a sub-task reopens as a new visit too.
+
 Done and Closed tasks are behind the archive button on the Tasks page. Nothing closes by itself.
 
 A duplicate is closed by merging it into the task that stays ([Merge](#merge)):
