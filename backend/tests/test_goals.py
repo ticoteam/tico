@@ -196,7 +196,7 @@ def test_a_closed_task_earns_a_goal_no_credit_only_a_done_one_does(company):
     assert scores["Ship the booking page"] == {
         "status": "gray",
         "basis": "tasks",
-        "reason": "No measure yet: all 1 tasks done",
+        "reason": "No measure yet: 1 task done",
     }
 
 
@@ -253,7 +253,7 @@ def test_finished_tasks_never_make_a_goal_green_only_a_measure_or_a_check_in_doe
         r = rows[title]
         return r["status"], r["status_note"], r["status_source"]
 
-    assert seen("Make Finance useful") == ("gray", "No measure yet: all 1 tasks done", "auto")
+    assert seen("Make Finance useful") == ("gray", "No measure yet: 1 task done", "auto")
     assert seen("Make Growth useful") == ("gray", "No measure yet: 2 of 4 tasks done, latest today", "auto")
     assert seen("Make Threads useful") == ("green", "Check-in today: on track", "auto")
     assert rows["Make Company useful"]["status"] == "green"
@@ -263,6 +263,57 @@ def test_finished_tasks_never_make_a_goal_green_only_a_measure_or_a_check_in_doe
     assert [e["new"] for e in events][-1] == "gray" and len([e for e in events if e["new"] == "gray"]) == 1
     # No ask, Needs-you item or notice is filed for the change.
     assert (tasks_after, messages_after) == (tasks_before, messages_before)
+
+
+def test_an_all_done_note_reads_right_for_one_two_and_more_tasks(company):
+    """The note on a goal whose tasks are all done counts them in plain words: "1 task done", "both tasks done",
+    "all 3 tasks done". A closed task is not counted. A note stored in the old "all 1 tasks done" words is rewritten
+    by the next pass, and the colour stays gray."""
+    from backend import goals as GL
+    from backend.store import H
+    from backend.tests.helpers import engine as X
+
+    with company.transaction() as c:
+        X.bot(c, "ops")
+
+        def goal_with(title, done, closed=0):
+            g = GL.create(c, "human:ana", title, "human:ana")
+            for n in range(done):
+                tid = H.task_create(c, "human:ana", f"{title} {n}", "Work it.", "bot:ops", goal_id=g["id"], lint=False)
+                H.task_done(c, "human:ana", tid["id"], "Done")
+            for n in range(closed):
+                tid = H.task_create(
+                    c, "human:ana", f"{title} dropped {n}", "Work it.", "bot:ops", goal_id=g["id"], lint=False
+                )
+                H.task_close(c, "human:ana", tid["id"], "Not now")
+            return g
+
+        one = goal_with("Make Finance useful", 1)
+        two = goal_with("Make Growth useful", 2)
+        three = goal_with("Make Threads useful", 3)
+        one_and_dropped = goal_with("Make Company useful", 1, closed=1)
+        notes = {g["title"]: GL.score(c, GL.goal(c, g["id"]))["reason"] for g in (one, two, three, one_and_dropped)}
+
+        GL.refresh(c)
+        c.execute(
+            "UPDATE goals SET status='gray', status_note='No measure yet: all 1 tasks done', status_source='auto' "
+            "WHERE id=?",
+            (one["id"],),
+        )
+        GL.refresh(c)
+        stored = GL.goal(c, one["id"])
+
+    assert notes == {
+        "Make Finance useful": "No measure yet: 1 task done",
+        "Make Growth useful": "No measure yet: both tasks done",
+        "Make Threads useful": "No measure yet: all 3 tasks done",
+        "Make Company useful": "No measure yet: 1 task done",
+    }
+    assert (stored["status"], stored["status_note"], stored["status_source"]) == (
+        "gray",
+        "No measure yet: 1 task done",
+        "auto",
+    )
 
 
 def test_stalled_tasks_still_warn_and_a_measure_with_no_reading_says_so(company, monkeypatch):

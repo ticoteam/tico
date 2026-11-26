@@ -690,6 +690,15 @@ def _age(then, at):
     return words if words == "today" else f"{words} ago"
 
 
+def _all_done(count: int) -> str:
+    """The "every task is done" words, read right for one and two tasks: "1 task done", "both tasks done"."""
+    if count == 1:
+        return "1 task done"
+    if count == 2:
+        return "both tasks done"
+    return f"all {count} tasks done"
+
+
 def _from_owner(conn, row, at):
     """A goal with no KPI to judge it by is coloured by its owner's check-in, then by its tasks."""
     since = H.shift(H.now(), days=-CHECKIN_DAYS)
@@ -718,7 +727,7 @@ def _from_owner(conn, row, at):
     # Finished tasks show effort, not that the goal is being met: they never make a goal green. Only a KPI on
     # target or an on-track check-in does. Stalled tasks can still warn (yellow, red) below.
     if not waiting:
-        return {"status": "gray", "basis": "tasks", "reason": f"{NO_MEASURE}: all {len(tasks)} tasks done"}
+        return {"status": "gray", "basis": "tasks", "reason": f"{NO_MEASURE}: {_all_done(len(tasks))}"}
     latest = max(finished, default=None)
     if latest and (at - H.parse_ts(latest).astimezone(timezone.utc)).days < TASK_DAYS:
         return {
