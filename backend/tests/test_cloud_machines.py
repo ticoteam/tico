@@ -4385,9 +4385,38 @@ def test_choosing_its_own_machine_again_after_its_computer_was_revoked_is_not_re
     current = cloud.row("ops")
     assert current["placement"] == "own" and current["size"] == "large"
     assert placed(cloud)["ops"] == shared
-    # That machine can never check in again: it is deleted, and a new one is made at the size chosen for the bot.
-    assert cloud.tick()[-2:] == ["delete", "create"] and cloud.hq.calls[-1][1] == "ops"
+    # That machine can never check in again: it is deleted, and a new one is made at the size chosen for the bot. The
+    # next tick lists HQ's machines first (the old one live, not pending deletion): that keeps the unsent DELETE.
+    assert ticked(cloud, CM.SYNC) == ["delete", "create"] and cloud.hq.calls[-1][1] == "ops"
     fresh = post(cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm", "platform": "linux"})
     cloud.tick()
     assert cloud.row("ops")["machine_size"] == "large" and fresh["runner_id"] != old
     assert placed(cloud)["ops"] == fresh["runner_id"]
+
+
+def test_a_revoked_own_machine_with_a_turn_still_out_is_not_deleted_until_the_turn_ends(cloud):
+    """#3587 review: the old machine's disk holds a turn's work while that turn is out on it. Choosing the bot's own
+    machine again saves the choice but deletes nothing until the turn has ended."""
+    shared_for(cloud, "cpo")
+    computer = own_computer(cloud, "ops")
+    old, old_machine = computer["runner_id"], cloud.row("ops")["machine_id"]
+    ready(cloud.api, computer, ["ops"])
+    assert claim_on(cloud, computer, "ops") and leased(cloud, old) == ["ops"]
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), old))
+    change_as(cloud, "ops", mode="cloud", placement="own", size="large")
+    assert cloud.row("ops")["size"] == "large"
+    assert "delete" not in ticked(cloud, CM.SYNC)
+    assert not cloud.row("ops")["deleting"]
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE attempts SET lease_until=0 WHERE bot_id='ops'")
+        cloud.api.app.state.execution.expire(c)
+    # The next look marks the old machine for deletion and makes the new one; the sweep after sends the DELETE.
+    assert ticked(cloud, CM.SYNC) == ["create"] and cloud.hq.calls[-1][1] == "ops" and cloud.row("ops")["deleting"]
+    assert ticked(cloud, 1) == ["delete"] and cloud.hq.machines[old_machine]["state"] == "deleted"
+
+
+def ticked(cloud, seconds):
+    """HQ's calls from this one tick (`cloud.tick` returns every call so far), heartbeats left out."""
+    before = len(cloud.hq.actions())
+    return [a for a in cloud.tick(seconds)[before:] if a != "heartbeat"]
