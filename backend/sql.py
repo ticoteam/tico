@@ -533,12 +533,22 @@ GRANTED = {
               FROM {all_events} WHERE action = 'mcp.call' AND actor LIKE 'bot:%')
         GROUP BY 1, 2, 3""",
     ),
+    # Files list, open, search and review per week, by person or bot (backend/file_use.py): how many distinct people or
+    # bots did each and how many times. Never a file, a name, content, a person or a bot.
+    "files_use_weekly": (
+        ("file_use_daily",),
+        """
+        SELECT date(day, '-6 days', 'weekday 1') AS week, kind AS who, action,
+               count(DISTINCT actor) AS actors, sum(uses) AS uses
+        FROM {all_file_use_daily} GROUP BY 1, 2, 3""",
+    ),
 }
 # Base tables only a saved view (DERIVED or GRANTED) reads, and the columns it may see of them. The ask views read a
 # requirement and its visit only by the id a history row the reader may read names: its kind, and the stage it was
 # added in.
 GRANTED_SOURCES = {
     "assistant_actions": ("created_at", "proposer", "proposed_via", "status"),
+    "file_use_daily": ("day", "kind", "action", "actor", "uses"),
     "requirements": ("id", "visit_id", "kind"),
     "visits": ("id", "stage_id"),
 }

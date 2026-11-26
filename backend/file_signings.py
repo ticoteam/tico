@@ -21,6 +21,7 @@ from typing import Any, cast
 from fastapi import FastAPI, Request
 from pydantic import Field
 
+from . import file_use
 from . import models as M
 from .api_contract import api_v2, error
 from .store import H as _H
@@ -353,6 +354,7 @@ def install(app: FastAPI, store: Any, auth: Any, blobs: Any, files: Any, mutate:
                 task_id,
                 {"file": fid, "before_version": number, "after_version": after, "after_sha256": digest},
             )
+            file_use.count_in(c, who.actor, "review")
             return {"file_id": fid, "version": after, "signing": view(c, signing, person=True)}
 
         result: Any = await asyncio.to_thread(

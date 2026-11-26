@@ -28,6 +28,7 @@ import sqlite3
 from fastapi import Request
 
 from . import file_details
+from . import file_use
 from . import html_convert
 from . import manual
 from . import page_links
@@ -943,7 +944,7 @@ def install_library(app, store, auth, files):
         cursor: str = "",
     ):
         """Library › Files: every file the caller may see, newest activity first. Paged and byte-capped; no totals."""
-        return library.listing(
+        found = library.listing(
             request.state.identity,
             kind=kind,
             bot=bot,
@@ -960,6 +961,8 @@ def install_library(app, store, auth, files):
             limit=max(1, min(limit, LIST_MAX)),
             cursor=cursor,
         )
+        file_use.count(store, request.state.identity, "list")
+        return found
 
     @app.get(
         "/api/v2/files/search",
@@ -984,7 +987,7 @@ def install_library(app, store, auth, files):
     ):
         """Search the files the caller may read by title and text, filtered by kind or tag, best first with an excerpt;
         a tag alone lists its files, newest first."""
-        return library.search(
+        found = library.search(
             request.state.identity,
             q[:500],
             max(1, min(limit, SEARCH_MAX)),
@@ -996,6 +999,8 @@ def install_library(app, store, auth, files):
             page_kind=page_kind,
             stale=stale,
         )
+        file_use.count(store, request.state.identity, "search")
+        return found
 
     @app.delete(
         "/api/v2/files/{fid}",
