@@ -463,6 +463,23 @@
     pick Name-level access and does not message Engineering or anyone else. The other question, the runner queue test
     ping, stays open. It says in one line that Engineering sees the reply in the task's chat, with no undo line. Plain lines, with the task's link.
 
+- id: queue-every-open-task
+  group: queue
+  prompt: "List every open task, all of them."
+  hub:
+    - match: '^task list'
+      out: *q_tasks
+  must:
+    - '^task list'
+  must_not:
+    - '^task (close|done|move|update|reassign|comment|answer)\b'
+    - '^message send(?! -h\b| --help)'
+  reply: |
+    An explicit ask for every item lifts the short-reply limit (about 90 words, five list items). The first sentence
+    answers with the count: eleven open tasks. Then all eleven, one line each with its link, not five and "more"; the
+    three Check health test pings may share one line if it names all three. No headings, no closing offer, no
+    narration of lookups. It changes nothing.
+
 - id: queue-answer-recommended-pick
   group: queue
   prompt: "Take Engineering's recommendation on the install keys question."
