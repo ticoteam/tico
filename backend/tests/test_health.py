@@ -1922,7 +1922,10 @@ def test_work_its_tasks_snooze_holds_is_never_refused_for_12_hours(environment):
         ]
         # The same job refused for another reason: the bot is held for its failed runs. That is still reported.
         failing(c, "ops", 3, held_at=H.shift(H.now(), hours=-14), probe_at=H.shift(H.now(), days=2))
-        assert [(bot, reason != "task_wait") for bot, reason in _refused_for_13_hours(c, api.app.state.store.settings, "ops")] == [("ops", True)]
+        assert [
+            (bot, reason != "task_wait")
+            for bot, reason in _refused_for_13_hours(c, api.app.state.store.settings, "ops")
+        ] == [("ops", True)]
 
 
 def test_a_rejected_sign_in_says_when_in_clock_time_never_an_iso_stamp():
