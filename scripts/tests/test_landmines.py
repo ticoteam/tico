@@ -188,6 +188,17 @@ HUB_PY = "backend/migrations/20261201000000_thing.py"
             'SQL = """\nCREATE TABLE IF NOT EXISTS\n    flight_requests (span INTEGER)\n"""\n',
             'SQL = """\nDROP TABLE IF EXISTS\n    flight_requests\n"""  # CREATE TABLE flight_requests moved\n',
         ),
+        (
+            HUB_SQL,
+            "CREATE /* legacy */ TABLE flight_events(id INTEGER);\n",
+            "/* CREATE TABLE flight_events(id INTEGER);\n   moved to hub.flight.db */\nSELECT 1;\n",
+        ),
+        (HUB_SQL, "ALTER TABLE 'flight_events' ADD COLUMN x;\n", "ALTER TABLE 'events' ADD COLUMN flight_x;\n"),
+        (
+            HUB_PY,
+            'SQL = "CREATE /* old */ TABLE \'main\'.\'flight_db\'(x)"\n',
+            'SQL = "/* CREATE TABLE flight_db(x) */ SELECT 1"\n',
+        ),
     ],
 )
 def test_no_flight_in_hub_bans_a_flight_table_made_or_changed_and_allows_its_drop(path, bad, good):
@@ -199,6 +210,15 @@ def test_no_flight_in_hub_names_the_line_a_statement_starts_on():
     text = "-- one\nCREATE TABLE\n  flight_events(id INTEGER);\nCREATE INDEX k\n  ON flight_events(id);\n"
     found = landmines.hits_in(HUB_SQL, text, [landmines.BY_ID["no-flight-in-hub"]])["no-flight-in-hub"]
     assert found == [(2, "CREATE TABLE"), (4, "CREATE INDEX k")]
+
+
+def test_no_flight_in_hub_keeps_line_numbers_past_a_block_comment_and_sees_past_globs():
+    text = "/* one\n   two */\nCREATE TABLE flight_events(id INTEGER);\n"
+    found = landmines.hits_in(HUB_SQL, text, [landmines.BY_ID["no-flight-in-hub"]])["no-flight-in-hub"]
+    assert [number for number, _ in found] == [3]
+    # A glob's /* in one Python string and */ in a later one are no comment hiding the DDL between them.
+    py = 'A = "docs/*.md"\nB = "CREATE TABLE flight_events(id INTEGER)"\nC = "src/**/x"\n'
+    assert hits(HUB_PY, py).get("no-flight-in-hub") == 1
 
 
 def test_no_flight_in_hub_leaves_the_flight_file_the_shipped_migrations_and_tests_alone():
@@ -264,6 +284,17 @@ def test_no_flight_in_hub_leaves_the_flight_file_the_shipped_migrations_and_test
         ("runner-rs/Cargo.toml", '[target.x.dependencies."tauri"]\n', '[target.x.dependencies."tokio"]\n'),
         ("app/bootstrap.sh", "cargo tauri build\n", "npm run build\n"),
         ("README-build.md", "Build the Tauri shell first.\n", "Build the Electron app first.\n"),
+        ("scripts/build.sh", "cargo   tauri build\n", "cargo   build\n"),
+        (
+            "app/Cargo.toml",
+            "[target.'cfg(target_os = \"macos\")'.dependencies.tauri]\n",
+            "[target.'cfg(target_os = \"macos\")'.dependencies.objc2]\n",
+        ),
+        (
+            "app/Cargo.toml",
+            '[target."cfg(unix)".build-dependencies."tauri"]\n',
+            '[target."cfg(unix)".dependencies.tokio]\n',
+        ),
     ],
 )
 def test_no_tauri_bans_the_tauri_app_coming_back(path, bad, good):
@@ -279,6 +310,21 @@ def test_no_tauri_bans_a_file_named_for_tauri_whatever_it_holds():
         "scripts/tauri_build.py",
     ):
         assert hits(path, "x = 1\n").get("no-tauri") == 1, path
+
+
+def test_no_tauri_counts_a_binary_file_at_a_tauri_path(tmp_path, monkeypatch):
+    git(tmp_path, "init", "-q")
+    icon = tmp_path / "app/src-tauri/icons/icon.png"
+    icon.parent.mkdir(parents=True)
+    icon.write_bytes(b"\x89PNG\r\n\x1a\n\xff\xfe\x00")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs/logo.png").write_bytes(b"\x89PNG\r\n\x1a\n\xff\xfe\x00")
+    git(tmp_path, "add", "-A")
+    monkeypatch.setattr(landmines, "ROOT", tmp_path)
+    tracked = landmines.tracked_files
+    monkeypatch.setattr(landmines, "tracked_files", lambda: tracked(tmp_path))
+    found = landmines.scan([landmines.BY_ID["no-tauri"]])
+    assert list(found) == ["app/src-tauri/icons/icon.png"]
 
 
 def test_no_tauri_leaves_history_tests_of_its_removal_and_customer_repositories_alone():

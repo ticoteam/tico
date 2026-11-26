@@ -2,7 +2,7 @@
 
 Download **Tico** from the [latest GitHub release](https://github.com/ticoteam/tico/releases/latest).
 The same app connects to any Tico server and holds several companies, each with its own sign-in.
-A company with its own app offers it in its Tico menu ([below](#your-companys-app)).
+Your Tico server's download links offer it too ([below](#downloads-from-your-tico-server)).
 
 ## Install
 
@@ -45,9 +45,9 @@ updates.
 ## The older desktop app
 
 Before the current app, Tico's desktop app was a different program (`app/` in the repository, files named
-`Tico_<version>_...` on each release, such as `Tico_<version>_universal.dmg`). Releases still carry it until installed
-copies have moved over. Inside it, the menu shows **A new Tico desktop app is ready.** with a **Download** link for
-your computer. Install the new app as above:
+`Tico_<version>_...` on releases made before it was retired, such as `Tico_<version>_universal.dmg`). New releases no
+longer build it; a computer that still has it moves over by hand. Inside it, the menu shows **A new Tico desktop
+app is ready.** with a **Download** link for your computer. Install the new app as above:
 
 - On a Mac, both apps are called Tico, so dragging the new one to Applications replaces the older one (Finder asks
   first).
@@ -109,9 +109,10 @@ Only the generic Mac app can hold several organizations. Company builds, environ
 ## Downloads from your Tico server
 
 Your Tico page's download links (`GET /download/{mac|windows|linux}`, which redirects with no sign-in, and
-`GET /api/download/{mac|windows|linux}`, which describes the file) offer the installers above from the GitHub release
+`GET /api/download/{mac|windows|linux}`, which describes the file) offer three of the installers above from the GitHub release
 of the version your server runs: `Tico-<version>-arm64.dmg` (or `-universal.dmg` on an older release),
-`Tico-<version>-setup.exe` and `Tico-<version>-x86_64.AppImage`. The answer's `app_kind` is always `generic`, and
+`Tico-<version>-setup.exe` and `Tico-<version>-x86_64.AppImage`, never the `.deb`. `<version>` is the app's, which
+can be older than the release's when the release carried the app forward ([releasing](releasing.md)). The answer's `app_kind` is always `generic`, and
 `signed` and `notarized` are always false, since the release records neither. The server caches what GitHub returned
 for ten minutes; when the release has no installers yet (they arrive a few minutes after it is published), it asks
 again after a minute. A server running from a source checkout reports `dev` and offers no download: get the app from

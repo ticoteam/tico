@@ -27,4 +27,4 @@ Regenerate after changing an SVG:
     bash scripts/build-brand-icons.sh
 
 It needs `rsvg-convert` (`brew install librsvg`) and, for `icon.icns`, macOS's `iconutil`. Then rebuild the
-desktop app (`cd desktop && npm run pack:mac` for a local Mac build).
+desktop app (`cd desktop && npm ci && npm run pack:mac` for a local Mac build).

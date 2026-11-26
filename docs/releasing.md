@@ -751,8 +751,9 @@ The desktop app (`desktop/`, Electron) never holds up the server release. Only `
 `release` run before core publication; the Mac binaries and the desktop app start afterwards so their fan-out cannot
 compete with publication for job slots. A manual rebuild of an already published tag still runs them when `release` is
 skipped. A failed desktop build leaves the server release published and the Release run red; rerun the workflow from
-the tag (Run workflow, `desktop` checked) once it is fixed. The app's version is the release's (v0.3.6 → app 0.3.6,
-including any prerelease suffix), stamped from the tag at build time.
+the tag (Run workflow, `desktop` checked) once it is fixed. When the workflow builds the app, its version is the release's
+(v0.3.6 → app 0.3.6, including any prerelease suffix), stamped from the tag; carried-forward files keep the version
+of the release that built them.
 
 The Release workflow's `electron-changes` job builds it with `.github/workflows/desktop.yml` unless all of these hold
 for the previous release tag (the newest version tag the new one descends from), in which case `electron-assets`

@@ -208,18 +208,21 @@ def runner_support_imports(path, text):
 # migrations are never edited (scripts/check_migration_order.py), so the ones that made or changed a flight table stay.
 FLIGHT_SCHEMA = "backend/flight.py"
 FLIGHT_SHIPPED = {"backend/migrations/baseline.sql", "backend/migrations/20261126013526_flight_slow_parts.sql"}
-_FLIGHT_TABLE = r"""(?:["`\[]?main["`\]]?\s*\.\s*)?["`\[]?flight_\w"""
+_FLIGHT_TABLE = r"""(?:["'`\[]?main["'`\]]?\s*\.\s*)?["'`\[]?flight_\w"""
 # Read over the whole file, so a statement split over lines is one statement; a trigger's ON is looked for within its
 # statement (no `;`) and its first 300 characters.
 FLIGHT_IN_HUB = re.compile(
     rf"\bCREATE\s+(?:(?:TEMP|TEMPORARY|VIRTUAL)\s+)?(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?{_FLIGHT_TABLE}"
     rf"|\bALTER\s+TABLE\s+{_FLIGHT_TABLE}"
     rf"|\bRENAME\s+TO\s+{_FLIGHT_TABLE}"
-    rf"""|\bCREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?[\w."`\[\]]+\s+ON\s+{_FLIGHT_TABLE}"""
+    rf"""|\bCREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?[\w."'`\[\]]+\s+ON\s+{_FLIGHT_TABLE}"""
     rf"|\bCREATE\s+(?:(?:TEMP|TEMPORARY)\s+)?TRIGGER\b[^;]{{0,300}}?\bON\s+{_FLIGHT_TABLE}",
     re.I,
 )
-SQL_COMMENT = re.compile(r"--[^\n]*")
+SQL_COMMENT = re.compile(r"--[^\n]*|/\*.*?\*/", re.S)
+# In Python a block comment sits inside one string, so it holds no quote: a glob's `/*` in one string and `*/` in a later
+# one are not a comment hiding the code between them.
+PY_SQL_COMMENT = re.compile(r"""--[^\n]*|/\*[^"']*?\*/""")
 
 
 def hub_schema(path):
@@ -231,8 +234,8 @@ def hub_schema(path):
 
 def flight_in_hub(path, text):
     """The line each statement that makes or changes a flight_* table starts on. The whole file is read as written (the
-    SQL sits in Python strings, often over several lines), with Python's # comments and SQL's -- comments blanked in
-    place, so line numbers hold. A DROP is not a hit: it is how the old tables leave hub.sqlite."""
+    SQL sits in Python strings, often over several lines), with Python's # comments and SQL's -- and /* */ comments
+    blanked in place, so line numbers hold. A DROP is not a hit: it is how the old tables leave hub.sqlite."""
     if path.endswith(".py"):
         lines = text.splitlines(keepends=True)
         try:
@@ -243,7 +246,8 @@ def flight_in_hub(path, text):
         except (tokenize.TokenError, SyntaxError, IndentationError):
             lines = [line if not line.lstrip().startswith("#") else "\n" for line in text.splitlines(keepends=True)]
         text = "".join(lines)
-    text = SQL_COMMENT.sub(lambda m: " " * len(m.group()), text)
+    comment = PY_SQL_COMMENT if path.endswith(".py") else SQL_COMMENT
+    text = comment.sub(lambda m: re.sub(r"[^\n]", " ", m.group()), text)
     return [text.count("\n", 0, m.start()) + 1 for m in FLIGHT_IN_HUB.finditer(text)]
 
 
@@ -251,11 +255,12 @@ def flight_in_hub(path, text):
 # and, outside the scope, the lessons and runner-rs/src/worktrees.rs, whose Tauri line is about customers' repositories.
 TAURI_ROOTS = ("app/", "docs/", "scripts/", "backend/", "clients/", "desktop/", "web/", ".github/workflows/")
 TAURI_BUILD = re.compile(
-    r"tauri[.-](?:conf|override|apps|action|cli|build|plugin|bundler|runtime|utils)|cargo[ -]tauri|src-tauri", re.I
+    r"tauri[.-](?:conf|override|apps|action|cli|build|plugin|bundler|runtime|utils)|cargo(?:\s+|-)tauri|src-tauri", re.I
 )
-# In a Cargo.toml: `tauri = ...`, `"tauri" = ...`, `[dependencies.tauri]`, or a renamed `x = { package = "tauri" }`.
+# In a Cargo.toml: `tauri = ...`, `"tauri" = ...`, a `[...dependencies.tauri]` table (a target's included, however its
+# cfg is quoted), or a renamed `x = { package = "tauri" }`.
 TAURI_CRATE = re.compile(
-    r"""^\s*["']?tauri["']?\s*=|\[(?:[\w-]+\.)*dependencies\.["']?tauri["']?\]|\bpackage\s*=\s*["']tauri["']"""
+    r"""^\s*["']?tauri["']?\s*=|^\s*\[.*\bdependencies\.["']?tauri["']?\s*\]|\bpackage\s*=\s*["']tauri["']"""
 )
 TAURI_WORD = re.compile(r"(?<![a-z])tauri", re.I)
 
@@ -559,7 +564,9 @@ def scan(rules=RULES):
             continue
         try:
             text = file.read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError):
+        except UnicodeDecodeError:
+            text = ""  # a binary file still counts by its path (an icon under src-tauri/)
+        except OSError:
             continue
         found = hits_in(path, text, rules)
         if found:
