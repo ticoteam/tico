@@ -2,7 +2,7 @@ import type { AnyRouter } from '@tanstack/react-router';
 import * as z from 'zod/mini';
 import { openOf, withOpen } from '@/lib';
 import { openSearch } from '@/search';
-import { resetSheetSizes } from '@/shell';
+import { openRecentViews, resetSheetSizes } from '@/shell';
 import { bound } from './bind';
 import * as copy from './copy';
 import { defineAction, type Ctx } from './types';
@@ -26,6 +26,30 @@ export const goTo = defineAction({
   // motion.md 5, case 5: the flight goes to the new page's title.
   target: ({ to }) => ({ kind: 'page', id: to }),
   // No search rows of its own: search's Pages group offers the menu's pages.
+});
+
+/** The top bar's Recent views (shell/Recent.tsx), its top row ready; on a phone, Search with nothing typed. */
+export const recentViews = defineAction({
+  id: 'shell.recentViews',
+  title: copy.recentViews,
+  kind: 'view',
+  input: z.strictObject({}),
+  tico: false,
+  run: () => openRecentViews(),
+  keys: { 'g r': {} },
+});
+
+/* A recent view's address as it was last seen: a path inside the app with its filters (`?who=me&task=12`). */
+const href = z.string().check(z.minLength(1), z.maxLength(2000), z.regex(/^\/(?!\/)[^\s\\]*$/), z.describe('an address inside the app'));
+
+/** A Recent views row from Search: the view as it was last seen. The person's own press only. */
+export const openView = defineAction({
+  id: 'shell.openView',
+  title: copy.openView,
+  kind: 'view',
+  input: z.strictObject({ to: href }),
+  tico: false,
+  run: ({ router }, { to }) => router.history.push(to),
 });
 
 const chat = z.string().check(z.maxLength(200), z.regex(/^(agent|person|thread):[^\s]+$/), z.describe('agent:<slug>, person:<id> or thread:<id>'));

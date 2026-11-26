@@ -1,6 +1,7 @@
 import { useLocation, useMatches, useRouter, type ErrorComponentProps } from '@tanstack/react-router';
 import { useEffect } from 'react';
 import { ApiError } from '@/api/client';
+import { forgetView, pageKey } from '@/data';
 import { reportError } from '@/features/support/routing';
 import { List } from '@/pagekinds';
 
@@ -14,6 +15,11 @@ export function PageFault({ error, reset }: ErrorComponentProps) {
   const path = useLocation({ select: (l) => l.pathname });
   const route = useMatches({ select: (m) => m.at(-1)?.routeId ?? '' });
   const refused = error instanceof ApiError && error.status === 403;
+  // a page refused or not found is no recent view (data/recentViews.ts)
+  const gone = error instanceof ApiError && (error.status === 403 || error.status === 404);
+  useEffect(() => {
+    if (gone) forgetView(pageKey(path));
+  }, [gone, path]);
   useEffect(() => {
     if (!refused) reportError(error, { source: 'page_fault', route });
   }, [error, refused, route]);

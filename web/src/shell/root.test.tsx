@@ -5,6 +5,7 @@ import { Suspense, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi, type MockInstance } from 'vitest';
 import { ApiError, api } from '@/api/client';
 import { queryClient } from '@/data/query-client';
+import { forgetRecentViews, readRecentViews } from '@/data/recentViews';
 import { Route as root } from '@/routes/__root';
 import { Route as landingRoute } from '@/routes/index';
 import { resetDesktopReports, type TicoDesktop } from '@/desktop';
@@ -1127,5 +1128,37 @@ describe('the browser tab’s title', () => {
     expect(tabTitle('')).toBe('Tico');
     expect(tabTitle('Tasks')).toBe('Tasks - Tico');
     expect(tabTitle('Tasks')).not.toContain('·');
+  });
+});
+
+describe('Recent views in the top bar', () => {
+  afterEach(() => forgetRecentViews());
+
+  it('lists each page opened before this one, newest first, once each, as last seen; an address that only passes on is none', async () => {
+    forgetRecentViews();
+    hops['9'] = '/company/finance';
+    people(MAYA);
+    const router = show('/calendar');
+    const stood = (href: string) => vi.waitFor(() => expect(readRecentViews('Fernhill\u0000human:maya')[0]?.to).toBe(href), { timeout: 3000 });
+    await stood('/calendar');
+    await act(() => router.navigate({ to: '/company/finance', search: { tab: 'bills' } as never }));
+    await stood('/company/finance?tab=bills');
+    await act(() => router.navigate({ to: '/needs-you' }));
+    await stood('/needs-you');
+    // the board's filters changed: the same row, at the top again, with the filters it had last
+    await act(() => router.navigate({ to: '/company/finance', search: { tab: 'cash' } as never }));
+    await stood('/company/finance?tab=cash');
+    // an old task address passing on to a page is not a view of its own
+    await act(() => router.navigate({ to: '/task/$task', params: { task: '9' } }));
+    await vi.waitFor(() => expect(router.state.location.pathname).toBe('/company/finance'));
+    await act(() => router.navigate({ to: '/' }));
+    await act(() => router.navigate({ to: '/needs-you' }));
+    await stood('/needs-you');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Recent views' }));
+    const rows = within(await screen.findByRole('menu', { name: 'Recent views' })).getAllByRole('menuitem');
+    expect(rows.map((r) => r.getAttribute('title'))).toEqual(['Company › Finance', 'Calendar › Calendar page']);
+    expect(rows[0]?.getAttribute('href')).toBe('/company/finance?tab=cash');
+    delete hops['9'];
   });
 });

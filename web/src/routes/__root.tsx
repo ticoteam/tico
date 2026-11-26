@@ -6,9 +6,15 @@ import { reportCallToDesktop, useCallWindow } from '@/desktop';
 import { AppActSheet, ticoRoomQuery } from '@/conversation';
 import {
   configQuery,
+  forgetView,
   meQuery,
+  noteView,
+  pageKey,
   pageOwnersQuery,
   recordVisit,
+  setRecentHere,
+  useOpenTaskName,
+  viewKey,
   useActor,
   useDirectory,
   useHeldCount,
@@ -110,8 +116,15 @@ export const Route = createRootRouteWithContext<RouterContext>()({
     if (add) out.add = add;
     return out;
   },
-  notFoundComponent: () => <Placeholder title="Not found" />,
+  notFoundComponent: () => <NotFound />,
 });
+
+/** The router's not-found page: an address that names nothing is no recent view. */
+function NotFound() {
+  const path = useLocation({ select: (l) => l.pathname });
+  useEffect(() => forgetView(pageKey(path)), [path]);
+  return <Placeholder title="Not found" />;
+}
 
 /* An open task's chat comes with the task's own code: the first load carries the shell only. So does every part the
    root mounts over a page: each loads the first time it has something to show (Later), never before the first paint. */
@@ -226,6 +239,7 @@ function App() {
   const arrangement = arrangementFor(at.path, at.chat ? { chat: at.chat } : {}, isActor);
   useNotePlaces();
   const trail = useTrailParts(at.path, who);
+  useRecentHere(trail, me.data?.id);
   // a task open over the page (`?task=`, lib/taskAddress): the task modal, over whatever page is under it
   const taskOpen = useLocation({ select: (l) => !!openOf(l.search as Record<string, unknown>) });
 
@@ -402,6 +416,29 @@ function useTrailParts(path: string, who: string): TrailPart[] {
   const call = useQuery({ ...callQuery(room ? decodeURIComponent(room) : ''), enabled: !!room, select: (c) => c.title });
   const page = room ? call.data || head : head;
   return trailOf(path, { company: config?.company_name || config?.app_name || '', pipelines, who: name, page });
+}
+
+/** Recent views (data/recentViews.ts): whose list it is, which view is open, and each view the person opens, once it
+    has stood for a moment (an address that only passes on is not one), named by its trail without the company, and a
+    task open over the page by its own name too. On a phone as well: no trail is drawn there, Search lists them. */
+function useRecentHere(trail: readonly TrailPart[], me: string | undefined) {
+  const { data: config } = useQuery(configQuery);
+  const who = me ? `${config?.company_name || config?.app_name || ''}\u0000${me}` : '';
+  const path = useLocation({ select: (l) => l.pathname });
+  const href = useLocation({ select: (l) => l.href });
+  const task = useLocation({ select: (l) => openOf(l.search as Record<string, unknown>)?.task ?? '' });
+  const key = viewKey(path, task ? { task } : {});
+  const taskName = useOpenTaskName(task);
+  useEffect(() => setRecentHere(who, key), [who, key]);
+  const named = trail.slice(1).map((p) => p.label);
+  if (taskName) named.push(taskName);
+  const text = named.join('\u0000');
+  const dev = /^(?:\/next)?\/_dev(?:\/|$)/.test(path);
+  useEffect(() => {
+    if (!who || dev || !text || (task && !taskName)) return;
+    const t = setTimeout(() => noteView({ key, to: href, trail: text.split('\u0000') }, who), 400);
+    return () => clearTimeout(t);
+  }, [who, dev, key, href, text, task, taskName]);
 }
 
 /* ---------------------------------------------------------------- the menu, from the directory */

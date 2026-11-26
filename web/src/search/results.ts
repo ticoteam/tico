@@ -1,5 +1,6 @@
 import * as z from 'zod/mini';
 import type { AnyAction, Ctx } from '@/actions';
+import { recentViewsNow, type RecentView } from '@/data';
 import type { SearchHit, SearchProvider } from './providers';
 
 export interface Group {
@@ -12,6 +13,8 @@ export interface Group {
 const RECENT_KEY = 'tico-next:search-recent';
 const RECENT_MAX = 6;
 export const RECENT = 'Recent';
+/** The top bar's Recent views (data/recentViews.ts), first in Search with nothing typed. */
+export const VIEWS = 'Recent views';
 export const ACTIONS = 'Actions';
 
 const words = (q: string) => q.toLowerCase().split(/\s+/).filter(Boolean);
@@ -145,10 +148,7 @@ export async function gather(
   signal: AbortSignal,
   early?: (groups: Group[]) => void,
 ): Promise<Group[]> {
-  if (!q.trim()) {
-    const recent = readRecent();
-    return recent.length ? [{ name: RECENT, hits: recent }] : [];
-  }
+  if (!q.trim()) return empty(recentViewsNow(), readRecent());
   const wait = from.some((p) => p.remote) ? pause(REMOTE_WAIT_MS, signal) : undefined;
   const found = new Map<SearchProvider, Group>();
   const acts = { name: ACTIONS, hits: actionHits(q, actions, ctx) };
@@ -172,6 +172,25 @@ export async function gather(
     }),
   );
   return groups();
+}
+
+/** A Recent views row as a Search row: it opens the view as it was last seen. */
+export const viewHit = (v: RecentView): SearchHit => ({
+  key: `view:${v.key}`,
+  title: v.trail.join(' › '),
+  lead: { icon: 'clock' },
+  run: { id: 'shell.openView', input: { to: v.to } },
+});
+export const isViewHit = (h: SearchHit) => h.key.startsWith('view:');
+
+/** What Search shows with nothing typed: Recent views, then Search's own Recent items that are not already a row there
+    (the same page by its address, or the same thing by its name). */
+export function empty(views: RecentView[], recent: SearchHit[]): Group[] {
+  const paths = new Set(views.map((v) => v.to.split(/[?#]/)[0]));
+  const names = new Set(views.map((v) => v.trail.at(-1)));
+  const to = (h: SearchHit) => (h.run.input as { to?: unknown } | null)?.to;
+  const own = recent.filter((h) => !names.has(h.title) && !(typeof to(h) === 'string' && paths.has(to(h) as string)));
+  return [...(views.length ? [{ name: VIEWS, hits: views.map(viewHit) }] : []), ...(own.length ? [{ name: RECENT, hits: own }] : [])];
 }
 
 export function readRecent(): SearchHit[] {

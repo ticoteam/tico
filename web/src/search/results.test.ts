@@ -5,7 +5,8 @@ import type { AnyAction, Ctx } from '@/actions';
 // The pieces, not the index, so this test does not load the whole registry.
 import { defineAction } from '@/actions/types';
 import { defineSearch } from './providers';
-import { actionHits, gather, highlight, rank, readRecent, remember, REMOTE_WAIT_MS, score, type Group } from './results';
+import { forgetRecentViews, noteView, setRecentHere } from '@/data';
+import { actionHits, empty, gather, highlight, rank, readRecent, remember, REMOTE_WAIT_MS, score, type Group } from './results';
 
 const ctx: Ctx = { router: {} as AnyRouter, queryClient: {} as Ctx['queryClient'], via: 'search' };
 const goTo = defineAction({
@@ -104,6 +105,29 @@ describe('search', () => {
     expect(readRecent().map((h) => h.key)).toEqual(['task:7', 'page:/settings']);
     const groups = await gather('', [tasks], [goTo], ctx, new AbortController().signal);
     expect(groups.map((g) => g.name)).toEqual(['Recent']);
+  });
+
+  it('opens with nothing typed on Recent views, the open view left out, then its own Recent items not already there', async () => {
+    const me = 'Tico Team\u0000human:chris';
+    setRecentHere(me, '');
+    noteView({ key: 'page:/tasks/product', to: '/tasks/product', trail: ['Tasks', 'Product'] });
+    noteView({ key: 'task:7', to: '/tasks/product?task=7', trail: ['Tasks', 'Product', 'Frost dates'] });
+    noteView({ key: 'page:/library/docs/d1', to: '/library/docs/d1', trail: ['Library', 'Docs', 'Release notes'] });
+    setRecentHere(me, 'page:/library/docs/d1');
+    remember({ key: 'page:/settings', title: 'Settings', run: { id: 'shell.goTo', input: { to: '/settings' } } });
+    remember({ key: 'page:/tasks/product', title: 'Tasks, Product', run: { id: 'shell.goTo', input: { to: '/tasks/product' } } });
+    remember({ key: 'task:7', title: 'Frost dates', run: { id: 'task.open', input: { task: 7 } } });
+    const groups = await gather('', [tasks], [goTo], ctx, new AbortController().signal);
+    expect(groups.map((g) => [g.name, g.hits.map((h) => h.title)])).toEqual([
+      ['Recent views', ['Tasks › Product › Frost dates', 'Tasks › Product']],
+      ['Recent', ['Settings']],
+    ]);
+    expect(groups[0]!.hits[0]!.run).toEqual({ id: 'shell.openView', input: { to: '/tasks/product?task=7' } });
+    // a word replaces them with results
+    expect((await gather('frost', [tasks], [], ctx, new AbortController().signal)).map((g) => g.name)).toEqual(['Tasks']);
+    forgetRecentViews();
+    setRecentHere('', '');
+    expect(empty([], readRecent()).map((g) => g.name)).toEqual(['Recent']);
   });
 
   describe('servers wait for a pause in the typing', () => {

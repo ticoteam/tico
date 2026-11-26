@@ -2,6 +2,7 @@ import { Link, useRouter, type LinkProps } from '@tanstack/react-router';
 import { Fragment, createContext, use, useEffect, type MouseEvent } from 'react';
 import { Icon } from '@/kit/Icon';
 import { stepBackIs, watchSteps } from '@/lib';
+import { RecentViews } from './Recent';
 
 /* The trail over every page: the company, the section, any page in between, then the open page. Read from the address
    alone, plus the names it needs; the open page's own name (its h1, tico/pageName) ends it when the address does not
@@ -138,6 +139,8 @@ export function Trail({ parts }: { parts: readonly TrailPart[] }) {
   };
   return (
     <nav className="shell-trail" aria-label="Breadcrumb">
+      {/* Recent views, left of the first part: the top bar's first stop */}
+      <RecentViews />
       {parts.map((p, i) => (
         <Fragment key={i}>
           {i > 0 && <Icon name="chevron" />}

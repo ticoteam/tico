@@ -2,7 +2,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter, useRouterState } from '@tanstack/react-router';
 import { useEffect, useEffectEvent, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent } from 'react';
 import { flushSync } from 'react-dom';
-import { meQuery, recordVisit } from '@/data';
+import { ApiError } from '@/api/client';
+import { forgetTask, meQuery, nameOpenTask, recordVisit } from '@/data';
 import { useFileOpen } from '@/features/library/routing';
 import { DockSlot } from '@/kit/Dock';
 import { Icon } from '@/kit/Icon';
@@ -66,6 +67,14 @@ export function TaskModal() {
     const at = setTimeout(() => recordVisit(`/task/${visit}`, title), 400);
     return () => clearTimeout(at);
   }, [visit, title]);
+  // its name ends its row in Recent views; a task that is not found or refused is dropped from them
+  useEffect(() => {
+    if (visit && title) nameOpenTask(visit, title);
+  }, [visit, title]);
+  const missing = !!visit && ref.error instanceof ApiError && (ref.error.status === 403 || ref.error.status === 404);
+  useEffect(() => {
+    if (missing) forgetTask(visit);
+  }, [missing, visit]);
 
   // a phone shows the task or its chat, chosen once the task is read (never flipped after by itself): the chat when the
   // address names it or a ❓ in it waits on the person. Then what the person picks shows: a session (Details) raises
