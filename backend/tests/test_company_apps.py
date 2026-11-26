@@ -477,45 +477,17 @@ def test_local_check_keeps_company_identity(tmp_path):
         assert "A1" not in result.stdout + result.stderr
 
 
-def test_public_workflow_and_company_ciphertext_artifact_boundary():
-    from pathlib import Path
-    import yaml
-
-    root = Path(__file__).resolve().parents[2]
-    public = (root / ".github/workflows/app.yml").read_text()
-    assert "vars.TICO_" not in public and "TICO_COMPANY_APPS" not in public
-    workflow = yaml.safe_load((root / ".github/workflows/company-app.yml").read_text())
-    upload = next(
-        step for step in workflow["jobs"]["build"]["steps"] if "actions/upload-artifact@" in step.get("uses", "")
-    )
-    assert upload["with"]["path"] == "out/bundles.enc"
-    release = yaml.safe_load((root / ".github/workflows/release.yml").read_text())
-    # The server release waits only for its validation run (whose binaries it attaches) and the quick Mac-binary
-    # decision, never for desktop or Mac builds.
-    assert release["jobs"]["release"].get("needs") == ["validated", "runner-changes"]
-    assert "release" in release["jobs"]["macos-assets"]["needs"]
-    assert "release" in release["jobs"]["desktop-assets"]["needs"]
-    assert release["jobs"]["companies"]["strategy"]["fail-fast"] is False
-
-
-def test_company_build_and_publish_wait_for_the_icon_check():
-    from pathlib import Path
-    import yaml
-
-    root = Path(__file__).resolve().parents[2]
-    jobs = yaml.safe_load((root / ".github/workflows/company-app.yml").read_text())["jobs"]
-    assert jobs["build"]["needs"] == "icon"
-    assert jobs["build"]["if"] == "needs.icon.outputs.available == 'true'"
-    assert set(jobs["publish"]["needs"]) == {"icon", "build"}
-    assert "needs.icon.outputs.available == 'true'" in jobs["publish"]["if"]
-
-
 def test_optional_release_branches_start_after_core_publication():
     from pathlib import Path
     import yaml
 
     root = Path(__file__).resolve().parents[2]
     jobs = yaml.safe_load((root / ".github/workflows/release.yml").read_text())["jobs"]
+    # The server release waits only for its validation run (whose binaries it attaches) and the quick Mac-binary
+    # decision, never for desktop or Mac builds.
+    assert jobs["release"].get("needs") == ["validated", "runner-changes"]
+    assert "release" in jobs["macos-assets"]["needs"]
+    assert "release" in jobs["electron-assets"]["needs"]
 
     def ancestors(job):
         needs = jobs[job].get("needs", [])

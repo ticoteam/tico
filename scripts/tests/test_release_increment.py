@@ -197,7 +197,9 @@ def test_failures_are_named_from_the_logs_and_by_their_job():
     assert ri.failure_tokens(PYTEST_FAILURES) == {"backend/tests/test_company_file.py"}
     named = ri.failed_tokens([("python-3", PYTEST_FAILURES), ("release-check", "")])
     assert named == {"backend/tests/test_company_file.py"}
-    assert ri.failed_tokens([("product", ""), ("desktop", "")]) == {"product", "desktop"}
+    assert ri.failed_tokens([("product", "")]) == {"product"}
+    # The retired desktop part names nothing a commit could fix: any commit may be the fix.
+    assert ri.failed_tokens([("desktop", "")]) is None
     # a red web journey is named by its job, so a commit to the app or its server wakes the train, not any commit
     assert ri.failed_tokens([("web-journeys", ""), ("python-3", PYTEST_FAILURES)]) == {
         ri.WEB,
@@ -332,7 +334,7 @@ def test_a_plan_runs_its_selection_and_the_carried_failures():
     )
     assert plan["python"] == ["backend/tests/test_a.py", "backend/tests/test_b.py"]
     assert plan["contracts"] == ["backend/tests/test_slow.py"]
-    assert plan["product"] is True and plan["desktop"] is False
+    assert plan["product"] is True and "desktop" not in plan
     assert plan["dropped"] == ["backend/tests/test_gone2.py", "ui/tests/task-code.cjs"]
     assert [job["name"] for job in plan["jobs"]] == ["python-1", "contracts", "product"]
 
@@ -364,27 +366,31 @@ def test_a_test_file_is_slow_only_when_it_marks_a_test_slow(tmp_path):
 def test_an_empty_selection_runs_nothing():
     plan = plan_of(selected(), changed=["docs/readme.md"], gone=())
     assert plan["python"] == [] and plan["contracts"] == [] and plan["jobs"] == []
-    assert plan["product"] is False and plan["desktop"] is False
+    assert plan["product"] is False and "desktop" not in plan
 
 
-def test_an_app_change_runs_the_desktop_part_and_a_caddy_change_the_product_part():
+def test_a_caddy_change_runs_the_product_part_and_an_app_change_no_desktop_part():
+    # The desktop part is retired: an app/ change starts no VM of its own.
     plan = plan_of(selected(caddy=True), changed=["app/src/main.rs"], gone=())
-    assert plan["desktop"] is True and plan["product"] is True
-    assert [job["name"] for job in plan["jobs"]] == ["product", "desktop"]
+    assert plan["product"] is True and "desktop" not in plan
+    assert [job["name"] for job in plan["jobs"]] == ["product"]
 
 
-def test_the_product_and_desktop_vms_of_a_plan_place_the_release_binaries():
-    # Both parts run native_binaries (hosted_release_check.py), so their VMs must wait for and place the binaries.
+def test_the_product_vm_of_a_plan_places_the_release_binaries():
+    # The product part runs native_binaries (hosted_release_check.py), so its VM must wait for and place the binaries.
     plan = plan_of(selected(caddy=True), changed=["app/src/main.rs"], gone=())
     include = ri.matrix_of(json.dumps(plan))["include"]
-    assert [entry["name"] for entry in include] == ["product", "desktop"]
+    assert [entry["name"] for entry in include] == ["product"]
     assert all("binaries" not in entry for entry in include)
+    # A plan naming the retired desktop part is refused.
+    with pytest.raises(ValueError):
+        ri.matrix_of(json.dumps({"jobs": [{"name": "desktop", "part": "desktop"}]}))
 
 
 def test_selection_tokens_name_what_the_selection_runs():
     sel = selected(python=["backend/tests/test_a.py"], contracts=True)
     tokens = ri.selection_tokens(sel, ["app/x.rs"])
-    assert {"backend/tests/test_a.py", ri.DESKTOP} <= tokens
+    assert "backend/tests/test_a.py" in tokens and "desktop" not in tokens
     assert set(pr_checks.CONTRACT_TESTS) <= tokens
 
 
@@ -437,7 +443,7 @@ def test_a_vm_of_an_incremental_plan_runs_its_own_files_through_the_queue_runner
 
 def test_the_full_matrix_is_the_gate_and_an_incremental_plan_lists_only_its_vms():
     full = ri.matrix_of("")["include"]
-    assert len(full) == ri.FULL_PYTHON_SHARDS + 2
+    assert len(full) == ri.FULL_PYTHON_SHARDS + 1
     assert full[0] == {"name": "product", "part": "product", "shard": "", "workers": "2", "runner": ri.RUNNER}
     assert full[1] == {
         "name": "python-1",
@@ -446,7 +452,7 @@ def test_the_full_matrix_is_the_gate_and_an_incremental_plan_lists_only_its_vms(
         "workers": "4",
         "runner": ri.RUNNER,
     }
-    assert full[-1]["name"] == "desktop"
+    assert full[-1]["name"] == f"python-{ri.FULL_PYTHON_SHARDS}"
     plan = plan_of(selected(python=["backend/tests/test_a.py"]), gone=())
     include = ri.matrix_of(json.dumps(plan))["include"]
     assert [entry["name"] for entry in include] == ["python-1"]
@@ -511,13 +517,13 @@ def test_a_string_or_a_parametrised_slow_case_is_not_a_slow_only_file(tmp_path):
 def test_a_large_contracts_lane_splits_into_timed_vms_and_a_small_one_keeps_its_name():
     files = [f"backend/tests/test_s{i}.py" for i in range(20)]
     tables = {"seconds": {name: 100.0 for name in files}, "slow": set(files)}
-    jobs = ri.build_jobs([], files, False, [], False, False, tables)
+    jobs = ri.build_jobs([], files, False, [], False, tables)
     names = [job["name"] for job in jobs]
     assert names == ["contracts-1", "contracts-2", "contracts-3"]  # 2000 one-worker seconds: three VMs of about 330 s
     ri.matrix_of(json.dumps({"jobs": jobs}))  # the gate accepts numbered contracts VMs
     assert sorted(sum((job["files"] for job in jobs), [])) == sorted(files)
     assert all(job["part"] == "python" for job in jobs)
-    small = ri.build_jobs([], files[:2], False, [], False, False, tables)
+    small = ri.build_jobs([], files[:2], False, [], False, tables)
     assert [job["name"] for job in small] == ["contracts"]
 
 
@@ -528,7 +534,7 @@ def test_only_the_python_vms_holding_native_test_files_wait_for_the_release_bina
     native = {"runner_support/tests/test_engine.py"}
     tables = {"seconds": {name: 400.0 for name in [*files, *native]}, "slow_only": set()}
     jobs = ri.build_jobs(
-        sorted([*files, *native]), [], False, [], False, False, tables, native=lambda names: native & set(names)
+        sorted([*files, *native]), [], False, [], False, tables, native=lambda names: native & set(names)
     )
     waiting = [job for job in jobs if "binaries" not in job]
     assert [job["files"] for job in waiting] == [sorted(native)]
@@ -543,7 +549,7 @@ def test_a_contracts_vm_waits_for_the_binaries_only_when_it_holds_a_native_test_
     native = {"backend/tests/test_s0.py"}
     files = [f"backend/tests/test_s{i}.py" for i in range(20)]
     tables = {"seconds": {name: 100.0 for name in files}, "slow_only": set()}
-    jobs = ri.build_jobs([], files, False, [], False, False, tables, native=lambda names: native & set(names))
+    jobs = ri.build_jobs([], files, False, [], False, tables, native=lambda names: native & set(names))
     assert [("binaries" not in job) for job in jobs] == [bool(native & set(job["files"])) for job in jobs]
     assert any(job.get("binaries") == "no" for job in jobs)
 

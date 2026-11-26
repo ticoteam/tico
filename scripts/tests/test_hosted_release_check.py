@@ -76,10 +76,8 @@ def test_each_vm_runs_its_slice_and_an_older_candidate_runs_whole_on_the_product
     (tmp_path / 'scripts').mkdir()
     gate = tmp_path / 'scripts/release_checks.py'
     base = [check.sys.executable, 'scripts/release_checks.py', '--release', '--previous', 'v0.3.50']
-    gate.write_text("parser.add_argument('--part', choices=PARTS)")
-    assert check.gate_command(tmp_path, 'v0.3.50', 'desktop', None) is None  # frozen before the desktop part
-    gate.write_text("PARTS = ('product', 'python', 'browser', 'desktop')\nparser.add_argument('--part', choices=PARTS)")
-    assert check.gate_command(tmp_path, 'v0.3.50', 'desktop', None) == base + ['--part', 'desktop']
+    gate.write_text("PARTS = ('product', 'python', 'browser')\nparser.add_argument('--part', choices=PARTS)")
+    assert check.gate_command(tmp_path, 'v0.3.50', 'product', None) == base + ['--part', 'product']
     assert check.gate_command(tmp_path, 'v0.3.50', None, None) == base
     assert check.gate_command(tmp_path, 'v0.3.50', 'browser', None) == base + ['--part', 'browser']
     assert check.gate_command(tmp_path, 'v0.3.50', 'python', '2/4') == base + ['--part', 'python', '--shard', '2/4']
@@ -87,7 +85,7 @@ def test_each_vm_runs_its_slice_and_an_older_candidate_runs_whole_on_the_product
     assert check.gate_command(tmp_path, 'v0.3.50', 'browser', '2/2') is None
     gate.write_text(gate.read_text() + '\ndef browser_shard(index, total): ...')
     assert check.gate_command(tmp_path, 'v0.3.50', 'browser', '2/2') == base + ['--part', 'browser', '--shard', '2/2']
-    for part, shard in (('desktop', '1/4'), ('python', '1/4;rm'), ('other', None)):
+    for part, shard in (('product', '1/4'), ('python', '1/4;rm'), ('desktop', None), ('other', None)):
         with pytest.raises(RuntimeError):
             check.gate_command(tmp_path, 'v0.3.50', part, shard)
     gate.write_text('# frozen before split gates; mentions --part only in prose')

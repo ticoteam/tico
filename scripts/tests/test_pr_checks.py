@@ -1131,7 +1131,6 @@ def test_the_main_cache_warm_up_saves_the_keys_pr_checks_restore():
             "npm",
             venv,
             "pr-rust-lint",
-            "pr-desktop",
             "pr-conformance",
             "pinned-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/pinned_tool.sh') }}",
             "playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}",
@@ -1307,12 +1306,11 @@ def test_every_job_runs_on_a_github_hosted_runner_and_only_a_ready_pull_request_
         "github.event_name == 'merge_group' || (github.event_name == 'pull_request' && "
         "!github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository)"
     )
-    for name in ("tests", "web", "rust-lint", "desktop-app", "caddy-linux", "advisories"):
+    for name in ("tests", "web", "rust-lint", "caddy-linux", "advisories"):
         assert ready in jobs[name]["if"], name
     for name, output in (
         ("rust-lint", "rust_lint"),
         ("advisories", "advisories"),
-        ("desktop-app", "desktop"),
         ("caddy-linux", "caddy"),
     ):
         assert f"needs.plan.outputs.{output} == 'true'" in jobs[name]["if"], name
@@ -1332,7 +1330,6 @@ def test_every_job_runs_on_a_github_hosted_runner_and_only_a_ready_pull_request_
         "tests",
         "checks",
         "rust-lint",
-        "desktop-app",
         "caddy-linux",
         "advisories",
         "timings",
@@ -1789,12 +1786,13 @@ def test_queue_jobs_start_only_for_a_change_to_their_folders_and_all_start_for_a
         checks.QUEUE_JOB_PATHS, False
     )
     # The screen relay is a Rust crate the lint checks, and the Caddy image compiles it.
-    assert checks.queue_jobs(["relay-rs/src/main.rs"]) == {"rust_lint": True, "desktop": False, "advisories": False}
+    assert checks.queue_jobs(["relay-rs/src/main.rs"]) == {"rust_lint": True, "advisories": False}
     assert checks.selection(["relay-rs/src/main.rs"])["caddy"]
     for name in ("runner-rs/src/sessions.rs", "tools/release-command/src/main.rs", "contracts/runner/schema.json"):
         assert checks.queue_jobs([name])["rust_lint"], name
     assert checks.queue_jobs(["scripts/rust_checks.sh"])["rust_lint"]
-    assert checks.queue_jobs(["app/src/main.rs"]) == {"rust_lint": False, "desktop": True, "advisories": False}
+    # The desktop app job is gone: an app/ change starts no queue job of its own.
+    assert checks.queue_jobs(["app/src/main.rs"]) == {"rust_lint": False, "advisories": False}
     # The advisory scan starts for a dependency input: a lock, a vendored library, an inventory or the gate itself.
     for name in (
         "backend/requirements-dev.txt",
@@ -1809,7 +1807,7 @@ def test_queue_jobs_start_only_for_a_change_to_their_folders_and_all_start_for_a
     ):
         assert checks.queue_jobs([name])["advisories"], name
     assert not checks.queue_jobs(["backend/requirements.in", "web/src/vendor.ts", "Cargo.toml"])["advisories"]
-    # Anchored at the root: a folder named app/ deeper in the tree is not the desktop app.
+    # Anchored at the root: a script named rust_checks.sh deeper in the tree is not the Rust gate.
     assert checks.queue_jobs(["backend/app/x.py", "docs/app/x.md", "scripts/tests/rust_checks.sh"]) == dict.fromkeys(
         checks.QUEUE_JOB_PATHS, False
     )
@@ -1825,25 +1823,27 @@ def test_the_plan_decides_the_queue_jobs_on_both_tiers_and_a_group_checks_its_me
     monkeypatch.setattr(
         checks,
         "changed_files",
-        lambda base, head="HEAD", only=None: [] if only else ["app/src/main.rs", "backend/task_engine.py"],
+        lambda base, head="HEAD", only=None: [] if only else ["runner-rs/src/main.rs", "backend/task_engine.py"],
     )
     output = tmp_path / "github-output"
     monkeypatch.setenv("GITHUB_OUTPUT", str(output))
     plan = checks.prepare("merge_group", "queue-base", tmp_path / "plan.json", head="queue-head")
-    assert plan["queue_jobs"] == {"rust_lint": False, "desktop": True, "advisories": False}
+    assert plan["queue_jobs"] == {"rust_lint": True, "advisories": False}
     lines = output.read_text().splitlines()
-    assert {"rust_lint=false", "desktop=true"} <= set(lines)
+    assert {"rust_lint=true", "advisories=false"} <= set(lines)
+    assert not any(line.startswith("desktop=") for line in lines)
     # A ready pull request runs the same jobs under the same conditions (PR checks == queue checks), so its plan writes
     # the same outputs from its own diff.
     monkeypatch.setattr(checks, "merge_parent", lambda base: base)
     output.write_text("")
     plan = checks.prepare("pull_request", "pr-base", tmp_path / "plan.json")
-    assert plan["queue_jobs"] == {"rust_lint": False, "desktop": True, "advisories": False}
-    assert {"rust_lint=false", "desktop=true"} <= set(output.read_text().splitlines())
+    assert plan["queue_jobs"] == {"rust_lint": True, "advisories": False}
+    assert {"rust_lint=true", "advisories=false"} <= set(output.read_text().splitlines())
 
     jobs = workflow_jobs()["jobs"]
     outputs = jobs["plan"]["outputs"]
-    for job, output_name in (("rust-lint", "rust_lint"), ("desktop-app", "desktop"), ("advisories", "advisories")):
+    assert "desktop" not in outputs and "desktop-app" not in jobs
+    for job, output_name in (("rust-lint", "rust_lint"), ("advisories", "advisories")):
         assert outputs[output_name] == f"${{{{ steps.plan.outputs.{output_name} }}}}", job
         assert jobs[job]["needs"] == "plan", job
         assert f"needs.plan.outputs.{output_name} == 'true'" in jobs[job]["if"], job
