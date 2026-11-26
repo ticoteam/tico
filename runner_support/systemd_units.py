@@ -59,7 +59,7 @@ def render(kind, *, python, config, root, log, path, env_slug="", home="", user=
     elif kind in COMMANDS:
         # `-m runner_support`, not the legacy `-m runner`: every release a computer may run, a downgrade's target
         # included, has runner_support/ (since 0.5.94; MIN_RUNNER_RELEASE is 0.6.0). runner/ only forwards for units
-        # older installs wrote (release_update.py move_units moves those over), until it is deleted. Do not go back.
+        # older installs wrote (release_update.py move_at_start moves those over), until it is deleted. Do not go back.
         exec_line = " ".join(quote(x) for x in (python, "-m", "runner_support", "--config", config, COMMANDS[kind]))
     else:
         raise ValueError(f"unknown job {kind!r}")

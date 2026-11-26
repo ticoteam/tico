@@ -569,11 +569,47 @@ def restart_helpers_systemd(env=os.environ, run=subprocess.run, unit_dir=None, s
 
 
 # -- installed jobs move from `python -m runner` to `python -m runner_support` ----------------------------------
-# Plists and units written by older installs start `python -m runner ...`, through the runner/ forwarder that is to be
-# deleted. Every release a computer may run has runner_support/ (since 0.5.94; MIN_RUNNER_RELEASE is 0.6.0), so an
-# update points them at it and reloads them; a rollback puts the old files back (and reloads them), so the release it
-# returns to, whatever it has, starts the jobs exactly as before.
-LEGACY_UNIT = re.compile(r'(?<=\s)("?)-m\1(\s+)("?)runner\3(?=\s|$)')
+# Plists and units older installs wrote start `python -m runner ...` through the runner/ forwarder, which is to be
+# deleted. Every release a computer may run has runner_support/ (since 0.5.94; MIN_RUNNER_RELEASE is 0.6.0).
+# The move runs at every runner start (`python -m runner_support run`, __main__.py), on the code that just started: the
+# updater that installs a release is the previous release's code, but the restart that ends every self-update starts the
+# new one, so the release that ships this moves its own computer's jobs, and a computer that never updates moves too.
+# Nothing is left rewritten that its supervisor did not load, and no job is left unloaded: a failed reload puts the
+# old file back (and loads it), so the next start tries again. A Mac's runner job is never booted out from inside
+# itself: a launchd job of its own does that (move_runner_job), after any update has finished.
+LEGACY_DIR = "legacy-units"  # in the state dir: each file the move replaced, as it was
+MOVE_FAILED = "unit-move-failed"  # in the state dir: the runner job's last move failed; not tried again for a day
+MOVE_RETRY_S = 24 * 3600
+MOVE_LOCK_WAIT_S = 45 * 60  # longer than an update's drain, checkout lock and health waits together
+WORD = re.compile(r'"(?:[^"\\]|\\.)*"|\S+')  # one word of an ExecStart= line, as systemd splits it
+
+
+def _unquoted(word):
+    return word[1:-1] if len(word) >= 2 and word[0] == word[-1] == '"' else word
+
+
+def moved_exec(line, old, new):
+    """An `ExecStart=` line whose interpreter runs `-m <old>`, with `-m <new>`; None for any other line. Only the
+    interpreter's own `-m` (its first two arguments) counts, a quoted path with spaces is one word, and the module word
+    keeps its quoting."""
+    if not line.startswith("ExecStart="):
+        return None
+    value = line[len("ExecStart=") :]
+    words = list(WORD.finditer(value))
+    if len(words) < 3 or _unquoted(words[1][0]) != "-m" or _unquoted(words[2][0]) != old:
+        return None
+    module = words[2]
+    return "ExecStart=" + value[: module.start()] + module[0].replace(old, new) + value[module.end() :]
+
+
+def moved_unit(content, old="runner", new="runner_support"):
+    """The unit with its ExecStart= moved from `-m <old>` to `-m <new>`, or None when it has nothing to move."""
+    lines, changed = content.decode().split("\n"), False
+    for n, line in enumerate(lines):
+        moved = moved_exec(line, old, new)
+        if moved is not None:
+            lines[n], changed = moved, True
+    return "\n".join(lines).encode() if changed else None
 
 
 def moved_plist(content):
@@ -583,27 +619,15 @@ def moved_plist(content):
     except (ValueError, ExpatError):
         return None
     args = data.get("ProgramArguments") if isinstance(data, dict) else None
-    if not isinstance(args, list):
+    if not isinstance(args, list) or len(args) < 3 or args[1:3] != ["-m", "runner"]:
         return None
-    for i, word in enumerate(args[:-1]):
-        if word == "-m" and args[i + 1] == "runner":
-            args[i + 1] = "runner_support"
-            return plistlib.dumps(data)
-    return None
-
-
-def moved_unit(content):
-    """The unit with `-m runner` in its ExecStart= made `-m runner_support`, or None when it has none."""
-    lines, changed = content.decode().split("\n"), False
-    for n, line in enumerate(lines):
-        if line.startswith("ExecStart="):
-            new = LEGACY_UNIT.sub(lambda m: f"{m[1]}-m{m[1]}{m[2]}{m[3]}runner_support{m[3]}", line, count=1)
-            changed, lines[n] = changed or new != line, new
-    return "\n".join(lines).encode() if changed else None
+    args[2] = "runner_support"
+    return plistlib.dumps(data)
 
 
 def replace_file(path, content, mode):
-    """Write `content` over `path` in one step (a reader never sees half a file), keeping its permission bits."""
+    """Write `content` over `path` in one step (a reader never sees half a file), with permission bits `mode`."""
+    path = Path(path)
     temp = path.with_name(f".{path.name}.tico-{uuid.uuid4().hex}")
     fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
     try:
@@ -617,91 +641,287 @@ def replace_file(path, content, mode):
         raise
 
 
-def reload_job(label, plist, domain, run=subprocess.run):
-    """`launchctl bootout` and `bootstrap` (scripts/tico-computer `bootstrap`): launchd keeps the definition it loaded, so
-    only this makes a job start what its plist now says. A KeepAlive job starts again at once (RunAtLoad). Returns the
-    bootstrap's outcome."""
-    run(["launchctl", "bootout", f"{domain}/{label}"], capture_output=True, text=True, timeout=60)
-    for _ in range(15):  # the label stays taken until the old process has stopped; bootstrap fails until then
-        if run(["launchctl", "print", f"{domain}/{label}"], capture_output=True, text=True, timeout=60).returncode:
-            break
-        _sleep(1)
-    done = run(["launchctl", "bootstrap", domain, str(plist)], capture_output=True, text=True, timeout=60)
-    if done.returncode:  # launchd can hold a just-removed label a moment longer
-        _sleep(2)
-        done = run(["launchctl", "bootstrap", domain, str(plist)], capture_output=True, text=True, timeout=60)
-    return done
+def _say(line):
+    print(time.strftime("%Y-%m-%d %H:%M:%S") + " " + line, file=sys.stderr, flush=True)
 
 
-def move_units(env=os.environ, *, mac, run=subprocess.run, agents=None, unit_dir=None, uid=None, say=None):
-    """Point this computer's installed jobs (the runner's own and its helpers) at `python -m runner_support` and reload
-    them: on a Mac each moved job is booted out and bootstrapped again, which also restarts it on the checkout as it is
-    now; under systemd one `daemon-reload` makes the update's restarts start the new ExecStart=. Returns `undo`, which
-    puts the files back as they were and reloads them the same way. A file that cannot be read or written is skipped."""
+def _rewrite(path, rewrite, state_dir):
+    """(content before, mode) after writing the moved content over `path`, or None when there is nothing to move or it
+    cannot be read or written. The old content is kept under the state dir first, for a rollback (restore_legacy_units)."""
+    path = Path(path)
+    try:
+        before = read_regular(path)
+        after = rewrite(before)
+        if after is None:
+            return None
+        mode = stat.S_IMODE(path.lstat().st_mode)
+        kept = Path(state_dir) / LEGACY_DIR
+        kept.mkdir(mode=0o700, parents=True, exist_ok=True)
+        replace_file(kept / path.name, before, 0o600)
+        replace_file(path, after, mode)
+    except (OSError, ValueError):  # unreadable, not UTF-8, or not writable: it keeps starting through runner/
+        return None
+    return before, mode
+
+
+def daemon_reload(run=subprocess.run, say=_say):
+    """`systemctl --user daemon-reload`; True when it worked. Never raises."""
+    try:
+        done = run(["systemctl", "--user", "daemon-reload"], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as exc:
+        say(f"Tico runner: systemctl daemon-reload failed: {type(exc).__name__}")
+        return False
+    if done.returncode:
+        say(f"Tico runner: systemctl daemon-reload exited {done.returncode}")
+    return not done.returncode
+
+
+def launchd_load(label, plist, domain, run=subprocess.run):
+    """`launchctl bootout` and `bootstrap` (scripts/tico-computer `bootstrap`): launchd keeps the definition it loaded,
+    so only this makes a job start what its plist says now. True once the job is loaded again. Never raises."""
+    try:
+        run(["launchctl", "bootout", f"{domain}/{label}"], capture_output=True, text=True, timeout=60)
+        for _ in range(15):  # the label stays taken until the old process has stopped; bootstrap fails until then
+            if run(["launchctl", "print", f"{domain}/{label}"], capture_output=True, text=True, timeout=60).returncode:
+                break
+            _sleep(1)
+        for attempt in range(2):  # launchd can hold a just-removed label a moment longer
+            if not run(
+                ["launchctl", "bootstrap", domain, str(plist)], capture_output=True, text=True, timeout=60
+            ).returncode:
+                return True
+            if not attempt:
+                _sleep(2)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return False
+
+
+def move_systemd_units(env, state_dir, *, run=subprocess.run, unit_dir=None, say=_say):
+    """Move this runner's unit and its helpers' to runner_support, then one daemon-reload, which the next restart of
+    each follows (the processes running now go on as they are). When the reload fails, the old files go back and are
+    reloaded, so the next start tries again. Returns the unit names moved."""
     from .systemd_units import helper_units, user_unit_dir
 
-    say = say or (lambda line: print(time.strftime("%Y-%m-%d %H:%M:%S") + " " + line, flush=True))
-    if mac:
-        directory = Path(agents) if agents else Path.home() / "Library" / "LaunchAgents"
-        names = [f"{label}.plist" for label in helper_labels(env, ("bot", *HELPERS)).values()]
-        rewrite = moved_plist
-    else:
-        unit = systemd_unit(env)
-        directory = Path(unit_dir) if unit_dir else user_unit_dir(env)
-        names = [unit, *helper_units(unit).values()] if unit else []
-        rewrite = moved_unit
-    domain = f"gui/{os.getuid() if uid is None else uid}"
-    moved = []  # (path, the content it had, its mode)
-    for name in names:
-        path = directory / name
-        try:
-            before = read_regular(path)
-            after = rewrite(before)
-            if after is None:
-                continue
-            mode = stat.S_IMODE(path.lstat().st_mode)
-            replace_file(path, after, mode)
-        except (OSError, ValueError):  # unreadable, not UTF-8, or not writable: it keeps starting through runner/
-            continue
-        moved.append((path, before, mode))
-        say(f"Tico update: {name} now starts python -m runner_support")
-
-    def reload(paths):
-        # Never raises: a moved file must still be put back on a rollback when its reload timed out.
-        if not paths:
-            return
-        if not mac:
-            try:
-                done = run(["systemctl", "--user", "daemon-reload"], capture_output=True, text=True, timeout=60)
-            except (OSError, subprocess.SubprocessError) as exc:
-                say(f"Tico update: systemctl daemon-reload failed: {type(exc).__name__}")
-                return
-            if done.returncode:
-                say(f"Tico update: systemctl daemon-reload exited {done.returncode}")
-            return
-        for path in paths:
-            try:
-                done = reload_job(path.stem, path, domain, run)
-            except (OSError, subprocess.SubprocessError) as exc:
-                say(f"Tico update: could not reload {path.stem}: {type(exc).__name__}")
-                continue
-            if done.returncode:
-                say(f"Tico update: could not reload {path.stem}: launchctl exited {done.returncode}")
-
-    reload([path for path, _, _ in moved])
-
-    def undo():
-        restored = []
+    unit = systemd_unit(env)
+    if not unit:
+        return []
+    directory = Path(unit_dir) if unit_dir else user_unit_dir(env)
+    moved = []
+    for name in (unit, *helper_units(unit).values()):
+        done = _rewrite(directory / name, moved_unit, state_dir)
+        if done:
+            moved.append((directory / name, *done))
+    if moved and not daemon_reload(run, say):
         for path, before, mode in moved:
-            try:
+            with contextlib.suppress(OSError):
                 replace_file(path, before, mode)
-            except OSError as exc:
-                say(f"Tico update: could not put back {path.name}: {type(exc).__name__}")
-                continue
-            restored.append(path)
-        reload(restored)
+        daemon_reload(run, say)
+        say("Tico runner: put the units back as they were; the next start moves them again")
+        return []
+    for path, _, _ in moved:
+        say(f"Tico runner: {path.name} now starts python -m runner_support")
+    return [path.name for path, _, _ in moved]
 
-    return undo
+
+def move_launchd_helpers(env, state_dir, *, run=subprocess.run, agents=None, uid=None, say=_say):
+    """Move each installed helper job's plist (close-calls, importers: jobs of their own, so this process is not in
+    them) and reload it. A job that does not load from its new plist gets its old one back, loaded. Returns the labels
+    moved."""
+    agents = Path(agents) if agents else Path.home() / "Library" / "LaunchAgents"
+    domain = f"gui/{os.getuid() if uid is None else uid}"
+    moved = []
+    for label in helper_labels(env).values():
+        path = agents / f"{label}.plist"
+        done = _rewrite(path, moved_plist, state_dir)
+        if not done:
+            continue
+        if launchd_load(label, path, domain, run):
+            say(f"Tico runner: {label} now starts python -m runner_support")
+            moved.append(label)
+            continue
+        with contextlib.suppress(OSError):
+            replace_file(path, *done)
+        loaded = launchd_load(label, path, domain, run)
+        say(
+            f"Tico runner: {label} did not load from its new plist; put the old one back"
+            + ("" if loaded else ", which did not load either")
+        )
+    return moved
+
+
+def hand_off_runner_job(
+    env,
+    state_dir,
+    *,
+    action="move",
+    root=ROOT,
+    python=sys.executable,
+    run=subprocess.run,
+    agents=None,
+    uid=None,
+    say=_say,
+):
+    """Start a launchd job of its own (`release_update move-runner-job`) that moves and reloads the runner's job, or
+    (`action="load"`) only reloads it. Booting out the runner's job stops every process in it, this one and an updater
+    the runner started included, so it is never done from in here. Returns whether the job was started."""
+    agents = Path(agents) if agents else Path.home() / "Library" / "LaunchAgents"
+    uid = os.getuid() if uid is None else uid
+    label = helper_labels(env, ("bot",))["bot"]
+    plist = agents / f"{label}.plist"
+    if action == "move":
+        try:
+            if moved_plist(read_regular(plist)) is None:
+                return False
+        except OSError:
+            return False
+        with contextlib.suppress(OSError):
+            if _now() - (Path(state_dir) / MOVE_FAILED).stat().st_mtime < MOVE_RETRY_S:
+                return False
+    job = f"{label}.unit-move"
+    log = str(Path(state_dir) / "unit-move.log")
+    data = {
+        "Label": job,
+        "ProgramArguments": [
+            str(python),
+            "-m",
+            "runner_support.release_update",
+            "move-runner-job",
+            "--action",
+            action,
+            "--label",
+            label,
+            "--plist",
+            str(plist),
+            "--state-dir",
+            str(state_dir),
+            "--root",
+            str(root),
+        ],
+        "WorkingDirectory": str(root),
+        "EnvironmentVariables": {"HOME": str(Path.home()), "PATH": os.environ.get("PATH", os.defpath)},
+        "RunAtLoad": True,
+        "StandardOutPath": log,
+        "StandardErrorPath": log,
+    }
+    domain = f"gui/{uid}"
+    try:
+        Path(state_dir).mkdir(mode=0o700, parents=True, exist_ok=True)
+        path = Path(state_dir) / f"{job}.plist"  # outside LaunchAgents: never loaded again at login
+        replace_file(path, plistlib.dumps(data), 0o600)
+        run(["launchctl", "bootout", f"{domain}/{job}"], capture_output=True, text=True, timeout=60)
+        done = run(["launchctl", "bootstrap", domain, str(path)], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as exc:
+        say(f"Tico runner: could not start {job}: {type(exc).__name__}")
+        return False
+    if done.returncode:
+        say(f"Tico runner: could not start {job}: launchctl exited {done.returncode}")
+    return not done.returncode
+
+
+def move_runner_job(
+    label, plist, state_dir, root, *, action="move", uid=None, run=subprocess.run, say=_say, lock_wait=MOVE_LOCK_WAIT_S
+):
+    """The launchd job hand_off_runner_job starts. It waits until no update runs (it takes the updater's process lock,
+    which also keeps the runner from starting one meanwhile), then moves the runner's plist (not when the checkout has
+    no runner_support/) and reloads the job. When the new plist does not load, the old one goes back and is loaded,
+    and the move is not tried again for a day. Returns what happened."""
+    domain = f"gui/{os.getuid() if uid is None else uid}"
+    path = Path(plist)
+    with open_regular_lock(Path(state_dir) / PROCESS_LOCK) as handle:
+        deadline = _now() + lock_wait
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if _now() >= deadline:
+                    say("Tico runner: an update is still running; the next start moves the runner job")
+                    return "busy"
+                _sleep(5)
+        try:
+            if action == "load":
+                return "loaded" if launchd_load(label, path, domain, run) else "unloaded"
+            if not (Path(root) / "runner_support" / "__main__.py").is_file():
+                return "kept"
+            done = _rewrite(path, moved_plist, state_dir)
+            if not done:
+                return "nothing"
+            if launchd_load(label, path, domain, run):
+                say(f"Tico runner: {label} now starts python -m runner_support")
+                return "moved"
+            with contextlib.suppress(OSError):
+                replace_file(path, *done)
+            loaded = launchd_load(label, path, domain, run)
+            with contextlib.suppress(OSError):
+                (Path(state_dir) / MOVE_FAILED).write_text(f"{label} did not load from its new plist\n")
+            say(
+                f"Tico runner: {label} did not load from its new plist; put the old one back"
+                + ("" if loaded else ", which did not load either")
+            )
+            return "put back" if loaded else "unloaded"
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def move_at_start(
+    config_path, env=None, *, run=subprocess.run, darwin=None, agents=None, unit_dir=None, uid=None, say=_say
+):
+    """The move, at a runner's start (__main__.py, before it execs the Rust runner). Only for a job its supervisor
+    started: a systemd unit (TICO_SYSTEMD_UNIT) or a launchd job (XPC_SERVICE_NAME team.tico...). Never raises."""
+    env = os.environ if env is None else env
+    darwin = sys.platform == "darwin" if darwin is None else darwin
+    try:
+        config = json.loads(read_regular(config_path))
+        state_dir = Path(config_path).parent / f"state-{config['runner_id']}"  # runner-rs config.rs state_dir
+        if systemd_unit(env):
+            move_systemd_units(env, state_dir, run=run, unit_dir=unit_dir, say=say)
+        elif darwin and str(env.get("XPC_SERVICE_NAME") or "").startswith("team.tico"):
+            move_launchd_helpers(env, state_dir, run=run, agents=agents, uid=uid, say=say)
+            hand_off_runner_job(env, state_dir, run=run, agents=agents, uid=uid, say=say)
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as exc:
+        say(f"Tico runner: could not move the jobs to runner_support: {type(exc).__name__}")
+
+
+def restore_legacy_units(
+    root, state_dir, *, darwin, env=None, run=subprocess.run, agents=None, unit_dir=None, uid=None, say=_say
+):
+    """A rollback to a checkout with no runner_support/ (before 0.5.94, which no supported release is) puts back the
+    files the move replaced and loads them; with runner_support/ there, nothing. Returns the names put back."""
+    from .systemd_units import user_unit_dir
+
+    env = os.environ if env is None else env
+    if (Path(root) / "runner_support" / "__main__.py").is_file():
+        return []
+    kept = Path(state_dir) / LEGACY_DIR
+    if darwin:
+        directory = Path(agents) if agents else Path.home() / "Library" / "LaunchAgents"
+    else:
+        directory = Path(unit_dir) if unit_dir else user_unit_dir(env)
+    restored = []
+    for backup in sorted(kept.glob("*")) if kept.is_dir() else []:
+        path = directory / backup.name
+        try:
+            replace_file(path, read_regular(backup), stat.S_IMODE(path.lstat().st_mode))
+        except OSError:
+            continue
+        restored.append(path)
+    if not restored:
+        return []
+    if not darwin:
+        daemon_reload(run, say)
+    else:
+        domain = f"gui/{os.getuid() if uid is None else uid}"
+        runner = helper_labels(env, ("bot",))["bot"]
+        for path in restored:
+            if path.stem == runner:  # never from inside the runner's own job
+                hand_off_runner_job(
+                    env, state_dir, action="load", root=root, run=run, agents=directory, uid=uid, say=say
+                )
+            else:
+                launchd_load(path.stem, path, domain, run)
+    say("Tico update: put back the jobs' plists or units for a release without runner_support")
+    return [path.name for path in restored]
 
 
 def wait_healthy(directory, commit, since, seconds=HEALTH_S, sleep=time.sleep):
@@ -785,13 +1005,13 @@ def update(
     listed=None,
     which=shutil.which,
     repair_links=False,
-    units=None,
+    legacy=None,
 ):
     """Move the checkout to release `version`, get its Rust runner ready (`prepare`), and bring the runner back on
     it; undo that if either fails or the runner does not come back. Once it is healthy, `helpers` restarts the helper jobs so they run the new code too (a rollback
     needs nothing: a helper that saw the new revision exits again when the old one returns).
-    `units` (move_units) points the installed jobs at runner_support just before the restart and returns how to put them
-    back, which a rollback does before it restarts the old release.
+    `legacy(root)` (restore_legacy_units) runs on a rollback before the restart: it puts back the jobs' old plists or
+    units when the checkout it went back to has no runner_support/.
     `started` is the commit the runner process started on. A checkout that is already on the release while the
     runner still runs other code (another runner sharing the checkout moved it, or a person did) only needs
     the restart.
@@ -879,19 +1099,6 @@ def update(
             return defer_update(directory, version, pending, clock=clock)
     say("updating")
 
-    put_back = []
-
-    def move_jobs():
-        if not units:
-            return
-        try:
-            undo = units()
-        except (OSError, subprocess.SubprocessError, ValueError) as exc:  # they keep starting through runner/
-            print(f"Tico update: could not move the jobs to runner_support: {type(exc).__name__}", flush=True)
-            return
-        if undo:
-            put_back.append(undo)
-
     def restarted_helpers():
         if helpers:
             try:
@@ -906,7 +1113,6 @@ def update(
         if error:
             return say("failed", error)
         since = clock()
-        move_jobs()
         restart and restart()
         if healthy and not healthy(target, since):
             return say("failed", f"the runner did not report in within {HEALTH_S} seconds on {tag}")
@@ -920,11 +1126,7 @@ def update(
         g("checkout", "--quiet", back)
         note = install(root, target, old) if changed_files(root, old, target, run) else ""
         since = clock()
-        for undo in put_back:
-            try:
-                undo()
-            except (OSError, subprocess.SubprocessError, ValueError) as exc:
-                print(f"Tico update: could not put the jobs back: {type(exc).__name__}", flush=True)
+        legacy and legacy(root)
         restart and restart()
         ok = healthy(old, since) if healthy else True
         return say(
@@ -968,7 +1170,6 @@ def update(
     if error:
         return back_out(error)
     since = clock()
-    move_jobs()
     restart and restart()
     if healthy and not healthy(target, since):
         return back_out(f"the runner did not report in within {HEALTH_S} seconds on {tag}")
@@ -992,7 +1193,24 @@ def updater_lock(directory):
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
+def move_runner_job_main(argv):
+    """`python -m runner_support.release_update move-runner-job ...`: the launchd job hand_off_runner_job starts."""
+    parser = argparse.ArgumentParser(prog="python -m runner_support.release_update move-runner-job")
+    parser.add_argument("--action", choices=("move", "load"), default="move")
+    parser.add_argument("--label", required=True)
+    parser.add_argument("--plist", required=True)
+    parser.add_argument("--state-dir", required=True)
+    parser.add_argument("--root", default=str(ROOT))
+    args = parser.parse_args(argv)
+    result = move_runner_job(args.label, args.plist, args.state_dir, args.root, action=args.action)
+    print(json.dumps({"move_runner_job": result}), flush=True)
+    return 0 if result in ("moved", "loaded", "nothing", "kept") else 1
+
+
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["move-runner-job"]:
+        return move_runner_job_main(argv[1:])
     parser = argparse.ArgumentParser(prog="python -m runner_support.release_update")
     parser.add_argument("--root", default=str(ROOT))
     parser.add_argument("--version", required=True)
@@ -1044,11 +1262,10 @@ def run_update(args):
     if not args.pid:
         return catch_up(args)
     helpers = restart_helpers if kind() == "mac" else restart_helpers_systemd if systemd_unit() else None
-    units = (
-        (lambda: move_units(mac=True))
-        if kind() == "mac"
-        else (lambda: move_units(mac=False))
-        if kind() == "linux" and systemd_unit()
+    darwin = kind() == "mac"
+    legacy = (
+        (lambda root: restore_legacy_units(root, args.state_dir, darwin=darwin))
+        if darwin or (kind() == "linux" and systemd_unit())
         else None
     )
     result = apply(
@@ -1060,7 +1277,7 @@ def run_update(args):
         healthy=lambda commit, since: wait_healthy(args.state_dir, commit or "", since),
         helpers=helpers,
         started=args.started,
-        units=units,
+        legacy=legacy,
     )
     print(json.dumps(result))
     return 0 if result["state"] == "healthy" else 1
