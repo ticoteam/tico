@@ -71,6 +71,8 @@ PINNED_CAUGHT = {
     63,
 }
 # Case numbers whose failing checks must run in the light PR plan.
+# Case 33 is not pinned here: its test (level 2, 121 s) was the last file under the PR plan's 7200 s budget, and three
+# small script tests added in #5330 pushed it out by under 6 s. The queue still catches it (PINNED_CAUGHT).
 PINNED_CAUGHT_AT_PR = {
     1,
     2,
@@ -95,7 +97,6 @@ PINNED_CAUGHT_AT_PR = {
     30,
     31,
     32,
-    33,
     34,
     35,
     36,
