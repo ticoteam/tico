@@ -53,7 +53,7 @@ export function Movable({
   task: TaskItem;
   stages: readonly Stage[];
   /** The wrapper's own props: a card's drag. */
-  wrap?: HTMLAttributes<HTMLDivElement> & { 'data-task'?: string; ref?: Ref<HTMLDivElement> };
+  wrap?: HTMLAttributes<HTMLDivElement> & { 'data-task'?: string; 'data-stage'?: string; ref?: Ref<HTMLDivElement> };
   /** Beside the card, after its menu: a link of its own (Paused's Fix). */
   after?: ReactNode;
   children: ReactElement;
@@ -65,7 +65,9 @@ export function Movable({
   ));
   return (
     <div className="tk-item" {...wrap}>
-      <ContextMenu items={items}>{children}</ContextMenu>
+      <ContextMenu items={items} drags={!!wrap?.ref}>
+        {children}
+      </ContextMenu>
       <Menu trigger={<IconButton icon="more" label="Move to" size="sm" className="tk-more" />}>{items}</Menu>
       {after}
     </div>

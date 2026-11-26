@@ -345,8 +345,200 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
     posts = [];
     dragTo(card('Plan the week'), screen.getByTitle('Write the notes'));
     await waitFor(() => expect(posts).toEqual([{ url: '/api/v2/tasks/a3/move', body: { to: 's2', version: 1 } }]));
-    expect(screen.queryByRole('dialog')).toBeNull();
+    // no dialog asks to merge or nest: the only one up is the move's own toast
+    expect(screen.queryAllByRole('dialog').filter((d) => !d.classList.contains('toast'))).toEqual([]);
     expect(document.querySelector('[data-drop], .is-drag')).toBeNull();
+  });
+
+  describe('moving a card by dragging it, on a computer and on a phone', () => {
+    const moved = (id: string, stage: string, version: number) => ({ status: 200, body: { task: task(id, 7, 'Fix the export', stage, { version }) } });
+    const card = (title: string) => screen.getByTitle(title).closest('.tk-item') as HTMLElement;
+    const strip = () => screen.queryByRole('list', { name: 'Drop on a stage' });
+    const chip = (name: string) => within(strip()!).getByText(name).closest('li') as HTMLElement;
+    const data = { types: [], setData() {}, getData: () => '', setDragImage() {} };
+    /** A mouse press and the browser's drag start on `el`; what it is let go over comes after. */
+    const lift = (el: Element) => {
+      fireEvent.pointerDown(el, { button: 0, pointerType: 'mouse' });
+      fireEvent.dragStart(el, { dataTransfer: data });
+    };
+    const over = (el: Element, at: { clientX?: number; clientY?: number } = {}) => {
+      fireEvent.dragEnter(el, { dataTransfer: data, ...at });
+      fireEvent.dragOver(el, { dataTransfer: data, ...at });
+    };
+
+    it('a drag shows every stage along the bottom, its own dimmed; let go on one, the task moves and the toast takes it back', async () => {
+      serve((url, method) => {
+        if (method === 'POST' && url.endsWith('/move')) return posts.length === 1 ? moved('a1', 's2', 2) : moved('a1', 's1', 3);
+        return { status: 404, body: {} };
+      });
+      seed([task('a1', 7, 'Fix the export', 's1')]);
+      show(<TasksPage pipeline="eng" search={{}} />, '/tasks/eng');
+      await screen.findByTitle('Fix the export');
+      expect(strip()).toBeNull();
+
+      lift(card('Fix the export'));
+      expect(within(strip()!).getAllByRole('listitem').map((x) => x.textContent)).toEqual(['Inbox', 'Doing']);
+      expect(chip('Inbox').getAttribute('aria-disabled')).toBe('true');
+      expect(chip('Doing').getAttribute('aria-disabled')).toBeNull();
+
+      // over another stage's chip: it lights up and says where the task goes
+      over(chip('Doing'));
+      expect(chip('Doing').hasAttribute('data-drop')).toBe(true);
+      expect(within(strip()!.parentElement!).getByText('Move to Doing')).toBeTruthy();
+      fireEvent.drop(chip('Doing'), { dataTransfer: data });
+
+      await waitFor(() => expect(posts).toEqual([{ url: '/api/v2/tasks/a1/move', body: { to: 's2', version: 1 } }]));
+      expect(strip()).toBeNull();
+      await waitFor(() => expect(stageOf('a1')).toBe('s2'));
+      expect(await screen.findByText('Moved to Doing')).toBeTruthy();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+      await waitFor(() => expect(posts[1]).toEqual({ url: '/api/v2/tasks/a1/move', body: { to: 's1', version: 2 } }));
+      await waitFor(() => expect(stageOf('a1')).toBe('s1'));
+      expect(await screen.findByText('Moved back to Inbox')).toBeTruthy();
+    });
+
+    it("over another stage's column it reads Move to that stage; over its own column nothing lights up and nothing is saved", async () => {
+      serve(() => ({ status: 404, body: {} }));
+      seed([task('a1', 7, 'Fix the export', 's1')]);
+      show(<TasksPage pipeline="eng" search={{}} />, '/tasks/eng');
+      await screen.findByTitle('Fix the export');
+      const column = (name: string) => screen.getByRole('region', { name });
+
+      lift(card('Fix the export'));
+      over(column('Inbox').querySelector('.col-head')!);
+      expect(column('Inbox').hasAttribute('data-drop')).toBe(false);
+      expect(screen.queryByText('Move to Inbox')).toBeNull();
+      over(column('Doing').querySelector('.col-head')!);
+      expect(column('Doing').hasAttribute('data-drop')).toBe(true);
+      expect(within(column('Doing')).getByText('Move to Doing')).toBeTruthy();
+      over(column('Inbox').querySelector('.col-head')!);
+      expect(column('Doing').hasAttribute('data-drop')).toBe(false);
+      fireEvent.drop(column('Inbox'), { dataTransfer: data });
+      expect(strip()).toBeNull();
+      expect(posts).toEqual([]);
+    });
+
+    it('a refused drag puts the card back and the toast says which stage and why', async () => {
+      serve((url, method) => {
+        if (method === 'POST' && url.endsWith('/move')) return { status: 409, body: { error: { code: 'requirement', detail: 'Needs a review first' } } };
+        if (url.startsWith('/api/v2/tasks?')) return { status: 200, body: { tasks: [task('a1', 7, 'Fix the export', 's1')], cursor: 'c2' } };
+        return { status: 200, body: {} };
+      });
+      seed([task('a1', 7, 'Fix the export', 's1')]);
+      show(<TasksPage pipeline="eng" search={{}} />, '/tasks/eng');
+      await screen.findByTitle('Fix the export');
+      lift(card('Fix the export'));
+      over(chip('Doing'));
+      fireEvent.drop(chip('Doing'), { dataTransfer: data });
+      await waitFor(() => expect(posts.length).toBe(1));
+      await waitFor(() => expect(stageOf('a1')).toBe('s1'));
+      const toast = (await screen.findByText('Needs a review first')).closest('.toast') as HTMLElement;
+      expect(toast.textContent).toBe("Couldn't move to Doing: Needs a review first");
+      expect(screen.queryByText(/^Moved to/)).toBeNull();
+    });
+
+    describe('on a phone', () => {
+      let under: Element | null = null;
+      beforeEach(() => {
+        under = null;
+        // jsdom has no layout: what lies under the finger is set by the test
+        document.elementFromPoint = () => under;
+      });
+      afterEach(() => vi.useRealTimers());
+
+      const touch = (type: 'pointerDown' | 'pointerMove' | 'pointerUp', el: Element, x: number, y: number) =>
+        fireEvent[type](el, { pointerType: 'touch', pointerId: 1, isPrimary: true, button: 0, clientX: x, clientY: y });
+
+      async function board() {
+        serve((url, method) => {
+          if (method === 'POST' && url.endsWith('/move')) return moved('a1', 's2', 2);
+          return { status: 404, body: {} };
+        });
+        seed([task('a1', 7, 'Fix the export', 's1'), task('a2', 8, 'Write the notes', 's2')]);
+        show(<TasksPage pipeline="eng" search={{}} />, '/tasks/eng');
+        await screen.findByTitle('Fix the export');
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+      }
+
+      it('hold half a second, then move: the card lifts with the stage strip; let go over a column, it moves there', async () => {
+        await board();
+        const c = card('Fix the export');
+        touch('pointerDown', c, 100, 200);
+        act(() => vi.advanceTimersByTime(499));
+        touch('pointerMove', c, 104, 203);
+        expect(strip()).toBeNull();
+        act(() => vi.advanceTimersByTime(1));
+        // held, not yet moved: still no drag (letting go here opens Move to, as before)
+        expect(strip()).toBeNull();
+        touch('pointerMove', c, 130, 260);
+        expect(strip()).not.toBeNull();
+        expect(c.classList.contains('is-drag')).toBe(true);
+        const lifted = document.querySelector('.drag-lift') as HTMLElement;
+        expect(lifted.textContent).toContain('Fix the export');
+
+        const doing = screen.getByRole('region', { name: 'Doing' });
+        under = screen.getByTitle('Write the notes');
+        touch('pointerMove', c, 300, 260);
+        expect(doing.hasAttribute('data-drop')).toBe(true);
+        expect(within(doing).getByText('Move to Doing')).toBeTruthy();
+        touch('pointerUp', c, 300, 260);
+        vi.useRealTimers();
+        await waitFor(() => expect(posts).toEqual([{ url: '/api/v2/tasks/a1/move', body: { to: 's2', version: 1 } }]));
+        expect(strip()).toBeNull();
+        expect(document.querySelector('.drag-lift, .is-drag, [data-drop]')).toBeNull();
+        expect(await screen.findByText('Moved to Doing')).toBeTruthy();
+      });
+
+      it('a swipe before the half second scrolls and a tap opens the task: neither lifts the card', async () => {
+        await board();
+        const c = card('Fix the export');
+        touch('pointerDown', c, 100, 200);
+        touch('pointerMove', c, 100, 240);
+        act(() => vi.advanceTimersByTime(1000));
+        touch('pointerMove', c, 100, 300);
+        expect(strip()).toBeNull();
+        touch('pointerUp', c, 100, 300);
+
+        touch('pointerDown', c, 100, 200);
+        touch('pointerUp', c, 100, 200);
+        act(() => vi.advanceTimersByTime(1000));
+        touch('pointerMove', c, 100, 300);
+        expect(strip()).toBeNull();
+        expect(c.classList.contains('is-drag')).toBe(false);
+      });
+
+      it('held at the edge of the screen, the board slides one column a second; back in the middle it stops', async () => {
+        await board();
+        const scroller = screen.getByRole('region', { name: 'Stages' });
+        const slides: number[] = [];
+        scroller.scrollBy = ((o: ScrollToOptions) => void slides.push(Math.sign(o.left ?? 0))) as typeof scroller.scrollBy;
+        scroller.getBoundingClientRect = () => DOMRect.fromRect({ x: 0, y: 100, width: 390, height: 600 });
+        Object.defineProperty(scroller, 'clientWidth', { value: 390 });
+        const c = card('Fix the export');
+        touch('pointerDown', c, 100, 200);
+        act(() => vi.advanceTimersByTime(500));
+        touch('pointerMove', c, 385, 300);
+        act(() => vi.advanceTimersByTime(999));
+        expect(slides).toEqual([]);
+        act(() => vi.advanceTimersByTime(1));
+        expect(slides).toEqual([1]);
+        act(() => vi.advanceTimersByTime(1000));
+        expect(slides).toEqual([1, 1]);
+        touch('pointerMove', c, 200, 300);
+        act(() => vi.advanceTimersByTime(3000));
+        expect(slides).toEqual([1, 1]);
+        touch('pointerMove', c, 4, 300);
+        act(() => vi.advanceTimersByTime(1000));
+        expect(slides).toEqual([1, 1, -1]);
+        // let go nowhere: nothing moves, and the slide stops
+        touch('pointerUp', c, 4, 300);
+        act(() => vi.advanceTimersByTime(3000));
+        expect(slides).toEqual([1, 1, -1]);
+        expect(posts).toEqual([]);
+        expect(strip()).toBeNull();
+      });
+    });
   });
 
   it('says so when the pipeline has nothing open, offering New task, and keeps every stage head', async () => {

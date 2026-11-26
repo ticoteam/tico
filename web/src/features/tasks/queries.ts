@@ -319,6 +319,12 @@ function stageIn(pipelineId: string | null, to: string): Stage | null {
   return p?.stages.find((s) => s.id === to || s.name.toLowerCase() === to.toLowerCase()) ?? null;
 }
 
+/** The name of the stage `to` names in the task's own pipeline, while the task is on screen. */
+export function stageNameOf(id: string, to: string): string | undefined {
+  const t = findTask(id);
+  return t ? stageIn(t.pipeline_id, to)?.name : undefined;
+}
+
 /**
  * Move a task to a stage: it shows there at once and is taken back if the server refuses (a requirement not met, a
  * newer version). The refusal's words are the error's message.

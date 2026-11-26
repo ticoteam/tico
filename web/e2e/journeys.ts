@@ -435,6 +435,84 @@ test('board: drag a card to another stage, and Move to does the same', async ({ 
   clean(page);
 });
 
+test('board on a phone: hold a card, drag it to a stage in the strip, Undo takes it back; held and let go it opens Move to', async ({ browser, hub }) => {
+  const [draft, date] = hub.facts.board.tasks;
+  const page = await open(browser, hub, '/tasks/launch?view=board', PHONE);
+  const stageOf = async (id: string) => (await sql<{ stage_id: string }>(hub, `SELECT stage_id FROM tasks WHERE id='${id}'`))[0]?.stage_id;
+  const card = (id: string) => page.locator(`.tk-item[data-task="${id}"]`);
+  await expect(card(draft!.id)).toBeVisible();
+  // the hold is timed on the page's clock, so the journey never waits on the wall clock for it
+  await page.clock.install();
+  const cdp = await page.context().newCDPSession(page);
+  const finger = (type: 'touchStart' | 'touchMove' | 'touchEnd', x: number, y: number) =>
+    cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y }] });
+  const middle = async (l: Locator) => {
+    const b = (await l.boundingBox())!;
+    return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+  };
+
+  const from = await middle(card(draft!.id));
+  await finger('touchStart', from.x, from.y);
+  await page.clock.runFor(600);
+  await finger('touchMove', from.x + 20, from.y + 30);
+  const strip = page.getByRole('list', { name: 'Drop on a stage' });
+  await expect(strip).toBeVisible();
+  await expect(strip.locator('li[aria-disabled="true"]')).toHaveText('Plan');
+  // the Move to sheet the hold opened is gone: the finger drags
+  await expect(page.getByRole('menuitem', { name: 'Build' })).toHaveCount(0);
+  const build = await middle(strip.locator('li', { hasText: 'Build' }));
+  await finger('touchMove', build.x, build.y);
+  await expect(page.locator('.stage-strip-line')).toHaveText('Move to Build');
+  await page.screenshot({ path: test.info().outputPath('drag-phone-strip.png') });
+  await finger('touchEnd', build.x, build.y);
+  await expect(strip).toHaveCount(0);
+  await expect.poll(() => stageOf(draft!.id)).toBe('launch-build');
+  const moved = page.locator('.toast', { hasText: 'Moved to Build' });
+  await expect(moved).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath('drag-phone-moved.png') });
+  // no task opened under the lifted finger
+  await expect(layers(page)).toHaveCount(0);
+  await moved.getByRole('button', { name: 'Undo' }).tap();
+  await expect.poll(() => stageOf(draft!.id)).toBe('launch-plan');
+  await expect(page.locator('.toast', { hasText: 'Moved back to Plan' })).toBeVisible();
+
+  // held still and let go: Move to, as before
+  const other = await middle(card(date!.id));
+  await finger('touchStart', other.x, other.y);
+  await page.clock.runFor(600);
+  await finger('touchEnd', other.x, other.y);
+  await expect(page.getByRole('menuitem', { name: 'Ship' })).toBeVisible();
+  await expect(page.getByRole('list', { name: 'Drop on a stage' })).toHaveCount(0);
+  clean(page);
+});
+
+test('board on a computer: a drag brings up every stage along the bottom, and a drop there reaches a stage past the edge', async ({ browser, hub }) => {
+  const [draft] = hub.facts.board.tasks;
+  // narrow enough that Ship lies past the board's right edge
+  const page = await open(browser, hub, '/tasks/launch?view=board', { viewport: { width: 760, height: 800 } });
+  const stageOf = async (id: string) => (await sql<{ stage_id: string }>(hub, `SELECT stage_id FROM tasks WHERE id='${id}'`))[0]?.stage_id;
+  const col = (stage: string) => page.locator(`.col[data-target="stage:launch-${stage}"]`);
+  await expect(col('plan')).toContainText(draft!.title);
+  await expect(page.getByRole('button', { name: 'Later stages' })).toBeVisible();
+
+  const card = page.locator(`.tk-item[data-task="${draft!.id}"]`);
+  const b = (await card.boundingBox())!;
+  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(b.x + b.width / 2 + 30, b.y + b.height / 2 + 10, { steps: 5 });
+  const strip = page.getByRole('list', { name: 'Drop on a stage' });
+  await expect(strip).toBeVisible();
+  const ship = (await strip.locator('li', { hasText: 'Ship' }).boundingBox())!;
+  await page.mouse.move(ship.x + ship.width / 2, ship.y + ship.height / 2, { steps: 10 });
+  await expect(strip.locator('li', { hasText: 'Ship' })).toHaveAttribute('data-drop', '');
+  await page.screenshot({ path: test.info().outputPath('drag-desktop-strip.png') });
+  await page.mouse.up();
+  await expect.poll(() => stageOf(draft!.id)).toBe('launch-ship');
+  await expect(page.locator('.toast', { hasText: 'Moved to Ship' })).toBeVisible();
+  await expect(strip).toHaveCount(0);
+  clean(page);
+});
+
 test("an agent answering: an @mention in a task's comments shows it got it, its reply being written, then the reply, on every page open on it; its own chat shows the same row", async ({ browser, hub }) => {
   const [draft] = hub.facts.board.tasks;
   const page = await open(browser, hub, `/task/${draft!.number}`);

@@ -45,6 +45,13 @@ A side stage such as **Rejected** sits beside a main stage. Automatic moves skip
 without giving a reason. In a side stage, **Send back** returns the task to the last main stage it visited.
 Reopening a task that ended in a side stage returns it there.
 
+On the board, drag a card to another stage's column. On a phone, hold the card still for half a second, then drag
+it; held and let go without moving, it opens **Move to** instead. While a card drags, every stage of the pipeline
+shows along the bottom of the screen, so a stage whose column is off screen can still be reached, and holding the
+card at the board's left or right edge slides the board a column a second. A move made by dragging says "Moved to
+<stage>" with **Undo** for 8 seconds; Undo moves the task back only, not what the stage did when it arrived. A move
+the server refuses puts the card back and says why.
+
 ### Pipeline and stage notes
 A pipeline and each of its stages can carry notes: what the team learned there, each with why, since when and its
 evidence (a task, a pull request or a run). They sit in the pipeline editor next to each stage's rules, and
