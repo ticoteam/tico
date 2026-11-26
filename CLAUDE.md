@@ -133,8 +133,11 @@ flight file, not the database.
 
 ## Refactor rules
 - `desktop/` (Electron) is the single desktop shell.
-- New routes use `routing.router()` and `Depends(get_deps)` once they land; no new `install(app, ...)` closures.
-- New background work registers in the lifespan worker list; no new ad-hoc `asyncio.create_task` loops.
+- New routes use `api_routing.router()`, handlers taking `deps.Injected`, and `api_routing.include(app, router)`; no
+  new `install(app, ...)` closures, bare `APIRouter` or `include_router` (landmines `no-install-closure`,
+  `no-bare-apirouter`).
+- New background work registers with `Workers` (`backend/lifespan_workers.py`); no bare `asyncio.create_task` in
+  `backend/app.py` (landmine `no-lifespan-task`).
 - `runner_support/` is frozen: no new file in it outside its tests, and no new import of it from `backend/` or
   `clients/`. Prefer `runner-rs`.
 - Core never imports a Non-Core module (Finance, Growth, Market, Calendar, Calls, Meetings, Mail, Letters, Slack,

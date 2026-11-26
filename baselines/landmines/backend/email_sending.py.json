@@ -1,0 +1,5 @@
+{
+  "backend/email_sending.py": {
+    "no-install-closure": 1
+  }
+}

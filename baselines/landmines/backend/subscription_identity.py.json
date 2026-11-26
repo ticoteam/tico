@@ -1,0 +1,5 @@
+{
+  "backend/subscription_identity.py": {
+    "no-install-closure": 1
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "backend/calls.py": {
+    "no-install-closure": 1
+  }
+}

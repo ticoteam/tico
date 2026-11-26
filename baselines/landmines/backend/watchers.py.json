@@ -1,0 +1,5 @@
+{
+  "backend/watchers.py": {
+    "no-install-closure": 1
+  }
+}

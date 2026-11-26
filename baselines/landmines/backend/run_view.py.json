@@ -1,0 +1,5 @@
+{
+  "backend/run_view.py": {
+    "no-install-closure": 1
+  }
+}

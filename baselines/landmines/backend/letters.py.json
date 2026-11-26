@@ -1,0 +1,5 @@
+{
+  "backend/letters.py": {
+    "no-install-closure": 1
+  }
+}

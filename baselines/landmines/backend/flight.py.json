@@ -1,0 +1,5 @@
+{
+  "backend/flight.py": {
+    "no-install-closure": 3
+  }
+}

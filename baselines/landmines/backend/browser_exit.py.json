@@ -1,0 +1,5 @@
+{
+  "backend/browser_exit.py": {
+    "no-install-closure": 1
+  }
+}

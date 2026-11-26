@@ -1,0 +1,5 @@
+{
+  "backend/assistant_share.py": {
+    "no-install-closure": 1
+  }
+}

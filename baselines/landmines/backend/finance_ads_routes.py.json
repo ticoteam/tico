@@ -1,0 +1,5 @@
+{
+  "backend/finance_ads_routes.py": {
+    "no-install-closure": 1
+  }
+}

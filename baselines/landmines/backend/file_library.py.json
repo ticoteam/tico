@@ -1,0 +1,5 @@
+{
+  "backend/file_library.py": {
+    "no-install-closure": 1
+  }
+}

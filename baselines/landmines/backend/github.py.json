@@ -1,0 +1,5 @@
+{
+  "backend/github.py": {
+    "no-install-closure": 1
+  }
+}

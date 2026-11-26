@@ -172,6 +172,153 @@ def test_an_import_inside_a_string_is_not_an_import():
     assert hits(CORE, text) == {}
 
 
+APP = "backend/app.py"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "import asyncio\n\n\nasync def lifespan(app):\n    task = asyncio.create_task(loop())\n",
+        "import asyncio as aio\nt = aio.create_task(loop())\n",
+        "from asyncio import create_task\nt = create_task(loop())\n",
+        "from asyncio import create_task as spawn\nt = spawn(loop())\n",
+        "import asyncio\nt = asyncio.get_running_loop().create_task(loop())\n",
+        "import asyncio\nt = asyncio.ensure_future(loop())\n",
+        "import asyncio\nt = asyncio.create_task(\n    loop(),\n    name='x',\n)\n",
+    ],
+)
+def test_no_lifespan_task_finds_each_way_app_starts_a_bare_task(bad):
+    assert hits(APP, bad) == {"no-lifespan-task": 1}
+
+
+@pytest.mark.parametrize(
+    "good",
+    [
+        # app.py's own Tico-task helper, handed back by register_task_routes, has the same name
+        "_, create_task, _ = register_task_routes(app)\nthread_tasks.install(app, store, auth, create_task, url)\n",
+        "t = create_task(c, who, body)\n",
+        "# asyncio.create_task(loop()) would die silently\nx = 1\n",
+        "HELP = 'never asyncio.create_task(loop()) here'\n",
+        "workers.start('digest', digest_loop)\n",
+        "import asyncio\nawait asyncio.sleep(0)\n",
+    ],
+)
+def test_no_lifespan_task_leaves_app_s_task_helper_comments_and_strings_alone(good):
+    assert "no-lifespan-task" not in hits(APP, good)
+
+
+def test_no_lifespan_task_reads_only_backend_app():
+    text = "import asyncio\nt = asyncio.create_task(loop())\n"
+    for path in ("backend/lifespan_workers.py", "backend/store.py", "backend/tests/test_app.py", "clients/x.py"):
+        assert "no-lifespan-task" not in hits(path, text), path
+
+
+INSTALLER = "backend/thing_routes.py"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "def install(app, store, auth):\n    @app.get('/x')\n    def x():\n        return {}\n",
+        "def install(\n    app,\n    store,\n):\n    pass\n",
+        "def register_foo(app: FastAPI, store: Any) -> None:\n    pass\n",
+        "def install_files(app, store, auth, blobs, mutate):\n    pass\n",
+        "def register(\n    app: Any,  # the FastAPI app\n    store: Any,\n) -> tuple:\n    pass\n",
+        "def install(app):\n    pass\n",
+        "def install(app=None):\n    pass\n",
+        "async def register_hooks(app, store):\n    pass\n",
+        "class Routes:\n    def install(self, app, store):\n        pass\n",
+        "def register_x(\n    self,\n    app,\n):\n    pass\n",
+    ],
+)
+def test_no_install_closure_finds_each_route_installer_taking_the_app(bad):
+    assert hits(INSTALLER, bad) == {"no-install-closure": 1}
+
+
+@pytest.mark.parametrize(
+    "good",
+    [
+        "def install(store: Any) -> None:\n    pass\n",  # stage_rules.install
+        "def register(store, vault, settings, tool):\n    pass\n",
+        "def register_people(admin_only, app, auth):\n    pass\n",  # app is not the first parameter
+        "def install_id(c):\n    pass\n",
+        "class A:\n    def install_id(self):\n        pass\n",
+        "class A:\n    def register(self, c, who, body):\n        pass\n",
+        "def install(application, store):\n    pass\n",
+        "def install(app_id, store):\n    pass\n",
+        "def build(app, store):\n    pass\n",
+        "def preinstall(app):\n    pass\n",
+        "# def install(app, store):\nx = 1\n",
+        "DOC = '''\ndef install(app, store):\n'''\n",
+        "router = api_routing.router()\napi_routing.include(app, router)\n",
+        "install(app, store, auth)\n",  # a call, not a definition
+    ],
+)
+def test_no_install_closure_leaves_other_functions_comments_and_strings_alone(good):
+    assert "no-install-closure" not in hits(INSTALLER, good)
+
+
+def test_no_install_closure_counts_each_installer_and_reads_only_shipped_backend_code():
+    text = "def install(app, store):\n    pass\n\n\ndef register_more(\n    app,\n):\n    pass\n"
+    assert landmines.hits_in(INSTALLER, text, landmines.RULES)["no-install-closure"] == [
+        (1, "def install(app, store):"),
+        (5, "def register_more("),
+    ]
+    for path in ("backend/tests/test_routes.py", "backend/conftest.py", "clients/thing.py", "scripts/x.py"):
+        assert "no-install-closure" not in hits(path, text), path
+
+
+ROUTES = "backend/thing_routes.py"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "from fastapi import APIRouter\nrouter = APIRouter()\n",
+        "import fastapi\nrouter = fastapi.APIRouter(prefix='/x')\n",
+        "from fastapi.routing import APIRouter\nrouter = APIRouter(\n    prefix='/x',\n)\n",
+        "from fastapi import APIRouter as R\nrouter = R()\n",
+        "from fastapi import FastAPI, APIRouter as Router\nrouter = Router()\n",
+        "from fastapi import (\n    FastAPI,\n    APIRouter as R,\n)\nrouter = R()\n",
+        "from fastapi.routing import APIRouter as R\nrouter = R()\n",
+        "app.include_router(router)\n",
+        "app.include_router(\n    router,\n    prefix='/x',\n)\n",
+        "parent.include_router(child)\n",
+    ],
+)
+def test_no_bare_apirouter_finds_a_bare_router_and_include_router(bad):
+    assert hits(ROUTES, bad) == {"no-bare-apirouter": 1}
+
+
+@pytest.mark.parametrize(
+    "good",
+    [
+        "from . import api_routing\nrouter = api_routing.router()\napi_routing.include(app, router)\n",
+        "from .api_routing import include, router\nr = router(prefix='/x')\ninclude(app, r)\n",
+        "from fastapi import APIRouter\n\n\ndef routes(made: APIRouter) -> APIRouter:\n    return made\n",
+        "# never APIRouter() or app.include_router(r) here\nx = 1\n",
+        "HELP = 'use api_routing.include, not app.include_router(r)'\n",
+        "from fastapi import FastAPI as R\napp = R()\n",
+        "from .other import R\nx = R()\n",
+    ],
+)
+def test_no_bare_apirouter_allows_api_routing_s_router_and_include(good):
+    assert "no-bare-apirouter" not in hits(ROUTES, good)
+
+
+def test_no_bare_apirouter_lets_api_routing_build_the_router_and_reads_only_shipped_backend_code():
+    text = "from fastapi import APIRouter\nr = APIRouter()\napp.include_router(r)\n"
+    assert hits(ROUTES, text) == {"no-bare-apirouter": 2}
+    for path in ("backend/api_routing.py", "backend/tests/test_routes.py", "backend/conftest.py", "clients/x.py"):
+        assert "no-bare-apirouter" not in hits(path, text), path
+
+
+def test_the_live_app_has_no_bare_task_and_no_bare_router():
+    """The two bans hold on today's tree: app.py's own create_task helper and api_routing.py are not hits."""
+    found = landmines.scan([landmines.BY_ID["no-lifespan-task"], landmines.BY_ID["no-bare-apirouter"]])
+    assert found == {}
+
+
 @pytest.fixture(autouse=True)
 def _git_finds_the_repository_by_its_folder(monkeypatch):
     """A hook exports GIT_DIR and GIT_INDEX_FILE; unset, every git call here (landmines' own included) reads the scratch
@@ -329,6 +476,9 @@ def test_a_true_lessons_table_passes():
         "L35",
         "L36",
         "L37",
+        "L40",
+        "L41",
+        "L42",
     )  # the real rules cite rows this one-row table does not have
     assert [p for p in lesson_problems(text) if not any(i in p for i in cited_elsewhere)] == []
 

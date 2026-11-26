@@ -1,0 +1,5 @@
+{
+  "backend/memory_history.py": {
+    "no-install-closure": 1
+  }
+}

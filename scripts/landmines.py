@@ -17,10 +17,13 @@ Python files are read with tokenize, so a pattern inside a string or a comment i
 line say so). There is no inline opt-out: a line a rule should not match is fixed in the rule, with a test case.
 A rule the --base ref's copy of this script does not have yet may bring its own baseline: that is how a rule starts.
 
-Three rules hold the architecture rather than the tests (CLAUDE.md, "Refactor rules"): Core code in backend/ imports no
-Non-Core module, backend/ and clients/ import no more runner_support, and runner_support/ gets no new file. The import
-rules read import statements token by token (one hit per Non-Core module a statement imports). The new-file rule compares
-the tracked paths with the --base ref's tree, so it runs only with --base, as CI runs it.
+Six rules hold the architecture rather than the tests (CLAUDE.md, "Refactor rules"): Core code in backend/ imports no
+Non-Core module, backend/ and clients/ import no more runner_support, runner_support/ gets no new file, backend/app.py
+starts no bare asyncio task (lifespan loops register with Workers), backend/ gets no new install(app, ...) closure, and
+no backend/ module but api_routing.py builds an APIRouter or calls include_router. The import rules read import
+statements token by token (one hit per Non-Core module a statement imports), and the last three read code tokens, so a
+signature or call over several lines counts once. The new-file rule compares the tracked paths with the --base ref's
+tree, so it runs only with --base, as CI runs it.
 """
 
 import argparse
@@ -202,6 +205,158 @@ def runner_support_imports(path, text):
     return imports_matching(path, text, lambda parts: parts[0] if parts[0] == "runner_support" else None)
 
 
+def code_tokens(text):
+    """The tokens of a Python file that are code: no comment, string, line break or indent, so a call split over lines
+    reads as one run of tokens. Empty when the file does not tokenize."""
+    skip = {tokenize.NL, tokenize.NEWLINE, tokenize.COMMENT, tokenize.INDENT, tokenize.DEDENT, tokenize.STRING}
+    skip |= {
+        getattr(tokenize, name)
+        for name in ("FSTRING_START", "FSTRING_MIDDLE", "FSTRING_END")
+        if hasattr(tokenize, name)
+    }
+    try:
+        return [t for t in tokenize.generate_tokens(io.StringIO(text).readline) if t.type not in skip]
+    except (tokenize.TokenError, SyntaxError, IndentationError):
+        return []
+
+
+def imported_names(path, text, module, name):
+    """The local names `path` binds to `module`.`name` (`from fastapi import APIRouter as R` binds R), and the local
+    names it binds to `module` itself (`import asyncio as aio` binds aio)."""
+    names, modules = set(), set()
+    for statement in _statements(text):
+        words = [t.string for t in statement]
+        if words[0] == "import":
+            for dotted, alias in _clauses(words[1:]):
+                if dotted == module:
+                    modules.add(alias or module.split(".")[0])
+        elif words[0] == "from" and "import" in words:
+            split = words.index("import")
+            source = resolve(path, "".join(words[1:split]))
+            for dotted, alias in _clauses(words[split + 1 :]):
+                if source == module and dotted == name:
+                    names.add(alias or name)
+                elif f"{source}.{dotted}" == module:
+                    modules.add(alias or dotted)
+    return names, modules
+
+
+def _statements(text):
+    statement, out = [], []
+    try:
+        tokens = list(tokenize.generate_tokens(io.StringIO(text).readline))
+    except (tokenize.TokenError, SyntaxError, IndentationError):
+        return out
+    for tok in tokens:
+        if tok.type in (tokenize.NEWLINE, tokenize.ENDMARKER) or (tok.type == tokenize.OP and tok.string == ";"):
+            if statement and statement[0].string in ("import", "from"):
+                out.append(statement)
+            statement = []
+        elif tok.type not in (tokenize.NL, tokenize.COMMENT, tokenize.INDENT, tokenize.DEDENT):
+            statement.append(tok)
+    return out
+
+
+def _clauses(words):
+    """(dotted name, alias or None) for each comma-separated clause of an import's names."""
+    out, current, alias, after_as = [], "", None, False
+    for word in [*words, ","]:
+        if word == ",":
+            if current:
+                out.append((current, alias))
+            current, alias, after_as = "", None, False
+        elif word == "as":
+            after_as = True
+        elif word not in "()":
+            if after_as:
+                alias = word
+            else:
+                current += word
+    return out
+
+
+def calls(tokens):
+    """(index, line number) of each `(` in `tokens` that calls a name: `name(` or `x.name(`."""
+    return [
+        (i, tok.start[0])
+        for i, tok in enumerate(tokens)
+        if i and tok.type == tokenize.OP and tok.string == "(" and tokens[i - 1].type == tokenize.NAME
+    ]
+
+
+def _callee(tokens, i):
+    """The name a call at `(` index `i` calls, and whether it is an attribute (`x.name(`)."""
+    attribute = i >= 2 and tokens[i - 2].type == tokenize.OP and tokens[i - 2].string == "."
+    return tokens[i - 1].string, attribute
+
+
+def lifespan_tasks(path, text):
+    """Each call in backend/app.py that starts an asyncio task outside the lifespan's Workers: `<anything>.create_task(`
+    (asyncio's, an alias's, a loop's), `asyncio.ensure_future(`, and a bare call of a name imported from asyncio. A bare
+    `create_task(` that asyncio did not bind is app.py's own Tico-task helper."""
+    names, modules = imported_names(path, text, "asyncio", "create_task")
+    names |= imported_names(path, text, "asyncio", "ensure_future")[0]
+    tokens = code_tokens(text)
+    lines = []
+    for i, number in calls(tokens):
+        name, attribute = _callee(tokens, i)
+        receiver = tokens[i - 3].string if attribute and i >= 3 else ""
+        if (
+            (attribute and name == "create_task")
+            or (attribute and name == "ensure_future" and receiver in modules)
+            or (not attribute and name in names)
+        ):
+            lines.append(number)
+    return lines
+
+
+INSTALLER = re.compile(r"(install|register)\w*")
+
+
+def install_closures(path, text):
+    """The line of each `def install*(app, ...)` / `def register*(app, ...)`: a function whose first parameter (after
+    `self`) is `app`, the closure a route module registers its routes in. Read token by token, so a signature over many
+    lines, a type annotation and a default all count, and a comment or string does not."""
+    tokens = code_tokens(text)
+    lines = []
+    for i, tok in enumerate(tokens[:-3]):
+        if not (tok.type == tokenize.NAME and tok.string == "def"):
+            continue
+        name, paren = tokens[i + 1], tokens[i + 2]
+        if not (INSTALLER.fullmatch(name.string) and paren.string == "("):
+            continue
+        j = i + 3
+        if tokens[j].string == "self" and j + 1 < len(tokens) and tokens[j + 1].string == ",":
+            j += 2
+        if (
+            j + 1 < len(tokens)
+            and tokens[j].type == tokenize.NAME
+            and tokens[j].string == "app"
+            and tokens[j + 1].string in (",", ")", ":", "=")
+        ):
+            lines.append(tok.start[0])
+    return lines
+
+
+ROUTER_HOME = "backend/api_routing.py"
+
+
+def bare_routers(path, text):
+    """Each `APIRouter(` (bare, `fastapi.APIRouter(`, or a name `from fastapi import APIRouter as R` binds) and each
+    `.include_router(` call: a route module builds on api_routing.router() and adds its routes with
+    api_routing.include()."""
+    aliases = set()
+    for module in ("fastapi", "fastapi.routing"):
+        aliases |= imported_names(path, text, module, "APIRouter")[0]
+    tokens = code_tokens(text)
+    lines = []
+    for i, number in calls(tokens):
+        name, attribute = _callee(tokens, i)
+        if name == "APIRouter" or (attribute and name == "include_router") or (not attribute and name in aliases):
+            lines.append(number)
+    return lines
+
+
 @dataclass
 class Rule:
     id: str
@@ -348,6 +503,37 @@ RULES = [
         "(a route, a worker, an event handler) or Core calls it through finance.actions, the one bridge.",
         "L37",
         find=core_imports_app,
+    ),
+    Rule(
+        "no-lifespan-task",
+        "ban",
+        lambda path: path == "backend/app.py",
+        [],
+        "backend/app.py starts a bare asyncio task. A lifespan loop registers with Workers (backend/lifespan_workers.py), "
+        "so its crash is logged and reported and shutdown stops it in order.",
+        "L40",
+        find=lifespan_tasks,
+    ),
+    Rule(
+        "no-install-closure",
+        "ratchet",
+        lambda path: path.startswith("backend/") and py_prod(path),
+        [],
+        "A new install(app, ...) / register(app, ...) closure. Build the module's routes on api_routing.router() with "
+        "handlers taking deps.Injected, and add them with api_routing.include(app, router) (backend/report_order.py).",
+        "L41",
+        find=install_closures,
+    ),
+    Rule(
+        "no-bare-apirouter",
+        "ban",
+        lambda path: path.startswith("backend/") and py_prod(path) and path != ROUTER_HOME,
+        [],
+        "A bare APIRouter or include_router. Use api_routing.router(), whose routes are TicoRoutes (orjson, display "
+        "names, run names, shared reads, compression), and api_routing.include(app, router): app.include_router adds one "
+        "lazy entry that hides the routes from app.routes.",
+        "L42",
+        find=bare_routers,
     ),
 ]
 BY_ID = {rule.id: rule for rule in RULES}

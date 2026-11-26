@@ -1,0 +1,5 @@
+{
+  "backend/rule_links.py": {
+    "no-install-closure": 1
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "backend/pages.py": {
+    "no-install-closure": 1
+  }
+}

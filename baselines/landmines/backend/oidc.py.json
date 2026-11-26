@@ -1,0 +1,5 @@
+{
+  "backend/oidc.py": {
+    "no-install-closure": 1
+  }
+}

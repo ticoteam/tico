@@ -1,0 +1,5 @@
+{
+  "backend/history_log.py": {
+    "no-install-closure": 1
+  }
+}
