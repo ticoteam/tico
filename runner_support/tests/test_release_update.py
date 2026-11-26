@@ -1327,7 +1327,8 @@ class Launchctl:
     def __call__(self, cmd, **kw):
         self.calls.append(cmd)
         bad = cmd[1] == "kickstart" and cmd[-1].rsplit("/", 1)[-1] in self.fail_kickstart
-        return subprocess.CompletedProcess(cmd, 1 if bad else 0, "", "")
+        gone = cmd[1] == "print"  # `launchctl print` fails once a booted-out job has stopped
+        return subprocess.CompletedProcess(cmd, 1 if bad or gone else 0, "", "")
 
 
 def install_plists(agents, *labels):
@@ -1417,6 +1418,242 @@ def test_only_installed_helper_units_are_restarted_through_systemctl_and_connect
     assert ru.restart_helpers_systemd(
         {"TICO_SYSTEMD_UNIT": "tico-acme-bot.service"}, Systemctl(), unit_dir=units, say=lambda line: None
     ) == ["close-calls"]
+
+
+# -- installed jobs move from `python -m runner` to `python -m runner_support` ------------------------------------
+
+
+def legacy_plist(label, command, module="runner"):
+    """A plist as scripts/tico-computer install wrote it before runner_support/ was named (one job per file)."""
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>{label}</string>
+  <key>ProgramArguments</key><array>
+    <string>/py</string><string>-m</string><string>{module}</string>
+    <string>--config</string><string>/cfg/runner.json</string><string>{command}</string>
+  </array>
+  <key>WorkingDirectory</key><string>/hub</string>
+  <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+</dict></plist>
+""".encode()
+
+
+def legacy_unit(kind, module="runner", python="/py"):
+    """A unit as runner_support/systemd_units.py rendered it before runner_support/ was named."""
+    from runner_support import systemd_units as su
+
+    text = su.render(kind, python=python, config="/cfg/runner.json", root="/hub", log="/l", path="/usr/bin")
+    return text.replace('"-m" "runner_support"', f'"-m" "{module}"')
+
+
+def args_of(path):
+    import plistlib
+
+    return plistlib.loads(Path(path).read_bytes())["ProgramArguments"]
+
+
+class Launchd:
+    """launchctl for one gui domain: which labels are loaded, and bootstraps that fail on purpose."""
+
+    def __init__(self, loaded=(), fail_bootstrap=None, raise_on=None):
+        self.loaded, self.calls = set(loaded), []
+        self.fail_bootstrap = fail_bootstrap or (lambda label, path: False)
+        self.raise_on = raise_on
+
+    def __call__(self, cmd, **kw):
+        import plistlib
+
+        self.calls.append(cmd)
+        if self.raise_on and self.raise_on(cmd):
+            raise subprocess.TimeoutExpired(cmd, 60)
+        verb = cmd[1]
+        if verb == "bootout":
+            self.loaded.discard(cmd[2].rsplit("/", 1)[1])
+        elif verb == "print":
+            return subprocess.CompletedProcess(cmd, 0 if cmd[2].rsplit("/", 1)[1] in self.loaded else 113, "", "")
+        elif verb == "bootstrap":
+            label = plistlib.loads(Path(cmd[3]).read_bytes())["Label"]
+            if self.fail_bootstrap(label, Path(cmd[3])):
+                return subprocess.CompletedProcess(cmd, 5, "", "Input/output error")
+            self.loaded.add(label)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def booted_out(self):
+        return [cmd[2].rsplit("/", 1)[1] for cmd in self.calls if cmd[1] == "bootout"]
+
+
+def test_only_the_interpreters_own_dash_m_runner_word_moves_and_keeps_its_quoting():
+    # A path with spaces is one quoted word; the interpreter's first two arguments are the only `-m` that counts.
+    spaced = 'ExecStart="/opt/my py/bin/python" "-m" "runner" "--config" "/c/runner.json" "run"'
+    assert ru.moved_exec(spaced, "runner", "runner_support") == (
+        'ExecStart="/opt/my py/bin/python" "-m" "runner_support" "--config" "/c/runner.json" "run"'
+    )
+    single = "ExecStart='/opt/my py/bin/python' '-m' 'runner' 'run'"
+    assert ru.moved_exec(single, "runner", "runner_support") == (
+        "ExecStart='/opt/my py/bin/python' '-m' 'runner_support' 'run'"
+    )
+    assert ru.moved_exec(
+        "ExecStart=/py -m runner.cloud_machine boot", "runner.cloud_machine", "runner_support.cloud_machine"
+    ) == ("ExecStart=/py -m runner_support.cloud_machine boot")
+    for line in (
+        'ExecStart="/py" "-m" "runner_support" "--config" "/c" "run"',  # already moved
+        'ExecStart="/py" "-m" "backend.server" "-m" "runner"',  # not the interpreter's module
+        'ExecStart="/opt/-m runner/py" "--config" "/c" "run"',  # the words are inside one quoted path
+        "ExecStart='/opt/x -m runner' run",  # the same, single-quoted
+        'Environment="-m runner"',
+    ):
+        assert ru.moved_exec(line, "runner", "runner_support") is None, line
+    assert (
+        ru.moved_unit(legacy_unit("bot", python="/opt/my py/bin/python").encode())
+        == legacy_unit("bot", "runner_support", python="/opt/my py/bin/python").encode()
+    )
+
+
+def write_units(units, **kinds):
+    units.mkdir(exist_ok=True)
+    for kind, module in kinds.items():
+        path = units / f"tico-{kind.replace('_', '-')}.service"
+        path.write_text(legacy_unit(kind.replace("_", "-"), module))
+        path.chmod(0o600)
+
+
+def test_a_linux_start_moves_the_units_and_reloads_systemd_once(tmp_path):
+    units = tmp_path / "units"
+    write_units(units, bot="runner", importers="runner", close_calls="runner_support")
+    systemctl = Systemctl()
+    moved = ru.move_systemd_units(SYSTEMD, run=systemctl, unit_dir=units, say=lambda line: None)
+    assert moved == ["tico-bot.service", "tico-importers.service"]
+    for kind in ("bot", "importers"):
+        path = units / f"tico-{kind}.service"
+        assert path.read_text() == legacy_unit(kind, "runner_support") and (path.stat().st_mode & 0o777) == 0o600
+    # The running processes go on as they are; the next restart of each starts the new ExecStart=.
+    assert systemctl.calls == [["systemctl", "--user", "daemon-reload"]]
+    assert ru.move_systemd_units(SYSTEMD, run=systemctl, unit_dir=units, say=lambda line: None) == []
+    assert len(systemctl.calls) == 1  # nothing left to move, nothing reloaded
+
+
+@pytest.mark.parametrize("how", ["exits non-zero", "times out"])
+def test_a_failed_daemon_reload_puts_the_units_back_so_the_next_start_tries_again(tmp_path, how):
+    units = tmp_path / "units"
+    write_units(units, bot="runner")
+    calls = []
+
+    def failing(cmd, **kw):
+        calls.append(cmd)
+        if len(calls) == 1:
+            if how == "times out":
+                raise subprocess.TimeoutExpired(cmd, 60)
+            return subprocess.CompletedProcess(cmd, 1, "", "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    assert ru.move_systemd_units(SYSTEMD, run=failing, unit_dir=units, say=lambda line: None) == []
+    # The file systemd may still have loaded is the one on disk again, reloaded.
+    assert (units / "tico-bot.service").read_text() == legacy_unit("bot") and len(calls) == 2
+    systemctl = Systemctl()
+    assert ru.move_systemd_units(SYSTEMD, run=systemctl, unit_dir=units, say=lambda line: None) == ["tico-bot.service"]
+    assert systemctl.calls == [["systemctl", "--user", "daemon-reload"]]
+
+
+def install_mac(agents, *jobs):
+    agents.mkdir(exist_ok=True)
+    for label, command, module in jobs:
+        (agents / f"{label}.plist").write_bytes(legacy_plist(label, command, module))
+        (agents / f"{label}.plist").chmod(0o600)
+
+
+def test_a_mac_start_rewrites_its_own_plist_without_unloading_it_and_reloads_the_helpers(tmp_path):
+    agents = tmp_path / "agents"
+    install_mac(
+        agents,
+        ("team.tico.tico-bot", "run", "runner"),
+        ("team.tico.tico-importers", "importers", "runner"),
+        ("team.tico.tico-close-calls", "close-calls", "runner_support"),
+    )
+    launchd = Launchd(loaded={"team.tico.tico-bot", "team.tico.tico-importers", "team.tico.tico-close-calls"})
+    moved = ru.move_launchd_jobs({}, run=launchd, agents=agents, uid=501, say=lambda line: None)
+    assert moved == ["team.tico.tico-bot", "team.tico.tico-importers"]
+    for label in ("team.tico.tico-bot", "team.tico.tico-importers"):
+        assert args_of(agents / f"{label}.plist")[1:3] == ["-m", "runner_support"]
+        assert ((agents / f"{label}.plist").stat().st_mode & 0o777) == 0o600
+    # The runner's own job is the one this process runs in: no launchctl call names it, so it stays loaded as it is.
+    assert not any("team.tico.tico-bot" in " ".join(map(str, cmd)) for cmd in launchd.calls)
+    assert launchd.booted_out() == ["team.tico.tico-importers"] and launchd.loaded >= {
+        "team.tico.tico-bot",
+        "team.tico.tico-importers",
+    }
+    launchd.calls.clear()
+    assert ru.move_launchd_jobs({}, run=launchd, agents=agents, uid=501, say=lambda line: None) == []
+    assert launchd.calls == []  # all moved: nothing reloaded again
+
+
+@pytest.mark.parametrize("how", ["bootstrap fails twice", "launchctl times out"])
+def test_a_helper_job_that_does_not_load_from_its_new_plist_gets_the_old_one_back_loaded(tmp_path, monkeypatch, how):
+    monkeypatch.setattr(ru, "_sleep", lambda seconds: None)
+    agents = tmp_path / "agents"
+    install_mac(agents, ("team.tico.tico-importers", "importers", "runner"))
+    timed_out = []
+
+    def raise_on(cmd):
+        # The first bootstrap of the new plist times out; launchd has nothing loaded.
+        if how == "launchctl times out" and cmd[1] == "bootstrap" and not timed_out:
+            timed_out.append(cmd)
+            return True
+        return False
+
+    launchd = Launchd(
+        loaded={"team.tico.tico-importers"},
+        fail_bootstrap=lambda label, path: how == "bootstrap fails twice" and args_of(path)[2] == "runner_support",
+        raise_on=raise_on,
+    )
+    assert ru.move_launchd_jobs({}, run=launchd, agents=agents, uid=501, say=lambda line: None) == []
+    assert (agents / "team.tico.tico-importers.plist").read_bytes() == legacy_plist(
+        "team.tico.tico-importers", "importers"
+    )
+    assert "team.tico.tico-importers" in launchd.loaded  # never left unloaded
+
+
+def test_the_move_runs_at_a_supervised_start_only_and_never_raises(monkeypatch):
+    seen = []
+    monkeypatch.setattr(ru, "move_systemd_units", lambda env, **kw: seen.append("systemd"))
+    monkeypatch.setattr(ru, "move_launchd_jobs", lambda env, **kw: seen.append("launchd"))
+    ru.move_at_start(SYSTEMD, darwin=False)
+    ru.move_at_start({"XPC_SERVICE_NAME": "team.tico.tico-bot"}, darwin=True)
+    ru.move_at_start({}, darwin=True)  # started by hand: nothing to move
+    ru.move_at_start({}, darwin=False)
+    assert seen == ["systemd", "launchd"]
+
+    def broken(env, **kw):
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(ru, "move_systemd_units", broken)
+    said = []
+    ru.move_at_start(SYSTEMD, darwin=False, say=said.append)
+    assert "could not move the jobs" in said[0]
+
+
+def test_the_runner_start_moves_the_jobs_before_it_execs_the_runner(monkeypatch, tmp_path):
+    from runner_support import __main__ as cli, engine
+
+    order = []
+    monkeypatch.setattr(ru, "move_at_start", lambda: order.append("move"))
+
+    class Execd(Exception):
+        """A real exec never returns."""
+
+    def exec_binary(argv):
+        order.append(("exec", argv))
+        raise Execd
+
+    monkeypatch.setattr(engine, "exec_binary", exec_binary)
+    for command in ("run", "doctor"):
+        with pytest.raises(Execd):
+            cli.main(["--config", str(tmp_path / "runner.json"), command])
+    assert order == [
+        "move",
+        ("exec", ["--config", str(tmp_path / "runner.json"), "run"]),
+        ("exec", ["--config", str(tmp_path / "runner.json"), "doctor"]),
+    ]
 
 
 @pytest.mark.slow

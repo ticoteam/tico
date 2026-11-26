@@ -38,7 +38,7 @@ def test_only_a_binary_of_this_version_and_these_sources_runs(tmp_path):
     assert engine.ready(env, root) is None and "other runner-rs sources" in engine.current(own, root)
 
 
-def test_the_shim_execs_the_binary_and_ignores_a_python_setting(tmp_path, capsys):
+def test_the_shim_execs_the_binary_whatever_an_old_engine_setting_says(tmp_path):
     root = checkout(tmp_path)
     given = fake_binary(tmp_path / "bin" / "tico-runner", RUNNER_VERSION, engine.source_id(root))
     config = tmp_path / "runner.json"
@@ -48,7 +48,6 @@ def test_the_shim_execs_the_binary_and_ignores_a_python_setting(tmp_path, capsys
     with pytest.raises(SystemExit):
         engine.exec_binary(
             argv,
-            config_path=config,
             root=root,
             execv=lambda *a: calls.append(a),
             env={"TICO_RUNNER_BIN": str(given), "TICO_RUNNER_ENGINE": "python", "PATH": ""},
@@ -56,8 +55,6 @@ def test_the_shim_execs_the_binary_and_ignores_a_python_setting(tmp_path, capsys
     program, args, env = calls.pop()
     assert (program, args) == (str(given), [str(given), *argv])
     assert env["TICO_ROOT"] == str(root) and env["TICO_RUNNER_PYTHON"]
-    err = capsys.readouterr().err
-    assert "TICO_RUNNER_ENGINE=python is ignored" in err and '"engine": "python" in runner.json is ignored' in err
 
 
 def test_no_binary_and_no_way_to_get_one_exits_75_saying_why(tmp_path, capsys):

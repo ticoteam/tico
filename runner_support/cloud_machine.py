@@ -346,11 +346,50 @@ def installed(m: Machine) -> bool:
     return all((m.unit_dir / f"tico-{job}.service").is_file() for job in JOBS)
 
 
-def boot(m: Machine | None, environ: dict[str, str]) -> int:
+def move_boot_unit(m: Machine, unit_dir: Path = UNIT_DIR) -> bool:
+    """Point a saved image's boot unit at `runner_support.cloud_machine` (images saved before it said
+    `runner.cloud_machine`, through the runner/ forwarder that is to be deleted) and daemon-reload. Runs at each boot,
+    as root; when the reload fails the old file goes back, so the next boot tries again. Returns whether it moved."""
+    from runner_support import release_update
+
+    path = unit_dir / UNIT
+    try:
+        if not path.is_file():
+            return False
+        before = path.read_bytes()
+        after = release_update.moved_unit(before, "runner.cloud_machine", "runner_support.cloud_machine")
+        if after is None:
+            return False
+        mode = path.stat().st_mode & 0o7777
+        release_update.replace_file(path, after, mode)
+    except (OSError, ValueError) as exc:
+        m.say(f"could not point {UNIT} at runner_support: {type(exc).__name__}")
+        return False
+
+    def reload() -> bool:
+        try:
+            return not m.system("systemctl", "daemon-reload").returncode
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+    if reload():
+        m.say(f"{UNIT} now starts python -m runner_support.cloud_machine")
+        return True
+    try:
+        release_update.replace_file(path, before, mode)
+    except OSError:
+        pass
+    reload()
+    m.say(f"systemctl daemon-reload failed; put {UNIT} back, the next boot tries again")
+    return False
+
+
+def boot(m: Machine | None, environ: dict[str, str], unit_dir: Path = UNIT_DIR) -> int:
     """One boot's work; 0 when there is nothing left to do, 1 to have systemd try again."""
     if m is None:
         print(f"no {MARKER}: not a Tico cloud machine, nothing to do")
         return 0
+    move_boot_unit(m, unit_dir)
     files = env_files(m.home, environ, m.etc / "environment")
     if not m.config.exists():
         code, hub, where = inputs(environ, files)
@@ -407,9 +446,10 @@ def unit_text(m: Machine) -> str:
             "[Service]",
             "Type=oneshot",
             f"WorkingDirectory={m.root}",
-            # `runner.cloud_machine`, not `runner_support.cloud_machine`: a saved image may boot a checkout on an older
-            # release, which has only runner/. Here runner/cloud_machine.py forwards it (runner/__init__.py).
-            f"ExecStart={m.python} -m runner.cloud_machine boot",
+            # `runner_support.cloud_machine`, not the legacy `runner.cloud_machine`: every release a machine may boot has
+            # runner_support/ (since 0.5.94; MIN_RUNNER_RELEASE is 0.6.0), and boot only moves a checkout forward.
+            # runner/cloud_machine.py only forwards for images saved earlier, until it is deleted. Do not go back.
+            f"ExecStart={m.python} -m runner_support.cloud_machine boot",
             "Restart=on-failure",
             "RestartSec=30",
             "Environment=PYTHONUNBUFFERED=1",

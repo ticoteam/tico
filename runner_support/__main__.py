@@ -12,8 +12,8 @@ from . import importers
 
 
 # The Rust runner's own commands: `python -m runner_support <one>` execs it with the same arguments (engine.py), so
-# launchd plists and systemd units, which say `python -m runner run|doctor|...` (runner/__main__.py forwards here),
-# keep working.
+# launchd plists and systemd units, which say `python -m runner_support run` (older ones `python -m runner run`, which
+# runner/__main__.py forwards here), keep working.
 BINARY = ("enroll", "profile", "status", "doctor", "adopt", "run")
 
 
@@ -47,7 +47,12 @@ def main(argv=None):
     if command:
         from . import engine
 
-        engine.exec_binary(argv, config_path=config_path if command == "run" else None)
+        if command == "run":
+            # The runner's own start, under launchd or systemd: point an older install's jobs at runner_support.
+            from . import release_update
+
+            release_update.move_at_start()
+        engine.exec_binary(argv)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=Path.home() / ".config/tico/runner.json")
     sub = parser.add_subparsers(dest="command", required=True)

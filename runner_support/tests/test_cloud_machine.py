@@ -316,8 +316,8 @@ def test_base_gives_sudo_and_the_boot_service_only_on_the_machine_it_prepares(ma
     assert fake.named("visudo") and ["systemctl", "enable", cm.UNIT] in fake.calls
     assert [c for c in fake.calls if "runner_support.engine" in c and "prepare" in c]
     unit = (tmp_path / "units" / cm.UNIT).read_text()
-    # `runner.cloud_machine`: a saved image may boot a checkout moved back to a release from before runner_support/.
-    assert f"ExecStart={m.python} -m runner.cloud_machine boot" in unit.splitlines()
+    # runner_support's own name: every release a machine may boot (MIN_RUNNER_RELEASE 0.6.0) has it (since 0.5.94).
+    assert f"ExecStart={m.python} -m runner_support.cloud_machine boot" in unit.splitlines()
     assert "Restart=on-failure" in unit and "WantedBy=multi-user.target" in unit
     marker = json.loads(cm.marker_path(machine.etc).read_text())
     assert marker == {"user": "user", "root": str(m.root), "release": "0.5.7"}
@@ -329,7 +329,8 @@ def test_base_gives_sudo_and_the_boot_service_only_on_the_machine_it_prepares(ma
 
 
 def test_the_boot_units_command_runs_through_the_runner_forwarder():
-    # What the saved unit starts, `python -m runner.cloud_machine boot`, reaches runner_support's boot (--help: no root).
+    # What an image saved before this release starts, `python -m runner.cloud_machine boot`, reaches runner_support's
+    # boot (--help: no root).
     root = Path(__file__).resolve().parents[2]
     old, new = (
         subprocess.run(
@@ -339,6 +340,49 @@ def test_the_boot_units_command_runs_through_the_runner_forwarder():
     )
     assert old.returncode == new.returncode == 0, old.stderr
     assert old.stdout == new.stdout and "boot" in old.stdout
+
+
+def old_boot_unit(m, units):
+    """The boot unit as an image saved before runner_support/ was named has it."""
+    units.mkdir(exist_ok=True)
+    text = cm.unit_text(m).replace("-m runner_support.cloud_machine", "-m runner.cloud_machine")
+    (units / cm.UNIT).write_text(text)
+    (units / cm.UNIT).chmod(0o644)
+    return text
+
+
+def test_a_boot_points_a_saved_images_boot_unit_at_runner_support_once(machine, tmp_path):
+    m, fake = machine()
+    units = tmp_path / "units"
+    old_boot_unit(m, units)
+    assert cm.boot(m, {}, unit_dir=units) == 0
+    assert (units / cm.UNIT).read_text() == cm.unit_text(m)
+    assert oct((units / cm.UNIT).stat().st_mode & 0o777) == "0o644"
+    assert fake.calls.count(["systemctl", "daemon-reload"]) == 1
+    assert cm.boot(m, {}, unit_dir=units) == 0
+    assert fake.calls.count(["systemctl", "daemon-reload"]) == 1  # already moved: nothing to reload
+
+
+@pytest.mark.parametrize("how", ["exits non-zero", "times out"])
+def test_a_failed_reload_puts_the_boot_unit_back_and_the_next_boot_tries_again(machine, tmp_path, how):
+    m, fake = machine()
+    units = tmp_path / "units"
+    text = old_boot_unit(m, units)
+    reloads = []
+
+    def run(command, **kw):
+        if command == ["systemctl", "daemon-reload"]:
+            reloads.append(command)
+            if len(reloads) == 1:
+                if how == "times out":
+                    raise subprocess.TimeoutExpired(command, 120)
+                return subprocess.CompletedProcess(command, 1, "", "")
+        return fake(command, **kw)
+
+    m.run = run
+    assert cm.boot(m, {}, unit_dir=units) == 0  # the boot goes on
+    assert (units / cm.UNIT).read_text() == text and len(reloads) == 2
+    assert cm.move_boot_unit(m, units) and (units / cm.UNIT).read_text() == cm.unit_text(m)
 
 
 class Healthz:

@@ -1,5 +1,6 @@
-"""The three `runner` entry points still in use: installed units run `python -m runner` (runner/__main__.py), saved cloud
-machine images run `python -m runner.cloud_machine boot` (runner/cloud_machine.py), and runner/__init__.py is the package."""
+"""The three `runner` entry points kept until every installed unit has moved to runner_support: units written before
+it run `python -m runner` (runner/__main__.py), cloud machine images saved before it run `python -m runner.cloud_machine
+boot` (runner/cloud_machine.py), and runner/__init__.py is the package."""
 
 import importlib
 import subprocess
