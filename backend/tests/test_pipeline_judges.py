@@ -577,12 +577,21 @@ def test_framing_lines_of_a_companys_own_bar_are_never_quoted_as_missing():
         assert not any(one[:40] in said["reason"] for one in framing), said["reason"]
     every = "Only these two count. A page that leaves any of them out does not meet it."
     assert len(P.explain_parts(every)) == 2, "a bar of framing lines alone keeps its sentences rather than none"
-    named = ("A page without a rollback plan does not meet it.", "A page that lacks a diagram does not meet it.")
+    named = (
+        "A page without a rollback plan does not meet it.",
+        "A page that lacks a diagram does not meet it.",
+        "A page that omits any of the screenshots does not meet it.",
+        "A report a person approves only if it shows test output.",
+        "A QA page that must meet this bar with the screenshots attached.",
+    )
     for line in (*PS.QA_RUBRIC.split(". ")[1:2], "Shows the checks at the newest commit.", PS.VALIDATE_RUBRIC, *named):
         assert not P.framing(line), line
     assert any("rollback" in part.ask for part in P.explain_parts(f"Shows the checks. {named[0]}")), (
         "a named item is a part"
     )
+    for one in named[2:4]:  # review of #5299: a framing match must not drop the evidence a sentence names
+        asks = [part.ask for part in P.explain_parts(f"{one} Shows the rollback command.")]
+        assert len(asks) == 2 and one.rstrip(".") in asks[0], (one, asks)
 
 
 def test_a_company_rubric_refused_names_its_unmet_sentence_and_a_one_sentence_rubric_its_only_item():

@@ -433,27 +433,35 @@ def _sentences(said: str) -> list[str]:
 # without them fails. Explained sentence by sentence, such a line was quoted as if the page lacked it ("Can't tell if
 # it meets: \"Only these seven count.\"", 27 of 36 QA reasons on Nov 18 and 19, task #3451), so it is never asked
 # as a part. Each is matched on a whole sentence, case aside.
+# A framing sentence's tail ("before the change ships") names no evidence: one that does ("only if it shows test
+# output", "with the screenshots") adds a condition a page can miss, and is a part.
+_NO_EVIDENCE = r"(?![^:;]*\b(if|unless|only|shows?|has|have|with|names?|includes?|gives?|lists?|says?)\b)"
 FRAMING = (
     # "Only these seven count." / "Only these three count: a page with all three meets it ..."
     re.compile(r"only (these|those|the above)( \w+)? (count|matter)\b.*", re.I),
     # "A page that leaves any of them out, such as ..., does not meet it." Only a page that leaves out "them" (the items
-    # the bar lists) is framing: "A page without a rollback plan does not meet it." names an item, and is a part.
+    # the bar lists) is framing: "A page without a rollback plan does not meet it." or "A page that omits any of the
+    # screenshots does not meet it." names an item, and is a part.
     re.compile(
         r"(a|an|any|the) ([\w-]+ ){0,3}(page|report) (that|which) (leaves|misses|lacks|omits|skips) (any|one|some|all)"
-        r"( \w+)? of (them|these|those|the \w+)( out)?\b.*\b(does not|doesn't|do not|don't|never) (meet|pass)(es|s)?"
+        r"( \w+)? of (them|these|those)( \w+)?( out)?\b.*\b(does not|doesn't|do not|don't|never) (meet|pass)(es|s)?"
         r"( it| this( bar| check)?| the (bar|check))?[.!]?",
         re.I,
     ),
     # "A QA page that must meet this bar before the change ships."
     re.compile(
-        r"(a|an|the|this) ([\w-]+ ){0,3}(page|report)( that)? (must|should|has to|needs to) (meet|pass)( it| this( bar| check)?| the (bar|check))?\b[^:;]*[.!]?",
+        r"(a|an|the|this) ([\w-]+ ){0,3}(page|report)( that)? (must|should|has to|needs to) (meet|pass)( it| this( bar| check)?| the (bar|check))?\b"
+        + _NO_EVIDENCE
+        + r"[^:;]*[.!]?",
         re.I,
     ),
     # "A page with all seven meets it even when it reports a target missed, ..."
     re.compile(r"(a|any) ([\w-]+ ){0,3}(page|report) with all( \w+)? (meets|passes) (it|this|the bar)\b.*", re.I),
     # "A QA page a person approves before the change ships."
     re.compile(
-        r"(a|an|the|this) ([\w-]+ ){0,3}(page|report)( that)? (a person|someone|people|the owner) (approves|oks|reads|signs off)\b[^:;,]*[.!]?",
+        r"(a|an|the|this) ([\w-]+ ){0,3}(page|report)( that)? (a person|someone|people|the owner) (approves|oks|reads|signs off)\b"
+        + _NO_EVIDENCE
+        + r"[^:;,]*[.!]?",
         re.I,
     ),
 )
