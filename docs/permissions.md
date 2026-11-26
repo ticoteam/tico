@@ -914,7 +914,7 @@ and tasks follow the rule above ([Tico SQL](hub-sql.md)).
 
 Task movers (the team owner and humans on the leadership, product or engineering teams) attach
 and remove tags on any task. A bot attaches and removes a classification tag (`qa`, an area, a
-priority) on a task it manages: one it owns, one it asked for, or one whose pipeline it manages,
+priority) on a task it manages: one it owns, one it asked for, or one whose pipeline it manages or owns,
 and only when it can already read the task. Two kinds of tag keep their gate for a bot, both to add
 and to remove: a tag on a public roadmap (Settings → Public roadmap) needs an OK of exactly that
 publication, given by a person from its preview, as public text does ([Roadmaps](roadmaps.md)), or

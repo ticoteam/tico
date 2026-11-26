@@ -72,7 +72,12 @@ from typing import Any, Literal, NoReturn, get_args
 from .batch_work import isolated
 from . import idempotency_messages
 from . import task_relations as TR
-from .task_rights import represents as task_represents, participant as task_participant, mover as task_mover
+from .task_rights import (
+    represents as task_represents,
+    participant as task_participant,
+    mover as task_mover,
+    pipeline_head as task_pipeline_head,
+)
 from . import task_roles as TRo
 from . import run_triggers as RT
 from . import status_values as SV
@@ -3197,10 +3202,12 @@ def number_pipeline(conn, actor, pipeline_id, note=""):
 
 
 def _labels(labels):
-    """Labels are lower-case free text, one word or a hyphenated few, unique, in the order given."""
+    """Labels are lower-case free text, one word or a hyphenated few, unique, in the order given. A key is the same
+    when normalized again (tag_create does), so a cut that leaves a trailing hyphen cannot pass a gate as one key and
+    be stored as another."""
     out = []
     for raw in labels if isinstance(labels, (list, tuple)) else str(labels or "").split(","):
-        one = re.sub(r"\s+", "-", str(raw or "").strip().lower()).strip("-")[:40]
+        one = re.sub(r"\s+", "-", str(raw or "").strip().lower()).strip("-")[:40].rstrip("-")
         if one and one not in out:
             out.append(one)
     return out[:20]
@@ -3440,7 +3447,7 @@ def _set_task_tags(conn, actor, task_id, labels, note="", approval_id=None, appr
 
 def _label_writer(conn, actor, row, labels, approval_id=None):
     """A bot that is not a mover changing labels on `row` (task_update): it may change a classification label
-    on a task it manages, one it owns or asked for or whose pipeline it manages, and nothing
+    on a task it manages, one it owns or asked for or whose pipeline it manages or owns, and nothing
     else. A label Tico acts on (WORKFLOW_LABELS) stays a mover's. A label on a public roadmap puts the task
     there once it is public, so adding or removing one takes the bot's exact approved publish approval
     (roadmaps.approve), or a mover when the team does not ask bots for one. Refused as rule `label`, which
@@ -3454,14 +3461,13 @@ def _label_writer(conn, actor, row, labels, approval_id=None):
     if not changed:
         return False
     teams = ", ".join(MOVER_TEAMS)
-    pipe = _one(conn, "SELECT manager_id FROM pipelines WHERE id=?", (row.get("pipeline_id") or "",)) or {}
-    if not task_participant(conn, actor, row) and pipe.get("manager_id") != actor:
+    if not task_participant(conn, actor, row) and not task_pipeline_head(conn, actor, row):
         refuse(
             conn,
             actor,
             "label",
-            f"{actor_name(conn, actor)} changes labels only on a task it owns, asked for, whose party it manages or whose pipeline it manages; labels on "
-            f"{row['id']} are changed by a person on the {teams} teams",
+            f"{actor_name(conn, actor)} changes labels only on a task it owns, asked for, whose party it manages or "
+            f"whose pipeline it manages or owns; labels on {row['id']} are changed by a person on the {teams} teams",
             task=row["id"],
         )
     settings = roadmap_settings(conn)
@@ -5638,12 +5644,15 @@ def task_update(
             )
         )
     )
-    # The bot that manages the task's pipeline may change its labels (_label_writer decides which); nothing else on
-    # the task becomes its to change.
-    manager = (_one(conn, "SELECT manager_id FROM pipelines WHERE id=?", (row.get("pipeline_id"),)) or {}).get(
-        "manager_id"
+    # The bot that manages or owns the task's pipeline may change its labels (_label_writer decides which); nothing
+    # else on the task becomes its to change.
+    mine = (
+        mine
+        or labels_only
+        and is_bot(actor)
+        and task_private_readable(conn, actor, row)
+        and task_pipeline_head(conn, actor, row)
     )
-    mine = mine or labels_only and is_bot(actor) and task_private_readable(conn, actor, row) and manager == actor
     # A bot a mover granted particular tags (tags.bot_writers) may set those, and only those, on a task it reads.
     if not mine and labels_only and is_bot(actor):
         changed = set(_labels(labels)) ^ set(task_labels(row))

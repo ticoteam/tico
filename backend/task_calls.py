@@ -111,8 +111,6 @@ def _task_write(
 def can_work(conn: "sqlite3.Connection", actor: str, row: Row, mover: bool | None = None) -> bool:
     """Whether `actor` can work this task: its owner, its requester, their managers and delegates, a party to a task
     above it, the General Manager, the manager and the owner of its pipeline, or a person who moves tasks."""
-    from . import task_engine as E
-
     H = _h()
     if actor == SYSTEM:
         return True
@@ -120,8 +118,7 @@ def can_work(conn: "sqlite3.Connection", actor: str, row: Row, mover: bool | Non
         return False
     if H._task_party(conn, actor, row) or H.general_manager_acts(conn, actor, row):
         return True
-    pipe: Row = E.pipeline(conn, row["pipeline_id"]) or {} if row.get("pipeline_id") else {}
-    if actor in (pipe.get("manager_id"), pipe.get("owner_id")):
+    if H.task_pipeline_head(conn, actor, row):
         return True
     if mover is None:
         mover = is_human(actor) and bool(H.can_move(conn, actor))
