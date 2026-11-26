@@ -1,6 +1,6 @@
 import { useQuery, type QueryKey } from '@tanstack/react-query';
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
-import { queryClient } from '@/data';
+import { keepOut, letIn, queryClient } from '@/data';
 import { hearPlaces, heldRow, holdRow, keptOrder, type ListRow } from '@/lib';
 import { flowCountQuery, flowQuery, type Flow } from './queries';
 
@@ -144,14 +144,23 @@ const READS: readonly QueryKey[] = [flowQuery.queryKey, flowCountQuery.queryKey]
 /** Stops what Needs you was reading (the revert is synchronous), so no read begun before lands over what follows. */
 const stop = () => READS.forEach((queryKey) => void queryClient.cancelQueries({ queryKey, exact: true }));
 
-/** An answer to `wait` on `task` given (null: all of it): it leaves Needs you's reads now (needsYouWithout). Returns
-    the undo for an answer never taken: each read as it was, unless a newer read landed since. */
+/** Which answer a read keeps out while it is sent (data keepOut). */
+const sendingKey = (task: string, wait: string | null) => `${task} ${wait ?? ''}`;
+
+/** An answer to `wait` on `task` given (null: all of it): it leaves Needs you's reads now (needsYouWithout), and stays
+    out of every list read that lands until its reply is heard (settleNeedsYou, or the undo). Returns the undo for an
+    answer never taken: each read as it was, unless a newer read landed since. */
 export function leaveNeedsYou(task: string, wait: string | null = null): () => void {
   stop();
   const change = needsYouWithout(task, wait);
-  const was = READS.map((key) => queryClient.getQueryData(key));
-  const now = READS.map((key) => queryClient.setQueryData(key, (cur: unknown) => (cur === undefined ? cur : change(cur))));
-  return () => READS.forEach((key, i) => queryClient.getQueryData(key) === now[i] && queryClient.setQueryData(key, was[i]));
+  const key = sendingKey(task, wait);
+  keepOut(key, change);
+  const was = READS.map((k) => queryClient.getQueryData(k));
+  const now = READS.map((k) => queryClient.setQueryData(k, (cur: unknown) => (cur === undefined ? cur : change(cur))));
+  return () => {
+    letIn(key);
+    READS.forEach((k, i) => queryClient.getQueryData(k) === now[i] && queryClient.setQueryData(k, was[i]));
+  };
 }
 
 /** The answer's reply heard: what was read meanwhile is stopped, what the server took (`gone`) stays out of the list
@@ -159,6 +168,7 @@ export function leaveNeedsYou(task: string, wait: string | null = null): () => v
     took out). The only reads of Needs you after an answer. */
 export function settleNeedsYou(gone?: { task: string; wait: string | null }): void {
   stop();
+  if (gone) letIn(sendingKey(gone.task, gone.wait));
   if (gone) queryClient.setQueryData(flowQuery.queryKey, (cur) => (cur === undefined ? cur : (needsYouWithout(gone.task, gone.wait)(cur) as Flow)));
   for (const queryKey of READS) void queryClient.invalidateQueries({ queryKey, exact: true, refetchType: gone ? 'active' : 'all' });
 }

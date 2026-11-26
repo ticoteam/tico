@@ -13,7 +13,7 @@ import { forgetPlaces, hearListClicks, openTasksOver } from '@/lib';
 import { dragTo } from '@/test/drag';
 import type * as VirtualListModule from '@/kit/VirtualList';
 import { ArchivedSections } from './Archived';
-import { leaveNeedsYou, needsYouWithout, useNeedsYou } from './needs';
+import { leaveNeedsYou, needsYouWithout, settleNeedsYou, useNeedsYou } from './needs';
 import { NeedsYouPage } from './NeedsYouPage';
 import { NeedsYouViews } from './NeedsYouViews';
 import { flowCountQuery, flowListParams, flowListQuery, flowQuery, listParams, loadMoreOf, pipelinesQuery, pipelineTasksQuery, refreshLoaded, STATUS_BACKSTOP_MS, useFlowCountRefresh, type Pipeline, type TaskItem } from './queries';
@@ -973,6 +973,32 @@ describe('Needs you @s5 @s112', () => {
     leaveNeedsYou('t1', 'qmark:t1');
     expect(queryClient.getQueryData<{ count: number }>(flowQuery.queryKey)?.count).toBe(1);
     expect(queryClient.getQueryData<{ count: number }>(flowCountQuery.queryKey)?.count).toBe(1);
+  });
+
+  it('two answers in flight each keep their own row out of a list read that lands meanwhile, until their own reply @approvals', async () => {
+    const need = (id: string, n: number) => ({ kind: 'ask', id: `v:${id}`, task_id: id, requirement_id: `r-${id}`, line: 'Send it?', since: ago(5),
+      task: { id, number: n, title: `Task ${n}`, pipeline_id: 'eng' }, ask: { kind: 'ok', requirement_id: `r-${id}`, asked_by: 'bot:so' } });
+    // what the server lists: all three until it takes an answer
+    let listed = ['t1', 't2', 't3'];
+    serve((url) => (url.includes('/needs-you?limit=') ? { status: 200, body: { items: listed.map((id, n) => need(id, n + 1)), next: null } } : { status: 200, body: { items: [] } }));
+    const ids = () => queryClient.getQueryData<{ task_ids: string[] }>(flowQuery.queryKey)?.task_ids;
+    const readAgain = () => queryClient.refetchQueries({ queryKey: flowQuery.queryKey, exact: true });
+    await queryClient.fetchQuery(flowQuery);
+    const undoFirst = leaveNeedsYou('t1', 'r-t1');
+    leaveNeedsYou('t2', 'r-t2');
+    expect(ids()).toEqual(['t3']);
+    await readAgain(); // the five-minute read, begun after both presses, lands before either reply
+    expect(ids()).toEqual(['t3']);
+    // the first refused: its row is the server's again; the second is still being sent, and stays out
+    undoFirst();
+    settleNeedsYou();
+    await readAgain();
+    expect(ids()).toEqual(['t1', 't3']);
+    // the second taken: the read after its reply is the server's own
+    listed = ['t1', 't3'];
+    settleNeedsYou({ task: 't2', wait: 'r-t2' });
+    await readAgain();
+    expect(ids()).toEqual(['t1', 't3']);
   });
 
   it('a long Needs you, opened past its cap, measures each row it draws, so a ❓ card never overlaps the rows below', async () => {

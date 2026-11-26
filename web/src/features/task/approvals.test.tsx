@@ -708,10 +708,11 @@ describe('the decision', () => {
     await waitFor(() => expect(sent.at(-1)?.url).toBe('/api/v2/answers/a9/undo'));
   });
 
-  it('says Changed when what it shows moved, and takes a new press for the new one @approvals', async () => {
+  it('refused because what it shows moved: says so in the card, reads it again and takes a new press for the new one @approvals', async () => {
     let hash = 'h1';
+    let previews = 0;
     reply = (url, method) => {
-      if (url.endsWith('/oks/r1')) return { body: { subject: 'file:f9@1', shown_hash: hash, content: {} } };
+      if (url.endsWith('/oks/r1')) return (previews++, { body: { subject: 'file:f9@1', shown_hash: hash, content: {} } });
       if (method === 'POST' && url.endsWith('/asks/r1/ok')) {
         if ((sent.at(-1)?.body.shown_hash as string) === 'h1') {
           hash = 'h2';
@@ -725,10 +726,13 @@ describe('the decision', () => {
     show(<TaskPage task="12" />, '/tasks/p1/12');
     const box = await decision();
     fireEvent.click(await ready(box));
-    expect(await within(box).findByText('Changed')).toBeTruthy();
+    // never a silent re-read: the person is told the answer was not taken
+    expect(await within(box).findByRole('alert')).toBeTruthy();
+    await waitFor(() => expect(previews).toBeGreaterThan(1));
     fireEvent.click(await ready(box));
     await waitFor(() => expect(sent.at(-1)?.body).toEqual({ shown_hash: 'h2' }));
     expect(sent.filter((x) => x.url.endsWith('/ok'))).toHaveLength(2);
+    await waitFor(() => expect(within(box).queryByRole('alert')).toBeNull());
   });
 
   it('a page’s Request changes sends the version the card showed when it opened @approvals', async () => {
@@ -837,7 +841,7 @@ describe('the decision', () => {
       held.list = held.count = null;
       const taken = new Promise<void>((done) => (take = done));
       reply = (url, method) => {
-        if (method === 'POST' && url.endsWith('/asks/r1/ok'))
+        if (method === 'POST' && (url.endsWith('/asks/r1/ok') || url.endsWith('/asks/r1/answer')))
           return taken.then(() => (down ? fails : ((open = false), { body: { task: task({ to_leave: [req({ met: true, may: [] })] }), answer_id: 'a9' } })));
         const which = method !== 'GET' ? null : url.includes('/needs-you?limit=') ? 'list' : url.includes('/needs-you?count=true') ? 'count' : null;
         if (!which) return null;
@@ -857,8 +861,9 @@ describe('the decision', () => {
     }
     const count = () => (queryClient.getQueryData(['flow', 'count']) as { count: number } | undefined)?.count;
     const ids = () => (queryClient.getQueryData(['flow']) as { task_ids: string[] } | undefined)?.task_ids;
-    /** Opened from Needs you with both read, Approve pressed: resolves once it is sent, not yet taken. */
-    const approving = async (only?: 'count') => {
+    /** Opened from Needs you with both read, Approve pressed (`back`: Request changes sent instead): resolves once it
+        is sent, not yet taken. */
+    const approving = async (only?: 'count', back?: 'back') => {
       serveNeeds();
       const router = show(
         <>
@@ -869,8 +874,13 @@ describe('the decision', () => {
       );
       await waitFor(() => expect([ids(), count()]).toEqual([only ? undefined : ['t1', 't9'], 2]));
       await act(() => router.navigate({ href: '/tasks/p1/12' }));
-      fireEvent.click(await ready(await decision()));
-      await waitFor(() => expect(sent.at(-1)?.url).toBe('/api/v2/tasks/t1/asks/r1/ok'));
+      const box = await decision();
+      if (back) {
+        fireEvent.click(within(box).getByRole('button', { name: 'Request changes' }));
+        fireEvent.change(within(box).getByRole('textbox', { name: 'What should change?' }), { target: { value: 'Shorter' } });
+        fireEvent.click(within(box).getByRole('button', { name: 'Send' }));
+      } else fireEvent.click(await ready(box));
+      await waitFor(() => expect(sent.at(-1)?.url).toBe(`/api/v2/tasks/t1/asks/r1/${back ? 'answer' : 'ok'}`));
       expect([ids(), count()]).toEqual([only ? undefined : ['t9'], 1]); // out at once
       return router;
     };
@@ -881,10 +891,15 @@ describe('the decision', () => {
     };
     const readAgain = (key: string[]) => act(() => void queryClient.refetchQueries({ queryKey: key, exact: true }));
 
-    it('once taken, reads the list once and the count once; a read landing while it was sent never brings the row back @approvals', async () => {
-      const router = await approving();
-      await readAgain(['flow']); // the five-minute read lands before the server took the answer: the row is back
-      await waitFor(() => expect(ids()).toEqual(['t1', 't9']));
+    it.each([
+      ['Approve', undefined],
+      ['Request changes', 'back'],
+    ] as const)('%s: a list read begun and landed while it is sent keeps the row out; once taken, the list and the count are read once @approvals', async (_, back) => {
+      const router = await approving(undefined, back);
+      reads.list = 0;
+      await readAgain(['flow']); // the five-minute read (or a live event's) lands before the server took the answer
+      expect(reads.list).toBe(1);
+      expect(ids()).toEqual(['t9']);
       reads.list = reads.count = 0;
       await taken(router);
       await waitFor(() => expect([ids(), count()]).toEqual([['t9'], 1]));
@@ -899,6 +914,18 @@ describe('the decision', () => {
       await waitFor(() => expect(was(router).pathname).not.toMatch(/^\/tasks\/p1\/12/));
       await waitFor(() => expect(count()).toBe(4));
       expect(reads).toEqual({ list: 0, count: 1 });
+    });
+
+    it('refused after a list read landed while it was sent: the row is back on the next read @approvals', async () => {
+      await approving();
+      await readAgain(['flow']);
+      expect(ids()).toEqual(['t9']);
+      held.list = Promise.resolve(listed()); // the server still lists it once it refused
+      await act(async () => {
+        down = true;
+        take();
+      });
+      await waitFor(() => expect(ids()).toEqual(['t1', 't9']));
     });
 
     it('an answer never taken, with Needs you not to be read again, leaves the task listed and the count as it was @approvals', async () => {
