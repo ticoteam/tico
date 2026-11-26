@@ -1316,7 +1316,8 @@ def test_a_review_page_sent_back_names_the_unmet_rubric_item_on_the_task_and_in_
     store, seeded, monkeypatch
 ):
     """Task #614: on the shipped Review rubric, the line the task shows to leave the stage and the message that sends
-    the page back both name the part Jev finds missing, not only 'Doesn't meet'."""
+    the page back both name the part Jev finds missing, not only 'Doesn't meet'. Since task #3451 that rubric is asked
+    as its parts, so the reason is the part's own line."""
     from backend import pipeline_settings as PS
 
     def build(c):
@@ -1343,7 +1344,7 @@ def test_a_review_page_sent_back_names_the_unmet_rubric_item_on_the_task_and_in_
             )
         ]
         line = _standing(r, row).line
-    assert line.startswith("Decision model sent it back: ") and item in line and "Read: " in line, line
+    assert line == "Decision model sent it back: " + item, line
     assert len(bodies) == 1 and item in bodies[0], bodies
 
 

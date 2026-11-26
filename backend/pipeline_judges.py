@@ -31,6 +31,7 @@ import logging
 import math
 import re
 import sqlite3
+from collections import Counter
 from typing import Any, TYPE_CHECKING, cast
 
 from clients import judge as clients_judge
@@ -73,12 +74,25 @@ LINES_AT_MOST = 3  # a verdict names at most this many missing parts, one line e
 class Part:
     """One named part of a check: its question id, what Jev is asked (`ask`, completing "The attachment ..."), the line a
     verdict says when it is missing (`missing`) and when Jev can't tell (`unclear`), and the short line an OK that shows
-    a passed page lists as one of its check rows (`found`; ui/app/decide.ts decideAskBubbleHTML), where it has one."""
+    a passed page lists as one of its check rows (`found`; ui/app/decide.ts decideAskBubbleHTML), where it has one.
+    `needs` is the key of a part this one only makes sense after: while that part reads no, this one is not named in
+    the reason (a page with one review is told it lacks the second, not also that the two models don't differ). `at`
+    is the part's own yes line where it is stricter than its check's bar (BARS), else None."""
 
-    __slots__ = ("key", "ask", "missing", "unclear", "found")
+    __slots__ = ("key", "ask", "missing", "unclear", "found", "needs", "at")
 
-    def __init__(self, key: str, ask: str, missing: str, unclear: str, found: str = "") -> None:
+    def __init__(
+        self,
+        key: str,
+        ask: str,
+        missing: str,
+        unclear: str,
+        found: str = "",
+        needs: str = "",
+        at: float | None = None,
+    ) -> None:
         self.key, self.ask, self.missing, self.unclear, self.found = key, ask, missing, unclear, found
+        self.needs, self.at = needs, at
 
 
 # The checks Tico ships, each as its parts (the Spec page's "What changes" table, task #351). A rubric is one of these
@@ -158,6 +172,7 @@ CHECKS: dict[str, tuple[Part, ...]] = {
             "The checks at the newest commit are not shown, or one failed.",
             "Can't tell if the checks at the newest commit passed.",
             "Checks pass at the newest commit.",
+            at=0.75,  # the page with an older commit's checks scored 0.57 to 0.71 (BARS, "raised_by_eval")
         ),
         Part(
             "reviewer_1",
@@ -179,15 +194,16 @@ CHECKS: dict[str, tuple[Part, ...]] = {
         # a person reads first, how the change works, and how to undo it. Nov 14's five QA pages had none of the three.
         Part(
             "strip",
-            "opens with a verdict a person reads first, before the details: how many of the acceptance criteria passed, "
-            "the checks, the open review findings and the risk (four short tiles or one line)",
+            "opens with a verdict a person reads first, near the top and before the details: whether the change is "
+            "ready, with how many acceptance criteria passed and the checks, and the open findings and the risk there "
+            "or just below (tiles, a table, a list or a line)",
             "No verdict strip to read first (criteria passed, checks, findings, risk).",
             "Can't tell if there is a verdict to read first.",
         ),
         Part(
             "how",
-            "shows how the change works: a diagram of the parts it touches with the changed ones marked, and the files "
-            "changed with their line counts; a change to one file may name that file instead of a diagram",
+            "shows how the change works: a diagram of the parts it touches, or a list or table of the files or parts "
+            "it changes saying what changed in each; a change to one file may name that file",
             "No diagram of how it works, or no list of the files changed.",
             "Can't tell if it shows how the change works.",
         ),
@@ -197,6 +213,50 @@ CHECKS: dict[str, tuple[Part, ...]] = {
             "stored data changes",
             "No risk and rollback (how to undo it, and whether stored data changes).",
             "Can't tell if it says how to undo the change.",
+        ),
+    ),
+    # Tico's Review bar (REVIEW_RUBRIC: two reviews on one page, since Nov 18). Until task #3451 it was asked whole and
+    # these parts only explained it: on the default bar of 0.75 for the whole page, no page passed (0 of 182 verdicts,
+    # Nov 18 to 25). Asked as its parts on the single review's bar it replaced, as Spec, QA and Validate are.
+    "two_reviews": (
+        Part(
+            "two",
+            "holds two reviews of the work, and each names the model that made it",
+            "No second review that names its model.",
+            "Can't tell if there are two reviews that each name their model.",
+            "Has two reviews, each naming its model.",
+        ),
+        Part(
+            "models",
+            "names a different model for each of its two reviews, so a reader can see the two models differ",
+            "No second review from a different model.",
+            "Can't tell if the two reviews are by different models.",
+            "The two reviews are by different models.",
+            needs="two",
+        ),
+        Part(
+            "commit",
+            "names the commit each review was of for every linked PR, and that commit is the PR's newest "
+            "(`work.context.heads`, in full or its first 7 or more characters); a second review that says it was of "
+            "the same commit counts",
+            "A review doesn't name the PR's newest commit.",
+            "Can't tell if each review names the PR's newest commit.",
+            "Each review names the newest commit.",
+        ),
+        Part(
+            "checked",
+            "says what each review checked: files read, tests or commands run",
+            "Doesn't say what each review checked (files read, tests or commands run).",
+            "Can't tell what each review checked.",
+            "Says what each review checked.",
+        ),
+        Part(
+            "findings",
+            "gives each real defect its own finding with file:line, a severity and why it matters, or says there are "
+            "no findings; a finding on the PR description may cite the guideline line it breaks as its file:line",
+            "A finding lacks file:line, a severity or why it matters, or there is no line saying there are none.",
+            "Can't tell if each finding has file:line, a severity and why it matters.",
+            "Each finding has file:line, a severity and why, or it says there are none.",
         ),
     ),
     "validate": (
@@ -229,61 +289,27 @@ CHECKS: dict[str, tuple[Part, ...]] = {
 # evals/pipeline_judge/rebuild.py from the 826 real verdicts of Nov 11 to 13 and what happened next (the result is
 # evals/pipeline_judge/results/bars-2026-11-13.md): the lowest bar that keeps met-then-sent-back no higher than before
 # and unsure under 10%. A send-back no bar could hold with unsure under 10% (the person sent back the work, every part
-# plainly there) is out of Jev's reach and does not count. QA stays at 0.75 because the eval's page with the checks of
-# an older commit scored 0.57 to 0.71 over nine real runs: met at 0.5, and once at 0.7 (the result's "raised_by_eval"). Rerun both when what Jev is shown, or a check's
-# parts, change: `rebuild.py --out` rewrites the result without "raised_by_eval", so carry each raise over by hand
+# plainly there) is out of Jev's reach and does not count. QA's checks part stays at 0.75 (`Part.at`) because the
+# eval's page with the checks of an older commit scored 0.57 to 0.71 over nine real runs: met at 0.5, and once at 0.7
+# (the result's "raised_by_eval"). Task #3451 re-ran it on the 250 real Review and QA pages of Nov 18 to 25
+# (results/bars-2026-11-26.md): the two reviews at a yes of 0.5 and a no of 0.4 left 13% unsure (75% before, none met),
+# and QA's other parts at 0.6 left 9% (24% at 0.75), with no page cut to one review, no commit, no rollback or one
+# reviewer's findings met. Rerun them when what Jev is shown, or a check's parts, change: `rebuild.py --out` rewrites
+# the result without "raised_by_eval" or "set_by_eval", so carry each over by hand
 # (test_the_committed_rebuild_result_is_the_bar_the_server_uses fails until it agrees with BARS).
 BARS: dict[str, tuple[float, float]] = {
     "spec": (0.5, NOT_MET_AT),
     "review": (0.5, NOT_MET_AT),
-    "qa": (0.75, NOT_MET_AT),
+    "two_reviews": (0.5, 0.4),
+    "qa": (0.6, NOT_MET_AT),
     "validate": (0.5, NOT_MET_AT),
 }
-# Rubrics asked whole whose parts are asked beside the whole question in the same call, only to say which part is
-# missing (task #614). The verdict stays the whole question's, read on the default bar as before: these parts never move
-# a page from met to not met. When the verdict is not met or unsure, the reason names the part the model scored lowest
-# and what it looked for on the page, instead of 'Doesn't meet "Review page".' with nothing to change (seen on #602,
-# #495, #520, #559 and #3857 on Nov 18, each refused two to four times). Each line names the rubric item; the first is
-# followed by the page line the model says its answer rests on: the same call asks it to pick one numbered line of the
-# page, or none (READ, `_read_question`), so the line quoted is the model's own pick, never one Tico chose. Any other
-# rubric asked whole is explained by its own sentences (`explain_parts`); a rubric of one sentence is its own only item,
-# quoted (`_one_item`).
-EXPLAINED: dict[str, tuple[Part, ...]] = {
-    "two_reviews": (
-        Part(
-            "two",
-            "holds two reviews of the work, and each names the model that made it",
-            "No second review that names its model.",
-            "Can't tell if there are two reviews that each name their model.",
-        ),
-        Part(
-            "models",
-            "names a different model for each of its two reviews, so a reader can see the two models differ",
-            "No second review from a different model.",
-            "Can't tell if the two reviews are by different models.",
-        ),
-        Part(
-            "commit",
-            "names, in each review, the commit it reviewed for every linked PR, and that commit is the PR's newest "
-            "(`work.context.heads`, in full or its first 7 or more characters)",
-            "A review doesn't name the PR's newest commit.",
-            "Can't tell if each review names the PR's newest commit.",
-        ),
-        Part(
-            "checked",
-            "says what each review checked: files read, tests or commands run",
-            "Doesn't say what each review checked (files read, tests or commands run).",
-            "Can't tell what each review checked.",
-        ),
-        Part(
-            "findings",
-            "gives each real defect its own finding with file:line, a severity and why it matters, or says there are "
-            "no findings; a finding on the PR description may cite the guideline line it breaks as its file:line",
-            "A finding lacks file:line, a severity or why it matters, or there is no line saying there are none.",
-            "Can't tell if each finding has file:line, a severity and why it matters.",
-        ),
-    ),
-}
+# Rubrics asked whole are explained by their own sentences (`explain_parts`): asked beside the whole question in the
+# same call, only to say which one is missing (task #614). The verdict stays the whole question's, read on the default
+# bar: these parts never move a page from met to not met. When the verdict is not met or unsure, the reason names the
+# sentence the model scored lowest, followed by the page line the model says its answer rests on: the same call asks it
+# to pick one numbered line of the page, or none (READ, `_read_question`), so the line quoted is the model's own pick,
+# never one Tico chose. A rubric of one sentence is its own only item, quoted (`_one_item`).
 
 
 def _words(text: object) -> str:
@@ -301,12 +327,14 @@ def check_of(rubric: object) -> str | None:
         return None
     known: dict[str, tuple[str, ...]] = {
         "spec": (S.SPEC_RUBRIC, *S.EARLIER.get("product-spec/page/rubric", ())),
-        # The combined Review uses the whole rubric. These parts only check a single review.
+        # The single review the presets shipped before the one Review stage, and the two reviews on one page since
+        # (Tico's text, and its text before the PR-description line).
         "review": tuple(
             text
             for text in S.EARLIER.get("engineering-review-1/page/rubric", ())
             if text not in S.COMBINED_REVIEW_RUBRICS
         ),
+        "two_reviews": S.COMBINED_REVIEW_RUBRICS,
         "qa": (S.QA_RUBRIC, *S.EARLIER.get("engineering-qa/page/rubric", ())),
         "validate": (S.VALIDATE_RUBRIC, *S.EARLIER.get("product-validate/page/rubric", ())),
     }
@@ -314,6 +342,50 @@ def check_of(rubric: object) -> str | None:
         if any(_words(text) == said for text in texts):
             return check
     return None
+
+
+# A rubric a company edited to be close to one of Tico's bars, but not the same, is a company's own: asked whole on the
+# default bar, not as the bar's calibrated parts. The save says so (pipeline_settings.near_bar_notes) and changes
+# nothing. Close is sharing at least this share of its words with the bar (each word counted as often as it is in both,
+# out of the longer text's words, case and punctuation aside).
+NEAR_SHARE = 0.8
+# What a person calls each check's bar.
+BAR_NAMES: dict[str, str] = {
+    "spec": "Spec",
+    "review": "single review",
+    "two_reviews": "Review",
+    "qa": "QA",
+    "validate": "Checked in production",
+}
+
+
+def _bag(text: object) -> "Counter[str]":
+    return Counter(re.findall(r"[a-z0-9]+(?:[:'][a-z0-9]+)*", str(text or "").lower()))
+
+
+def shared_words(one: object, other: object) -> float:
+    """The share of words two texts have in common: each word as often as it is in both, out of the longer text's."""
+    a, b = _bag(one), _bag(other)
+    longer = max(sum(a.values()), sum(b.values()))
+    return sum((a & b).values()) / longer if longer else 0.0
+
+
+def near_bar(rubric: object) -> tuple[str, str] | None:
+    """(check, Tico's text) when a rubric is close to one of Tico's bars as it ships now (NEAR_SHARE) but is none of
+    them (`check_of` is None); else None."""
+    from . import pipeline_settings as PS
+
+    S: Any = PS
+    if not _words(rubric) or check_of(rubric) is not None:
+        return None
+    shipped = {
+        "spec": S.SPEC_RUBRIC,
+        "two_reviews": S.REVIEW_RUBRIC,
+        "qa": S.QA_RUBRIC,
+        "validate": S.VALIDATE_RUBRIC,
+    }
+    share, check = max((shared_words(rubric, text), check) for check, text in shipped.items())
+    return (check, shipped[check]) if share >= NEAR_SHARE else None
 
 
 # A rubric of a company's own is explained by its sentences in at most this many parts (a longer rubric's sentences are
@@ -334,23 +406,53 @@ def _sentences(said: str) -> list[str]:
     return [one for one in re.split(r"(?<=[.!?])\s+(?=[A-Z\"'(`])", said) if one.strip()]
 
 
-def explain_parts(rubric: object) -> tuple[Part, ...]:
-    """The parts asked beside a rubric asked whole, only to name what is missing (task #614): the shipped Review
-    rubric's own (EXPLAINED), or for a rubric of two or more sentences, one part per sentence (grouped into at most
-    SENTENCES_AT_MOST parts, so none is left out), the sentence quoted. Empty for one of CHECKS (asked as its parts) and
-    for a rubric of one sentence: that sentence is the only item, and the whole question's verdict is about it, so the
-    reason quotes it (`_one_item`) without asking it again."""
-    from . import pipeline_settings as PS
+# Sentences of a rubric that name nothing a page shows: they say what the page is, which items count, or that one
+# without them fails. Explained sentence by sentence, such a line was quoted as if the page lacked it ("Can't tell if
+# it meets: \"Only these seven count.\"", 27 of 36 QA reasons on Nov 18 and 19, task #3451), so it is never asked
+# as a part. Each is matched on a whole sentence, case aside.
+FRAMING = (
+    # "Only these seven count." / "Only these three count: a page with all three meets it ..."
+    re.compile(r"only (these|those|the above)( \w+)? (count|matter)\b.*", re.I),
+    # "A page that leaves any of them out, such as ..., does not meet it."
+    re.compile(
+        r"(a|an|any|the) ([\w-]+ ){0,3}(page|report)\b.*\b(does not|doesn't|do not|don't|never) (meet|meets|pass|passes)( it| this( bar| check)?| the (bar|check))?[.!]?",
+        re.I,
+    ),
+    # "A QA page that must meet this bar before the change ships."
+    re.compile(
+        r"(a|an|the|this) ([\w-]+ ){0,3}(page|report)( that)? (must|should|has to|needs to) (meet|pass)( it| this( bar| check)?| the (bar|check))?\b[^:;]*[.!]?",
+        re.I,
+    ),
+    # "A page with all seven meets it even when it reports a target missed, ..."
+    re.compile(r"(a|any) ([\w-]+ ){0,3}(page|report) with all( \w+)? (meets|passes) (it|this|the bar)\b.*", re.I),
+    # "A QA page a person approves before the change ships."
+    re.compile(
+        r"(a|an|the|this) ([\w-]+ ){0,3}(page|report)( that)? (a person|someone|people|the owner) (approves|oks|reads|signs off)\b[^:;,]*[.!]?",
+        re.I,
+    ),
+)
 
-    S: Any = PS
+
+def framing(sentence: str) -> bool:
+    """Whether a rubric's sentence only frames it (FRAMING): what the page is, which items count, or that a page
+    without them fails. Such a sentence is never explained as a part a page may lack."""
+    said = _words(sentence)
+    return any(pattern.fullmatch(said) for pattern in FRAMING)
+
+
+def explain_parts(rubric: object) -> tuple[Part, ...]:
+    """The parts asked beside a rubric asked whole, only to name what is missing (task #614): for a rubric of two or more
+    sentences, one part per sentence that names something a page shows (FRAMING lines are left out; grouped into at
+    most SENTENCES_AT_MOST parts, so none is left out), the sentence quoted. Empty for one of CHECKS (asked as its
+    parts) and for a rubric of one sentence: that sentence is the only item, and the whole question's verdict is about
+    it, so the reason quotes it (`_one_item`) without asking it again."""
     said = _words(rubric)
     if not said or check_of(rubric) is not None:
         return ()
-    if any(said == _words(text) for text in S.COMBINED_REVIEW_RUBRICS):
-        return EXPLAINED["two_reviews"]
-    sentences = _sentences(said)
-    if len(sentences) < 2:
+    every = _sentences(said)
+    if len(every) < 2:
         return ()
+    sentences = [one for one in every if not framing(one)] or every
     size = -(-len(sentences) // SENTENCES_AT_MOST)  # sentences per part, so at most SENTENCES_AT_MOST parts
     groups = [" ".join(sentences[i : i + size]) for i in range(0, len(sentences), size)]
     parts: list[Part] = []
@@ -457,14 +559,21 @@ def _band(p: float, bar: tuple[float, float]) -> str:
     return "unsure"
 
 
+def part_bar(part: Part, bar: tuple[float, float]) -> tuple[float, float]:
+    """One part's (yes, no) lines: its check's bar, with the part's own yes line where it is stricter (`Part.at`)."""
+    return (max(bar[0], part.at), bar[1]) if part.at is not None else bar
+
+
 def _part_lines(check: str, parts: dict[str, float]) -> tuple[str, float, str]:
     """(verdict, p, reason) from each part's probability: not met naming the parts that are no, else unsure naming the
     parts Jev can't tell, else met. p is the lowest part's, so a check's bands read the same on p alone. Each part is
     read against the check's bar."""
     bar = BARS.get(check, (MET_AT, NOT_MET_AT))
-    said = {part.key: _band(parts[part.key], bar) for part in CHECKS[check] if part.key in parts}
-    no = [part.missing for part in CHECKS[check] if said.get(part.key) == "no"]
-    unclear = [part.unclear for part in CHECKS[check] if said.get(part.key) in ("unsure", None)]
+    said = {part.key: _band(parts[part.key], part_bar(part, bar)) for part in CHECKS[check] if part.key in parts}
+    # A part that only makes sense after another (`needs`) is not named while that one is missing.
+    named = [part for part in CHECKS[check] if not (part.needs and said.get(part.needs) == "no")]
+    no = [part.missing for part in named if said.get(part.key) == "no"]
+    unclear = [part.unclear for part in named if said.get(part.key) in ("unsure", None)]
     p = min(parts.values()) if parts else 0.5
     if no:
         return "not_met", p, " ".join(no[:LINES_AT_MOST])

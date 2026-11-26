@@ -43,7 +43,9 @@ SCHEMAS.update(
                 "closed": {"oneOf": [STAGE_PLACE, {"type": "null"}]},
             }
         ),
-        "PipelineSettingsResult": obj({"pipeline": ref("PipelineSettings")}),
+        "PipelineSettingsResult": obj(
+            {"pipeline": ref("PipelineSettings"), "notes": items("s")}, required=["pipeline"]
+        ),
         "PipelineSettingsList": obj({"pipelines": items(ref("PipelineSettings"))}),
         "PipelineLog": obj(
             {

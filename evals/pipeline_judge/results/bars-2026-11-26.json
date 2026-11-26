@@ -1,0 +1,315 @@
+{
+ "verdicts": 251,
+ "unreadable": 1,
+ "unanswered": 0,
+ "with_context": 251,
+ "cost_usd": 0.0894,
+ "grid": [
+  0.5,
+  0.55,
+  0.6,
+  0.65,
+  0.7,
+  0.75,
+  0.8,
+  0.85,
+  0.9,
+  0.95
+ ],
+ "not_met_at": 0.2,
+ "unsure_under": 0.1,
+ "checks": {
+  "qa": {
+   "today": {
+    "n": 68,
+    "met": 38,
+    "unsure": 25,
+    "not_met": 5,
+    "unsure_rate": 0.368,
+    "met_then_sent_back": 0,
+    "mtsb_rate": 0.0,
+    "out_of_reach": 0
+   },
+   "by_bar": {
+    "0.50": {
+     "n": 68,
+     "met": 58,
+     "unsure": 5,
+     "not_met": 5,
+     "unsure_rate": 0.074,
+     "met_then_sent_back": 0,
+     "mtsb_rate": 0.0,
+     "out_of_reach": 0
+    },
+    "0.55": {
+     "n": 68,
+     "met": 58,
+     "unsure": 5,
+     "not_met": 5,
+     "unsure_rate": 0.074,
+     "met_then_sent_back": 0,
+     "mtsb_rate": 0.0,
+     "out_of_reach": 0
+    },
+    "0.60": {
+     "n": 68,
+     "met": 57,
+     "unsure": 6,
+     "not_met": 5,
+     "unsure_rate": 0.088,
+     "met_then_sent_back": 0,
+     "mtsb_rate": 0.0,
+     "out_of_reach": 0
+    },
+    "0.65": {
+     "n": 68,
+     "met": 54,
+     "unsure": 9,
+     "not_met": 5,
+     "unsure_rate": 0.132,
+     "met_then_sent_back": 0,
+     "mtsb_rate": 0.0,
+     "out_of_reach": 0
+    },
+    "0.70": {
+     "n": 68,
+     "met": 51,
+     "unsure": 12,
+     "not_met": 5,
+     "unsure_rate": 0.176,
+     "met_then_sent_back": 0,
+     "mtsb_rate": 0.0,
+     "out_of_reach": 0
+    },
+    "0.75": {
+     "n": 68,
+     "met": 47,
+     "unsure": 16,
+     "not_met": 5,
+     "unsure_rate": 0.235,
+     "met_then_sent_back": 0,
+     "mtsb_rate": 0.0,
+     "out_of_reach": 0
+    },
+    "0.80": {
+     "n": 68,
+     "met": 43,
+     "unsure": 20,
+     "not_met": 5,
+     "unsure_rate": 0.294,
+     "met_then_sent_back": 0,
+     "mtsb_rate": 0.0,
+     "out_of_reach": 0
+    },
+    "0.85": {
+     "n": 68,
+     "met": 34,
+     "unsure": 29,
+     "not_met": 5,
+     "unsure_rate": 0.426,
+     "met_then_sent_back": 0,
+     "mtsb_rate": 0.0,
+     "out_of_reach": 0
+    },
+    "0.90": {
+     "n": 68,
+     "met": 29,
+     "unsure": 34,
+     "not_met": 5,
+     "unsure_rate": 0.5,
+     "met_then_sent_back": 0,
+     "mtsb_rate": 0.0,
+     "out_of_reach": 0
+    },
+    "0.95": {
+     "n": 68,
+     "met": 12,
+     "unsure": 51,
+     "not_met": 5,
+     "unsure_rate": 0.75,
+     "met_then_sent_back": 0,
+     "mtsb_rate": 0.0,
+     "out_of_reach": 0
+    }
+   },
+   "bar": [
+    0.5,
+    0.2
+   ],
+   "out_of_reach": []
+  },
+  "two_reviews": {
+   "today": {
+    "n": 182,
+    "met": 0,
+    "unsure": 136,
+    "not_met": 46,
+    "unsure_rate": 0.747,
+    "met_then_sent_back": 0,
+    "mtsb_rate": 0.0,
+    "out_of_reach": 0
+   },
+   "by_bar": {
+    "0.50": {
+     "n": 182,
+     "met": 108,
+     "unsure": 48,
+     "not_met": 26,
+     "unsure_rate": 0.264,
+     "met_then_sent_back": 0,
+     "mtsb_rate": 0.0,
+     "out_of_reach": 0
+    },
+    "0.55": {
+     "n": 182,
+     "met": 91,
+     "unsure": 65,
+     "not_met": 26,
+     "unsure_rate": 0.357,
+     "met_then_sent_back": 0,
+     "mtsb_rate": 0.0,
+     "out_of_reach": 0
+    },
+    "0.60": {
+     "n": 182,
+     "met": 82,
+     "unsure": 74,
+     "not_met": 26,
+     "unsure_rate": 0.407,
+     "met_then_sent_back": 0,
+     "mtsb_rate": 0.0,
+     "out_of_reach": 0
+    },
+    "0.65": {
+     "n": 182,
+     "met": 62,
+     "unsure": 94,
+     "not_met": 26,
+     "unsure_rate": 0.516,
+     "met_then_sent_back": 0,
+     "mtsb_rate": 0.0,
+     "out_of_reach": 0
+    },
+    "0.70": {
+     "n": 182,
+     "met": 41,
+     "unsure": 115,
+     "not_met": 26,
+     "unsure_rate": 0.632,
+     "met_then_sent_back": 0,
+     "mtsb_rate": 0.0,
+     "out_of_reach": 0
+    },
+    "0.75": {
+     "n": 182,
+     "met": 21,
+     "unsure": 135,
+     "not_met": 26,
+     "unsure_rate": 0.742,
+     "met_then_sent_back": 0,
+     "mtsb_rate": 0.0,
+     "out_of_reach": 0
+    },
+    "0.80": {
+     "n": 182,
+     "met": 13,
+     "unsure": 143,
+     "not_met": 26,
+     "unsure_rate": 0.786,
+     "met_then_sent_back": 0,
+     "mtsb_rate": 0.0,
+     "out_of_reach": 0
+    },
+    "0.85": {
+     "n": 182,
+     "met": 4,
+     "unsure": 152,
+     "not_met": 26,
+     "unsure_rate": 0.835,
+     "met_then_sent_back": 0,
+     "mtsb_rate": 0.0,
+     "out_of_reach": 0
+    },
+    "0.90": {
+     "n": 182,
+     "met": 0,
+     "unsure": 156,
+     "not_met": 26,
+     "unsure_rate": 0.857,
+     "met_then_sent_back": 0,
+     "mtsb_rate": 0.0,
+     "out_of_reach": 0
+    },
+    "0.95": {
+     "n": 182,
+     "met": 0,
+     "unsure": 156,
+     "not_met": 26,
+     "unsure_rate": 0.857,
+     "met_then_sent_back": 0,
+     "mtsb_rate": 0.0,
+     "out_of_reach": 0
+    }
+   },
+   "bar": null,
+   "out_of_reach": []
+  }
+ },
+ "set_by_eval": {
+  "two_reviews": [
+   0.5,
+   0.4
+  ],
+  "qa": [
+   0.6,
+   0.2
+  ]
+ },
+ "measured": {
+  "two_reviews": {
+   "bar": [
+    0.5,
+    0.4
+   ],
+   "n": 182,
+   "met": 108,
+   "unsure": 23,
+   "not_met": 51,
+   "unsure_rate": 0.126,
+   "today": {
+    "n": 182,
+    "met": 0,
+    "unsure": 136,
+    "not_met": 46
+   },
+   "traps": {
+    "no_commit:not_met": 15,
+    "one_review:not_met": 14,
+    "one_review:unsure": 1
+   }
+  },
+  "qa": {
+   "bar": [
+    0.6,
+    0.2
+   ],
+   "n": 68,
+   "met": 57,
+   "unsure": 6,
+   "not_met": 5,
+   "unsure_rate": 0.088,
+   "today": {
+    "n": 68,
+    "met": 38,
+    "unsure": 25,
+    "not_met": 5
+   },
+   "traps": {
+    "no_reviewer_2:not_met": 6,
+    "no_reviewer_2:unsure": 2,
+    "no_rollback:not_met": 8
+   }
+  }
+ },
+ "window": "Review pages 2026-11-18 to 2026-11-26 00:41 UTC; QA pages 2026-11-19 15:30 UTC (bars restored) to 2026-11-26"
+}
