@@ -1,6 +1,8 @@
 """Long-lived background threads (backend/background.py): a Loop's stop wakes and ends its threads, and a later start
 runs again on a fresh stop event, as the scheduler's tick (`ensure`) and a test's own start expect."""
 
+import threading
+
 from backend import background
 
 
@@ -25,5 +27,70 @@ def test_a_stopped_loop_ends_its_threads_and_starts_again_on_a_new_event():
         loop.start(work)
         assert not loop.stopped() and loop.threads[0].is_alive(), "a start after the stop runs on a new event"
     finally:
+        loop.stop()
+        background._loops.remove(loop)
+
+
+class _WatchedLock:
+    """A Loop's lock that says when a thread named `who` has come to take it, so a test can hold it and know the
+    other thread is waiting on it rather than guess with a sleep."""
+
+    def __init__(self, who: str) -> None:
+        self.who, self.inner, self.reached = who, threading.Lock(), threading.Event()
+
+    def __enter__(self) -> "_WatchedLock":
+        if threading.current_thread().name == self.who:
+            self.reached.set()
+        self.inner.acquire()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.inner.release()
+
+
+def test_a_stop_during_a_start_waits_for_it_and_covers_the_threads_it_started():
+    stops = []
+    loop = background.Loop("test-loop-race", lambda: None)
+    loop.lock = _WatchedLock("test-stop")  # pyright: ignore[reportAttributeAccessIssue]
+    stopper = threading.Thread(target=lambda: stops.append(loop.signal()), name="test-stop")
+
+    def before():  # runs under the loop's lock, just before the start's threads
+        stopper.start()
+        assert loop.lock.reached.wait(5), "the stop did not take the loop's lock, so it ran in the middle of a start"
+        assert not loop.stopped(), "the stop set the event while a start held the lock"
+
+    try:
+        loop.start(lambda halt: halt.wait(), count=2, before=before)
+        stopper.join()
+        assert stops == [loop.threads] and len(stops[0]) == 2, "the stop returns both threads the start made"
+        background.join(stops[0], 5)
+        assert loop.stopped() and not any(t.is_alive() for t in stops[0])
+    finally:
+        loop.stop()
+        background._loops.remove(loop)
+
+
+def test_a_thread_still_running_after_a_stop_gave_up_blocks_a_second_copy_until_it_ends():
+    release = threading.Event()
+    loop = background.Loop("test-loop-stubborn", lambda: None)
+    try:
+        loop.start(lambda halt: release.wait())  # ignores its stop event, like a worker stuck in a slow call
+        first = loop.threads[0]
+        loop.stop(timeout=0)  # the join gives up at once
+        assert first.is_alive() and loop.threads == [first], "the stop forgot a thread that is still running"
+
+        loop.start(lambda halt: halt.wait())
+        assert loop.threads == [first] and background.running().count("test-loop-stubborn") == 1, (
+            "a start ran a second copy beside the one the stop gave up on"
+        )
+
+        release.set()
+        first.join()
+        loop.start(lambda halt: halt.wait())
+        assert loop.threads[0] is not first and loop.threads[0].is_alive() and not loop.stopped(), (
+            "a start after the old thread ended runs again on a new event"
+        )
+    finally:
+        release.set()
         loop.stop()
         background._loops.remove(loop)
