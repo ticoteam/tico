@@ -88,7 +88,8 @@ class Loop:
         self, target: Callable[..., object], *args: Any, count: int = 1, before: Callable[[], None] | None = None
     ) -> None:
         """Start the threads that are not running (the ones that died, or all of them after `stop`, with a new event).
-        A stop still waiting on a thread starts none. `before` runs once, under the lock, just before any start."""
+        A stop still waiting on a thread, or one that gave up on it, starts none until that thread ends. `before` runs
+        once, under the lock, just before any start."""
         with self.lock:
             self.threads = [t for t in self.threads if t.is_alive()]
             if self.halt.is_set():
@@ -105,15 +106,19 @@ class Loop:
         return self.halt.is_set()
 
     def signal(self) -> list[threading.Thread]:
-        """Set the stop event and ring the bell; the threads to join."""
-        self.halt.set()
+        """Set the stop event and ring the bell; the threads to join. Under the lock: a start under way finishes first
+        and its threads are among them, and no start swaps the event between this set and that read."""
+        with self.lock:
+            self.halt.set()
+            threads = list(self.threads)
         self.wake()
-        return list(self.threads)
+        return threads
 
     def forget(self, joined: list[threading.Thread]) -> None:
-        """Drop the threads a stop joined (or gave up on); one a start made since stays."""
+        """Drop the threads a stop joined that have ended. One still running when the join gave up stays, so a start
+        runs no second copy beside it until it ends; one a start made since stays too."""
         with self.lock:
-            self.threads = [t for t in self.threads if t not in joined]
+            self.threads = [t for t in self.threads if t not in joined or t.is_alive()]
 
     def stop(self, timeout: float = STOP_WAIT) -> None:
         """Set the stop event, ring the bell and join the threads within `timeout` seconds all told."""
