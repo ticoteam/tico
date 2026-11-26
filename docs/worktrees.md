@@ -88,17 +88,17 @@ anyone. It removes only what nothing can still need, in this order, and stops on
    unpushed work and no ignored files outside build folders.
 3. On Linux: top-level entries of the temp folder untouched for 24 hours that no process holds open and that hold no
    git checkout (never the runner's own `tico*` files, sockets or another user's files).
-4. Idle task checkouts of a bot's own repository (`sessions/bot-<bot>/<task>`, where a bot's turns on a task work),
-   oldest first: one nothing has touched for 2 hours, with no turn of its bot or on its task running and no file
-   waiting to upload from it, and no other checkout inside it. It goes only when Git shows nothing uncommitted or
-   untracked in it and every commit on it is on a remote; its branch goes with it. Its task may still be open (a
-   ticket waiting in a later stage): the next turn on it checks the tree out again. What its repository ignores
-   (test videos and traces, build output) goes with it.
-5. `git worktree prune` in Tico's own base clones under `repos/`, one at a time and only while no fetch holds that
+4. `git worktree prune` in Tico's own base clones under `repos/`, one at a time and only while no fetch holds that
    clone. It never runs `git gc`: repacking a large clone takes longer than the computer's Git time limit, leaves
    partial packs when stopped, and holds the clone while other bots' worktree steps wait.
+5. Last, idle task checkouts of a bot's own repository (`sessions/bot-<bot>/<task>`, where a bot's turns on a task work),
+   oldest first: one nothing has touched for 2 hours, with no turn of its bot or on its task running and no file
+   waiting to upload from it, and no other checkout inside it. It goes only when Git shows nothing uncommitted or
+   untracked in it and every commit on it and on its task branch is on a remote; its branch goes with it. Its task may still be open (a
+   ticket waiting in a later stage): the next turn on it checks the tree out again. What its repository ignores
+   (test videos and traces, build output) goes with it.
 
-It never touches an open task's folder under `tasks/`, a bot's main checkout or its memory, package caches in the home folder, a git checkout itself, a bot's repository,
+It never touches an open task's folder under `tasks/`, a bot's main checkout or its memory, package caches in the home folder, any other git checkout,
 credentials, the runner's state or configuration, or Docker images and volumes. It never follows a symlink, never
 removes anything on another volume or under a mount point, and never cleans a folder inside the Tico install. Each
 removal is logged with its kind and size; only space freed on the workspace volume is counted. The computer's

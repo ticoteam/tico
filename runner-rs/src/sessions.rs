@@ -963,14 +963,18 @@ pub async fn remove(main: &Path, path: &Path, task: &str, turn: &Env) -> bool {
         {
             return Ok(false);
         }
-        // Reachable from a remote-tracking ref, not just the upstream: a commit only this branch has stays.
-        let ahead = g(
-            path,
-            &env,
-            &["rev-list", "--count", "HEAD", "--not", "--remotes"],
-            15,
-        )
-        .await?;
+        // Reachable from a remote-tracking ref, not just the upstream: a commit only this branch has stays. The task
+        // branch is checked as well as HEAD, since a turn may leave the tree detached at an older commit.
+        let branch = format!("refs/heads/{BRANCH}{task}");
+        let mut count = vec!["rev-list", "--count", "HEAD"];
+        if g(path, &env, &["rev-parse", "--verify", "-q", &branch], 15)
+            .await?
+            .ok()
+        {
+            count.push(&branch);
+        }
+        count.extend(["--not", "--remotes"]);
+        let ahead = g(path, &env, &count, 15).await?;
         if !ahead.ok() || ahead.stdout.trim() != "0" {
             return Ok(false);
         }

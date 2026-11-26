@@ -9,14 +9,14 @@
 //!    person and not in use, and never one Git tracks or a checkout holding anything unsaved;
 //! 3. on Linux, top-level entries of the temp folder untouched for a day that no process holds open and that hold
 //!    no Git checkout;
-//! 4. idle task checkouts of a bot's own repository (`sessions/bot-<bot>/<task>`, sessions.rs), oldest first: one
+//! 4. `git worktree prune` in Tico's base clones, one at a time under the lock fetches take. Never `git gc`: a
+//!    repack of a large clone outlives the runner's Git time limit, leaves partial packs when stopped, and holds
+//!    the clone's lock while other bots' worktree steps wait;
+//! 5. last, idle task checkouts of a bot's own repository (`sessions/bot-<bot>/<task>`, sessions.rs), oldest first: one
 //!    nothing touched for SESSION_IDLE_S, with no turn of its bot or on its task, no file waiting to upload from it
 //!    and no other checkout inside it, goes through sessions.rs `remove`, which keeps any tree holding uncommitted
-//!    work or a commit no remote has. Its task may still be open (a ticket waiting in a later stage): its next turn
-//!    checks the tree out again. What goes with it is what its repository ignores (test videos, traces, builds);
-//! 5. `git worktree prune` in Tico's base clones, one at a time under the lock fetches take. Never `git gc`: a
-//!    repack of a large clone outlives the runner's Git time limit, leaves partial packs when stopped, and holds
-//!    the clone's lock while other bots' worktree steps wait.
+//!    work or a commit no remote has on it or its task branch. Its task may still be open (a ticket waiting in a later stage): its next turn
+//!    checks the tree out again. What goes with it is what its repository ignores (test videos, traces, builds).
 //!
 //! Never touched: an open task's folder under `tasks/`, a folder the server lists nothing for, package caches in the home folder,
 //! a git checkout itself (but an idle task checkout above), a bot's main checkout and its memory, the runner's state and configuration, credentials, Docker, and
@@ -423,6 +423,16 @@ pub struct IdleSession {
     pub path: PathBuf,
     pub bytes: u64,
     pub newest: f64,
+    dev: u64,
+    cutoff: f64,
+}
+
+/// The tree of a task checkout while it is still idle: a checkout at its top, nothing touched since `cutoff`, and no
+/// other checkout, live file or mount point inside it.
+fn idle_tree(path: &Path, dev: u64, cutoff: f64) -> Option<Tree> {
+    let tree = walk(path, dev);
+    (tree.top_git && !tree.git && !tree.special && !tree.mount && tree.newest < cutoff)
+        .then_some(tree)
 }
 
 /// Task checkouts of bots' repositories (`sessions/bot-<bot>/<task>`) nothing touched for SESSION_IDLE_S, holding no
@@ -460,16 +470,17 @@ pub fn idle_sessions(scope: &Scope) -> Vec<IdleSession> {
             {
                 continue;
             }
-            let tree = walk(&path, dev);
-            if !tree.top_git || tree.git || tree.special || tree.mount || tree.newest >= cutoff {
+            let Some(tree) = idle_tree(&path, dev, cutoff) else {
                 continue;
-            }
+            };
             out.push(IdleSession {
                 bot: bot.to_string(),
                 task,
                 path,
                 bytes: tree.bytes,
                 newest: tree.newest,
+                dev,
+                cutoff,
             });
         }
     }
@@ -494,6 +505,12 @@ pub async fn remove_session(
     if !owners_free(&owner, host.as_ref()) || pending(&s.path) {
         return 0;
     }
+    // Walked again under the locks: a turn may have run in it since the list was made.
+    let (path, dev, cutoff) = (s.path.clone(), s.dev, s.cutoff);
+    let Ok(Some(tree)) = tokio::task::spawn_blocking(move || idle_tree(&path, dev, cutoff)).await
+    else {
+        return 0;
+    };
     // The checkout it is a worktree of, read from Git: `<main>/.git`, never metadata kept elsewhere.
     let Ok(common) = worktrees::git(
         &s.path,
@@ -518,6 +535,14 @@ pub async fn remove_session(
     {
         return 0;
     }
+    // Only a tree on its task's own branch: never a checkout that merely sits in the folder.
+    let branch = format!("refs/heads/{}{}", crate::sessions::BRANCH, s.task);
+    if !worktrees::git(&main, env, &["rev-parse", "--verify", "-q", &branch], true)
+        .await
+        .is_ok_and(|r| r.ok())
+    {
+        return 0;
+    }
     let Some(_git) = host.try_git_lock(&main) else {
         return 0;
     };
@@ -527,7 +552,7 @@ pub async fn remove_session(
     {
         return 0;
     }
-    s.bytes
+    tree.bytes
 }
 
 /// Whether Git shows a planned candidate as safe to go: nothing under it tracked or shown as changed, and its
@@ -944,6 +969,10 @@ async fn run(
             tally.add(c.class, freed);
         }
     }
+    if free(workspace) < target {
+        git_maintenance(workspace, host.repositories(), &env, &mut tally).await;
+    }
+    // Task evidence goes last, once nothing cheaper is left.
     if workspace_ok && free(workspace) < target {
         let idle = {
             let s = scope.clone();
@@ -965,9 +994,6 @@ async fn run(
                 tally.add(Class::IdleTaskWorktree, freed);
             }
         }
-    }
-    if free(workspace) < target {
-        git_maintenance(workspace, host.repositories(), &env, &mut tally).await;
     }
     let after = free(workspace);
     let freed: u64 = tally.classes.values().map(|v| v.1).sum();
@@ -1723,13 +1749,16 @@ mod tests {
             path
         };
         let (done, unpushed, untracked, live) = (add("t1"), add("t2"), add("t3"), add("t4"));
+        let (detached, touched) = (add("t5"), add("t6"));
+        git(&detached, &["commit", "-q", "--allow-empty", "-m", "work"]);
+        git(&detached, &["checkout", "-q", "--detach", "origin/main"]);
         file(&unpushed.join("memory/lesson.md"), 10);
         git(&unpushed, &["add", "memory/lesson.md"]);
         git(&unpushed, &["commit", "-q", "-m", "lesson not pushed"]);
         file(&untracked.join("qa/1/plan.json"), 10);
         age_tree(&ws.join("sessions"), 3.0 * 3600.0);
         let idle = idle_sessions(&s);
-        assert_eq!(idle.len(), 4);
+        assert_eq!(idle.len(), 6);
         let of = |p: &Path| idle.iter().find(|i| i.path == p).unwrap().clone();
         let client = Client::new("http://127.0.0.1:9", "t", 1, 0).unwrap();
         let lanes = Arc::new(crate::sessions::Lanes::new(Arc::new(
@@ -1766,6 +1795,16 @@ mod tests {
         );
         assert!(unpushed.join("memory/lesson.md").exists());
         assert!(untracked.join("qa/1/plan.json").exists());
+        // A tree left detached at a pushed commit stays while its task branch holds one no remote has.
+        assert_eq!(
+            remove_session(&of(&detached), &host, &none, &env()).await,
+            0
+        );
+        assert!(detached.exists());
+        // A tree a turn wrote to since the list was made stays.
+        file(&touched.join("qa/2/evidence/run.webm"), 10);
+        assert_eq!(remove_session(&of(&touched), &host, &none, &env()).await, 0);
+        assert!(touched.exists());
         // A turn on its task, its lane taken, or a Git step on the checkout keeps it.
         lanes.attempts.lock().unwrap().insert(
             "a1".into(),
