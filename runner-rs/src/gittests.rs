@@ -3864,7 +3864,7 @@ async fn an_unpushed_commit_is_copied_to_its_wip_branch_and_copied_again_only_on
     let last = Backup {
         head: head.clone(),
         at: Some(now),
-        error: None,
+        ..Default::default()
     };
     assert_eq!(
         backup_due(&after, &head, Some(&last), now + 6 * BACKUP_EVERY),
@@ -3873,11 +3873,11 @@ async fn an_unpushed_commit_is_copied_to_its_wip_branch_and_copied_again_only_on
     // The server's record of the copy is enough after a restart.
     assert_eq!(backup_due(&after, &head, None, now), None);
 
-    // A new commit is copied once ten minutes have passed since the last copy, not before.
+    // A new commit is copied once five minutes have passed since the last copy, not before.
     let newer = commit(&tree, "two.txt");
     let moved = worktrees::inspect(&workspace, &row, &env, None).await;
     assert_eq!(
-        backup_due(&moved, &head, Some(&last), now + Duration::from_secs(300)),
+        backup_due(&moved, &head, Some(&last), now + Duration::from_secs(150)),
         None
     );
     assert_eq!(
@@ -3923,6 +3923,7 @@ async fn a_copy_that_cannot_be_pushed_says_why_keeps_the_checkout_and_is_retried
         head: String::new(),
         at: Some(now),
         error: Some(shown),
+        timed_out: false,
     };
     commit(&tree, "two.txt");
     let report = worktrees::inspect(&workspace, &row, &env, None).await;
@@ -3932,16 +3933,41 @@ async fn a_copy_that_cannot_be_pushed_says_why_keeps_the_checkout_and_is_retried
     );
     assert!(backup_due(&report, "", Some(&last), now + BACKUP_RETRY).is_some());
     // A restarted runner keeps the hour's wait and the reason: the failure is kept beside the worktree.
-    worktrees::save_backup(&workspace, &row, Some(&last.error.clone().unwrap()));
+    worktrees::save_backup(&workspace, &row, Some(&last.error.clone().unwrap()), false);
     let restarted = worktrees::saved_backup(&workspace, &row);
     assert_eq!(restarted.error, last.error);
+    assert!(!restarted.timed_out);
     assert_eq!(
         backup_due(&report, "", Some(&restarted), Instant::now()),
         None
     );
     assert!(backup_due(&report, "", Some(&restarted), Instant::now() + BACKUP_RETRY).is_some());
-    // A copy that later succeeds clears it, and a restart keeps the ten minutes after it.
-    worktrees::save_backup(&workspace, &row, None);
+    // A copy that only ran out of time (a slow remote, Reviewer 2 on task #3448) is tried again at the next
+    // interval, its reason still shown, and a restart keeps that.
+    let slow = Backup {
+        timed_out: true,
+        ..last.clone()
+    };
+    assert_eq!(
+        backup_due(&report, "", Some(&slow), now + worktrees::BACKUP_EVERY / 2),
+        None
+    );
+    assert!(backup_due(&report, "", Some(&slow), now + worktrees::BACKUP_EVERY).is_some());
+    worktrees::save_backup(&workspace, &row, slow.error.as_deref(), true);
+    let restarted = worktrees::saved_backup(&workspace, &row);
+    assert_eq!(
+        (restarted.error.clone(), restarted.timed_out),
+        (slow.error, true)
+    );
+    assert!(backup_due(
+        &report,
+        "",
+        Some(&restarted),
+        Instant::now() + worktrees::BACKUP_EVERY
+    )
+    .is_some());
+    // A copy that later succeeds clears it, and a restart keeps the five minutes after it.
+    worktrees::save_backup(&workspace, &row, None, false);
     let copied = worktrees::saved_backup(&workspace, &row);
     assert_eq!(copied.error, None);
     assert_eq!(backup_due(&report, "", Some(&copied), Instant::now()), None);
@@ -4139,30 +4165,6 @@ async fn a_copy_is_not_published_work() {
     .unwrap_err();
     assert!(kept.text().contains("unpushed commits"), "{}", kept.text());
     assert!(tree.exists());
-}
-
-#[tokio::test]
-async fn a_copy_moved_since_it_was_checked_is_not_deleted() {
-    let tmp = Tmp::new();
-    let env = turn_env(&tmp.0, &[]);
-    let (bare, workspace, tree, row) = backed_checkout(&tmp, &env).await;
-    let wip = worktrees::wip_branch(&row);
-    let first = commit(&tree, "one.txt");
-    worktrees::back_up(&workspace, &row, &first, &env, false, "")
-        .await
-        .unwrap();
-    let second = commit(&tree, "two.txt");
-    worktrees::back_up(&workspace, &row, &second, &env, false, &first)
-        .await
-        .unwrap();
-    assert!(worktrees::delete_copy(&tree, &wip, &first, &env)
-        .await
-        .is_err());
-    assert_eq!(remote_head(&bare, &wip), Some(second.clone()));
-    worktrees::delete_copy(&tree, &wip, &second, &env)
-        .await
-        .unwrap();
-    assert_eq!(remote_head(&bare, &wip), None);
 }
 
 /// A remote that takes connections and never answers: its URL and a signal for each connection it holds.
@@ -4384,6 +4386,7 @@ async fn a_healthy_copy_behind_more_stalled_ones_than_slots_still_lands_within_m
         worktrees::allow_test_destination(&repo, &held);
         rows.push(row);
     }
+    let first_stalled = rows[0].clone();
     let (healthy_bare, workspace, healthy_tree, healthy) =
         backed_checkout_of(&tmp, &env, "healthy", "0100").await;
     let healthy_head = commit(&healthy_tree, "one.txt");
@@ -4426,11 +4429,18 @@ async fn a_healthy_copy_behind_more_stalled_ones_than_slots_still_lands_within_m
         remote_head(&healthy_bare, &worktrees::wip_branch(&healthy)),
         Some(healthy_head)
     );
+    // A stalled copy that ran out of time is tried again at the next interval, not after BACKUP_RETRY.
+    tokio::time::timeout(Duration::from_secs(60), manager.copied("link-0001"))
+        .await
+        .expect("the stalled copy outlived its deadline");
+    let slow = worktrees::saved_backup(&workspace, &first_stalled);
+    assert!(slow.timed_out && slow.error.is_some(), "{slow:?}");
     holder.abort();
 }
 
 #[tokio::test]
-async fn removing_a_checkout_whose_work_reached_the_default_branch_deletes_its_wip_copy() {
+async fn a_wip_copy_survives_removal_even_once_the_default_branch_holds_its_work() {
+    // Chris on task #3448: a backup branch is never deleted automatically; it stays until someone prunes it.
     let tmp = Tmp::new();
     let env = turn_env(&tmp.0, &[]);
     let (bare, workspace, tree, row) = backed_checkout(&tmp, &env).await;
@@ -4453,78 +4463,8 @@ async fn removing_a_checkout_whose_work_reached_the_default_branch_deletes_its_w
         "{:?}",
         removed.err().map(|e| e.text())
     );
-    worktrees::dropped(
-        &workspace
-            .join("repos")
-            .join(crate::repositories::base_folder("org/product")),
-    )
-    .await;
-    assert_eq!(remote_head(&bare, &wip), None);
+    assert_eq!(remote_head(&bare, &wip), Some(head.clone()));
     assert_eq!(remote_head(&bare, "tico/feature"), Some(head));
-}
-
-#[tokio::test]
-async fn a_wip_copy_whose_work_is_only_on_the_task_branch_survives_removal() {
-    // A task branch can be rewritten between the check and the delete; only the default branch is relied on.
-    let tmp = Tmp::new();
-    let env = turn_env(&tmp.0, &[]);
-    let (bare, workspace, tree, row) = backed_checkout(&tmp, &env).await;
-    let wip = worktrees::wip_branch(&row);
-    let head = commit(&tree, "one.txt");
-    worktrees::back_up(&workspace, &row, &head, &env, false, "")
-        .await
-        .unwrap();
-    sh(&tree, &["push", "-q", "origin", "tico/feature"]);
-    let mut action_row = row.as_object().unwrap().clone();
-    action_row.insert("full_name".into(), json!("org/product"));
-    let removed = worktrees::act(&workspace, &mut action_row, "remove", &env, &[], || async {
-        true
-    })
-    .await;
-    assert!(
-        matches!(removed, Ok("removed")),
-        "{:?}",
-        removed.err().map(|e| e.text())
-    );
-    worktrees::dropped(
-        &workspace
-            .join("repos")
-            .join(crate::repositories::base_folder("org/product")),
-    )
-    .await;
-    assert_eq!(remote_head(&bare, &wip), Some(head));
-}
-
-#[tokio::test]
-async fn a_wip_copy_holding_work_the_task_branch_lacks_survives_removal() {
-    let tmp = Tmp::new();
-    let env = turn_env(&tmp.0, &[]);
-    let (bare, workspace, tree, row) = backed_checkout(&tmp, &env).await;
-    let wip = worktrees::wip_branch(&row);
-    let head = commit(&tree, "one.txt");
-    worktrees::back_up(&workspace, &row, &head, &env, false, "")
-        .await
-        .unwrap();
-    // The bot drops that commit; the checkout is clean and has nothing unpushed, but the copy is the only record.
-    sh(&tree, &["reset", "-q", "--hard", "HEAD~1"]);
-    let mut action_row = row.as_object().unwrap().clone();
-    action_row.insert("full_name".into(), json!("org/product"));
-    let removed = worktrees::act(&workspace, &mut action_row, "remove", &env, &[], || async {
-        true
-    })
-    .await;
-    assert!(
-        matches!(removed, Ok("removed")),
-        "{:?}",
-        removed.err().map(|e| e.text())
-    );
-    worktrees::dropped(
-        &workspace
-            .join("repos")
-            .join(crate::repositories::base_folder("org/product")),
-    )
-    .await;
-    assert_eq!(remote_head(&bare, &wip), Some(head));
 }
 
 #[tokio::test]

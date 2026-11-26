@@ -1801,26 +1801,30 @@ pub fn wip_branch(row: &Value) -> String {
 }
 
 /// How often an open checkout's unpushed head is copied to its wip/ branch, and how long a failed copy waits before
-/// the next try. A cloud machine made again on a new disk keeps only what reached GitHub (task #3448).
-pub const BACKUP_EVERY: Duration = Duration::from_secs(600);
+/// the next try (a copy that only ran out of time waits BACKUP_EVERY). A cloud machine made again on a new disk keeps
+/// only what reached GitHub (task #3448).
+pub const BACKUP_EVERY: Duration = Duration::from_secs(300);
 pub const BACKUP_RETRY: Duration = Duration::from_secs(3600);
 /// Copies pushing at once on this computer, each given at most COPY_DEADLINE: behind 44 stalled ones (the Shared
-/// machine's 45 checkouts) a due copy starts within six minutes, inside BACKUP_EVERY.
+/// machine's 45 checkouts) a due copy starts within six minutes.
 const BACKUP_AT_ONCE: usize = 8;
 const COPY_DEADLINE: Duration = Duration::from_secs(60);
 
 /// The last copy of a checkout's head to its wip/ branch: the head copied (empty before the first), when this
-/// computer last tried, and why that try failed.
+/// computer last tried, why that try failed, and whether it failed only by running out of time (`timed_out`): a slow
+/// remote is tried again at the next interval, not after BACKUP_RETRY.
 #[derive(Clone, Debug, Default)]
 pub struct Backup {
     pub head: String,
     pub at: Option<Instant>,
     pub error: Option<String>,
+    pub timed_out: bool,
 }
 
 /// The head to copy now for an inspected checkout `report`, if any: one that is present, holds commits origin
 /// does not have, and moved since the head last copied (`known`: this computer's last copy, else the server's
-/// record of it). A copy waits BACKUP_EVERY after the last one, and BACKUP_RETRY after a failed one.
+/// record of it). A copy waits BACKUP_EVERY after the last one or one that ran out of time, and BACKUP_RETRY after
+/// any other failure.
 pub fn backup_due(
     report: &Value,
     known: &str,
@@ -1835,7 +1839,9 @@ pub fn backup_due(
     {
         return None;
     }
-    if let Some((at, failed)) = last.and_then(|b| b.at.map(|at| (at, b.error.is_some()))) {
+    if let Some((at, failed)) =
+        last.and_then(|b| b.at.map(|at| (at, b.error.is_some() && !b.timed_out)))
+    {
         let wait = if failed { BACKUP_RETRY } else { BACKUP_EVERY };
         if now.saturating_duration_since(at) < wait {
             return None;
@@ -1925,8 +1931,8 @@ pub async fn back_up(
 
 /// Whether every place git sends origin's fetches and pushes is the task link's repository `repo`: exactly one
 /// fetch URL and the same single push URL, read after git applies `url.*.insteadOf`, `pushInsteadOf` and push URLs
-/// (`remote get-url --all`). A rewrite in the clone's config or a second push URL would otherwise send the copy, or
-/// the delete, to another repository than the one origin names, and with `machine_git` to any this machine can write.
+/// (`remote get-url --all`). A rewrite in the clone's config or a second push URL would otherwise send the copy
+/// to another repository than the one origin names, and with `machine_git` to any this machine can write.
 async fn backup_destination(path: &Path, env: &Env, repo: &str, machine_git: bool) -> R<bool> {
     let urls = |push: bool| async move {
         let mut args = vec!["remote", "get-url", "--all"];
@@ -2000,8 +2006,8 @@ fn backup_file(workspace: &Path, row: &Value) -> Option<PathBuf> {
         .then(|| gitdir.join("tico-backup"))
 }
 
-/// Keep checkout `row`'s last copy: now, and why it failed (`None`: it succeeded).
-pub fn save_backup(workspace: &Path, row: &Value, failure: Option<&str>) {
+/// Keep checkout `row`'s last copy: now, why it failed (`None`: it succeeded), and whether it only ran out of time.
+pub fn save_backup(workspace: &Path, row: &Value, failure: Option<&str>, timed_out: bool) {
     let Some(file) = backup_file(workspace, row) else {
         return;
     };
@@ -2009,17 +2015,21 @@ pub fn save_backup(workspace: &Path, row: &Value, failure: Option<&str>) {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let _ = std::fs::write(file, format!("{at}\n{}", failure.unwrap_or_default()));
+    let mark = if timed_out { " timed-out" } else { "" };
+    let _ = std::fs::write(file, format!("{at}{mark}\n{}", failure.unwrap_or_default()));
 }
 
 /// What this computer knew of checkout `row`'s copies before a restart: the last one's time, timed back to when it
-/// happened so `backup_due` keeps its wait, and its failure, if it failed.
+/// happened so `backup_due` keeps its wait, and its failure, if it failed (and whether it only ran out of time).
 pub fn saved_backup(workspace: &Path, row: &Value) -> Backup {
     let saved = backup_file(workspace, row).and_then(|f| std::fs::read_to_string(f).ok());
     let Some((at, reason)) = saved.as_deref().and_then(|t| t.split_once('\n')) else {
         return Backup::default();
     };
-    let then = std::time::UNIX_EPOCH + Duration::from_secs(at.trim().parse().unwrap_or(0));
+    let mut first = at.split_whitespace();
+    let secs = first.next().and_then(|t| t.parse().ok()).unwrap_or(0);
+    let timed_out = first.next() == Some("timed-out");
+    let then = std::time::UNIX_EPOCH + Duration::from_secs(secs);
     let ago = std::time::SystemTime::now()
         .duration_since(then)
         .unwrap_or_default();
@@ -2029,6 +2039,7 @@ pub fn saved_backup(workspace: &Path, row: &Value) -> Backup {
         error: Some(reason.trim())
             .filter(|r| !r.is_empty())
             .map(|r| r.chars().take(300).collect()),
+        timed_out,
     }
 }
 
@@ -2044,84 +2055,6 @@ pub fn backup_error(e: &WtErr) -> String {
         .chars()
         .take(300)
         .collect()
-}
-
-/// The wip/ copies being deleted after removals, by base clone (`drop_backup`).
-static DROPPING: Mutex<Vec<(PathBuf, tokio::task::JoinHandle<()>)>> = Mutex::new(Vec::new());
-
-/// Wait for the copy deletes a removal from base clone `base` started (tests).
-#[cfg(test)]
-pub async fn dropped(base: &Path) {
-    let mine: Vec<_> = {
-        let mut running = DROPPING.lock().unwrap();
-        let base = resolve(base);
-        let (mine, rest) = running.drain(..).partition(|(at, _)| resolve(at) == base);
-        *running = rest;
-        mine
-    };
-    for (_, d) in mine {
-        let _ = d.await;
-    }
-}
-
-/// After a clean removal, a wip/ copy whose commits origin's default branch (`defaults`) already holds is redundant:
-/// delete it so GitHub keeps no stale branch per task. The default branch is the one branch Tico relies on not being
-/// rewritten (branch protection); a task branch can be, after the check and before the delete lands, and git cannot
-/// make an unchanged ref part of the delete's transaction (task #3448's review), so containment there is never
-/// enough: such a copy is kept. Runs from the base clone `base` once the checkout is gone, so a slow
-/// remote never holds the removal itself.
-async fn drop_backup(
-    base: &Path,
-    repo: &str,
-    machine_git: bool,
-    defaults: &[String],
-    wip: &str,
-    env: &Env,
-) -> R<()> {
-    if !backup_destination(base, env, repo, machine_git).await? {
-        return Ok(()); // the delete would go elsewhere than this task's repository: keep the copy
-    }
-    let Some(copy) = remote_ref(base, env, &format!("refs/heads/{wip}")).await? else {
-        return Ok(());
-    };
-    for default in defaults {
-        let Some(landed) = remote_ref(base, env, &format!("refs/heads/{default}")).await? else {
-            continue;
-        };
-        if is_sha(&copy)
-            && is_sha(&landed)
-            && git(
-                base,
-                env,
-                &["merge-base", "--is-ancestor", &copy, &landed],
-                false,
-            )
-            .await?
-            .ok()
-        {
-            return delete_copy(base, wip, &copy, env).await;
-        }
-    }
-    Ok(())
-}
-
-/// Delete origin's wip/ branch `wip` only while it is still at `copy`, the commit shown to be on the default branch:
-/// a copy moved since holds work nobody checked, and stays.
-pub async fn delete_copy(path: &Path, wip: &str, copy: &str, env: &Env) -> R<()> {
-    git_remote(
-        path,
-        env,
-        &[
-            "push",
-            "origin",
-            &format!("--force-with-lease=refs/heads/{wip}:{copy}"),
-            "--delete",
-            &format!("refs/heads/{wip}"),
-        ],
-        true,
-    )
-    .await?;
-    Ok(())
 }
 
 /// Left out of origin's published history wherever a commit's being pushed decides something (`ahead`, `unpushed`,
@@ -3117,8 +3050,6 @@ where
             .trim()
             .to_string();
         let against = upstreams(&path, env, &branch, &defaults).await?;
-        // Whether this removal saved work to the wip/ branch; when not, an older copy is dropped below.
-        let mut copied = false;
         if crate::util::truthy(row.get("release")) {
             // Released while its task is open: the bot may still use it, so nothing is saved on its behalf.
             if dirty {
@@ -3281,7 +3212,6 @@ where
                 true,
             )
             .await?;
-            copied = true;
             if !defaults.contains(&branch) {
                 let moved = fast_forward(&path, &branch, "HEAD", env).await;
                 git(&path, env, &["switch", &branch], true).await?;
@@ -3296,7 +3226,6 @@ where
                 true,
             )
             .await?;
-            copied = true;
             if !defaults.contains(&branch) {
                 if !git(
                     &path,
@@ -3329,7 +3258,6 @@ where
                     true,
                 )
                 .await?;
-                copied = true;
             } else if current != branch || defaults.contains(&branch) {
                 return Err(WtErr::msg(
                     "Unpushed history on another or default branch; kept worktree",
@@ -3365,20 +3293,6 @@ where
             true,
         )
         .await?;
-        if !copied && !defaults.contains(&branch) {
-            // Best effort, after the checkout is gone and without holding up this removal or the next action: a copy
-            // left on GitHub costs a branch, never work.
-            let (env, machine_git) = (env.clone(), crate::util::truthy(row.get("machine_git")));
-            let mut defaults: Vec<String> = defaults.iter().cloned().collect();
-            defaults.sort();
-            let at = base.clone();
-            let dropping = tokio::spawn(async move {
-                let _ = drop_backup(&base, &repo, machine_git, &defaults, &wip, &env).await;
-            });
-            let mut running = DROPPING.lock().unwrap();
-            running.retain(|(_, d)| !d.is_finished());
-            running.push((at, dropping));
-        }
         return Ok("removed");
     }
     let branch = checked_branch(&own(row, "branch")).await?;
@@ -3950,7 +3864,7 @@ impl Worktrees {
             && report["state"] == "present"
             && report["ahead"].as_i64() == Some(0)
         {
-            save_backup(&self.workspace, row, None);
+            save_backup(&self.workspace, row, None, false);
             if let Some(entry) = self.inner.lock().unwrap().backups.get_mut(&link) {
                 entry.error = None;
             }
@@ -3972,23 +3886,27 @@ impl Worktrees {
             let machine_git = listed.get("machine_git") == Some(&json!(true));
             back_up(&self.workspace, row, &head, &env, machine_git, known).await
         };
-        // A remote that stalls holds a slot no longer than this; its git is killed with the attempt (kill_on_drop).
-        let outcome = tokio::time::timeout(deadline, attempt)
-            .await
-            .unwrap_or_else(|_| {
+        // A remote that stalls holds a slot no longer than this; its git and every process git started are killed
+        // with the attempt (gitrun's process group guard), and it is tried again at the next interval.
+        let (outcome, timed_out) = match tokio::time::timeout(deadline, attempt).await {
+            Ok(outcome) => (outcome, false),
+            Err(_) => (
                 Err(WtErr::msg(format!(
                     "the remote did not answer within {} s",
                     deadline.as_secs()
-                )))
-            });
+                ))),
+                true,
+            ),
+        };
         let error = outcome.err().map(|e| backup_error(&e));
-        save_backup(&self.workspace, row, error.as_deref());
+        save_backup(&self.workspace, row, error.as_deref(), timed_out);
         let mut inner = self.inner.lock().unwrap();
         let entry = inner.backups.entry(link).or_default();
         entry.at = Some(Instant::now());
         if error.is_none() {
             entry.head = head;
         }
+        entry.timed_out = timed_out && error.is_some();
         entry.error = error;
     }
 
