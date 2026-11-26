@@ -84,7 +84,7 @@ export function PipelineNotes({ pipeline, stage, mayChange }: { pipeline: string
           <>
             <Field label="Note" value={draft.note} onValueChange={set('note')} />
             <Field label="Why" value={draft.why} onValueChange={set('why')} />
-            <Field label="Since" placeholder="YYYY-MM-DD" value={draft.since} onValueChange={set('since')} />
+            <Field label="Since" placeholder="2026-11-18" value={draft.since} onValueChange={set('since')} />
             <Field label="Evidence" placeholder="A task, a pull request or a run" value={draft.evidence} onValueChange={set('evidence')} />
           </>
         )}

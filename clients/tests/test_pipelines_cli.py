@@ -129,6 +129,9 @@ class Api:
             return {"actor": "human:ana", "actor_name": "Ana", "role": "owner", "kind": "owner"}
         if path.endswith("/log"):
             return {"log": [{"line": "moved"}], "learned": []}
+        if path.endswith("/notes"):
+            spec = {"id": "n_1", "stage_id": "product-spec", "note": "Name the segment.", "why": "Two specs missed it."}
+            return {"notes": [], "stages": [{"id": "product-spec", "notes": [{**spec, "since": "2026-11-18"}]}]}
         if path == "tasks" and not self.script:
             return {"tasks": []}
         if path == "tasks":
@@ -244,6 +247,11 @@ def test_over_mcp_a_pipeline_read_is_one_call_and_a_missing_one_names_the_ones_t
     spec = shown["stages"][1]
     assert spec["held_by_name"] == "Product Owner" and spec["to_leave"][0]["line"] == "Spec page (a person's OK)"
     assert spec["to_leave"][0]["person"] == "Ana" and shown["stages"][0]["by_hand"] is True
+    # What the team learned there, under the stage it is for.
+    assert shown["notes"] == [] and shown["stages"][0]["notes"] == []
+    assert spec["notes"] == [
+        {"id": "n_1", "note": "Name the segment.", "why": "Two specs missed it.", "since": "2026-11-18"}
+    ]
     missing = call("tico_pipeline_show", {"pipeline": "nope"})
     assert missing["isError"] and "general, product, engineering" in missing["structuredContent"]["detail"]
     assert "old" not in missing["structuredContent"]["detail"]

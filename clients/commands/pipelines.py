@@ -1314,6 +1314,10 @@ AUDIENCE = {
         "tico_requirement_add",
         "tico_requirement_update",
         "tico_requirement_remove",
+        # A person adds, edits and retires notes; a bot proposes, and a manager bot accepts or declines.
+        "tico_pipeline_note_add",
+        "tico_pipeline_note_edit",
+        "tico_pipeline_note_retire",
     )
 }
 SHELL_ONLY = {"tico_task_wait"}
