@@ -14,6 +14,7 @@ import { Switch } from '@/kit/Switch';
 import { newId } from '@/lib';
 import { Record as RecordPage, Section, type PageState } from '@/pagekinds';
 import { Face } from './parts';
+import { PipelineNotes } from './PipelineNotes';
 import {
   factoryChoicesQuery,
   pipelineChanged,
@@ -258,6 +259,7 @@ export function PipelinePage({ pipeline, fresh }: { pipeline: string; fresh: boo
       sections={
         shown && (
           <Section name="Stages" count={rows.length || undefined}>
+            {p && <PipelineNotes pipeline={p.id} stage={null} mayChange={!!rec.data?.may_change} />}
             {rows.length === 0 ? (
               <Empty title="No stages yet">
                 <Button icon="plus" onClick={addStage}>
@@ -329,6 +331,8 @@ export function PipelinePage({ pipeline, fresh }: { pipeline: string; fresh: boo
                               )}
                             </div>
                             {rulesOf && p && <StageRules pipeline={p.id} stage={rulesOf} leave={rec.data?.stages.find((st) => st.id === rulesOf)} />}
+                            {/* Notes belong to any saved stage, a side stage's included: a bot there is handed them. */}
+                            {r.id && p && <PipelineNotes pipeline={p.id} stage={r.id} mayChange={!!rec.data?.may_change} />}
                           </div>
                         )}
                       </div>

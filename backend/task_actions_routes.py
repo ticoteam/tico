@@ -281,6 +281,7 @@ def register_core(
                     parent = {"id": parent_id, "title": parent_row["title"], **H.ticket_refs(c, [parent_id])[parent_id]}
             from .chat_goals import may_direct
             from .task_reads import comment_rights
+            from .task_calls import can_work
             from .views import task_wait
 
             try:
@@ -333,6 +334,9 @@ def register_core(
                 "comment_to": comment_to(c, who, row) if can_comment else None,
                 "comment_delivery": delivery_choices(c, who, row) if can_comment else None,
                 "mover": mover(c, request.state.identity),
+                # Whether this reader may close it now: the check a close itself makes (task_calls.can_work), so the
+                # approval card offers Close to whoever the server would let close it, a pipeline's manager included.
+                "can_close": row["status"] == "open" and can_work(c, who.actor, row, mover(c, who) or None),
                 "waiting_for": task_wait(c, tid, settings),
                 "runs": task_runs(c, who, tid),
                 # The model a bot's check subtask runs on (backend/check_models.py), or null.

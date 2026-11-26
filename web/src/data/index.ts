@@ -4,6 +4,24 @@ export { keys } from './keys';
 export { meQuery } from './session';
 export { configQuery, readConfigOnce, useInitialReleaseRefresh, type ReleaseOffer } from './config';
 export { recordVisit } from './visits';
+export {
+  RECENT_VIEWS,
+  forgetRecentViews,
+  forgetTask,
+  faultedPage,
+  forgetView,
+  nameOpenTask,
+  noteView,
+  pageFaulted,
+  pageKey,
+  recentViewsNow,
+  setRecentHere,
+  useFaultedPage,
+  useOpenTask,
+  useRecentViews,
+  viewKey,
+  type RecentView,
+} from './recentViews';
 export { write, NeedsConnection, isNetworkError, quietRoot, isQuiet, QUIET_STALE_MS, type Write } from './optimistic';
 export { heldCount, useHeldCount, type HeldCount } from './held';
 export { directoryQuery, useActor, useActors, useDirectory, withStatus, type Actor, type Directory, type StatusLine, type Team } from './directory';

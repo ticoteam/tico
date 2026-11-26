@@ -1,5 +1,7 @@
 // Every string a person reads from the base actions: titles (search rows, the catalog) and did lines.
 export const goTo = 'Go to a page';
+export const recentViews = 'Recent views';
+export const openView = 'Open a recent view';
 export const didGoTo = (name: string) => `Opened ${name}`;
 export const openChat = 'Open a second chat';
 export const didOpenChat = 'Opened the chat';

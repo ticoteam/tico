@@ -21,6 +21,7 @@ import { taskDetailQuery, taskFilesQuery, type TaskData } from './queries';
 import { loadTask, openCold } from './routing';
 import { answered, answering } from './answered';
 import { TaskChat, TaskPage } from './TaskPage';
+import { Answer } from './Answer';
 
 /* The decision (plan/approvals.html): the thing asked about is the first tab, one box decides it, Approve is bound to
    what was shown, Request changes is a message to the agent. Made-up rows only; every answer is stubbed. */
@@ -85,7 +86,7 @@ const mail = {
 };
 
 function base(url: string): Reply {
-  if (url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1')) return { body: { task: shown, runs: [], children: [], can_comment: true, mover: true } };
+  if (url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1')) return { body: { task: shown, runs: [], children: [], can_comment: true, mover: true, can_close: true } };
   if (url.endsWith('/files?all=1')) return { body: { files: [] } };
   if (url.endsWith('/api/v2/email/sends/s1')) return { body: mail };
   if (url.endsWith('/api/v2/oks/r1')) return { body: { requirement_id: 'r1', subject: 'email_send:s1', content: {}, shown_hash: 'h-grant', standing: 'waiting', task_id: 't1' } };
@@ -1034,6 +1035,118 @@ describe('the decision', () => {
     expect(vi.mocked(sendMessage)).not.toHaveBeenCalled();
     expect(within(chat).queryByRole('button', { name: 'Approve' })).toBeNull();
     expect(within(chat).getByRole('textbox', { name: 'Message Legal Owner' })).toBeTruthy();
+  });
+});
+
+describe('Close and Snooze beside Approve', () => {
+  // A stage's own OK on a spec page, waiting on the person, who may close the task (a mover).
+  const page = { file_id: 'f9', version: 2, ref: 'page:f9@2' };
+  const specTask = (more: Partial<TaskData> = {}) =>
+    task({ title: 'Search by task number', visit_id: 'v4', to_leave: [req({ kind: 'page', shows: [], line: 'OK the spec', page } as Partial<TaskRequirement>)], ...more } as Partial<TaskData>);
+  const quietReads = (url: string) => (url.endsWith('/oks/r1') ? { status: 404, body: { error: { code: 'not_found' } } } : null);
+  const names = (box: HTMLElement) => within(box).getAllByRole('button').map((b) => b.textContent);
+
+  it('shows Snooze, Close, Request changes and Approve in that order, and only Approve is filled @approvals', async () => {
+    shown = specTask();
+    reply = quietReads;
+    show(<TaskPage task="12" />, '/tasks/p1/12');
+    const box = await decision();
+    await ready(box);
+    expect(names(box).filter((n) => ['Snooze', 'Close', 'Request changes', 'Approve'].includes(n ?? ''))).toEqual(['Snooze', 'Close', 'Request changes', 'Approve']);
+    expect(within(box).getAllByRole('button').filter((b) => b.classList.contains('btn-fill')).map((b) => b.textContent)).toEqual(['Approve']);
+  });
+
+  it('Close with an empty note closes the task, answers nothing and offers Undo, which gives back the visit it closed @approvals', async () => {
+    shown = specTask();
+    reply = (url, method) => (method === 'POST' && url.endsWith('/move') ? { body: { task: specTask({ status: sent.at(-1)?.body.to === 'reopen' ? 'open' : 'closed' }) } } : quietReads(url));
+    show(<TaskPage task="12" />, '/tasks/p1/12');
+    const box = await decision();
+    fireEvent.click(await within(box).findByRole('button', { name: 'Close' }));
+    expect(within(box).getByRole('textbox', { name: 'Why close? (optional)' })).toBeTruthy();
+    fireEvent.click(within(box).getByRole('button', { name: 'Close task' }));
+    await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/tasks/t1/move', body: { to: 'closed' } }));
+    // no send-back: the owner is not asked to rewrite it
+    expect(sent.some((x) => x.url.includes('/asks/'))).toBe(false);
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo' }));
+    await waitFor(() => expect(sent.at(-1)?.body).toMatchObject({ to: 'reopen', undo: true }));
+  });
+
+  it('Close carries the note the person typed, and Cancel goes back to the four choices @approvals', async () => {
+    shown = specTask();
+    reply = (url, method) => (method === 'POST' && url.endsWith('/move') ? { body: { task: specTask({ status: 'closed' }) } } : quietReads(url));
+    show(<TaskPage task="12" />, '/tasks/p1/12');
+    const box = await decision();
+    fireEvent.click(await within(box).findByRole('button', { name: 'Close' }));
+    fireEvent.click(within(box).getByRole('button', { name: 'Cancel' }));
+    expect(within(box).getByRole('button', { name: 'Approve' })).toBeTruthy();
+    fireEvent.click(within(box).getByRole('button', { name: 'Close' }));
+    fireEvent.change(within(box).getByRole('textbox', { name: 'Why close? (optional)' }), { target: { value: '  Not needed any more ' } });
+    fireEvent.click(within(box).getByRole('button', { name: 'Close task' }));
+    await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/tasks/t1/move', body: { to: 'closed', why: 'Not needed any more' } }));
+  });
+
+  it('Snooze › Tomorrow snoozes this one ask for the person until the start of tomorrow, and leaves the task alone @approvals', async () => {
+    shown = specTask();
+    reply = (url, method) => (method === 'POST' && url.endsWith('/needs-you/snooze') ? { body: { ok: true } } : quietReads(url));
+    show(<TaskPage task="12" />, '/tasks/p1/12');
+    const box = await decision();
+    fireEvent.click(within(box).getByRole('button', { name: 'Snooze' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Tomorrow' }));
+    const tomorrow = new Date();
+    tomorrow.setHours(0, 0, 0, 0);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/needs-you/snooze', body: { id: 'v4:r1', until: tomorrow.toISOString() } }));
+    expect(sent).toHaveLength(1);
+    expect(await screen.findByText(/^Snoozed until tomorrow/)).toBeTruthy();
+  });
+
+  it('an OK bound to one thing (an email, a rule, an action, a letter, a webhook) has no Close, and Snooze stays @approvals', async () => {
+    for (const subject of ['email:s1', 'rule:o7', 'outbound:a1', 'letter:l1', 'webhook:hooks-in']) {
+      // one the server lets close the task, so only the kind of OK keeps Close away
+      shown = { ...task({ visit_id: 'v4', to_leave: [req({ shows: [subject] })] } as Partial<TaskData>), children: [], can_close: true, mover: true };
+      reply = (url) =>
+        url.endsWith('/api/v2/oks/r1') && !subject.startsWith('email:')
+          ? { body: { requirement_id: 'r1', subject, content: {}, shown_hash: 'h-bound', standing: 'waiting', task_id: 't1' } }
+          : null;
+      queryClient.clear();
+      queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'person', slug: null });
+      show(<Answer t={shown} r={shown.to_leave?.[0] as TaskRequirement} />, '/tasks/p1/12');
+      expect(await screen.findByRole('button', { name: 'Snooze' })).toBeTruthy();
+      // what it is bound to has been read: Close stays away for good, not only while loading
+      await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+      expect(screen.queryByRole('button', { name: 'Close' }), subject).toBeNull();
+      cleanup();
+    }
+  });
+
+  it('a task the server would not let the person close has no Close, and Snooze stays @approvals', async () => {
+    reply = quietReads;
+    const t = { ...specTask(), children: [], can_close: false, mover: true } as TaskData;
+    show(<Answer t={t} r={t.to_leave?.[0] as TaskRequirement} />, '/tasks/p1/12');
+    expect(await screen.findByRole('button', { name: 'Snooze' })).toBeTruthy();
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+    expect(screen.queryByRole('button', { name: 'Close' })).toBeNull();
+  });
+
+  it('whoever the server lets close it sees Close, a pipeline’s manager who moves no tasks included @approvals', async () => {
+    reply = quietReads;
+    const t = { ...specTask({ requester_id: 'bot:po' } as Partial<TaskData>), children: [], can_close: true, mover: false } as TaskData;
+    show(<Answer t={t} r={t.to_leave?.[0] as TaskRequirement} />, '/tasks/p1/12');
+    expect(await screen.findByRole('button', { name: 'Close' })).toBeTruthy();
+  });
+
+  it('the Snooze toast says a day for Next week and a stretch for In two weeks @approvals', async () => {
+    for (const [choice, said] of [['Next week', 'Snoozed until next week'], ['In two weeks', 'Snoozed for two weeks']] as const) {
+      shown = specTask();
+      reply = (url, method) => (method === 'POST' && url.endsWith('/needs-you/snooze') ? { body: { ok: true } } : quietReads(url));
+      show(<TaskPage task="12" />, '/tasks/p1/12');
+      fireEvent.click(within(await decision()).getByRole('button', { name: 'Snooze' }));
+      fireEvent.click(await screen.findByRole('menuitem', { name: choice }));
+      expect(await screen.findByText(new RegExp(`^${said}`))).toBeTruthy();
+      cleanup();
+      queryClient.clear();
+      queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'person', slug: null });
+    }
   });
 });
 

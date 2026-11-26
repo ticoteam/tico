@@ -1,6 +1,6 @@
 import * as z from 'zod/mini';
 import { defineAction, run } from '@/actions';
-import { configQuery, meQuery, queryClient } from '@/data';
+import { configQuery, forgetRecentViews, meQuery, queryClient } from '@/data';
 import { tellDesktopSigningOut } from '@/desktop';
 import { forgetSetup, goToGithub, handOff, pendingSetup, refused } from './handoff';
 import {
@@ -39,6 +39,8 @@ export const signOut = defineAction({
   // the desktop app hears first (its count and small call window go before the page leaves)
   run: async () => {
     await tellDesktopSigningOut();
+    // nothing of the person's is left on this device: their Recent views go (data/recentViews.ts)
+    forgetRecentViews();
     location.assign('/api/v2/logout');
   },
 });

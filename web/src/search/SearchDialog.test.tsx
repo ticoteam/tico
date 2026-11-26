@@ -3,7 +3,7 @@ import { createMemoryHistory, createRootRoute, createRouter } from '@tanstack/re
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { bind } from '@/actions/bind';
-import { queryClient } from '@/data';
+import { forgetRecentViews, noteView, queryClient, setRecentHere } from '@/data';
 import { holdToasts } from '@/kit/Toast';
 import { loadProviders } from './providers';
 import * as results from './results';
@@ -115,6 +115,40 @@ describe('Search @s1209', () => {
     fireEvent.click(within(people).getByRole('option', { name: /QA Owner/ }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/team/qa'));
     expect(screen.queryByRole('combobox', { name: 'Search' })).toBeNull();
+  });
+
+  it('with nothing typed lists Recent views; a row opens that view and closes, and typing gives way to results', async () => {
+    const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ['/library/docs/d1'] }) });
+    bind({ router });
+    const me = 'Tico Team\u0000human:chris';
+    setRecentHere(me, '');
+    noteView({ key: 'page:/tasks/product', to: '/tasks/product?who=me', trail: ['Tasks', 'Product'] });
+    noteView({ key: 'task:12', to: '/tasks/product?task=12', trail: ['Tasks', 'Product', 'Fix the login bug'] });
+    noteView({ key: 'page:/library/docs/d1', to: '/library/docs/d1', trail: ['Library', 'Docs', 'Release notes'] });
+    setRecentHere(me, 'page:/library/docs/d1');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <SearchDialog />
+      </QueryClientProvider>,
+    );
+    act(() => openSearch());
+    const views = await screen.findByRole('group', { name: 'Recent views' });
+    expect(within(views).getAllByRole('option').map((o) => o.textContent)).toEqual(['Tasks › Product › Fix the login bug', 'Tasks › Product']);
+
+    const field = screen.getByRole('combobox', { name: 'Search' });
+    fireEvent.change(field, { target: { value: 'QA' } });
+    await screen.findByRole('group', { name: 'People' });
+    expect(screen.queryByRole('group', { name: 'Recent views' })).toBeNull();
+    fireEvent.change(field, { target: { value: '' } });
+    const again = await screen.findByRole('group', { name: 'Recent views' });
+
+    fireEvent.click(within(again).getByRole('option', { name: /Tasks › Product$/ }));
+    await waitFor(() => expect(router.state.location.href).toBe('/tasks/product?who=me'));
+    expect(screen.queryByRole('combobox', { name: 'Search' })).toBeNull();
+    // Search's own Recent keeps only what was opened from its results
+    expect(results.readRecent()).toEqual([]);
+    forgetRecentViews();
+    setRecentHere('', '');
   });
 
   it('has the cursor in a field from the moment it opens, and keeps what was typed while it drew', async () => {

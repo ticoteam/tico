@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Rust gate for the crates CI builds: rustfmt and clippy with -D warnings. app/ (the Tauri desktop shell, with
-# vendored GTK dependencies) has its own PR job in pr-checks.yml.
+# Rust gate for the crates CI builds: rustfmt and clippy with -D warnings.
 # The toolchain is pinned here, not in rust-toolchain.toml: installs that run from a checkout build runner-rs with
 # whatever cargo they have (runner_support/engine.py build), and a pin there would make each of them download it first.
 # 1.99.1 is the release images' version (Dockerfile); RUST_TOOLCHAIN overrides it.

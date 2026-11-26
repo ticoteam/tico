@@ -316,9 +316,9 @@ jobs:
       fail-fast: ${{ inputs.anchor != '' }}
       # The VMs: the full validation's (release_increment.full_matrix), or an incremental plan's (--plan).
       matrix: ${{ fromJSON(needs.candidate.outputs.matrix) }}
-    # An incremental validation's python and browser VMs run on hosted runners; its product and desktop VMs need the
-    # 35 GiB disk and the Docker images, so they stay on RunsOn.
-    runs-on: ${{ (vars.TICO_CI_HOSTED == 'true' || (inputs.anchor != '' && matrix.part != 'product' && matrix.part != 'desktop')) && 'ubuntu-24.04' || format('runs-on={0}/runner={1}/family=m8+m7+m6+r8+r7/volume=80gb:gp3:125mbs:3000iops/extras=s3-cache', github.run_id, matrix.runner) }}
+    # An incremental validation's python and browser VMs run on hosted runners; its product VM needs the 35 GiB disk
+    # and the Docker images, so it stays on RunsOn.
+    runs-on: ${{ (vars.TICO_CI_HOSTED == 'true' || (inputs.anchor != '' && matrix.part != 'product')) && 'ubuntu-24.04' || format('runs-on={0}/runner={1}/family=m8+m7+m6+r8+r7/volume=80gb:gp3:125mbs:3000iops/extras=s3-cache', github.run_id, matrix.runner) }}
     env:
       CANDIDATE_SHA: ${{ needs.candidate.outputs.sha }}
       PREVIOUS_RELEASE: ${{ needs.candidate.outputs.previous }}
@@ -327,7 +327,7 @@ jobs:
       TICO_RELEASE_PART: ${{ matrix.part }}
       TICO_RELEASE_SHARD: ${{ matrix.shard }}
       # An incremental plan's python or browser VM runs its suite (scripts/pr_checks.py run) from the candidate's checkout.
-      TICO_INCREMENT_SUITE: ${{ needs.candidate.outputs.plan != '' && matrix.part != 'product' && matrix.part != 'desktop' && matrix.name || '' }}
+      TICO_INCREMENT_SUITE: ${{ needs.candidate.outputs.plan != '' && matrix.part != 'product' && matrix.name || '' }}
       TICO_PYTHON_WORKERS: ${{ matrix.workers }}
       TICO_UI_JOBS: '3'
       TICO_UI_SLOWDOWN: '2'
@@ -440,8 +440,8 @@ jobs:
           npx playwright install --with-deps chromium webkit
       # The release's own Linux binaries, where a checkout's build would be; hosted_release_check.py run checks on
       # every VM that their build ids match the candidate's sources. Setup above overlaps their build: wait for the
-      # native-linux x86_64 job to finish, and fail this part if that build did not succeed. Only product, desktop
-      # and python-1/python-2 (the native test files, release_checks.py NATIVE_SHARDS) need them; the others start at once.
+      # native-linux x86_64 job to finish, and fail this part if that build did not succeed. Only product and
+      # python-1/python-2 (the native test files, release_checks.py NATIVE_SHARDS) need them; the others start at once.
       # A candidate frozen before native-first python shards may put native tests on any python VM: all of them wait.
       - name: Does this VM need the release binaries
         id: binaries
@@ -489,17 +489,6 @@ jobs:
         run: |
           rustup toolchain install 1.99 --profile minimal
           rustup default 1.99
-      # The Tauri app's Linux build dependencies, as .github/workflows/app.yml installs them.
-      - name: Desktop build dependencies
-        if: matrix.part == 'desktop'
-        run: |
-          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update -q
-          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y -q libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libpulse-dev
-      - if: matrix.part == 'desktop'
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          workspaces: candidate/app -> target
-          shared-key: release-desktop
       # The product part tests the release's own images (amd64, this VM's architecture), pulled by digest, once the
       # three amd64 builds have finished. The arm64 builds finish on their own; release-check needs every image.
       - if: matrix.part == 'product'

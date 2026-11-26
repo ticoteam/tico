@@ -408,6 +408,9 @@ class TaskMove(Contract):
     # A person lets exactly this one see a private task and moves it on (the stuck card's one fix, task #392): `to` is
     # next. Refused when the task now waits on someone else (H.task_let_see).
     let_see: list[ID] | None = Field(default=None, min_length=1, max_length=50)
+    # With `to` reopen: the Undo of the close this caller made a moment ago. The stage visit it ended comes back as it
+    # was, its page and the OK it waited on included, and nobody is woken; past two minutes it is a plain reopen.
+    undo: bool | None = None
 
 
 class TaskMovePlace(Contract):

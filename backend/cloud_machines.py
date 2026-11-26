@@ -1224,6 +1224,13 @@ def enrolled(c, execution, runner_id, key):
         mark_revoked(c, old, execution=execution if burst else None)
     if not burst:
         replaced(c, key, old, runner_id)
+        from . import performance
+
+        # Its overloads, points and turns follow the machine, newest computer first: a minute both reported keeps
+        # the newer reading. Not a computer a bot merely was assigned to (a person's own, removed).
+        for source in dict.fromkeys([old, *were(c, key)]):
+            if source and source != runner_id:
+                performance.carry_over(c, source, runner_id)
     save(c, key, runner_id=runner_id, enroll_by=0, enroll_fails=0)
     checked_in(c, runner_id)
     H.event(c, H.TICO_ACTOR, "cloud_machine.enrolled", key, {"runner": runner_id})
@@ -1296,6 +1303,14 @@ def unplaced(c, bot):
     target = machine.get("runner_id")
     if not target:
         return False
+    # Its own machine's computer was revoked: `bind` deletes that machine once no turn is out on it, a return from a
+    # burst computer pending or not (that return resumes when the new machine enrolls and binds it).
+    if (
+        machine.get("bot") == bot
+        and not machine.get("deleting")
+        and not c.execute("SELECT 1 FROM runners WHERE id=? AND revoked_at IS NULL", (target,)).fetchone()
+    ):
+        return True
     placed_on = c.execute(PLACED_ON, (bot,)).fetchone()
     if placed_on and placed_on["return_pending"]:
         return machine["state"] not in DEAD and bool(
@@ -1319,6 +1334,25 @@ def bind(c, execution, bot, lasting=False):
         moving(c, bot, False)
         return False
     target = machine.get("runner_id")
+    if target and not c.execute("SELECT 1 FROM runners WHERE id=? AND revoked_at IS NULL", (target,)).fetchone():
+        # A machine whose computer was revoked since (a person removed it in Settings > Computers) is no computer to
+        # go to (#3587: binding to it was refused "Computer is not registered"), and it can never check in again. The
+        # bot waits where it is; its own such machine is deleted, and its want makes a new one. Not while a turn is
+        # still out on that computer: its work is on that disk, so the deletion waits for a later look, as a person's
+        # removal waits (`remove`). Never when that computer last said the bot's history is not on GitHub
+        # (`stranded`): the disk is its only copy, so it stays for a person to recover.
+        from .execution import stranded
+
+        if (
+            machine["bot"] == bot
+            and machine.get("machine_id")
+            and not c.execute(
+                "SELECT 1 FROM attempts WHERE runner_id=? AND state IN ('leased','running') LIMIT 1", (target,)
+            ).fetchone()
+            and not stranded(c, execution.store.settings, bot, target, None)
+        ):
+            intend_delete(c, machine, "computer_revoked")
+        target = None
     placed_on = c.execute(PLACED_ON, (bot,)).fetchone()
     if placed_on and placed_on["return_pending"] is not None:
         from .compute_pool import resume_return
@@ -2514,7 +2548,9 @@ class Manager:
             return False
         if machine["state"] == "deleted":
             self.deletion_done(c, intent)
-        elif "pending" in machine and machine["pending"] != "delete":
+        elif "pending" in machine and machine["pending"] != "delete" and intent["next_try_at"] is not None:
+            # HQ is not deleting a machine it was asked to delete. A DELETE never sent yet (no retry clock: every
+            # answer sets one, `deletion_retry`) is kept for the sweep to send (#3587).
             c.execute("DELETE FROM cloud_machine_deletions WHERE machine_id=?", (intent["machine_id"],))
             current = row(c, intent["bot"])
             if current and current["machine_id"] == intent["machine_id"] and current["state"] != "deleted":

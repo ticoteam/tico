@@ -11037,6 +11037,7 @@
         "properties": {
           "sort": {
             "enum": [
+              "board",
               "priority",
               "newest",
               "oldest"

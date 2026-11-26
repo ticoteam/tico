@@ -588,6 +588,8 @@ KEEP = (
             "rule_reads",
             "rules",
             "stage_rules",
+            "pipeline_notes",  # a pipeline's and its stages' notes: settings, nothing in them acts
+            "pipeline_note_changes",  # each note's edit history, kept with its note
             "stage_pick_turns",
             # Keep-warm's old per-stage setting (removed): unread, left until every install ran the migration that made it.
             "stage_keep_warm",

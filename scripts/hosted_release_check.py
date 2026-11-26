@@ -122,15 +122,15 @@ def native_binaries(root):
     return result
 
 
-PARTS = ("product", "python", "browser", "desktop")
+PARTS = ("product", "python", "browser")
 
 
 def gate_command(root, previous, part, shard):
     """The candidate's own gate command for this VM's slice, or None when another VM covers it.
 
     A candidate frozen before `--part` existed runs its whole unchanged gate on the product VM; the other VMs then
-    have nothing of their own to check. A candidate frozen before the desktop part has no desktop test to run, and one
-    frozen before browser shards runs every browser script on the first browser VM."""
+    have nothing of their own to check, and one frozen before browser shards runs every browser script on the first
+    browser VM."""
     require(part in PARTS or part is None, "unknown gate part")
     require(
         shard is None or (part in ("python", "browser") and re.fullmatch(r"[1-9][0-9]*/[1-9][0-9]*", shard)),
@@ -142,8 +142,6 @@ def gate_command(root, previous, part, shard):
     gate = (root / "scripts/release_checks.py").read_text()
     if "add_argument('--part'" not in gate:
         return command if part == "product" else None
-    if part == "desktop" and "'desktop'" not in gate:
-        return None
     if part == "browser" and shard and "def browser_shard" not in gate:
         return command + ["--part", "browser"] if shard.startswith("1/") else None
     return command + ["--part", part] + (["--shard", shard] if shard else [])
@@ -252,9 +250,7 @@ def main():
             command = gate_command(root, previous, args.part, args.shard)
         if command is None:
             note = (
-                "candidate predates the desktop part; it has no desktop test"
-                if args.part == "desktop"
-                else "candidate predates browser shards; the first browser VM runs them all"
+                "candidate predates browser shards; the first browser VM runs them all"
                 if args.part == "browser"
                 else "candidate predates split gates; the product VM runs its whole gate"
             )
@@ -264,7 +260,7 @@ def main():
         gate_temp = temp / "tico-release-gate"
         gate_temp.mkdir(mode=0o700, exist_ok=True)
         env = {**os.environ, "TMPDIR": str(gate_temp)}
-        # Only the VMs that test native binaries wait for the native-linux build: product, desktop and python shards 1-2
+        # Only the VMs that test native binaries wait for the native-linux build: product and python shards 1-2
         # (release_checks.py NATIVE_SHARDS gives them the native test files; a shard without binaries refuses native tests).
         # Browser tests use none. Where the binaries were placed, they must be the candidate's.
         placed = (root / "runner-rs/target/release/tico-runner").exists()
@@ -274,7 +270,7 @@ def main():
             and "native_first" not in (root / "scripts/release_checks.py").read_text()
         ):
             raise RuntimeError("candidate predates native-first python shards; every python VM needs the binaries")
-        if args.part in ("product", "desktop") or placed:
+        if args.part == "product" or placed:
             receipt["native_binaries"] = native_binaries(root)
             env["TICO_SCREEN_RELAY_BIN"] = receipt["native_binaries"]["relay"]["path"]
         receipt.update({"command": command, "gate_start_requested": True, "gate_state": "starting"})

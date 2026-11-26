@@ -34,7 +34,7 @@ function PagesList({ filters }: { filters: PageFilters }) {
   const tags = useQuery(tagsQuery).data ?? [];
   const [linked, setLinked] = useState(false);
   const query = searching ? found : list;
-  const rows = searching ? found.data ?? [] : list.data?.pages.flatMap((p) => p.pages) ?? [];
+  const rows: readonly PageListRow[] = searching ? found.data ?? [] : list.data?.pages.flatMap((p) => p.pages) ?? [];
   const update = (change: PageFilters) => void router.navigate({ href: pageHref({ ...filters, ...change }), replace: true });
   const directory = useDirectory((d) => d.actors) ?? [];
   const writers = new Map(directory.map((actor) => [actor.id, actor.name]));
@@ -109,6 +109,8 @@ function PagesList({ filters }: { filters: PageFilters }) {
 }
 
 type PageLineRow = Pick<Page, 'file_id' | 'title' | 'live' | 'has_app' | 'approved' | 'stale_days'>;
+/** A row of the list, from either the list read or the search read (which returns these fields only). */
+type PageListRow = PageLineRow & Pick<Page, 'writers' | 'links'>;
 
 function PageLine({ page, href }: { page: PageLineRow; href: string }) {
   return (

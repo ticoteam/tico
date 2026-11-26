@@ -68,8 +68,8 @@ export function FilterItems({ filters }: { filters: Filters }) {
   );
 }
 
-/** Sort's choices, as the menu says them: Priority (the default), then by when each task was made. */
-export const SORT_NAMES: Record<Sort, string> = { priority: 'Priority', newest: 'Newest', oldest: 'Oldest' };
+/** Sort's choices, as the menu says them: the board's order (the default), Priority, then by when each task was made. */
+export const SORT_NAMES: Record<Sort, string> = { board: 'Board order', priority: 'Priority', newest: 'Newest', oldest: 'Oldest' };
 
 /** Sort's rows (the list beside an open task, its tools' Sort ›). Each choice is `tasks.sort`, kept in the list's search. */
 export function SortItems({ sort }: { sort: Sort | undefined }) {
@@ -77,7 +77,7 @@ export function SortItems({ sort }: { sort: Sort | undefined }) {
   return (
     <>
       {(Object.keys(SORT_NAMES) as Sort[]).map((s) => (
-        <MenuItem key={s} label={SORT_NAMES[s]} on={(sort ?? 'priority') === s} onSelect={() => void order.run({ sort: s })} />
+        <MenuItem key={s} label={SORT_NAMES[s]} on={(sort ?? 'board') === s} onSelect={() => void order.run({ sort: s })} />
       ))}
     </>
   );

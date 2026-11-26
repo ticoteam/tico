@@ -648,7 +648,10 @@ def _check(
 
         held = approval_of(conn, row, target) if row.get("visit") else None
         if held:
-            detail = APPROVAL_FIRST.format(name=H.actor_name(conn, target), page=held)
+            from . import pipeline_notes
+
+            why = pipeline_notes.guard_why(conn, row, "approval_first")
+            detail = APPROVAL_FIRST.format(name=H.actor_name(conn, target), page=held) + (f"\n{why}" if why else "")
             engine._refuse(conn, bot, "task_requirement", detail, task_id)
         page = engine.people_page(conn, row, [body], question=True) if row.get("visit") else None
         if page:

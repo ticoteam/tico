@@ -1167,16 +1167,44 @@ def _new_heads(conn: "sqlite3.Connection", task: Row) -> list[tuple[str, str]]:
     heads = heads_now(conn, task)
     if not heads:
         return []
+    reads: Any = read_cache  # its rows, as the snapshot keeps them (`prime_reviews` reads many tasks' together)
     reviewed: list[dict[str, object]] = []
-    for found in conn.execute(REVIEWED_SQL, (task["id"],)).fetchall():
+    for found in reads.rows(conn, REVIEWED_SQL, (task["id"],)):
         if (versions := _heads_of(found[0] or "{}")) is not None:
             reviewed.append(versions)
     if not reviewed:
         return []
-    for by, text, named in conn.execute(NEW_REVIEWED_SQL, (task["id"],)).fetchall():
+    for by, text, named in reads.rows(conn, NEW_REVIEWED_SQL, (task["id"],)):
         if _is_bot(by) and by != named and (versions := _heads_of(text)) is not None:
             reviewed.append(versions)
     return [(ref, sha) for ref, sha in sorted(heads.items()) if not any(each.get(ref) == sha for each in reviewed)]
+
+
+def _of_tasks(statement: str, first: str) -> str:
+    """`statement`, which reads one task's rows (`v.task_id=?`), for many tasks at once, each row led by its task."""
+    return statement.replace(first, first.replace("SELECT ", "SELECT v.task_id, "), 1).replace(
+        "WHERE v.task_id=?", "WHERE v.task_id IN (SELECT value FROM json_each(?))", 1
+    )
+
+
+REVIEWED_MANY_SQL = _of_tasks(REVIEWED_SQL, "SELECT p.item_versions")
+NEW_REVIEWED_MANY_SQL = _of_tasks(NEW_REVIEWED_SQL, "SELECT a.by_id")
+
+
+def prime_reviews(conn: "sqlite3.Connection", task_ids: "Iterable[str]") -> None:
+    """Read what `_new_heads` reads of each task (its reviewed heads, and the commits a bot OK'd after them) for many
+    tasks in one statement each, for the reads that follow in this snapshot. Nothing outside a snapshot."""
+    values = read_cache.cache(conn)
+    if values is None:
+        return
+    for one, many in ((REVIEWED_SQL, REVIEWED_MANY_SQL), (NEW_REVIEWED_SQL, NEW_REVIEWED_MANY_SQL)):
+        wanted = sorted({str(t) for t in task_ids if t and (one, (str(t),)) not in values})
+        if not wanted:
+            continue
+        found: dict[tuple[Any, ...], list[tuple[Any, ...]]] = {(task_id,): [] for task_id in wanted}
+        for row in conn.execute(many, (json.dumps(wanted),)):
+            found[(str(row[0]),)].append(tuple(row)[1:])
+        read_cache.prime_rows(conn, one, found)
 
 
 def _where(conn: "sqlite3.Connection", task: Row, new: list[tuple[str, str]]) -> str:

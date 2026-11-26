@@ -2,6 +2,7 @@ import type { AnyRouter } from '@tanstack/react-router';
 import { changeWords, closeTask, openOf, type Steps, type TaskWords } from '@/lib';
 import * as z from 'zod/mini';
 import { defineAction } from '@/actions';
+import { forgetTask } from '@/data';
 import {
   addSubtask,
   answerAsk,
@@ -66,15 +67,17 @@ export const rename = defineAction({
   target: (i) => ({ kind: 'task-title', id: i.task }),
 });
 
-/** To a stage, or next, done, closed or reopen. Reopening (and moving a finished task back to work) needs a `why`. */
+/** To a stage, or next, done, closed or reopen. Reopening (and moving a finished task back to work) needs a `why`.
+ *  `undo` on a reopen is a Close's own Undo: the server gives back the visit the close ended, its OK still waiting. */
 export const move = defineAction({
   id: 'task.move',
   title: 'Move a task',
   kind: 'change',
   input: z
-    .strictObject({ task, to: z.string().check(z.minLength(1), z.maxLength(100)), why: z.optional(z.string().check(z.minLength(1), z.maxLength(2000))) })
-    .check(z.refine((i) => i.to !== 'reopen' || !!i.why?.trim(), { message: 'is needed to reopen a task', path: ['why'] })),
-  run: (_ctx, i) => said(moveTask(i.task, i.to, i.why?.trim() || undefined)),
+    .strictObject({ task, to: z.string().check(z.minLength(1), z.maxLength(100)), why: z.optional(z.string().check(z.minLength(1), z.maxLength(2000))), undo: z.optional(z.boolean()) })
+    .check(z.refine((i) => i.to !== 'reopen' || !!i.why?.trim(), { message: 'is needed to reopen a task', path: ['why'] }))
+    .check(z.refine((i) => !i.undo || i.to === 'reopen', { message: 'takes back a close: to is reopen', path: ['undo'] })),
+  run: (_ctx, i) => said(moveTask(i.task, i.to, i.why?.trim() || undefined, i.undo)),
   did: (i) => (i.to === 'closed' ? 'Closed' : i.to === 'reopen' ? 'Reopened' : 'Moved'),
   target: (i) => ({ kind: 'task-stage', id: i.task }),
 });
@@ -458,6 +461,8 @@ export const remove = defineAction({
   run: async ({ router, queryClient }, i) => {
     const held = queryClient.getQueryData<{ number?: number | null }>(['tasks', 'detail', i.task]);
     await said(deleteTask(i.task));
+    // gone from Recent views by either name its address may use
+    forgetTask(i.task, held?.number);
     // still open over the page, it closes; closed meanwhile, or another task open in its place, nothing moves
     const open = openOf(router.state.location.search as Record<string, unknown>)?.task;
     if (open && (open === i.task || open === String(held?.number ?? ''))) closeTask(router as unknown as Steps);

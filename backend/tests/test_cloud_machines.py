@@ -15,11 +15,12 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from backend import cloud_access, cloud_machines as CM, placement, readiness
+from backend import cloud_access, cloud_machines as CM, performance, placement, readiness
 from backend.cloud_machine_health import file_card as file_health_card
 from backend.store import H, Problem
 from backend.tests.helpers.api import assign, get, headers, post, ready, runner  # noqa: F401
 from backend.tests.helpers.cloud_access import signals
+from backend.tests.helpers.performance import sample
 from backend.tests.helpers.credentials import setup
 from backend.tests.helpers.model_subscriptions import OTHER, TOKEN, add, codex_file, company, on, pick
 from backend.tests.helpers.member_bots import agent_ops  # noqa: F401 - fixture for settings confirmation
@@ -4211,6 +4212,31 @@ def test_a_replaced_machine_keeps_a_persons_plans_when_its_bot_left_the_old_comp
     assert payer(cloud, "ops")["person"] == "human:ana"
 
 
+def test_a_replaced_machine_keeps_its_overloads_and_points_through_a_clean_up_before_the_new_one_signs_in(cloud):
+    """Tico Team, 18 Nov: the Shared cloud machine was made again and its overnight overload left Health seven hours
+    after it ended instead of 24. The old computer's history moves to the new one, and the hourly clean-up that runs
+    while the new machine boots does not delete it first."""
+    setup(cloud.api)
+    company(cloud.api)
+    old = own_computer(cloud)
+    start = (int(time.time()) // 60 - 30) * 60
+    busy = [sample(start + 60 * i, cpu=97.0, procs=[("cargo", 400.0)]) for i in range(10)]
+    post(cloud.api, "runners/performance", {"samples": [*busy, sample(start + 600)]}, token=old["token"])
+    was = get(cloud.api, f"computers/{old['runner_id']}/performance?hours=168")
+    assert len(was["overloads"]) == 1 and was["overloads"][0]["ended_at"] == start + 600
+    assert cloud.api.post("/api/v2/bots/ops/cloud-machine/replace", headers=headers()).status_code == 200
+    with cloud.store.read() as c:
+        assert c.execute("SELECT revoked_at FROM runners WHERE id=?", (old["runner_id"],)).fetchone()[0]
+    performance.sweep(cloud.store)  # the hourly clean-up, while the new machine is still on its way
+    new = enroll_made(cloud, "ops")
+    now = get(cloud.api, f"computers/{new['runner_id']}/performance?hours=168")
+    assert now["overloads"] == was["overloads"]
+    assert now["points"] == was["points"] and now["busiest"]["processes"] == was["busiest"]["processes"]
+    assert now["summary"].startswith("Overloaded once")
+    load = next(x for x in get(cloud.api, "health")["checks"] if x["id"] == "performance:" + new["runner_id"])
+    assert "was overloaded" in load["summary"]
+
+
 def test_a_machine_deleted_for_good_leaves_the_agents_pool_pick(cloud):
 
     setup(cloud.api)
@@ -4368,3 +4394,195 @@ def test_cloud_health_leaves_out_a_machine_whose_computer_has_a_stuck_update(clo
         )
         assert "deletion" in CM.health(c, store.settings)["summary"]
         assert CM.health(c, store.settings, skip={computer["runner_id"]}) is None
+
+
+def test_choosing_its_own_machine_again_after_its_computer_was_revoked_is_not_refused(cloud):
+    """#3587: a bot's own machine row kept the runner_id of a computer revoked since (the bot meanwhile on the shared
+    machine). Choosing its own machine again bound it to that computer, and the assignment said Computer is not
+    registered (404). Now the choice is saved, the bot stays where it is, and that machine is replaced by a new one."""
+    shared = shared_for(cloud, "cpo")["runner_id"]
+    old = own_computer(cloud, "ops")["runner_id"]
+    change_as(cloud, "ops", mode="cloud", placement="shared")
+    assert placed(cloud)["ops"] == shared
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), old))
+    assert cloud.row("ops")["runner_id"] == old
+    change_as(cloud, "ops", mode="cloud", placement="own", size="large")
+    current = cloud.row("ops")
+    assert current["placement"] == "own" and current["size"] == "large"
+    assert placed(cloud)["ops"] == shared
+    # That machine can never check in again: it is deleted, and a new one is made at the size chosen for the bot. The
+    # next tick lists HQ's machines first (the old one live, not pending deletion): that keeps the unsent DELETE.
+    assert ticked(cloud, CM.SYNC) == ["delete", "create"] and cloud.hq.calls[-1][1] == "ops"
+    fresh = post(cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm", "platform": "linux"})
+    cloud.tick()
+    assert cloud.row("ops")["machine_size"] == "large" and fresh["runner_id"] != old
+    assert placed(cloud)["ops"] == fresh["runner_id"]
+
+
+def test_a_revoked_own_machine_with_a_turn_still_out_is_not_deleted_until_the_turn_ends(cloud):
+    """#3587 review: the old machine's disk holds a turn's work while that turn is out on it. Choosing the bot's own
+    machine again saves the choice but deletes nothing until the turn has ended."""
+    shared_for(cloud, "cpo")
+    computer = own_computer(cloud, "ops")
+    old, old_machine = computer["runner_id"], cloud.row("ops")["machine_id"]
+    ready(cloud.api, computer, ["ops"])
+    assert claim_on(cloud, computer, "ops") and leased(cloud, old) == ["ops"]
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), old))
+    change_as(cloud, "ops", mode="cloud", placement="own", size="large")
+    assert cloud.row("ops")["size"] == "large"
+    assert "delete" not in ticked(cloud, CM.SYNC)
+    assert not cloud.row("ops")["deleting"]
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE attempts SET lease_until=0 WHERE bot_id='ops'")
+        cloud.api.app.state.execution.expire(c)
+    # The next look marks the old machine for deletion and makes the new one; the sweep after sends the DELETE.
+    assert ticked(cloud, CM.SYNC) == ["create"] and cloud.hq.calls[-1][1] == "ops" and cloud.row("ops")["deleting"]
+    assert ticked(cloud, 1) == ["delete"] and cloud.hq.machines[old_machine]["state"] == "deleted"
+
+
+def test_a_revoked_own_machine_whose_history_is_not_on_github_is_kept(cloud):
+    """#3587 review: the old machine's disk is the only copy of history its computer last reported as not on GitHub.
+    Choosing the bot's own machine again saves the choice and deletes nothing."""
+    shared = shared_for(cloud, "cpo")["runner_id"]
+    computer = own_computer(cloud, "ops")
+    old_machine = cloud.row("ops")["machine_id"]
+    change_as(cloud, "ops", mode="cloud", placement="shared")
+    assert placed(cloud)["ops"] == shared
+    report_repo(cloud.api, computer, "ops", published=False)
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), computer["runner_id"]))
+    change_as(cloud, "ops", mode="cloud", placement="own", size="large")
+    assert cloud.row("ops")["size"] == "large" and placed(cloud)["ops"] == shared
+    assert "delete" not in ticked(cloud, CM.SYNC) + ticked(cloud, CM.SYNC)
+    assert cloud.hq.machines[old_machine]["state"] != "deleted" and not cloud.row("ops")["deleting"]
+
+
+def test_a_revoked_own_machine_is_replaced_while_its_bots_return_from_a_burst_computer_is_pending(cloud):
+    """#3587 review: a bot whose return from a burst computer is pending was never bound again, so its own machine
+    with a revoked computer was neither deleted nor replaced."""
+    shared = shared_for(cloud, "cpo")["runner_id"]
+    computer = own_computer(cloud, "ops")
+    change_as(cloud, "ops", mode="cloud", placement="shared")
+    assert placed(cloud)["ops"] == shared
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), computer["runner_id"]))
+        CM.save(c, "ops", placement="own")
+        generation = c.execute("SELECT generation FROM assignments WHERE bot='ops'").fetchone()[0]
+        c.execute(
+            "INSERT INTO burst_guests(bot,runner_id,generation,base_runner,return_pending) VALUES(?,?,?,?,?)",
+            ("ops", shared, generation, shared, "settled"),
+        )
+    assert ticked(cloud, CM.SYNC) == ["create"] and cloud.hq.calls[-1][1] == "ops" and cloud.row("ops")["deleting"]
+    assert ticked(cloud, 1) == ["delete"]
+
+
+def test_a_burst_return_goes_to_the_replacement_when_its_base_computer_was_revoked(cloud):
+    """#3587 review: with no shared machine, a burst guest returns to the computer it left (`base_runner`). When that
+    was its own machine's computer, revoked since, the return goes to the machine that replaced it."""
+    computer = own_computer(cloud, "ops")
+    old = computer["runner_id"]
+    burst = runner(cloud.api, label="Burst")
+    with cloud.store.transaction() as c:
+        assert not CM.row(c, CM.SHARED)
+        generation = c.execute(
+            "UPDATE assignments SET runner_id=?,generation=generation+1 WHERE bot='ops' RETURNING generation",
+            (burst["runner_id"],),
+        ).fetchone()[0]
+        c.execute(
+            "INSERT INTO burst_guests(bot,runner_id,generation,base_runner,return_pending) VALUES(?,?,?,?,?)",
+            ("ops", burst["runner_id"], generation, old, "settled"),
+        )
+        c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), old))
+    assert ticked(cloud, CM.SYNC) == ["create"] and cloud.hq.calls[-1][1] == "ops"
+    code = cloud.hq.calls[-1][3]
+    assert ticked(cloud, 1) == ["delete"]
+    fresh = post(cloud.api, "runners/enroll", {"code": code, "label": "boat-vm", "platform": "linux"})
+    cloud.tick(CM.SYNC)  # HQ's list puts the new machine on the bot's row
+    cloud.tick(CM.SYNC)  # the next look returns the bot from the burst computer to it
+    assert sorted(m["state"] for m in cloud.hq.machines.values()) == ["deleted", "starting"]  # one replacement
+    assert placed(cloud)["ops"] == fresh["runner_id"]
+    with cloud.store.read() as c:
+        assert not c.execute("SELECT 1 FROM burst_guests WHERE bot='ops'").fetchone()
+
+
+def test_a_burst_return_never_goes_to_an_own_machine_being_deleted(cloud):
+    """#3587 review: the own-machine fallback skips a machine with a pending deletion. The guest stays on the burst
+    computer (its return still pending) rather than land on a computer HQ is about to remove."""
+    from backend import compute_pool
+
+    computer = own_computer(cloud, "ops")
+    gone = runner(cloud.api, label="Gone")
+    burst = runner(cloud.api, label="Burst")
+    with cloud.store.transaction() as c:
+        assert not CM.row(c, CM.SHARED)
+        generation = c.execute(
+            "UPDATE assignments SET runner_id=?,generation=generation+1 WHERE bot='ops' RETURNING generation",
+            (burst["runner_id"],),
+        ).fetchone()[0]
+        c.execute(
+            "INSERT INTO burst_guests(bot,runner_id,generation,base_runner,return_pending) VALUES(?,?,?,?,?)",
+            ("ops", burst["runner_id"], generation, gone["runner_id"], "settled"),
+        )
+        c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), gone["runner_id"]))
+        CM.intend_delete(c, CM.row(c, "ops"), "manual")
+        assert not compute_pool.return_guests(c, burst["runner_id"])
+        assert c.execute("SELECT 1 FROM burst_guests WHERE bot='ops'").fetchone()
+        assert c.execute("SELECT runner_id FROM assignments WHERE bot='ops'").fetchone()[0] == burst["runner_id"]
+        c.execute("DELETE FROM cloud_machine_deletions")  # the same machine, not being deleted: the return lands
+        assert compute_pool.return_guests(c, burst["runner_id"])
+        assert c.execute("SELECT runner_id FROM assignments WHERE bot='ops'").fetchone()[0] == computer["runner_id"]
+
+
+def guest_on_burst(c, burst, base):
+    """Puts ops on computer `burst` as a settled guest whose home was `base`; returns `burst`."""
+    generation = c.execute(
+        "UPDATE assignments SET runner_id=?,generation=generation+1 WHERE bot='ops' RETURNING generation",
+        (burst,),
+    ).fetchone()[0]
+    c.execute(
+        "INSERT INTO burst_guests(bot,runner_id,generation,base_runner,return_pending) VALUES(?,?,?,?,?)",
+        ("ops", burst, generation, base, "settled"),
+    )
+    return burst
+
+
+def test_a_burst_return_skips_a_shared_machine_whose_computer_is_gone(cloud):
+    """#3587 review: a shared machine row whose computer is revoked is no home; the guest goes back to its own
+    computer instead of staying on the burst computer."""
+    from backend import compute_pool
+
+    computer = own_computer(cloud, "ops")
+    dead = runner(cloud.api, label="Dead shared")
+    on = runner(cloud.api, label="Burst")["runner_id"]
+    with cloud.store.transaction() as c:
+        c.execute(
+            "INSERT INTO cloud_machines(bot,mode,placement,machine_id,runner_id,state) VALUES(?,?,?,?,?,?)",
+            (CM.SHARED, "cloud", "shared", "m-shared", dead["runner_id"], "running"),
+        )
+        c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), dead["runner_id"]))
+        burst = guest_on_burst(c, on, computer["runner_id"])
+        assert compute_pool.return_guests(c, burst)
+        assert c.execute("SELECT runner_id FROM assignments WHERE bot='ops'").fetchone()[0] == computer["runner_id"]
+
+
+def test_a_burst_return_never_goes_to_a_base_computer_being_deleted(cloud):
+    """#3587 review: the computer the guest left is no home while its machine has a pending deletion (an HQ refusal
+    can leave the intent with the computer still enrolled)."""
+    from backend import compute_pool
+
+    computer = own_computer(cloud, "ops")
+    on = runner(cloud.api, label="Burst")["runner_id"]
+    with cloud.store.transaction() as c:
+        assert not CM.row(c, CM.SHARED)
+        burst = guest_on_burst(c, on, computer["runner_id"])
+        CM.intend_delete(c, CM.row(c, "ops"), "manual")
+        assert not compute_pool.return_guests(c, burst)
+        assert c.execute("SELECT runner_id FROM assignments WHERE bot='ops'").fetchone()[0] == burst
+
+
+def ticked(cloud, seconds):
+    """HQ's calls from this one tick (`cloud.tick` returns every call so far), heartbeats left out."""
+    before = len(cloud.hq.actions())
+    return [a for a in cloud.tick(seconds)[before:] if a != "heartbeat"]

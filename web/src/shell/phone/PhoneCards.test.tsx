@@ -285,6 +285,102 @@ describe('the phone’s chat card', () => {
   });
 });
 
+/* Typing in a chat folds the bar away from the focus alone: jsdom has no visualViewport, as an iPhone whose keyboard
+   was never measured (#3562). The bar's `display:none` is phone.css's, keyed on `data-typing`. */
+describe('phone: the bar while typing', () => {
+  const typing = () => document.querySelector('.phone')?.getAttribute('data-typing') ?? null;
+
+  it("Tico's box: the bar goes with no keyboard measured", () => {
+    render(cards({ tico: <textarea aria-label="Message Tico" /> }));
+    fireEvent.click(icon('Tico'));
+    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Message Tico' }));
+    expect(typing()).toBe('tico');
+  });
+
+  it("a bot's chat box: the bar goes", () => {
+    render(cards({ chat: <textarea aria-label="Message Finance Owner" /> }));
+    fireEvent.click(icon('Finance Owner'));
+    act(() => screen.getByRole('textbox', { name: 'Message Finance Owner' }).focus());
+    expect(typing()).toBe('chat');
+  });
+
+  it("a page's own chat box: the bar goes, and is back once the box loses focus", () => {
+    vi.useFakeTimers();
+    try {
+      render(cards({ page: <div className="chat-page"><textarea aria-label="Message the page" /></div> }));
+      const box = screen.getByRole('textbox', { name: 'Message the page' });
+      act(() => box.focus());
+      expect(typing()).toBe('page');
+      act(() => box.blur());
+      act(() => vi.advanceTimersByTime(100));
+      expect(typing()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a keyboard that closes while the box keeps focus brings the bar back; it goes again when the keys come up', () => {
+    vi.useFakeTimers();
+    // a visualViewport the test drives: the keyboard is the height it hides under the keys
+    const vv = Object.assign(new EventTarget(), { height: 800, scale: 1, offsetTop: 0 });
+    Object.defineProperty(window, 'visualViewport', { value: vv, configurable: true });
+    Object.defineProperty(window, 'innerHeight', { value: 800, configurable: true });
+    const keyboard = (kb: number) =>
+      act(() => {
+        vv.height = 800 - kb;
+        vv.dispatchEvent(new Event('resize'));
+        vi.advanceTimersByTime(100);
+      });
+    try {
+      render(cards({ tico: <textarea aria-label="Message Tico" /> }));
+      fireEvent.click(icon('Tico'));
+      keyboard(300);
+      expect(typing()).toBe('tico');
+      keyboard(0);
+      expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Message Tico' }));
+      expect(typing()).toBeNull();
+      keyboard(300);
+      expect(typing()).toBe('tico');
+      // the keys go down with the box kept, then the box is left and tapped again at once: a new focus, the bar goes
+      keyboard(0);
+      const box = screen.getByRole('textbox', { name: 'Message Tico' });
+      act(() => {
+        box.blur();
+        box.focus();
+      });
+      expect(typing()).toBe('tico');
+    } finally {
+      delete (window as { visualViewport?: unknown }).visualViewport;
+      vi.useRealTimers();
+    }
+  });
+
+  it('an input with an empty or unknown type is a text box: the bar goes', () => {
+    render(cards({ page: <input type="" aria-label="Reply" /> }));
+    act(() => screen.getByRole('textbox', { name: 'Reply' }).focus());
+    expect(typing()).toBe('page');
+  });
+
+  it('a checkbox or a select on the page keeps the bar', () => {
+    render(
+      cards({
+        page: (
+          <>
+            <input type="checkbox" aria-label="Done" />
+            <select aria-label="Stage">
+              <option>Build</option>
+            </select>
+          </>
+        ),
+      }),
+    );
+    act(() => screen.getByRole('checkbox', { name: 'Done' }).focus());
+    expect(typing()).toBeNull();
+    act(() => screen.getByRole('combobox', { name: 'Stage' }).focus());
+    expect(typing()).toBeNull();
+  });
+});
+
 /* The shell as the root draws it on a phone: the arrangement from the address, a second chat when it names one. */
 function PhoneShell() {
   const path = useLocation({ select: (l) => l.pathname });
