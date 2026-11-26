@@ -16,8 +16,8 @@ RETIRED_WITH_UI = (
     "scripts/tests/test_release_shots.py",
     "backend/tests/test_growth_page_fixtures.py",
 )
-# Case numbers in red_main_cases.json that the merge queue plan must catch. The queue plan has no time budget, so it
-# catches every one; cases outside the PR plan's budget (23, 33) are caught only there.
+# Case numbers in red_main_cases.json that the merge queue plan must catch. Its time budget is wider than the PR plan's,
+# and the replay shows it catches every one; cases outside the PR plan's budget (23, 33) are caught only there.
 PINNED_CAUGHT = {
     1,
     2,
