@@ -41,18 +41,6 @@ function loadCompanies(dataDir: string): C.CompaniesFile {
       return C.emptyFile();
     }
   }
-  // None yet: the Tauri app's list, once (platforms.md 10, R1). Only an installed app reads it, never a dev or test run.
-  if (app.isPackaged && !process.env.TICO_USER_DATA) {
-    try {
-      const migrated = C.migrateOrgs(JSON.parse(fs.readFileSync(path.join(app.getPath('appData'), 'team.tico.app', 'orgs.json'), 'utf8')), newId);
-      if (migrated) {
-        log('info', `moved ${migrated.companies.length} companies from the previous app`);
-        return migrated;
-      }
-    } catch {
-      // No earlier app.
-    }
-  }
   return C.emptyFile();
 }
 

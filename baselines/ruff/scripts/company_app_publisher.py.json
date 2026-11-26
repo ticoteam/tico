@@ -1,5 +1,0 @@
-{
-  "scripts/company_app_publisher.py": {
-    "F401": 1
-  }
-}

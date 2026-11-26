@@ -6,13 +6,12 @@
 #
 # Needs rsvg-convert (macOS: brew install librsvg) and, for icon.icns, macOS's iconutil. Without
 # iconutil the .icns is left as committed. The .ico is written here directly (PNG entries), so
-# there is no Pillow dependency. Commit what it writes. After changing app/icons, rebuild the
-# desktop app with scripts/app.sh build.
+# there is no Pillow dependency. Commit what it writes.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 BRAND=backend/assets/tico
 WEB=backend/assets
-APP=app/icons
+DESKTOP=desktop/build
 MARK=$BRAND/tico-mark.svg      # 64x64 rounded tile, #172221, the flat Liquid Dot
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -51,22 +50,15 @@ png "$TMP/fullbleed.svg" 180 $WEB/apple-touch-icon.png
 png "$TMP/fullbleed.svg" 512 $BRAND/tico-slack.png
 png "$TMP/mac.svg" 1024 $BRAND/tico-1024.png
 
-
-# Desktop app bundle (tauri.conf.json lists these).
-png "$MARK" 32 $APP/32x32.png
-png "$MARK" 64 $APP/64x64.png
-png "$MARK" 128 $APP/128x128.png
-png "$MARK" 256 $APP/128x128@2x.png
-png "$MARK" 512 $APP/icon.png
-
+# The desktop app's Mac and Windows icons (desktop/electron-builder.yml).
 if command -v iconutil >/dev/null; then
-  icns "$TMP/mac.svg" $APP/icon.icns desktop
+  icns "$TMP/mac.svg" $DESKTOP/icon.icns desktop
 else
-  echo "iconutil not found: $APP/icon.icns left as is"
+  echo "iconutil not found: $DESKTOP/icon.icns left as is"
 fi
 
 # Windows icon: PNG-compressed entries at the usual sizes.
-python3 - "$MARK" "$APP/icon.ico" "$TMP" <<'PY'
+python3 - "$MARK" "$DESKTOP/icon.ico" "$TMP" <<'PY'
 import struct, subprocess, sys
 mark, out, tmp = sys.argv[1:4]
 sizes, blobs = [16, 32, 48, 64, 128, 256], []

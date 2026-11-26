@@ -98,7 +98,6 @@ def test_owner_sets_bucket_secret_stays_sealed_and_every_file_keeps_opening(api,
         saved.json()['active']['location'] == 'acme-files/tico' and saved.json()['active']['access_key_id'] == '…0001'
     )
     first = buckets['AKIAEXAMPLEGOOD0001']
-    assert api.app.state.downloads.s3 is buckets['server'], 'desktop app builds keep the server credentials'
     with api.app.state.store.read() as c:
         row = c.execute('SELECT secret FROM company_storage WHERE active=1').fetchone()
         assert row['secret'].startswith('sealed:v1:') and SECRET not in row['secret']

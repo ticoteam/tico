@@ -81,7 +81,7 @@ def test_the_run_kind_comes_from_its_workflow_file_or_the_merge_queue():
     assert ci_runs.kind_of({"path": ".github/workflows/remote-run.yml", "event": "workflow_dispatch"}) == "remote"
     assert ci_runs.kind_of({"path": ".github/workflows/train.yml", "event": "push"}) == "release"
     assert ci_runs.kind_of({"path": ".github/workflows/ci.yml", "event": "merge_group"}) == "queue"
-    assert ci_runs.kind_of({"path": ".github/workflows/app.yml", "event": "push"}) == "other"
+    assert ci_runs.kind_of({"path": ".github/workflows/desktop.yml", "event": "push"}) == "other"
 
 
 # ---------------------------------------------------------------------------------------------------- the ticket cap

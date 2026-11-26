@@ -109,7 +109,7 @@ export async function checkPlan(): Promise<boolean> {
   return held === null;
 }
 
-/* ---------------------------------------------------------------- the new desktop app, for the older one */
+/* ---------------------------------------------------------------- the desktop app's download */
 
 export type DesktopSystem = 'mac' | 'windows' | 'linux';
 
@@ -120,8 +120,18 @@ export const RELEASES_URL = 'https://github.com/ticoteam/tico/releases/latest';
 export interface DesktopDownload {
   available: boolean;
   url?: string;
-  /** `generic`: from the running GitHub release (the new app when the release has it); `company`: the company's own build. */
-  app_kind?: 'generic' | 'company';
+  /** `generic`: the desktop app's installer from the running GitHub release, the only kind the server offers. */
+  app_kind?: string;
+}
+
+/** Which installer to offer, from the platform, and from the user agent only when there is no platform. Never used to
+    decide what the page does. */
+export function systemOf(nav: Pick<Navigator, 'platform' | 'userAgent'> & { userAgentData?: { platform?: string } }): DesktopSystem | null {
+  const s = `${nav.userAgentData?.platform || nav.platform || nav.userAgent || ''}`.toLowerCase();
+  if (/mac/.test(s)) return 'mac';
+  if (/\bwin/.test(s)) return 'windows';
+  if (/linux|x11/.test(s)) return 'linux';
+  return null;
 }
 
 export const desktopDownloadQuery = (system: DesktopSystem) =>
@@ -132,7 +142,7 @@ export const desktopDownloadQuery = (system: DesktopSystem) =>
     retry: false,
   });
 
-/** Where Download goes: the server's generic installer, else the release page. A company build is the older app. */
+/** Where Download goes: the server's generic installer, else the release page. */
 export function downloadHref(answer: DesktopDownload | undefined): string {
   const url = answer?.available && answer.app_kind === 'generic' ? answer.url : undefined;
   return url && /^https:\/\/\S+$/.test(url) ? url : RELEASES_URL;

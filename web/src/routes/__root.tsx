@@ -25,7 +25,7 @@ import {
 } from '@/data';
 import { callQuery, isCallActive, ringingQuery, useCall } from '@/features/calls/routing';
 import { useFileOpen } from '@/features/library/routing';
-import { DesktopMove, PlanLock, UpdateNotice } from '@/features/notices/exports';
+import { PlanLock, UpdateNotice } from '@/features/notices/exports';
 import { StartScreen, useSetupOwed, useStartGate } from '@/features/start/routing';
 import { SUPPORT_CHAT, supportUnreadQuery } from '@/features/support/routing';
 import { TaskModal } from '@/features/task/exports';
@@ -347,10 +347,7 @@ function App() {
                 status === 'offline' ? (
                   <OfflineBar held={held} />
                 ) : (
-                  <>
-                    <UpdateNotice />
-                    <DesktopMove />
-                  </>
+                  <UpdateNotice />
                 )
               }
             />
