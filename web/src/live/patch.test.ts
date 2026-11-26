@@ -347,6 +347,38 @@ describe('tasks', () => {
     expect(newest.unsure).toBe(false);
   });
 
+  it("show a task new to a list in the board's queue order at once, and read the list again for its place", () => {
+    const list: TaskList = { tasks: [task('t1', { stage_id: 's1', rank: 1 })], cursor: '900.x' };
+    const queued = patchTaskList(list, [{ seq: 901, id: 't9', task: task('t9', { stage_id: 's1', rank: 0.5 }) }], { status: 'open', pipeline: 'p1' });
+    expect(queued.list.tasks.map((t) => t.id)).toEqual(['t1', 't9']);
+    expect(queued.unsure).toBe(true);
+    // a list in no queue order (a person's own) keeps it where it lands
+    const own = patchTaskList(list, [{ seq: 901, id: 't9', task: task('t9', { stage_id: 's1', rank: 0.5 }) }], { status: 'open' });
+    expect(own.unsure).toBe(false);
+  });
+
+  it("read a list in the board's queue order again after a read already out, when a row's rank changes meanwhile", async () => {
+    const board = ['tasks', 'list', { status: 'open', pipeline: 'p1' }];
+    queryClient.setQueryData<TaskList>(board, { tasks: [task('t1', { stage_id: 's1', rank: 1 }), task('t2', { stage_id: 's1', rank: 2 })], cursor: '900.x' });
+    const reads: ((rows: unknown[]) => void)[] = [];
+    const read = () => new Promise((done) => reads.push((rows) => done({ tasks: rows, cursor: '900.x' })));
+    const seen = new QueryObserver(queryClient, { queryKey: board, queryFn: read, staleTime: Infinity });
+    const stop = seen.subscribe(() => {});
+    try {
+      void queryClient.refetchQueries({ queryKey: board, exact: true });
+      await vi.waitFor(() => expect(reads).toHaveLength(1));
+      FakeEventSource.last.feed(taskFrame(901, task('t2', { stage_id: 's1', rank: 0.5, version: 2 })));
+      flushFrame();
+      // the read out may be from before the change: it answers, then the list is read again
+      await act(async () => reads[0]!([task('t1', { stage_id: 's1', rank: 1 }), task('t2', { stage_id: 's1', rank: 2 })]));
+      await vi.waitFor(() => expect(reads).toHaveLength(2));
+      await act(async () => reads[1]!([task('t2', { stage_id: 's1', rank: 0.5, version: 2 }), task('t1', { stage_id: 's1', rank: 1 })]));
+      expect(queryClient.getQueryData<TaskList>(board)?.tasks.map((t) => t.id)).toEqual(['t2', 't1']);
+    } finally {
+      stop();
+    }
+  });
+
   it('patch a row in place, keeping every row that did not change', () => {
     const [a, b, c] = [task('t1'), task('t2'), task('t3')];
     queryClient.setQueryData<TaskList>(open, { tasks: [a, b, c], cursor: '900.x' });

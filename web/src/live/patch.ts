@@ -220,9 +220,7 @@ export function patchTaskList<T extends TaskRow>(
   const paged = !!list.next_after && (params?.sort === 'newest' || params?.sort === 'oldest');
   // a stage by priority (Tico's order for the reader): a task new to it is read again in its place, never added at the end
   const ranked = params?.sort === 'priority';
-  // a pipeline in the server's queue order (a board, and the list beside a task in Board order): a row whose rank or stage
-  // changes may move in it, so the list is read again for its new place
-  const queued = !!params?.pipeline && !params.sort;
+  const queued = inQueue(params);
   const edit = () => {
     if (tasks === list.tasks) tasks = [...tasks];
     return tasks;
@@ -245,7 +243,11 @@ export function patchTaskList<T extends TaskRow>(
     if (i < 0) {
       if (fits && paged) return { list, unsure: false, reset: true };
       if (fits && ranked) unsure = true;
-      else if (fits) edit().push(e.task);
+      else if (fits) {
+        // shown at once; in a queue order its place may be elsewhere, so the list is read again for it
+        edit().push(e.task);
+        if (queued) unsure = true;
+      }
       else if (fits === null) unsure = true;
       continue;
     }
@@ -259,6 +261,10 @@ export function patchTaskList<T extends TaskRow>(
   }
   return { list: tasks === list.tasks ? list : { ...list, tasks }, unsure };
 }
+
+/** A pipeline in the server's queue order (a board, and the list beside a task in Board order): a task new to it, or a
+    row whose rank or stage changes, may belong elsewhere in it, so the list is read again for its place. */
+const inQueue = (params: Record<string, unknown> | undefined): boolean => !!params?.pipeline && !params.sort;
 
 /** Whether a change may move a task in a pipeline's queue order (rank, then no rank, then oldest, then id, within its
     stage). An event that leaves rank out says nothing about it. */
@@ -277,6 +283,8 @@ function patchTasks(batch: TaskEvent[]): void {
     // A stage by priority is in the server's order, which any change to its rows may move: whatever touches it reads
     // it again, after any read already out (that read may be from before this). The patch only shows the change meanwhile.
     const ranked = (key[2] as { sort?: unknown } | undefined)?.sort === 'priority';
+    // either order is the server's: a read already out may be from before the change, so it reads again after it
+    const ordered = ranked || inQueue(key[2] as Record<string, unknown> | undefined);
     if (!data || !Array.isArray(data.tasks)) {
       if (ranked) refetchSoon(key, true);
       continue;
@@ -287,7 +295,7 @@ function patchTasks(batch: TaskEvent[]): void {
       continue;
     }
     if (list !== data) queryClient.setQueryData(key, list);
-    if (unsure || (ranked && list !== data)) refetchSoon(key, ranked);
+    if (unsure || (ranked && list !== data)) refetchSoon(key, ordered);
   }
   // Flow needs the server's claimability and page boundaries (relationship names come from their own query).
   for (const [key, data] of queryClient.getQueriesData<{ pages: TaskList[] }>({ queryKey: ['tasks', 'flow'] })) {
