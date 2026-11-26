@@ -106,6 +106,19 @@ def not_a_friday(monkeypatch):
     monkeypatch.setattr(_updates, "today", lambda at=None: "2026-09-29")
 
 
+def checked_after(api):
+    """Run the rule checks left for after their writes (org_rule_check `late`), as the drain thread does: a bot's ❓
+    under Warn rules only is checked right after it is saved."""
+    from backend import org_rule_check
+
+    org_rule_check.drain_late(api.app.state.store, api.app.state.judge)
+
+
+def notes_to(api, bot="ops"):
+    """Tico's notes for a bot's next run, oldest first."""
+    return [n["body"] for n in sql(api, "SELECT body FROM notes WHERE to_actor=? ORDER BY rowid", (f"bot:{bot}",))]
+
+
 def task_for_ops(api, title="Write the launch note"):
     return post(api, "tasks", {"owner": "ops", "title": title, "body": "Draft it."})
 

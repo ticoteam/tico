@@ -67,7 +67,8 @@ _OPEN_ON_TASKS = (
 
 class Asking:
     """A ❓'s place for the org rule check: the message's own place, marked as a bot's question to a person
-    (org_rule_check.asking), so a `kind:ask` rule ("Asks to a person") checks it before it is written."""
+    (org_rule_check.asking), so a `kind:ask` rule ("Asks to a person") checks it: right after it is written when every
+    rule it meets only warns, before it when one can block."""
 
     asks_person = True
 

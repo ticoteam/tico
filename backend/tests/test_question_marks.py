@@ -15,8 +15,10 @@ from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, restrict, runner
 from backend.tests.helpers.org_rule_check import (  # noqa: F401 - fixtures
     COLOR,
+    checked_after,
     color_rule,
     not_a_friday,
+    notes_to,
     ruled,
     sql,
     task_for_ops,
@@ -254,11 +256,13 @@ def test_the_asks_to_a_person_rule_checks_a_question_mark(ruled):
     task = task_for_ops(api)
     r = ask_on(api, task)
     assert r.status_code == 200, r.text
+    checked_after(api)  # a Warn rule alone: judged right after the ❓ is saved
     [call] = judge.calls
     assert [rule_row["text"] for rule_row in call["state"]["rules"]] == [OR.ASKS_TO_A_PERSON]
     r = ask_on(api, task, text="Should it go out **Friday**?")
-    assert r.status_code == 200 and "held" not in r.json(), r.text
-    assert r.json()["rule_warning"]["rules"][0]["text"] == OR.ASKS_TO_A_PERSON
+    assert r.status_code == 200 and "held" not in r.json() and "rule_warning" not in r.json(), r.text
+    checked_after(api)
+    assert [n for n in notes_to(api) if OR.ASKS_TO_A_PERSON in n], notes_to(api)
     [mark] = sql(api, "SELECT line FROM question_marks WHERE cleared_at IS NULL AND task_id=?", (task["id"],))
     assert mark["line"] == "Should it go out **Friday**?", "listed by the bot's words, not the warning line"
     assert [q["mark_id"] for q in questions(api)] == [r.json()["question"]["id"]]

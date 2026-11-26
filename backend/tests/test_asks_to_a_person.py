@@ -19,8 +19,10 @@ from backend.tests.helpers.api import headers, post
 from backend.tests.helpers.counsel import store_file
 from backend.tests.helpers.org_rule_check import (  # noqa: F401 - fixtures
     COLOR,
+    checked_after,
     color_rule,
     not_a_friday,
+    notes_to,
     ruled,
     sql,
     task_for_ops,
@@ -295,6 +297,7 @@ def test_the_rule_judges_a_bots_question_to_a_person_with_all_its_lines_in_one_c
     four = "Four tones for the launch note, which one?\n1. Plain\n2. Playful\n3. Formal\n4. Short"
     r = question(api, task, four)
     assert r.status_code == 200, r.text
+    checked_after(api)  # a Warn rule alone: judged right after the ❓ is saved
     [call] = judge.calls  # AC-9: one question, whatever its lines, is 1 rule-check call
     assert [rule_row["text"] for rule_row in call["state"]["rules"]] == [OR.ASKS_TO_A_PERSON]
     output = call["state"]["output"]
@@ -302,9 +305,10 @@ def test_the_rule_judges_a_bots_question_to_a_person_with_all_its_lines_in_one_c
 
     task = task_for_ops(api, "Write the second launch note")
     r = question(api, task, "Which tone should it take? It goes out **Friday** under our name.")
-    # A style rule never stops a question: it is asked, and the bot is told the rule it may break.
-    assert r.status_code == 200 and "held" not in r.json(), r.text
-    assert r.json()["rule_warning"]["rules"][0]["text"] == OR.ASKS_TO_A_PERSON
+    # A style rule never stops a question: it is asked, and the bot is told the rule it may break, on its next run.
+    assert r.status_code == 200 and "held" not in r.json() and "rule_warning" not in r.json(), r.text
+    checked_after(api)
+    assert [n for n in notes_to(api) if OR.ASKS_TO_A_PERSON in n], notes_to(api)
     [mark] = sql(api, "SELECT person_id FROM question_marks WHERE task_id=?", (task["id"],))
     assert mark["person_id"] == "human:ana"
     assert sql(api, "SELECT count(*) AS n FROM org_rule_holds")[0]["n"] == 0

@@ -498,6 +498,7 @@ def register(
             question_marks.with_choices(text, body.choices),  # its suggested answers are shown, and sent, as words
             lambda c: comment_audience(c, who, tid, M.TaskComment(text=text), ask_to=to),
             place=question_marks.Asking(task_place(who, tid)),
+            late=True,  # under Warn rules only (the plain-words rule), checked right after it is saved
         )
 
         def write(c):
