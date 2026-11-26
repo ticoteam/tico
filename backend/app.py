@@ -58,6 +58,7 @@ from . import names as actor_names
 from . import settings_catalog
 from .files import raw_media
 from . import company_server
+from .downloads import PUBLIC_PATHS as DOWNLOAD_PATHS
 from . import hosted_updates, releases, runner_versions
 from .census import Census
 from .providers import MODEL_BY_ID
@@ -1073,9 +1074,9 @@ def _install_request_guard(
             # A frontend's one-time sign-in code, exchanged with its PKCE verifier (backend/oidc.py).
             if request.url.path == oidc.TOKEN_PATH and request.method == "POST":
                 return await call_next(request)
-            # The desktop app's installers and update manifest (backend/downloads.py): the app's
-            # updater has no browser session, and a build is nothing to protect.
-            if request.url.path.startswith("/download/") and request.method == "GET":
+            # The desktop app's installer for each system (backend/downloads.py): a link a visitor follows before
+            # they have a session, and an installer is nothing to protect.
+            if request.url.path in DOWNLOAD_PATHS and request.method == "GET":
                 return await call_next(request)
             if request.url.path == "/api/v2/team/icon" and request.method == "GET":
                 return await call_next(request)

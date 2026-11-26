@@ -50,31 +50,6 @@ export function parseCompanies(json: unknown): CompaniesFile {
   return file;
 }
 
-/**
- * Today's Tauri orgs.json (`{version: 1, active, orgs: [{id, url, name, email, ...}]}`, app/src/orgs.rs), made into a
- * companies list once. Cookies live in WebKit and cannot move, so each company asks for sign-in once.
- */
-export function migrateOrgs(json: unknown, newId: () => string): CompaniesFile | null {
-  if (!json || typeof json !== 'object') return null;
-  const o = json as Record<string, unknown>;
-  if (!Array.isArray(o.orgs)) return null;
-  let file = emptyFile();
-  let active: string | null = null;
-  for (const raw of o.orgs as unknown[]) {
-    if (!raw || typeof raw !== 'object') continue;
-    const org = raw as Record<string, unknown>;
-    if (typeof org.url !== 'string') continue;
-    const address = checkAddress(org.url);
-    if (!address.ok) continue;
-    const added = addCompany(file, address.origin, newId());
-    file = added.file;
-    file = reportSelf(file, added.company.id, { name: text(org.name), email: text(org.email) });
-    if (org.id === o.active) active = added.company.id;
-  }
-  if (!file.companies.length) return null;
-  return { ...file, active: active ?? file.companies[0]!.id };
-}
-
 export function findByOrigin(file: CompaniesFile, origin: string): Company | undefined {
   return file.companies.find((c) => c.url === origin);
 }

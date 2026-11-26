@@ -485,7 +485,7 @@ def config_view(c, settings, who=None):
         # Where a bucket's objects open (TICO_S3_VIEW_URLS): the UI links s3:// URIs, `hub` rewrites them before sending.
         value["s3_view_urls"] = dict(settings.s3_view_urls)
         # Pages and SVG from Tico file hosting: the desktop app follows a frame to this origin, only on its signed
-        # visual paths (app/src/visual_origin.rs), when the install has no visual address of its own.
+        # visual paths (desktop/src/main/shell.ts filesOrigin), when the install has no visual address of its own.
         from . import tico_storage, visuals
 
         value["visuals"] = visuals.shown(settings, c)

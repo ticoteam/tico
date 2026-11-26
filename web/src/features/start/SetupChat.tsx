@@ -3,7 +3,7 @@ import { Suspense, lazy, useRef, useState, type FormEvent, type ReactNode } from
 import { reasonIn, useAction } from '@/actions';
 import { Message, MessageBones, type ChatMessage } from '@/conversation';
 import { configQuery, meQuery } from '@/data';
-import { desktopApp, inOldDesktopApp } from '@/desktop';
+import { desktopApp } from '@/desktop';
 import { desktopDownloadQuery, downloadHref, systemOf } from '@/features/notices/exports';
 import { billingQuery, providerReady, subscriptionsQuery, type BillingView, type SignInKind } from '@/features/settings/routing';
 import { Button } from '@/kit/Button';
@@ -311,7 +311,7 @@ function InviteCard({ people, onDone }: { people: FilePerson[]; onDone: (said: '
 /** Where Tico reaches the person, each doing the real thing: the desktop app's download (left out inside it), or the
     app on their phone's home screen. (Email is Settings › You: what it sends depends on the install.) */
 function TouchChips({ onChoose }: { onChoose: (chosen: Chosen) => void }) {
-  const inApp = !!desktopApp() || inOldDesktopApp();
+  const inApp = !!desktopApp();
   const system = inApp ? null : systemOf(navigator);
   const download = useQuery({ ...desktopDownloadQuery(system ?? 'mac'), enabled: !!system });
   const href = downloadHref(download.data);
