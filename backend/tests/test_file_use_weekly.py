@@ -5,12 +5,95 @@ times. Never a file, its name, its content, a person or a bot. Like `mcp_call_we
 bot the owner grants outcome stats (backend/outcome_stats.py); anyone else gets "no such table".
 """
 
+import json
+
 from backend import file_use
+from backend.auth import Identity
+from backend.store import H
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import headers
 from backend.tests.helpers.mcp import call
 from backend.tests.helpers.sql import query
-from backend.tests.test_file_signings import as_bot, sign, task_pdf
-from backend.tests.test_task_asks_routes import a_file, bots_task
+
+PDF = b"%PDF-1.7\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"
+SIGNED = b"%PDF-1.7\n1 0 obj<<>>endobj\n2 0 obj<</Signed true>>endobj\ntrailer<<>>\n%%EOF\n"
+
+
+def as_bot(api, slug):
+    token = slug + "-bot-test"
+    with api.app.state.store.transaction() as c:
+        X.bot(c, slug)
+        c.execute(
+            "INSERT OR IGNORE INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
+            (slug, "hermes", "x-" + slug, H.now(), "human:ana"),
+        )
+    api.app.state.auth.settings.test_identities[token] = Identity("bot:" + slug, "bot", agent="hermes")
+    return token
+
+
+def task_pdf(api):
+    """A task Ana asked bot:ops for, with a PDF on it: its file id."""
+    with api.app.state.store.transaction() as c:
+        tid = H.task_create(c, "human:ana", "Sign the declaration", "Sign and return it.", "bot:ops", lint=False)["id"]
+    r = api.post(f"/api/v2/tasks/{tid}/files", files={"file": ("d.pdf", PDF, "application/pdf")}, headers=headers())
+    assert r.status_code == 200, r.text
+    return r.json()["file_id"]
+
+
+def sign(api, fid):
+    return api.post(
+        f"/api/v2/files/{fid}/signings",
+        data={"version": "1", "marks": json.dumps([{"kind": "signature", "page": 1}])},
+        files={"file": ("d.pdf", SIGNED, "application/pdf")},
+        headers=headers(),
+    )
+
+
+def a_file(api, bot, task=None):
+    """A bot's published file with one version, as files.py keeps it; on `task` when given."""
+    fid = "f" + H.new_id()[:8]
+    at = H.now()
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,locator,current_version,first_activity_at,"
+            "last_activity_at,task_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                fid,
+                bot,
+                f"task:{task}" if task else "bot",
+                "cuts/" + fid + ".md",
+                "Intro cut",
+                "doc",
+                "tico_blob",
+                1,
+                at,
+                at,
+                task,
+            ),
+        )
+        c.execute(
+            "INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) VALUES(?,?,?,?,?,?,?)",
+            ("b" + fid, "bot:" + bot, "d" + fid, 10, "intro.md", "text/markdown", at),
+        )
+        c.execute(
+            "INSERT INTO bot_file_versions(file_id,version,blob_id,digest,size,name,mime,repo_path,actor,created_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (fid, 1, "b" + fid, "d" + fid, 10, "intro.md", "text/markdown", "cuts/" + fid + ".md", "bot:" + bot, at),
+        )
+        if task:
+            c.execute("INSERT INTO task_assets VALUES(?,?)", (task, "b" + fid))
+    return fid
+
+
+def ops_task(api):
+    """A shared task Ana asked bot:ops for."""
+    with api.app.state.store.transaction() as c:
+        tid = H.task_create(c, "human:ana", "Post the release note", "Write it and post it.", "bot:ops", lint=False)[
+            "id"
+        ]
+        c.execute("UPDATE tasks SET private=0 WHERE id=?", (tid,))
+    return tid
+
 
 VIEW = "SELECT who, action, actors, uses FROM files_use_weekly ORDER BY who, action"
 
@@ -25,7 +108,7 @@ def ok(response):
 
 
 def test_each_files_action_counts_once_per_use_by_person_or_bot_and_refusals_count_nothing(api):
-    _, pdf = task_pdf(api)
+    pdf = task_pdf(api)
     ops, finance = as_bot(api, "ops"), as_bot(api, "finance")
 
     # 1. A person opens one file twice.
@@ -39,19 +122,17 @@ def test_each_files_action_counts_once_per_use_by_person_or_bot_and_refusals_cou
     found = ok(api.get("/api/v2/files/search?q=zzqx-nothing-matches", headers=headers(ops))).json()
     assert not found["results"]
     # 4. A bot's review verdict and a person's signing are each one review.
-    theirs = a_file(api, bot="finance")
-    tid = bots_task(api, ops)
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET private=0 WHERE id=?", (tid,))
+    tid = ops_task(api)
+    theirs = a_file(api, "finance", task=tid)
     reviewed = api.post(
         "/api/v2/file-reviews", json={"file": theirs, "task": tid, "verdict": "approve"}, headers=headers(ops)
     )
     ok(reviewed)
     ok(sign(api, pdf))
-    # 5. Refusals count nothing: a file nobody has, one the reader may not see, a bot's own review.
+    # 5. Refusals count nothing: a file nobody has, a version it does not have, a bot's own review.
     assert api.get("/api/v2/files/fnosuchfile", headers=headers()).status_code == 404
-    assert api.get(f"/api/v2/files/{pdf}", headers=headers("cara-test")).status_code == 404
-    mine = a_file(api, bot="ops")
+    assert api.get(f"/api/v2/files/{pdf}/versions/9", headers=headers()).status_code == 404
+    mine = a_file(api, "ops", task=tid)
     refused = api.post(
         "/api/v2/file-reviews", json={"file": mine, "task": tid, "verdict": "approve"}, headers=headers(ops)
     )
