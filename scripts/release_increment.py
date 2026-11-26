@@ -32,8 +32,7 @@ import pr_checks  # beside this module; stdlib only
 
 ROOT = Path(__file__).resolve().parents[1]
 ANCHOR_AGE = timedelta(hours=24)
-PRODUCT, DESKTOP = "product", "desktop"
-DESKTOP_INPUTS = ("app/",)  # the Tauri desktop app: its part of the gate tests it
+PRODUCT = "product"
 # What the product part runs besides the images: the Docker isolation suite and its fakes, and the journey. A change to
 # one selects the product part, so a fix to a red isolation or journey check wakes the train (v0.6.83 waited on #4413).
 PRODUCT_INPUTS = (
@@ -54,10 +53,13 @@ WEB_INPUTS = (
     "package-lock.json",
 )
 IGNORED_JOBS = {"release-check", "test-timings"}  # a consequence of a failed part, or optional
+# Gate parts no validation runs any more, read only in older runs: the desktop part (cargo test of app/) was retired.
+# A commit can no longer fix or select its failure, so it names nothing, and it never hides the other parts' failures.
+RETIRED_JOBS = {"desktop"}
 FAILED = {"failure", "cancelled", "timed_out", "startup_failure", "action_required"}
 RUNNER = "4cpu-linux-x64"
 MATRIX_KEYS = ("name", "part", "shard", "workers", "runner", "binaries")
-JOB_NAME = re.compile(r"python-\d+|conformance|contracts(-\d+)?|product|desktop")
+JOB_NAME = re.compile(r"python-\d+|conformance|contracts(-\d+)?|product")
 TOKEN_PYTEST = re.compile(r"\bFAILED (\S+?)::")
 
 
@@ -71,9 +73,9 @@ def failed_tokens(jobs):
     failure cannot be named (a build, a VM, a log with no failing test), so any commit could be the fix."""
     tokens = set()
     for name, log in jobs:
-        if name in IGNORED_JOBS:
+        if name in IGNORED_JOBS or name in RETIRED_JOBS:
             continue
-        if name in (PRODUCT, DESKTOP, WEB):
+        if name in (PRODUCT, WEB):
             tokens.add(name)
         elif re.fullmatch(r"python-\d+", name):
             found = failure_tokens(log)
@@ -101,6 +103,8 @@ INFRASTRUCTURE = (
 )
 # A product part that failed only because an image build did: it waits for the images before its gate starts (ci.yml).
 CONSEQUENCE = re.compile(r"An image build did not succeed")
+# The gate parts whose receipts infrastructure_red reads; desktop stays so an older run's retired part still reads
+# as a gate (JOB_NAME, what a new plan may name, leaves it out).
 GATE_JOB = re.compile(r"python-\d+|conformance|contracts(-\d+)?|product|desktop")
 
 
@@ -280,8 +284,6 @@ def selection_tokens(selected, changed):
         tokens.add(pr_checks.CONFORMANCE)
     if selected.get("caddy") or any(name.startswith(PRODUCT_INPUTS) for name in changed):
         tokens.add(PRODUCT)
-    if any(name.startswith(DESKTOP_INPUTS) for name in changed):
-        tokens.add(DESKTOP)
     if any(name.startswith(WEB_INPUTS) for name in changed):
         tokens.add(WEB)
     return tokens
@@ -386,7 +388,7 @@ def plan_for(
     dropped = []
     carried_python = set()
     for token in sorted(carried):
-        if token in (PRODUCT, DESKTOP, WEB):  # their own VMs; the web journeys run in every validation
+        if token in (PRODUCT, WEB):  # its own VM; the web journeys run in every validation
             continue
         if token == pr_checks.CONFORMANCE:
             conformance = True
@@ -410,14 +412,12 @@ def plan_for(
         or PRODUCT in carried
         or bool(previous_changed)
     )
-    desktop = any(name.startswith(DESKTOP_INPUTS) for name in changed) or DESKTOP in carried
     jobs = build_jobs(
         python,
         contract_files,
         conformance,
         selected.get("rust") or [],
         product,
-        desktop,
         tables,
         native=native,
     )
@@ -426,7 +426,6 @@ def plan_for(
         "contracts": contract_files,
         "conformance": conformance,
         "product": product,
-        "desktop": desktop,
         # The content sweeps the diff turned on (pr_checks.CONTENT_SWEEPS): the contracts lane runs them as the full
         # gate does (pr_checks.run reads `sweeps` for their environment).
         "sweeps": sorted(selected.get("sweeps") or []),
@@ -445,7 +444,7 @@ def warn(lines):
         print(line, file=sys.stderr)
 
 
-def build_jobs(python, contract_files, conformance, rust, product, desktop, tables, native=None):
+def build_jobs(python, contract_files, conformance, rust, product, tables, native=None):
     """The gate's VMs for these files, grouped by measured seconds the way pr_checks.prepare groups them.
 
     Only a VM holding a file that runs the native binaries (`native(files)`, release_checks.native_test_files) waits
@@ -483,10 +482,8 @@ def build_jobs(python, contract_files, conformance, rust, product, desktop, tabl
             for name, (files, load) in zip(names, packed, strict=True)
         ]
     if product:
-        # The product and desktop parts run hosted_release_check's native_binaries, so their VMs place the release binaries.
+        # The product part runs hosted_release_check's native_binaries, so its VM places the release binaries.
         jobs.append(job("product", "product", workers="2"))
-    if desktop:
-        jobs.append(job("desktop", "desktop", workers="2"))
     return jobs
 
 
@@ -502,7 +499,7 @@ FULL_PYTHON_SHARDS = 36
 
 
 def full_matrix():
-    """The full validation's gate VMs: the product part, FULL_PYTHON_SHARDS python shards and the desktop part."""
+    """The full validation's gate VMs: the product part and FULL_PYTHON_SHARDS python shards."""
     jobs = [{"name": "product", "part": "product", "shard": "", "workers": "2", "runner": RUNNER}]
     jobs += [
         {
@@ -515,7 +512,6 @@ def full_matrix():
         }
         for k in range(1, FULL_PYTHON_SHARDS + 1)
     ]
-    jobs.append({"name": "desktop", "part": "desktop", "shard": "", "workers": "2", "runner": RUNNER})
     return jobs
 
 
@@ -528,7 +524,7 @@ def matrix_of(plan_text):
     if not isinstance(jobs, list) or not jobs:
         raise ValueError("an incremental plan lists no VMs")
     for entry in jobs:
-        if not JOB_NAME.fullmatch(entry.get("name", "")) or entry.get("part") not in ("python", "product", "desktop"):
+        if not JOB_NAME.fullmatch(entry.get("name", "")) or entry.get("part") not in ("python", "product"):
             raise ValueError("an incremental plan names an unknown VM: %r" % (entry.get("name"),))
     return {"include": [{key: entry[key] for key in MATRIX_KEYS if key in entry} for entry in jobs]}
 

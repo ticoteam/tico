@@ -9,13 +9,13 @@
 # gate: its plan goes one level further (two, at most nineteen Python VMs) and keeps every other job's condition. A fork's
 # pull request keeps the cheap checks only, and a draft runs nothing.
 # A ready pull request from this repository also runs every other job a queue group runs, under the same conditions, so
-# a failure shows before the change is enqueued: the Rust lint, desktop, advisories and Linux Caddy jobs when the
+# a failure shows before the change is enqueued: the Rust lint, advisories and Linux Caddy jobs when the
 # change touches what they check. The plan decides (scripts/pr_checks.py queue_jobs, caddy), so an untouched job starts
 # no VM, on a pull request and in a group alike. The timing receipt, flake artifact and merge commit checks are
 # queue-only (a pull request's own static checks and types jobs run the same list on its own head).
 # A merge queue group (the merge_group event, once per queue group) runs them all again on its merge commit: the tests
-# the group's merged change reaches within two levels (release validation runs the rest), and the same Rust lint,
-# desktop and Caddy jobs. The group's base is the head of the group
+# the group's merged change reaches within two levels (release validation runs the rest), and the same Rust lint
+# and Caddy jobs. The group's base is the head of the group
 # queued ahead of it (main for the first), so it selects from its own pull request's change, tested on top of everything
 # ahead of it. The static checks and types jobs run on the pull request only; the group's merge commit checks job runs every
 # static check again on the merge commit that lands on main (scripts/ci/merge_commit_checks.sh), beside the plan and the
@@ -68,7 +68,6 @@ jobs:
       matrix: ${{ steps.plan.outputs.matrix }}
       caddy: ${{ steps.plan.outputs.caddy }}
       rust_lint: ${{ steps.plan.outputs.rust_lint }}
-      desktop: ${{ steps.plan.outputs.desktop }}
       advisories: ${{ steps.plan.outputs.advisories }}
     steps:
       - id: checkout_first
@@ -579,63 +578,6 @@ jobs:
       - name: Known advisories (pinned OSV-Scanner)
         run: python3 scripts/osv_gate.py scan
 
-  desktop-app:
-    # Merge queue groups, and a ready pull request from this repository. The Tauri desktop app (app/): rustfmt, clippy
-    # -D warnings and its unit tests, on Linux with the build dependencies app.yml installs. No VM starts when the plan
-    # sees no app file changed.
-    name: desktop app
-    needs: plan
-    if: ${{ (github.event_name == 'merge_group' || (github.event_name == 'pull_request' && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository)) && needs.plan.outputs.desktop == 'true' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    steps:
-      - id: checkout_first
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-        timeout-minutes: 3
-        continue-on-error: true
-      - if: ${{ steps.checkout_first.outcome == 'failure' }}
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-        timeout-minutes: 3
-      - name: Free disk only when under 40 GB free (hosted ubuntu-24.04 x64 runners start with about 85 GB)
-        run: bash scripts/ci/free_disk.sh 40
-      - name: Rust 1.99.1 with rustfmt and clippy (the version scripts/rust_checks.sh pins)
-        run: rustup toolchain install 1.99.1 --profile minimal --component clippy,rustfmt
-      - name: Linux build dependencies (the ones app.yml installs)
-        run: |
-          sudo sed -i \
-            -e 's|mirror+file:/etc/apt/apt-mirrors.txt|https://archive.ubuntu.com/ubuntu/|g' \
-            -e 's|http://azure\.archive\.ubuntu\.com/ubuntu/|https://archive.ubuntu.com/ubuntu/|g' \
-            /etc/apt/sources.list.d/ubuntu.sources
-          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
-          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libpulse-dev
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          workspaces: app -> target
-          shared-key: pr-desktop
-          # A failing run keeps its compiled dependencies, so the next push does not start from nothing.
-          cache-on-failure: true
-      - name: rustfmt
-        working-directory: app
-        run: cargo +1.99.1 fmt --check
-      - name: clippy
-        working-directory: app
-        run: cargo +1.99.1 clippy --locked --all-targets -- -D warnings
-      - name: Python for the updater test (the hub backend it serves from, installed as the Python suites install it)
-        run: |
-          python3 -m venv "$RUNNER_TEMP/venv"
-          "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check --retries 1 --timeout 30 -r backend/requirements-dev.txt
-      - name: unit tests
-        working-directory: app
-        env:
-          TICO_PYTHON: ${{ runner.temp }}/venv/bin/python
-        run: cargo +1.99.1 test --locked
-
   caddy-linux:
     # Merge queue groups, and a ready pull request from this repository, when the plan selects the Caddy image.
     needs: plan
@@ -729,7 +671,7 @@ jobs:
     # Merge queue groups only. A failed tests leg cancels the run, and a canceled run ends here: a final job
     # queued after the cancellation can wait for a RunsOn runner that never comes. It gates nothing: the receipt is cosmetic.
     if: ${{ !cancelled() && github.event_name == 'merge_group' }}
-    needs: [plan, tests, caddy-linux, static, types, merge-checks, rust-lint, desktop-app]
+    needs: [plan, tests, caddy-linux, static, types, merge-checks, rust-lint]
     runs-on: ubuntu-24.04
     outputs:
       flaky: ${{ steps.flaky.outputs.tests }}
@@ -799,10 +741,10 @@ jobs:
   checks:
     # The one required check, on every pull request to main and on the merge queue. It fails when a job it needs failed or
     # was cancelled. A skipped job passes: a change that does not reach a job skips it, a fork's pull request skips the
-    # tests and the Rust, desktop and Caddy jobs, and a draft pull request skips every job.
+    # tests and the Rust and Caddy jobs, and a draft pull request skips every job.
     name: checks
     if: ${{ always() && !github.event.pull_request.draft }}
-    needs: [plan, static, types, web, merge-checks, tests, rust-lint, desktop-app, caddy-linux, advisories]
+    needs: [plan, static, types, web, merge-checks, tests, rust-lint, caddy-linux, advisories]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -818,7 +760,6 @@ jobs:
           MERGE_CHECKS: ${{ needs.merge-checks.result }}
           TESTS: ${{ needs.tests.result }}
           RUST_LINT: ${{ needs.rust-lint.result }}
-          DESKTOP_APP: ${{ needs.desktop-app.result }}
           CADDY: ${{ needs.caddy-linux.result }}
           ADVISORIES: ${{ needs.advisories.result }}
           GH_TOKEN: ${{ github.token }}
@@ -839,7 +780,6 @@ jobs:
           check merge-checks "$MERGE_CHECKS"
           check tests "$TESTS"
           check rust-lint "$RUST_LINT"
-          check desktop-app "$DESKTOP_APP"
           check caddy-linux "$CADDY"
           check advisories "$ADVISORIES"
           # A failed leg cancels the whole run, itself included, so its job reads "cancelled". Name the step that
