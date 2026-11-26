@@ -421,7 +421,6 @@ pub struct IdleSession {
     pub bot: String,
     pub task: String,
     pub path: PathBuf,
-    pub bytes: u64,
     pub newest: f64,
     dev: u64,
     cutoff: f64,
@@ -477,7 +476,6 @@ pub fn idle_sessions(scope: &Scope) -> Vec<IdleSession> {
                 bot: bot.to_string(),
                 task,
                 path,
-                bytes: tree.bytes,
                 newest: tree.newest,
                 dev,
                 cutoff,
@@ -1720,7 +1718,6 @@ mod tests {
                 ("qa".to_string(), "t-old".to_string())
             ]
         );
-        assert!(idle_sessions(&s).iter().all(|i| i.bytes >= 4096));
         // Nothing here is a cache or temp entry the other steps take.
         assert!(plan(&s).iter().all(|c| !c.path.starts_with(&bot)));
     }
