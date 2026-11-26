@@ -14,6 +14,10 @@ import type { Session } from './Session';
 import { waitsQuery, type Timeline } from './queries';
 import type { ChatMessage } from './types';
 
+// Read with node's fs (tests load no CSS), as QuestionCard.test.tsx does.
+const fs = (await import(/* @vite-ignore */ 'node:' + 'fs')) as { readFileSync(file: URL, encoding: 'utf8'): string };
+const here = import.meta.url;
+
 /* The stream, stood in for: handlers register as they do in the app; `emit` applies one frame. A `messages` frame
    first does what live/patch.ts's built-in patcher does (upsert by id into the timeline), then the module's own. */
 const handlers = vi.hoisted(() => new Map<string, Set<(batch: unknown[]) => void>>());
@@ -548,6 +552,48 @@ describe('the page it sits beside', () => {
     fireEvent.click(screen.getByRole('button', { name: 'What did you make?' }));
     expect(box.value).toBe('Hide Files please');
     expect(sends()).toHaveLength(0);
+  });
+
+  it('the starters step away when the person clicks or tabs into the box, and come back when they leave it empty', async () => {
+    const style = document.createElement('style');
+    style.textContent = fs.readFileSync(new URL('../shell/Menu.css', here), 'utf8');
+    document.head.append(style);
+    try {
+      seed([]);
+      serve(() => ({ status: 200, body: {} }));
+      render(<Conversation id={T} variant="side" title="Ana" actor="bot:qa" from={FROM} starters={['What needs me on Tasks?']} />, {
+        wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+      });
+      const box = (await screen.findByRole('textbox', { name: 'Message Ana' })) as HTMLTextAreaElement;
+      const shown = () => getComputedStyle(document.querySelector('.qchips')!).display !== 'none';
+      expect(shown()).toBe(true);
+      // Tico putting the cursor there (Cmd+J, the phone's Tico button) is not the person's move: they stay
+      act(() => box.focus());
+      expect(shown()).toBe(true);
+      // a click or tap in the box
+      fireEvent.pointerDown(box);
+      expect(shown()).toBe(false);
+      // out again with the box empty
+      act(() => box.blur());
+      expect(shown()).toBe(true);
+      // in by Tab: the key comes up in the box
+      act(() => box.focus());
+      fireEvent.keyUp(box, { key: 'Tab' });
+      expect(shown()).toBe(false);
+      act(() => box.blur());
+      expect(shown()).toBe(true);
+      // typed and wiped without leaving: still away until they leave
+      act(() => box.focus());
+      fireEvent.change(box, { target: { value: 'Hi' } });
+      fireEvent.change(box, { target: { value: '' } });
+      expect(shown()).toBe(false);
+      // words left in the box keep them away after leaving (as before)
+      fireEvent.change(box, { target: { value: 'Hi' } });
+      act(() => box.blur());
+      expect(shown()).toBe(false);
+    } finally {
+      style.remove();
+    }
   });
 
   it("a starter's words stay in the chat they were pressed in: another chat shown in its place neither takes them nor the focus", async () => {

@@ -87,6 +87,17 @@ async function desktop(browser: Browser) {
       check((await fromEnd()) <= 2, 'Jump to latest lands on the end', `Jump to latest stopped ${await fromEnd()}px short`);
       check(!(await jump.isVisible()), 'at the end, Jump to latest is gone', 'at the end, Jump to latest still shows');
     } else note("  Tico's chat is too short to scroll up");
+
+    // A click in Tico's empty box puts its asks away; leaving it empty brings them back
+    const asks = page.locator('[data-sheet="tico"] .qchips');
+    if (await asks.isVisible()) {
+      const box = page.getByRole('textbox', { name: 'Message Tico' });
+      await box.click();
+      check(!(await asks.isVisible()), 'a click in the box: the asks are away', 'a click in the box: the asks still show');
+      await box.blur();
+      await settle(page, 600);
+      check(await asks.isVisible(), 'out of the empty box: the asks are back', 'out of the empty box: the asks stay away');
+    } else note('  no asks over the box to put away');
   }
 
   if (want('menu')) {
