@@ -210,9 +210,11 @@ _TIMER = {"event": "timer", "timer": {"kind": "in_stage", "hours": 2}, "then": "
 def test_the_log_says_where_each_stage_moved_and_what_an_approval_changed_from_and_to(c):
     saved = _board(c)
     intake, sign = copy.deepcopy(saved["stages"])
+    sign["task_limit"] = None  # the first stage has no limit
     after = PS.save(c, BEN, dict(saved, stages=[sign, intake]))
     assert _log(c, saved["id"])[0]["changes"] == [
-        "changed the order of the stages: Sign off from 2 to 1, Intake from 1 to 2"
+        "changed the order of the stages: Sign off from 2 to 1, Intake from 1 to 2",
+        "changed Sign off's limit from 2 to none",
     ]
     sign, intake = copy.deepcopy(after["stages"])
     sign["requirements"][0]["who_oks"] = "people_with_exceptions"

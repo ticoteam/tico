@@ -88,6 +88,12 @@ def _stage(c: sqlite3.Connection, name: str, key: str, label: str, old: object, 
     return f"changed {name}'s {label} from {_word(c, key, old)} to {_word(c, key, new)}"
 
 
+def _line(c: sqlite3.Connection, requirement_id: str) -> str | None:
+    """A requirement's wording as it is now, to name one whose wording the save left as it was."""
+    found = c.execute("SELECT line FROM requirements WHERE id=?", (requirement_id,)).fetchone()
+    return str(found[0]) if found and found[0] else None
+
+
 def lines(c: sqlite3.Connection, pipeline_id: str, changes: Row) -> list[str]:
     """Every change one save made, one line each, without who made it ("renamed the stage Ideas to Bot ideas")."""
     out = [_top(c, key, label, *changes[key]) for key, label in TOP if key in changes]
@@ -131,9 +137,9 @@ def lines(c: sqlite3.Connection, pipeline_id: str, changes: Row) -> list[str]:
         if "name" in fields:
             out.append(f"renamed the stage {old_name} to {new_name}")
         out += [_stage(c, name, key, label, *fields[key]) for key, label in STAGE if key in fields]
-        for req in stages[sid]["requirements"].values():
+        for rid, req in stages[sid]["requirements"].items():
             kind = req.get("kind", [None, None])
-            words = (req.get("line") or [None, None])[1] or (req.get("line") or [None, None])[0]
+            words = (req.get("line") or [None, None])[1] or (req.get("line") or [None, None])[0] or _line(c, rid)
             what = f'"{words}"' if words else "a requirement"
             if kind[0] is None and kind[1] is not None:
                 out.append(f"added {what} to {name}")

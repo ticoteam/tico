@@ -1672,8 +1672,6 @@ def save(
             _refuse(conn, by, "task_settings", LOOSENS_NAMED.format(sign_off))
     if existing and existing.get("private") and not parsed["private"] and is_bot(by):
         _refuse(conn, by, "task_settings", "Only a person makes a private pipeline company-wide.")
-    if existing and bool(existing.get("private")) != bool(parsed["private"]) and not company_admin(conn, by):
-        _refuse(conn, by, "task_settings", PRIVACY_ADMINS_ONLY)
     if existing and is_bot(by):
         sign_off = _loosens_people_only(conn, str(existing["id"]), parsed)
         if sign_off:
@@ -1693,6 +1691,9 @@ def save(
         raise Problem("invalid_request", malformed, 422)
     if problems:
         _refuse(conn, by, "task_settings", problems[0])
+    # After what the record itself gets wrong (a private board needs a manager), so that is said first.
+    if existing and bool(existing.get("private")) != bool(parsed["private"]) and not company_admin(conn, by):
+        _refuse(conn, by, "task_settings", PRIVACY_ADMINS_ONLY)
     if is_bot(by):
         # Who a stage picks from is a person's to set: a bot reads it and cannot change it.
         had = _picks(conn, str(existing["id"])) if existing else {}
