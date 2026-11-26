@@ -9,7 +9,11 @@ from backend.tests.helpers.automation_api import as_bot
 
 
 def _make(api, name, owner, kind="event"):
-    trigger = {"type": "event", "name": "x.y"} if kind == "event" else {"type": "schedule", "cron": "0 7 * * *"}
+    trigger = {
+        "event": {"type": "event", "name": "x.y"},
+        "schedule": {"type": "schedule", "cron": "0 7 * * *"},
+        "listening": {"type": "listening", "sources": [], "at": "08:00", "tz": "UTC"},
+    }[kind]
     aid = "auto_" + H.new_id()
     flow = {"name": name, "owner": owner, "enabled": True, "builtin": False, "trigger": trigger, "steps": []}
     with api.app.state.store.transaction() as c:
@@ -51,6 +55,19 @@ def test_runs_show_only_what_the_caller_may_see(api):
     assert get(api, "automations/runs?range=1h&owner=person:cara", "ben-test")["runs"] == []
     stats = get(api, "automations/stats?range=1h", "ben-test")
     assert [s["id"] for s in stats["automations"]] == [ops] and stats["totals"]["runs"] == 1
+
+
+def test_listening_runs_are_listed_when_the_trigger_filter_names_listening(api):
+    watch = _make(api, "Competitor watch", "person:ana", kind="listening")
+    daily = _make(api, "Daily", "person:ana", kind="schedule")
+    heard = _run(api, watch, "ok", 1)
+    ran = _run(api, daily, "ok", 2)
+    ids = lambda q: [r["id"] for r in get(api, "automations/runs?range=1h" + q)["runs"]]  # noqa: E731
+    assert ids("&trigger=listening") == [heard]
+    assert ids("") == [ran]  # with no trigger filter, listening runs stay on their own page
+    assert ids("&trigger=listening,schedule") == [heard, ran]
+    refused = get(api, "automations/runs?range=1h&trigger=nonsense", expected=422)
+    assert "listening" in json.dumps(refused), refused
 
 
 def test_runs_page_by_cursor_within_the_range(api):

@@ -24,7 +24,7 @@ from .api_contract import api_v2
 # range: (seconds, buckets). 5m is 10 of 30s, 1h 12 of 5 min, 24h 24 of an hour, 7d 28 of 6 hours.
 RANGES = {"5m": (300, 10), "1h": (3600, 12), "24h": (86400, 24), "7d": (7 * 86400, 28)}
 KINDS = ("message", "task_received", "schedule", "webhook", "event", "due", "system")
-LISTENING = "listening"  # a listening has its own page: the overview leaves it out unless `ids` names it
+LISTENING = "listening"  # a listening has its own page: the overview leaves it out unless `ids` or `trigger` names it
 STATUSES = {
     "done": ("ok", "empty", "skipped"),
     "ok": ("ok", "empty", "skipped"),
@@ -186,8 +186,8 @@ def visible(c, who, settings=None):
 
 def _pick(rows, trigger="", owner="", ids=""):
     kinds = {k for k in str(trigger or "").split(",") if k}
-    if kinds - set(KINDS):
-        raise Problem("invalid", "trigger is one or more of " + ", ".join(KINDS), 422)
+    if kinds - set(KINDS + (LISTENING,)):
+        raise Problem("invalid", "trigger is one or more of " + ", ".join(KINDS + (LISTENING,)), 422)
     wanted = [i for i in str(ids or "").split(",") if i]
     if len(wanted) > IDS_MAX:
         raise Problem("invalid", f"ids names at most {IDS_MAX} automations", 422)
@@ -196,7 +196,7 @@ def _pick(rows, trigger="", owner="", ids=""):
         (r, f)
         for r, f in rows
         if (not kinds or kind_of(f) in kinds)
-        and (kind_of(f) != LISTENING or r["id"] in wanted)
+        and (kind_of(f) != LISTENING or r["id"] in wanted or LISTENING in kinds)
         and (not owner or r["owner_id"] == owner)
         and (not wanted or r["id"] in wanted)
     ]
