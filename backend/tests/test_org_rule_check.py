@@ -86,7 +86,11 @@ def ruled(api):
     org(api)
     judge = Judge(api.app.state.store)
     api.app.state.judge = judge
-    return api, judge
+    yield api, judge
+    # A write a rule holds starts its part call on its own thread once the hold commits, and that thread holds a pooled
+    # read while it asks. A test ending right after a held write left it running, on a busy runner past the connection
+    # guard's 2 s join (release validation run 45889585966). Wait for it before the guard checks.
+    K.settle_parts()
 
 
 def color_rule(api, if_broken="block", **more):
