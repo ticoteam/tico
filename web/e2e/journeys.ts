@@ -332,8 +332,8 @@ test('a toast that names its thing reads whole when it fits, and a long one ends
   };
   // a short name has room: every letter shows, no ellipsis
   expect(await removed('notes.txt')).toMatchObject({ cut: false, inside: true });
-  // a name wider than the window still stops inside it, cut with an ellipsis
-  const long = await removed(`${'Launch-plan-for-the-spring-campaign-'.repeat(6)}final.txt`);
+  // a name wider than the window still stops inside it, cut with an ellipsis (wide letters: the server keeps names short)
+  const long = await removed(`${'MW'.repeat(55)}.txt`);
   expect(long).toMatchObject({ cut: true, inside: true });
   expect(long.wide).toBeGreaterThan(1280 / 2);
   clean(page);
