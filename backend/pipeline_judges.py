@@ -245,11 +245,15 @@ CHECKS: dict[str, tuple[Part, ...]] = {
         # show that, so it does not have this part.
         Part(
             "maker",
-            "names the model that built the change, and the second review's model (Reviewer 2's, the second opinion) "
-            "is by a different maker than the builder's (a model's maker is the company that makes it, such as "
-            "Anthropic for Claude or OpenAI for GPT and Codex); the first review may share the builder's maker; a page "
-            "that does not name the model that built the change, or whose second review is by the builder's maker, "
-            "does not have this part",
+            "names the model that built the change, and the second review's model (Reviewer 2's, the second opinion "
+            "or independent check) is by a different maker than the builder's. Find the builder's model and its "
+            "maker, then the second review's model and its maker, and compare the makers, not the model names: a "
+            "model's maker is the company that makes it, and every Claude model is Anthropic's while every GPT, Codex "
+            "or o-series model is OpenAI's, so two different GPT models are the same maker. The first review may share "
+            "the builder's maker. When the page lists more than two reviews, the second review is the one it gives as "
+            "the second or independent review; an earlier review it says does not count is not it. A page that does "
+            "not name the model that built the change, or whose second review is by the builder's maker, does not have "
+            "this part",
             "The page doesn't name the model that built the change, or the second review is by the builder's maker.",
             "Can't tell if the second review is by a different maker than the model that built the change (the "
             "builder).",
@@ -322,7 +326,9 @@ CHECKS: dict[str, tuple[Part, ...]] = {
 # (results/bars-2026-11-26.md): the two reviews at a yes of 0.5 left 18% unsure (75% before, none met), and QA's other
 # parts at 0.6 left 9% (24% at 0.75); with the parts' own no lines (`PRESENT_NO_AT`) every page cut to one review, no
 # commit, no rollback or one reviewer's findings was not met. A no line of 0.4 on every Review part left 13% unsure,
-# but by sending back pages whose findings and checks were there. Rerun them when what Jev is shown, or a check's parts, change: `rebuild.py --out` rewrites
+# but by sending back pages whose findings and checks were there. Task #3970 asked the bar with the builder rule (the
+# `maker` part) on the same bars over 274 real pages of Nov 18 to 26 (results/review-builder-2026-11-26.md): 13% unsure,
+# every trap not met. Rerun them when what Jev is shown, or a check's parts, change: `rebuild.py --out` rewrites
 # the result without "raised_by_eval" or "set_by_eval", so carry each over by hand
 # (test_the_committed_rebuild_result_is_the_bar_the_server_uses fails until it agrees with BARS).
 BARS: dict[str, tuple[float, float]] = {
