@@ -72,8 +72,16 @@ def test_a_stop_during_a_start_waits_for_it_and_covers_the_threads_it_started():
         background._loops.remove(loop)
 
 
-def test_a_start_while_a_timed_out_stop_drains_runs_once_the_old_thread_ends():
-    release = threading.Event()
+def test_a_start_while_a_timed_out_stop_drains_runs_once_the_old_thread_ends(monkeypatch):
+    release, joining = threading.Event(), threading.Event()
+    real_join = background.join
+
+    def watched_join(threads, timeout):  # the real join, telling the test when the restart thread waits in it
+        if threading.current_thread().name == "test-loop-stubborn-restart":
+            joining.set()
+        real_join(threads, timeout)
+
+    monkeypatch.setattr(background, "join", watched_join)
     loop = background.Loop("test-loop-stubborn", lambda: None)
     try:
         loop.start(lambda halt: release.wait())  # ignores its stop event, like a worker stuck in a slow call
@@ -81,15 +89,28 @@ def test_a_start_while_a_timed_out_stop_drains_runs_once_the_old_thread_ends():
         loop.stop(timeout=0)  # the join gives up at once
         assert first.is_alive() and loop.threads == [first], "the stop forgot a thread that is still running"
 
-        loop.start(lambda halt: halt.wait())  # the next lifespan's start, the only one it makes
+        old_alive_at_start = []
+        started = threading.Event()
+
+        def replacement(halt):
+            old_alive_at_start.append(first.is_alive())
+            started.set()
+            halt.wait()
+
+        loop.start(replacement)  # the next lifespan's start, the only one it makes
+        waiter = getattr(loop, "waiter", None)  # None on a Loop that has no restart thread
         assert loop.threads == [first] and background.running().count("test-loop-stubborn") == 1, (
             "a start ran a second copy beside the one the stop gave up on"
         )
         assert not loop.stopped(), "a start is asked for, so ensure() must not read the Loop as stopped"
 
+        assert joining.wait(5), "the waiting start does not wait for the old thread to exit"
         release.set()
-        first.join()
-        assert len(loop.threads) == 1 and loop.threads[0] is not first, "the start that waited did not run"
+        assert started.wait(5), "the start that waited did not run once the old thread ended"
+        assert old_alive_at_start == [False], "the replacement started before the old thread had exited"
+        if waiter is not None:
+            waiter.join()  # it has finished adding the replacement to the list
+        assert len(loop.threads) == 1 and loop.threads[0] is not first
         assert loop.threads[0].is_alive() and not loop.halt.is_set() and not loop.stopped()
     finally:
         release.set()
@@ -107,8 +128,11 @@ def test_a_stop_after_that_start_cancels_it():
         loop.start(lambda halt: halt.wait())
         loop.stop(timeout=0)  # the next shutdown, before the old thread ends
 
+        waiter = getattr(loop, "waiter", None)  # None on a Loop that has no restart thread
         release.set()
         first.join()
+        if waiter is not None:
+            waiter.join()  # whatever watched the old thread has decided
         assert not any(t.is_alive() for t in loop.threads) and loop.stopped(), "the cancelled start ran after all"
         assert "test-loop-cancelled" not in background.running()
     finally:

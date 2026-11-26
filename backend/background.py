@@ -82,6 +82,7 @@ class Loop:
         self.halt = threading.Event()
         self.threads: list[threading.Thread] = []
         self.pending: tuple[Callable[..., object], tuple[Any, ...], int, Callable[[], None] | None] | None = None
+        self.waiter: threading.Thread | None = None  # the thread that runs `pending` once the old threads exit
         with _lock:
             _loops.append(self)
 
@@ -90,13 +91,15 @@ class Loop:
     ) -> None:
         """Start the threads that are not running (the ones that died, or all of them after `stop`, with a new event).
         While a stop still has a thread running (it is waiting on it, or gave up), no second copy starts beside it: the
-        start waits, and the last of those threads runs it as it ends, unless a stop comes first. `before` runs once,
-        under the lock, just before any start."""
+        start waits, and a `-restart` thread runs it once every old thread has exited, unless a stop comes first.
+        `before` runs once, under the lock, just before any start."""
         with self.lock:
             self.threads = [t for t in self.threads if t.is_alive()]
             if self.halt.is_set():
                 if self.threads:
                     self.pending = (target, args, count, before)
+                    if self.waiter is None:
+                        self.waiter = start(f"{self.name}-restart", self._restart, list(self.threads))
                     return
                 self.halt = threading.Event()
             self._spawn(target, args, count, before)
@@ -110,18 +113,15 @@ class Loop:
             before()
         while len(self.threads) < count:
             name = self.name if count == 1 else f"{self.name}-{len(self.threads)}"
-            self.threads.append(start(name, self._run, target, args, self.halt))
+            self.threads.append(start(name, target, *args, self.halt))
 
-    def _run(self, target: Callable[..., object], args: tuple[Any, ...], halt: threading.Event) -> None:
-        try:
-            target(*args, halt)
-        finally:
-            self._ended(threading.current_thread())
-
-    def _ended(self, thread: threading.Thread) -> None:
-        """A thread's work is over: it leaves the list, and the last one of a stopped Loop runs the start that waited."""
+    def _restart(self, old: list[threading.Thread]) -> None:
+        """The waiting start's own thread: join the old threads until they have exited, then run it, unless a stop
+        dropped it meanwhile. While the stop event is set no thread is added, so `old` is every thread left."""
+        join(old, None)
         with self.lock:
-            self.threads = [t for t in self.threads if t is not thread and t.is_alive()]
+            self.waiter = None
+            self.threads = [t for t in self.threads if t.is_alive()]
             if self.pending is None or self.threads or not self.halt.is_set():
                 return
             self.halt = threading.Event()
