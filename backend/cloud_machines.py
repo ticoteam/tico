@@ -1222,9 +1222,16 @@ def enrolled(c, execution, runner_id, key):
     burst = burst_key(key)
     if old and old != runner_id:
         mark_revoked(c, old, execution=execution if burst else None)
+    # The machine's own earlier computers, gone now: their checkouts come to this one (task #3448). Read before
+    # REPLACES_KEY is cleared below.
+    gone = [] if burst else [r for r in dict.fromkeys([old, *were(c, key)]) if r and r != runner_id]
     if not burst:
         replaced(c, key, old, runner_id)
     save(c, key, runner_id=runner_id, enroll_by=0, enroll_fails=0)
+    if gone:
+        from . import worktrees
+
+        worktrees.follow_replacement(c, gone, runner_id, {"bot:" + bot for bot in hosted(c, key)})
     checked_in(c, runner_id)
     H.event(c, H.TICO_ACTOR, "cloud_machine.enrolled", key, {"runner": runner_id})
     if not burst:
