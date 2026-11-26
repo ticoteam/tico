@@ -46,40 +46,50 @@ def _alone(api, monkeypatch, who=ANA, **how):
 
 
 def test_one_open_builds_the_list_once_and_each_answer_is_todays(api, monkeypatch):
-    """Done-when 1: needs-you twice, four live-stream starts, the company floor and two place reads, with no write in
-    between: one build, and each answer equals the answer of a build of its own."""
+    """Done-when 1: needs-you twice, four live-stream starts, the company floor and two places, all at once with no
+    write in between: one build, and each answer equals the answer each request gets with nothing shared (today's)."""
+    from concurrent.futures import Future
+
     for k in range(3):
         _ask(api, f"Payroll run {k}")
-    whole = get(api, "needs-you")
-    count = get(api, "needs-you?count=1")
-    floor = get(api, "company/floor")
-    place = get(api, "places/dashboard")
     auth = api.app.state.auth
-    baselines = []
-    for _ in range(4):
+
+    def baseline():
         with api.app.state.store.read_transaction() as c:
-            baselines.append(events.needs_baseline(c, auth, ANA, None))
-    first = needs_share.builds
+            return events.needs_baseline(c, auth, ANA, None)
+
+    calls = [lambda: get(api, "needs-you"), lambda: get(api, "needs-you?count=1")]
+    calls += [baseline] * 4
+    calls += [lambda: get(api, "company/floor"), lambda: get(api, "places/dashboard")]
+    calls += [lambda: get(api, "places/person:me")]
+    with monkeypatch.context() as alone:
+        alone.setattr(needs_share, "mark", lambda c: None)
+        today = [call() for call in calls]
+    assert today[1]["count"] == 3
+
+    # The first caller's build is held until every other caller waits on it: all nine ask together.
+    waiting = threading.Semaphore(0)
+
+    class Counted(Future):
+        def result(self, timeout=None):
+            waiting.release()
+            return super().result(timeout)
+
+    real = V._needs_items
+
+    def held(*args, **kwargs):
+        for _ in range(len(calls) - 1):
+            assert waiting.acquire(timeout=10), "a caller never waited on the shared build"
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(needs_share, "Future", Counted)
+    monkeypatch.setattr(V, "_needs_items", held)
     needs_share.clear()
-
-    def opened():
-        answers = [get(api, "needs-you"), get(api, "needs-you?count=1")]
-        for _ in range(4):
-            with api.app.state.store.read_transaction() as c:
-                answers.append(events.needs_baseline(c, auth, ANA, None))
-        answers += [get(api, "company/floor"), get(api, "places/dashboard")]
-        return answers
-
     before = needs_share.builds
-    answers = opened()
+    with ThreadPoolExecutor(len(calls)) as pool:
+        answers = list(pool.map(lambda call: call(), calls))
     assert needs_share.builds - before == 1
-    assert answers[0]["items"] == whole["items"] and answers[1]["count"] == count["count"] == 3
-    assert answers[2:6] == baselines
-    assert answers[6] == floor and answers[7] == place
-    assert first >= 1
-    # Today's answer, built alone, is the same list.
-    assert _items(api) == _alone(api, monkeypatch)
-    assert len(_items(api, count_only=True)) == len(_alone(api, monkeypatch, count_only=True))
+    assert answers == today
 
 
 def test_callers_that_ask_together_wait_on_one_build(api, monkeypatch):
@@ -186,11 +196,16 @@ def test_a_connection_that_wrote_builds_its_own(api):
     assert len(_items(api)) == 2
 
 
-def test_one_build_reads_each_tasks_prs_metadata_and_reviews_together(api):
-    """Done-when 5, on a small fixture shaped like production: tasks asking the person's OK, each with a linked GitHub
-    PR Tico has read. Their links, saved metadata, current pages and reviews are read for all of them together: at most
-    six statements in all, none per task (live, 18 Nov: about 400 a build)."""
+def test_one_build_reads_each_tasks_prs_metadata_and_reviews_together(api, monkeypatch):
+    """Done-when 5, on a fixture shaped like production: 132 candidate tasks asking the person's OK on a page, each with
+    a linked GitHub PR Tico has read, and 33 ❓s to her on tasks of their own. Their links, saved metadata, current pages and
+    reviews are read for all of them together: at most six statements in all, none per task (live, 18 Nov: about 400
+    a build), and the list is the one a build reading each task's rows on its own gives."""
+    import json
+
     from backend import item_metadata as IM
+    from backend import question_marks as Q
+    from backend import read_cache
     from backend import task_pages as P
     from backend import task_requirements as R
     from backend.item_sources import github as GS
@@ -205,30 +220,45 @@ def test_one_build_reads_each_tasks_prs_metadata_and_reviews_together(api):
         "owner": "assignee",
         "requirements": [{"kind": "page", "line": "QA page", "person": "human:ana"}],
     }
-    n = 12
+    n = 132
     with store.transaction() as c:
         X.bot(c, "writer")
         X.pipeline(c, "eng", "Engineering", (stage,), manager="bot:writer")
-    for k in range(n):
-        with store.transaction() as c:
+        for k in range(n):
             made = X.new_task(c, "human:ana", f"Ship change {k}", "eng", assignee="bot:writer")
             H.task_link(c, "bot:writer", made["id"], f"https://github.com/acme/app/pull/{100 + k}")
             GS.save_pr(c, "acme/app", 100 + k, {"title": f"Change {k}", "state": "open", "head_sha": "a" * 40}, 1)
             fid, _ = _page(c, store, f"<h1>QA {k}</h1>")
             row = H.task(c, made["id"])
             _say(c, P.attach(c, made["id"], "QA page", "page:" + fid, "bot:writer", seen_version=row["version"]), "met")
+            if k % 4 == 0:  # a ❓ to her on a task of the writer's own (a task asking her OK takes no ❓ beside it)
+                other = H.task_create(c, "bot:writer", f"Note {k}", "x", "bot:writer", lint=False)
+                said = H.task_comment(c, "bot:writer", other["id"], f"Should note {k} go out on Friday?", wake=False)
+                Q.mark(c, "bot:writer", said["id"], "human:ana")
     one = {IM.OF_TASK_SQL, IM.GET_SQL, P.CURRENT_SQL, R.REVIEWED_SQL, R.NEW_REVIEWED_SQL}
     many = {IM.OF_TASKS_SQL, P.CURRENT_MANY_SQL, R.REVIEWED_MANY_SQL, R.NEW_REVIEWED_MANY_SQL}
     seen: list[str] = []
-    with api.app.state.store.read_transaction() as c:
+    with store.read_transaction() as c:
         c.set_trace_callback(seen.append)
         items = V.needs_items(c, api.app.state.auth, ANA)
         c.set_trace_callback(None)
     assert len([i for i in items if i["kind"] == "ask"]) == n, items
+    assert len([i for i in items if i["kind"] == "question"]) == n // 4
     shapes = [_shape(s) for s in seen]
     assert not [s for s in shapes if s in {_shape(q) for q in one}], "a per-task lookup was not read together"
     together = {_shape(q) for q in many}
     assert sum(1 for s in shapes if s in together or s.startswith("SELECT m.* FROM json_each(?) p CROSS JOIN")) <= 6
+    # Each task's rows read on its own (no snapshot cache, as main read them): the same list, one lookup per task.
+    rows: list[str] = []
+    with monkeypatch.context() as patched:
+        patched.setattr(needs_share, "mark", lambda c: None)
+        patched.setattr(read_cache, "cache", lambda c: None)
+        with store.read_transaction() as c:
+            c.set_trace_callback(rows.append)
+            alone = V.needs_items(c, api.app.state.auth, ANA)
+            c.set_trace_callback(None)
+    assert json.dumps(items, sort_keys=True, default=str) == json.dumps(alone, sort_keys=True, default=str)
+    assert sum(1 for s in rows if _shape(s) in {_shape(q) for q in one}) >= n
 
 
 def _shape(statement):
