@@ -16,13 +16,13 @@ A Tico bot working a task on this repository follows these where the rest of thi
 - Run `scripts/dev_setup.sh` once in each clone or worktree, and again after a pull that changes a lock file.
 - While you work, test only what the change can break, one file at a time: `.venv/bin/python -m pytest -q -n 2 <file>`.
   Never the whole suite by hand.
-- Check before CI does: push the draft (a draft runs no CI), then run `python3 scripts/pr_checks.py local --ready` at
-  that head. It runs the tests the PR checks would select for the diff in the computer's shared slots
-  (`scripts/heavy.sh`; prefix `TICO_HEAVY_REMOTE=1` to run them on a RunsOn VM, which takes a Tico permit) and marks the
-  PR ready only after they pass. Never mark it ready with `gh pr ready` before a pass. Before each later push to a ready
-  PR, commit and run `python3 scripts/pr_checks.py local` first, and push only after it passes. Put its last line (the
-  receipt) in your reply on the task. A red result is fixed before the push, never left for CI to find; a check it could
-  not run is "not checked", with the reason.
+- PR checks run in CI; never wait for a local test slot. Push the finished draft (a draft runs no CI) and mark it ready
+  with `gh pr ready`: the ready PR's checks run the light plan's tests for the diff. `python3 scripts/pr_checks.py local`
+  applies the same narrowing rules, but CI caps with recent queue timings and diffs from the PR's merge base, so the
+  files each keeps can differ when the time cap applies. That local run (in the computer's shared slots, `scripts/heavy.sh`) is optional: run it only when it starts at
+  once, and never hold the PR back for it. When `checks` is green at the head, put
+  `CI checks passed at head <full sha> (<run link>)` in your reply on the task. A red run is fixed before review; a
+  check that did not run is "not checked", with the reason.
 - Never skip the pre-push hook. If it cannot run, say on the task what is missing.
 - Never enqueue or merge: Tico queues the PR when the task reaches Merge. Never tag, and never cut or change a release.
 - Never edit `.github/workflows/`: the push is refused. Say so on the task; a person lands that part.
@@ -86,9 +86,10 @@ when the branch would not merge into origin/main and names the files. A person m
 
 ## How we work
 Trunk-based: branches are `<who>/<topic>` (a Tico bot's: `tico/...`), one ticket per PR. Draft PRs run no CI. The flow: open the PR as a draft
-(`gh pr create --draft`) and push freely; when done, a person runs `python3 scripts/pr_checks.py local --ready`, which runs the
-tests the PR checks select for your diff on this computer, prints a receipt line with the head sha for the ticket, and
-marks the PR ready after a pass. A Tico bot runs it too (see "A Tico bot on a Tico task"). Mark ready once: each push to a ready PR runs CI again, so batch later fixes. Wait for
+(`gh pr create --draft`) and push freely; when done, mark it ready with `gh pr ready`: its checks run the tests the PR
+checks select for your diff (a fork's pull request runs the cheap checks only). `python3 scripts/pr_checks.py local --ready`
+applies the same selection rules on this computer first and prints a receipt line with the head sha; when the time cap
+applies, the files it keeps can differ from CI's. It is optional, for when a heavy slot is free, and never waited for. Mark ready once: each push to a ready PR runs CI again, so batch later fixes. Wait for
 green `checks` on that run (not skipped), and once it is reviewed, enqueue it with
 `gh pr merge <N> --merge`: the merge queue tests the PR merged onto current main before it lands. Enqueue once. No bot
 enqueues: Tico queues a bot's PR at the checked head when its task reaches Merge, and a queue removal goes to the
