@@ -600,3 +600,36 @@ def test_repeated_overloads_with_the_same_bot_advise_its_own_large_machine_on_a_
     assert P.advice([over("ops"), over("builder")], busiest) is None
     assert P.advice([over(""), over("")], busiest) is None
     assert P.advice([over("ops"), over("ops")], [{"bot": "ops"}]) is None
+
+
+def test_a_computer_that_replaces_another_keeps_its_own_minute_on_a_clash_and_lists_the_old_ones_turns(api):
+    """A cloud machine made again: the old computer's history moves to the new one. Where both reported the same
+    minute, the new computer's reading stays; the old computer's turns still count among the busiest bots."""
+    r, _, attempt = setup_attempt(api)
+    old = r["runner_id"]
+    new = runner(api, label="New Mac")["runner_id"]
+    t = (int(time.time()) // 60 - 5) * 60
+    with api.app.state.store.transaction() as c:
+        P.ingest(c, old, [P_sample(t, cpu=30.0), P_sample(t + 60, cpu=40.0)])
+        P.ingest(c, new, [P_sample(t + 60, cpu=70.0)])
+        P.carry_over(c, old, new)
+    seen = get(api, f"computers/{new}/performance?hours=1")
+    assert [(p[0], p[1]) for p in seen["points"]] == [(t, 30.0), (t + 60, 70.0)]
+    assert [x["id"] for x in seen["runs"]] == [attempt["id"]]
+    assert [(b["bot"], b["runs"]) for b in seen["busiest"]["bots"]] == [("ops", 1)]
+    assert get(api, f"computers/{old}/performance?hours=1")["points"] == []
+
+
+def test_an_overload_still_open_when_its_computer_is_replaced_ends_at_its_last_loaded_minute(api):
+    r, _, _ = setup_attempt(api)
+    old = r["runner_id"]
+    fresh = runner(api, label="New Mac")
+    start = (int(time.time()) // 60 - 20) * 60
+    busy = [sample(start + 60 * i, cpu=97.0) for i in range(10)]
+    post(api, "runners/performance", {"samples": busy}, token=r["token"])
+    with api.app.state.store.transaction() as c:
+        P.carry_over(c, old, fresh["runner_id"])
+    # The new computer is calm five minutes later: the overload is not stretched to that minute.
+    post(api, "runners/performance", {"samples": [sample(start + 900)]}, token=fresh["token"])
+    (o,) = get(api, f"computers/{fresh['runner_id']}/performance?hours=1")["overloads"]
+    assert (o["started_at"], o["last_seen_at"], o["ended_at"]) == (start, start + 540, start + 600)
