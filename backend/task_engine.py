@@ -627,34 +627,37 @@ def _undoes_close(conn: "sqlite3.Connection", row: Row, target: Row, by: str) ->
 
 
 def _last_move(conn: "sqlite3.Connection", task_id: str) -> Row:
-    """The data of the task's newest move in its history, {} when it has none."""
+    """The data of the task's newest move in its history, with its row's `id` as `event`; {} when it has none."""
     found = conn.execute(
-        "SELECT data FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='move' "
+        "SELECT id, data FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='move' "
         "ORDER BY rowid DESC LIMIT 1",
         (task_id,),
     ).fetchone()
-    data: Any = _h()._json(found[0], {}) if found and found[0] else {}
-    return cast("Row", data) if isinstance(data, dict) else {}
+    data: Any = _h()._json(found[1], {}) if found and found[1] else {}
+    return {**cast("Row", data), "event": str(found[0])} if found and isinstance(data, dict) else {}
 
 
-def _cascades_since(conn: "sqlite3.Connection", mark: int) -> list[str]:
-    """The tasks a close closed with it, at any depth, in the order they closed: each writes its own `cascade` move
-    (its sub-tasks, and the hand-offs its stage filed on entering). Kept on the close's history row as `closed_with`."""
+def _cascades_since(conn: "sqlite3.Connection", mark: int) -> list[list[str]]:
+    """The tasks a close closed with it, at any depth, in the order they closed, each as [task id, the id of its own
+    `cascade` close in its history] (its sub-tasks, and the hand-offs its stage filed on entering). Kept on the close's
+    history row as `closed_with`."""
     rows = conn.execute(
-        "SELECT subject_id FROM history_events WHERE rowid>? AND subject_type='task' AND kind='move' "
+        "SELECT subject_id, id FROM history_events WHERE rowid>? AND subject_type='task' AND kind='move' "
         "AND json_extract(data, '$.consequence')='cascade' AND json_extract(data, '$.move')='closed' ORDER BY rowid",
         (mark,),
     ).fetchall()
-    return [str(r[0]) for r in rows]
+    return [[str(r[0]), str(r[1])] for r in rows]
 
 
-def _undo_cascade(conn: "sqlite3.Connection", closed_with: list[str], by: str, why: str | None) -> None:
+def _undo_cascade(conn: "sqlite3.Connection", closed_with: list[Any], by: str, why: str | None) -> None:
     """An Undo gave a task its visit back: each task its close closed with it comes back too, the same way (its own
-    visit, nobody woken; or a plain reopen where that can't be, `_undoes_close`). One that moved since stays as it is."""
-    for other in reversed(closed_with):  # a task before what closed under it: its own Undo brings those back
-        row = task(conn, other)
-        then = _last_move(conn, other)
-        if row and row["status"] == "closed" and then.get("move") == CLOSED and then.get("consequence") == "cascade":
+    visit, nobody woken; or a plain reopen where that can't be, `_undoes_close`), while that very close is still its
+    newest move. One that moved since, closed again by anything later included, stays as it is."""
+    for pair in reversed(closed_with):  # a task before what closed under it: its own Undo brings those back
+        both: list[Any] = cast("list[Any]", pair) if isinstance(pair, list) else []
+        other, event = (str(both[0]), str(both[1])) if len(both) == 2 else ("", "")
+        row = task(conn, other) if other else None
+        if row and row["status"] == "closed" and _last_move(conn, other).get("event") == event:
             move(conn, other, REOPEN, by, why, cascade=True, undo_close=True)
 
 
@@ -1352,7 +1355,7 @@ def move(
     elif kind in ("back", "closed"):
         _need_why(conn, by, why, "close it" if kind == "closed" else "move it back", task_id)
     restored = _undoes_close(conn, row, target, by) if kind == "reopen" and undo_close else None
-    give_back = [str(t) for t in _last_move(conn, task_id).get("closed_with") or ()] if restored else []
+    give_back = list(_last_move(conn, task_id).get("closed_with") or ()) if restored else []
     if kind == "back" or (kind == "side" and row["stage"].get("side") and is_main_work(target)):
         _may_go_back_to(conn, by, row, target)
     if kind == "closed" and not cascade:

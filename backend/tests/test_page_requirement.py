@@ -1311,6 +1311,19 @@ def test_undoing_a_close_brings_back_the_sub_tasks_it_closed_and_leaves_one_reop
     assert E.task(c, other["id"])["visit"]["id"] == again, "one reopened since stays as it is"
 
 
+def test_undoing_a_close_leaves_a_sub_task_closed_again_since_by_something_else(c, store):
+    _, row, _ = _waiting_on_ana(c, store)
+    sub = X.new_task(c, ANA, "Check the importer's limits", "product", parent=row["id"])
+    deeper = X.new_task(c, ANA, "Measure a large file", "product", parent=sub["id"])
+    E.move(c, row["id"], E.CLOSED, ANA, "Not needed")
+    E.move(c, sub["id"], E.REOPEN, ANA, "Still worth checking")
+    E.move(c, deeper["id"], E.REOPEN, ANA, "This too")
+    E.move(c, sub["id"], E.CLOSED, ANA, "Not after all")  # closes the deeper one again, as its own cascade
+    _undo(c, row)
+    assert E.task(c, sub["id"])["status"] == "closed", "its own close is not the one undone"
+    assert E.task(c, deeper["id"])["status"] == "closed", "closed again by a later close: not this Undo's to give back"
+
+
 def test_undoing_a_close_brings_back_the_hand_off_its_stage_filed(c, store):
     X.pipeline(c)
     made = X.pipeline(c, "product", "Product", _stages(person=ANA), manager="bot:manager")
