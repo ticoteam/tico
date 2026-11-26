@@ -17,8 +17,6 @@ Nothing here reads more than the `humans` and `bots` tables, and a name is only 
 import asyncio
 import sqlite3
 from fastapi.responses import JSONResponse
-from fastapi.datastructures import DefaultPlaceholder
-from fastapi.routing import APIRoute
 from . import runs
 from .openapi_v2 import stable_path
 
@@ -169,84 +167,55 @@ def annotate_json(conn, raw, render_notices=False, actors=True):
     return fast_json.dumps(payload)
 
 
-def install_route_class(app, store):
-    async def display_names(request, response):
-        """Stable v2 answers carry display names beside actor ids (backend/names.py)."""
-        # Only API JSON is editable. FileResponse, StreamingResponse and raw byte Response
-        # objects must keep their bodies, lengths and digests, whatever their content type.
-        if (
-            not isinstance(response, JSONResponse)
-            or request.method == "HEAD"
-            or response.status_code != 200
-            or "content-disposition" in response.headers
-            or "x-content-sha256" in response.headers
-            or "count" in request.query_params
-            or not stable_path(app).fullmatch(request.url.path)  # the stable v2 routes (backend/names.py)
-            or "application/json" not in response.headers.get("content-type", "")
-        ):
-            return response
-        raw = response.body
-        who = getattr(request.state, "identity", None)
-
-        def work():
-            with store.read() as c:
-                return annotate_json(
-                    c, raw, render_notices=bool(who and who.role in ("human", "owner")), actors=request.method == "GET"
-                )
-
-        try:
-            body = await asyncio.get_running_loop().run_in_executor(None, work)
-        except sqlite3.Error:
-            body = None
-        if body is not None:
-            response.body = body
-            response.headers["Content-Length"] = str(len(body))
+async def display_names(store, request, response):
+    """Stable v2 answers carry display names beside actor ids, read from `store`, the request's app's
+    (backend/api_routing.py TicoRoute)."""
+    # Only API JSON is editable. FileResponse, StreamingResponse and raw byte Response
+    # objects must keep their bodies, lengths and digests, whatever their content type.
+    if (
+        not isinstance(response, JSONResponse)
+        or request.method == "HEAD"
+        or response.status_code != 200
+        or "content-disposition" in response.headers
+        or "x-content-sha256" in response.headers
+        or "count" in request.query_params
+        or not stable_path(request.app).fullmatch(request.url.path)  # the stable v2 routes (backend/openapi_v2.py)
+        or "application/json" not in response.headers.get("content-type", "")
+    ):
         return response
+    raw = response.body
+    who = getattr(request.state, "identity", None)
 
-    def run_names(request, response):
-        """An answer's `attempt_id` keys read `run_id`: storage's attempt is the contract's run (backend/runs.py).
-        File downloads and other raw bytes keep theirs."""
-        body = getattr(response, "body", None)
-        if (
-            not body
-            or "content-disposition" in response.headers
-            or "x-content-sha256" in response.headers
-            or "content-encoding" in response.headers
-            or "application/json" not in response.headers.get("content-type", "")
-        ):
-            return response
-        renamed = runs.public_json(body, request.url.path)
-        if renamed is not body:
-            response.body = renamed
-            response.headers["Content-Length"] = str(len(renamed))
-        return response
-
-    class DisplayNameRoute(APIRoute):
-        def __init__(self, path, endpoint, **options):
-            # FastAPI calls the handler it was given; the JSON it answers is encoded by orjson (backend/fast_json.py).
-            # `endpoint` stays the handler itself, for the callers that read its dicts.
-            plain = isinstance(options.get("response_class", DefaultPlaceholder(None)), DefaultPlaceholder)
-            super().__init__(
-                path, fast_json.answering_json(endpoint, options.get("status_code")) if plain else endpoint, **options
+    def work():
+        with store.read() as c:
+            return annotate_json(
+                c, raw, render_notices=bool(who and who.role in ("human", "owner")), actors=request.method == "GET"
             )
-            self.endpoint = endpoint
 
-        def get_route_handler(self):
-            handler = super().get_route_handler()
+    try:
+        body = await asyncio.get_running_loop().run_in_executor(None, work)
+    except sqlite3.Error:
+        body = None
+    if body is not None:
+        response.body = body
+        response.headers["Content-Length"] = str(len(body))
+    return response
 
-            async def named_response(request):
-                from . import shared_reads
-                from .json_response import compress
 
-                async def answer():
-                    return run_names(request, await display_names(request, await handler(request)))
-
-                # A person's identical reads run at most once a second (backend/shared_reads.py); each request gets its
-                # own validators and wire encoding.
-                return await compress(request, await shared_reads.answer(store, request, self.path, answer))
-
-            return named_response
-
-    # HTTP middleware's call_next wraps every response as a stream, hiding its original
-    # type. Annotate before that wrapping so actual file/stream responses stay untouched.
-    app.router.route_class = DisplayNameRoute
+def run_names(request, response):
+    """An answer's `attempt_id` keys read `run_id`: storage's attempt is the contract's run (backend/runs.py).
+    File downloads and other raw bytes keep theirs."""
+    body = getattr(response, "body", None)
+    if (
+        not body
+        or "content-disposition" in response.headers
+        or "x-content-sha256" in response.headers
+        or "content-encoding" in response.headers
+        or "application/json" not in response.headers.get("content-type", "")
+    ):
+        return response
+    renamed = runs.public_json(body, request.url.path)
+    if renamed is not body:
+        response.body = renamed
+        response.headers["Content-Length"] = str(len(renamed))
+    return response
