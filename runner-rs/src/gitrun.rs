@@ -159,12 +159,16 @@ async fn run_once(
             .get_or_insert_with(HashSet::new)
             .insert(pgid);
     }
+    let mut group = Group { pgid, ended: false };
     let waited =
         tokio::time::timeout(Duration::from_secs(timeout_s), child.wait_with_output()).await;
     if pgid > 0 {
         if let Some(s) = RUNNING.lock().unwrap().as_mut() {
             s.remove(&pgid);
         }
+    }
+    if waited.is_ok() {
+        group.ended = true;
     }
     match waited {
         Ok(Ok(out)) => {
@@ -186,8 +190,29 @@ async fn run_once(
                 tokio::time::sleep(Duration::from_millis(200)).await;
                 group_signal(pgid, libc::SIGKILL);
             }
+            group.ended = true;
             Err(Fault::Timeout(timeout_s))
         }
+    }
+}
+
+/// A running command's process group. Dropped before the command ends (its caller gave up, as a wip/ copy past its
+/// deadline does), it kills the whole group, credential and transport helpers included, and forgets it: only the
+/// direct child goes with `kill_on_drop`.
+struct Group {
+    pgid: i32,
+    ended: bool,
+}
+
+impl Drop for Group {
+    fn drop(&mut self) {
+        if self.pgid <= 0 || self.ended {
+            return;
+        }
+        if let Some(s) = RUNNING.lock().unwrap().as_mut() {
+            s.remove(&self.pgid);
+        }
+        group_signal(self.pgid, libc::SIGKILL);
     }
 }
 
@@ -326,6 +351,40 @@ mod tests {
         ));
         tokio::time::sleep(Duration::from_millis(2500)).await;
         assert!(!marker.exists());
+    }
+
+    #[tokio::test]
+    async fn a_command_its_caller_gives_up_on_takes_its_whole_group_with_it() {
+        let mut env = Env::new();
+        env.insert("PATH".into(), "/usr/bin:/bin".into());
+        let tag = uuid::Uuid::new_v4().simple().to_string();
+        let marker = std::env::temp_dir().join(format!("tico-gitrun-{tag}"));
+        let pidfile = std::env::temp_dir().join(format!("tico-gitrun-{tag}.pid"));
+        let script = format!(
+            "echo $$ > {}; (sleep 2; touch {}) & sleep 30",
+            pidfile.display(),
+            marker.display()
+        );
+        let argv: Vec<String> = vec!["/bin/sh".into(), "-c".into(), script];
+        // The caller's own deadline drops the command long before its timeout.
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), run(&argv, &env, None, 60))
+                .await
+                .is_err()
+        );
+        let pgid: i32 = std::fs::read_to_string(&pidfile)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert!(!RUNNING
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|s| s.contains(&pgid)));
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        assert!(!marker.exists());
+        let _ = std::fs::remove_file(pidfile);
     }
 
     #[test]
