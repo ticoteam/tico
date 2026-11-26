@@ -12,9 +12,11 @@ from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import headers, post
 from backend.tests.helpers.org_rule_check import (  # noqa: F401 - fixtures
     COLOR,
+    checked_after,
     color_rule,
     events,
     not_a_friday,
+    notes_to,
     ruled,
     sql,
     task_for_ops,
@@ -148,10 +150,11 @@ def test_a_block_rule_or_a_mix_with_one_still_holds_before_anything_is_saved(rul
     assert len(judge.calls) == 1
 
 
-def test_a_bots_ask_is_still_checked_before_it_is_saved(ruled):
-    """A bot's ask (here an OK of what it shows) is checked before it is saved, never left for later, so the bot's
-    answer carries the warning; a Warn rule never stops it (task_rule_gate `covering`)."""
-    api, _ = ruled
+def test_a_bots_ask_under_warn_rules_is_saved_first_and_checked_right_after(ruled):
+    """A bot's ask (here an OK of what it shows) that only Warn rules meet is saved without waiting for the judge, and
+    the one check left for after it tells the bot on its next run (spec "Bots' questions checked after save"); a Warn
+    rule never stops it (task_rule_gate `covering`)."""
+    api, judge = ruled
     color_rule(api, if_broken="warn")
     task = task_for_ops(api)
     r = api.post(
@@ -165,9 +168,11 @@ def test_a_bots_ask_is_still_checked_before_it_is_saved(ruled):
         },
         headers=headers("ops-test"),
     )
-    assert r.status_code == 200 and r.json()["rule_warning"]["rules"][0]["text"] == COLOR, r.text
+    assert r.status_code == 200 and "rule_warning" not in r.json(), r.text
     assert r.json()["requirement_id"]
-    assert sql(api, "SELECT count(*) AS n FROM org_rule_late")[0]["n"] == 0
+    checked_after(api)
+    assert len(judge.calls) == 1
+    assert [n for n in notes_to(api) if COLOR in n], notes_to(api)
 
 
 def test_a_judge_that_fails_after_the_write_keeps_it_and_records_it_unchecked(ruled):
