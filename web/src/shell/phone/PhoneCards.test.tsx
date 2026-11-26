@@ -319,6 +319,40 @@ describe('phone: the bar while typing', () => {
     }
   });
 
+  it('a keyboard that closes while the box keeps focus brings the bar back; it goes again when the keys come up', () => {
+    vi.useFakeTimers();
+    // a visualViewport the test drives: the keyboard is the height it hides under the keys
+    const vv = Object.assign(new EventTarget(), { height: 800, scale: 1, offsetTop: 0 });
+    Object.defineProperty(window, 'visualViewport', { value: vv, configurable: true });
+    Object.defineProperty(window, 'innerHeight', { value: 800, configurable: true });
+    const keyboard = (kb: number) =>
+      act(() => {
+        vv.height = 800 - kb;
+        vv.dispatchEvent(new Event('resize'));
+        vi.advanceTimersByTime(100);
+      });
+    try {
+      render(cards({ tico: <textarea aria-label="Message Tico" /> }));
+      fireEvent.click(icon('Tico'));
+      keyboard(300);
+      expect(typing()).toBe('tico');
+      keyboard(0);
+      expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Message Tico' }));
+      expect(typing()).toBeNull();
+      keyboard(300);
+      expect(typing()).toBe('tico');
+    } finally {
+      delete (window as { visualViewport?: unknown }).visualViewport;
+      vi.useRealTimers();
+    }
+  });
+
+  it('an input with an empty or unknown type is a text box: the bar goes', () => {
+    render(cards({ page: <input type="" aria-label="Reply" /> }));
+    act(() => screen.getByRole('textbox', { name: 'Reply' }).focus());
+    expect(typing()).toBe('page');
+  });
+
   it('a checkbox or a select on the page keeps the bar', () => {
     render(
       cards({
