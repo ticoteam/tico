@@ -17,6 +17,9 @@ export type MenuProps = {
   className?: string;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /** Where focus goes once it closes: by default back to its button. `false` leaves it where an item put it (Rename's
+      box). */
+  finalFocus?: () => boolean;
 };
 
 /** Whether a menu has anything to show: items left out with `cond && <MenuItem />` (in fragments too) leave nothing. */
@@ -26,7 +29,7 @@ function hasItems(children: ReactNode): boolean {
 
 /** The "⋯" menu: a short list that opens from a button. On a phone it is a sheet from the bottom edge, over a scrim.
     With no items it draws nothing, not even its button. */
-export function Menu({ trigger, children, side = 'bottom', align = 'end', className = '', open, onOpenChange }: MenuProps) {
+export function Menu({ trigger, children, side = 'bottom', align = 'end', className = '', open, onOpenChange, finalFocus }: MenuProps) {
   const at = usePlacement();
   if (!hasItems(children)) return null;
   return (
@@ -35,7 +38,9 @@ export function Menu({ trigger, children, side = 'bottom', align = 'end', classN
       <BaseMenu.Portal>
         {at.sheet && <BaseMenu.Backdrop className={sheetScrim} />}
         <BaseMenu.Positioner className={at.layer} style={at.style} side={side} align={align} sideOffset={6}>
-          <BaseMenu.Popup className={`menu ${at.look} ${className}`}>{children}</BaseMenu.Popup>
+          <BaseMenu.Popup className={`menu ${at.look} ${className}`} finalFocus={finalFocus}>
+            {children}
+          </BaseMenu.Popup>
         </BaseMenu.Positioner>
       </BaseMenu.Portal>
     </BaseMenu.Root>

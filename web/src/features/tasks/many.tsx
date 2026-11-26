@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import { useAction } from '@/actions';
 import { useActors } from '@/data';
 import { Avatar } from '@/kit/Avatar';
@@ -69,23 +70,33 @@ function Subs({ p, ids, except, label, after }: { p: Pipeline; ids: readonly str
   );
 }
 
-/** A stage head's "⋯" (list.js `o.add`): Move all to ›, Close all, Assign all to ›, Snooze all ›, then Edit stage. */
-export function StageMenu({ p, stage, ids, onEdit }: { p: Pipeline; stage: { id: string; name: string }; ids: readonly string[]; onEdit?: () => void }) {
+/** A stage head's "⋯" (list.js `o.add`): Move all to ›, Close all, Assign all to ›, Snooze all ›, then, for whoever may
+    change the board, Rename (in the head) and Edit board (its whole page). */
+export function StageMenu({ p, stage, ids, onEdit, onRename }: { p: Pipeline; stage: { id: string; name: string }; ids: readonly string[]; onEdit?: () => void; onRename?: () => void }) {
   const many = useMany(ids);
+  // Rename opens a box in the head once the menu has closed and let go of focus (while open it keeps focus in itself),
+  // and the menu leaves focus there instead of taking it back to its button.
+  const renaming = useRef(false);
+  const finalFocus = () => {
+    if (!renaming.current) return true;
+    renaming.current = false;
+    onRename?.();
+    return false;
+  };
+  const rename = () => {
+    renaming.current = true;
+  };
   return (
-    <Menu trigger={<IconButton icon="more" label={`More, ${stage.name}`} size="sm" className="ib-ghost" />}>
+    <Menu trigger={<IconButton icon="more" label={`More, ${stage.name}`} size="sm" className="ib-ghost" />} finalFocus={finalFocus}>
       {ids.length > 0 && (
         <>
           <Subs p={p} ids={ids} except={stage.id} label={(verb) => (verb === 'Snooze' ? 'Snooze all' : `${verb} all to`)} />
           <MenuItem label="Close all" onSelect={() => many.move('closed')} />
         </>
       )}
-      {onEdit && (
-        <>
-          {ids.length > 0 && <MenuRule />}
-          <MenuItem label="Edit stage" icon="edit" onSelect={onEdit} />
-        </>
-      )}
+      {(onRename || onEdit) && ids.length > 0 && <MenuRule />}
+      {onRename && <MenuItem label="Rename" icon="edit" onSelect={rename} />}
+      {onEdit && <MenuItem label="Edit board" icon="gear" onSelect={onEdit} />}
     </Menu>
   );
 }

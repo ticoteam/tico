@@ -44,27 +44,32 @@ export interface BoardColumnProps {
   target?: string;
   /** "12 more", under the cards a column shows. */
   more?: ReactNode;
+  /** The head's "⋯", at its right. */
+  menu?: ReactNode;
+  /** In the name's place while it is being edited (Rename). */
+  editing?: ReactNode;
   /** The cards. */
   children?: ReactNode;
 }
 
 /** One stage of a board: its name (the fold control), count and waits, then its cards. */
-export function BoardColumn({ name, count, waits, folded = false, onToggle, target, more, children }: BoardColumnProps) {
+export function BoardColumn({ name, count, waits, folded = false, onToggle, target, more, menu, editing, children }: BoardColumnProps) {
   const id = useId();
   return (
     <section className={folded ? 'col is-fold' : 'col'} aria-label={name} data-target={target}>
       <header className="col-head">
         <h2 className="sec-name">
-          {onToggle ? (
+          {editing ?? (onToggle ? (
             <FoldButton name={name} count={count} open={!folded} onToggle={onToggle} controls={id} />
           ) : (
             <>
               {name}
               {count !== undefined && <span className="stage-n">{count}</span>}
             </>
-          )}
+          ))}
         </h2>
         {waits}
+        {menu}
       </header>
       {!folded && (
         <div id={id} className="col-cards">

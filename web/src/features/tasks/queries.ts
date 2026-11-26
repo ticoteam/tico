@@ -619,6 +619,14 @@ export async function savePipeline(pipeline: string, { stages, facts = {}, versi
 /** The record as it is on the server now, past the cache (someone saved first): the editor compares it with what it read. */
 export const pipelineSettingsNow = (pipeline: string) => queryClient.fetchQuery({ ...pipelineSettingsQuery(pipeline), staleTime: 0 });
 
+/** Rename one stage from the board: the record is read fresh and goes back whole at the version read, with only that
+    stage's name changed. The stage keeps its id, so every task in it stays put. */
+export async function renameStage(pipeline: string, stage: string, name: string): Promise<Pipeline> {
+  const rec = await pipelineSettingsNow(pipeline);
+  const stages = rec.stages.map((s) => ({ id: s.id, name: s.id === stage ? name : s.name, side: s.side }));
+  return savePipeline(pipeline, { stages, version: rec.settings_version });
+}
+
 /** What changed between two reads of a record, as a person names it: a fact, or a stage by its name (the old editor's
     peChanged). */
 export function pipelineChanged(a: PipelineSettingsRecord, b: PipelineSettingsRecord): string[] {

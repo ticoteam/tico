@@ -1,8 +1,8 @@
 import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
-import { useEffect, useState, type MouseEvent, type ReactNode } from 'react';
+import { useEffect, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 import { useAction } from '@/actions';
-import { meQuery } from '@/data';
+import { meQuery, useActors } from '@/data';
 import { CardFix, lineFor, StatusLine, TaskSend } from '@/features/task/exports';
 import { useFollow } from '@/live/follow';
 import { Ago } from '@/kit/Ago';
@@ -62,7 +62,12 @@ export function TasksPage({ pipeline, search }: { pipeline: string; search: Task
 
   const head = {
     path: `/tasks/${pipeline}`,
-    after: p && <PipelinePick pipelines={pipes} current={p} />,
+    after: p && (
+      <>
+        <PipelinePick pipelines={pipes} current={p} />
+        <BoardPeople p={p} />
+      </>
+    ),
     className: 'tasks-page',
   };
   if (view === 'archived') return <ArchivedPage pipeline={pipeline} p={p} search={search} head={head} />;
@@ -206,6 +211,50 @@ function PipelinePick({ pipelines, current }: { pipelines: readonly Pipeline[]; 
         <MenuItem key={x.id} label={x.name} on={x.id === current.id} onSelect={() => void open.run({ pipeline: x.id })} />
       ))}
     </Menu>
+  );
+}
+
+/** Who owns the board and who manages it, beside its name: only once an owner is set (an Admin sets one on Edit
+    board); a board with none shows the head as before. */
+function BoardPeople({ p }: { p: Pipeline }) {
+  const actors = useActors();
+  if (!p.boardOwner) return null;
+  const nameOf = (id: string) => actors.find((a) => a.id === id)?.name ?? id;
+  return (
+    <span className="board-people">
+      <span>Owner: {nameOf(p.boardOwner)}</span>
+      {p.manager && <span>Manager: {nameOf(p.manager)}</span>}
+    </span>
+  );
+}
+
+/** A stage's name as a box in its head (the stage menu's Rename): Enter saves the new name, Esc or leaving it keeps the
+    old one. Only the name changes; the stage keeps its id, so its tasks stay in it. */
+function RenameBox({ p, stage, onDone }: { p: Pipeline; stage: Stage; onDone: () => void }) {
+  const rename = useAction('tasks.renameStage');
+  const [name, setName] = useState(stage.name);
+  const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      onDone();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const next = name.trim();
+      onDone();
+      if (next && next !== stage.name) void rename.run({ pipeline: p.id, stage: stage.id, name: next });
+    }
+  };
+  return (
+    <input
+      className="stage-rename"
+      aria-label="Stage name"
+      value={name}
+      maxLength={80}
+      autoFocus
+      onChange={(e) => setName(e.target.value)}
+      onKeyDown={onKeyDown}
+      onBlur={onDone}
+    />
   );
 }
 
@@ -398,8 +447,9 @@ function Card({ t, p, me, waits, picked, onPick }: { t: TaskItem; p: Pipeline; m
 /** Where a board card lands: a stage's column. */
 const COLUMN = '.col[data-target^="stage:"]';
 
-function Columns({ p, rows, me, needs, folds, fold, more, cut, countOf, picking, toggle }: BodyProps) {
+function Columns({ p, rows, me, needs, folds, fold, more, cut, countOf, picking, toggle, onEdit }: BodyProps) {
   const move = useAction('tasks.move');
+  const [renaming, setRenaming] = useState<string | null>(null);
   // Dragging only moves: a card let go over another stage's column moves there.
   const drag = useDrag({
     zones: COLUMN,
@@ -435,6 +485,19 @@ function Columns({ p, rows, me, needs, folds, fold, more, cut, countOf, picking,
             folded={folded}
             onToggle={list.length ? () => fold(s.id, folded) : undefined}
             target={`stage:${s.id}`}
+            editing={renaming === s.id ? <RenameBox p={p} stage={s} onDone={() => setRenaming(null)} /> : undefined}
+            menu={
+              !picking &&
+              (p.mayChange || list.length > 0) && (
+                <StageMenu
+                  p={p}
+                  stage={s}
+                  ids={list.filter((t) => !isPending(t)).map((t) => t.id)}
+                  onEdit={p.mayChange ? onEdit : undefined}
+                  onRename={p.mayChange ? () => setRenaming(s.id) : undefined}
+                />
+              )
+            }
             waits={
               waits > 0 && (
                 <span className="col-flow" title={`${waits} wait${waits === 1 ? 's' : ''} on you`}>
@@ -478,6 +541,7 @@ function Columns({ p, rows, me, needs, folds, fold, more, cut, countOf, picking,
 
 function Sections({ p, rows, needs, folds, fold, more, cut, countOf, picking, toggle, onNew, onEdit, edit }: BodyProps & { edit?: boolean }) {
   const cards = useCards();
+  const [renaming, setRenaming] = useState<string | null>(null);
   const groups = byStage(p.stages, rows);
   const none = p.stages.filter((s) => !groups.get(s.id)?.length);
   return (
@@ -489,7 +553,8 @@ function Sections({ p, rows, needs, folds, fold, more, cut, countOf, picking, to
           return (
             <Section
               key={s.id}
-              name={s.name}
+              name={renaming === s.id ? <RenameBox p={p} stage={s} onDone={() => setRenaming(null)} /> : s.name}
+              label={s.name}
               count={countOf(s.id, list.length)}
               open={!folds.includes(s.id)}
               onOpenChange={(o) => fold(s.id, o)}
@@ -497,7 +562,13 @@ function Sections({ p, rows, needs, folds, fold, more, cut, countOf, picking, to
               actions={
                 <>
                   <IconButton icon="plus" label={`New task in ${s.name}`} size="sm" className="ib-ghost" onClick={() => onNew(s.id)} />
-                  <StageMenu p={p} stage={s} ids={list.filter((t) => !isPending(t)).map((t) => t.id)} onEdit={edit ? onEdit : undefined} />
+                  <StageMenu
+                    p={p}
+                    stage={s}
+                    ids={list.filter((t) => !isPending(t)).map((t) => t.id)}
+                    onEdit={edit ? onEdit : undefined}
+                    onRename={edit ? () => setRenaming(s.id) : undefined}
+                  />
                 </>
               }
             >

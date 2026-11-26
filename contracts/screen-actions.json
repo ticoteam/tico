@@ -10825,6 +10825,38 @@
       }
     },
     {
+      "id": "tasks.renameStage",
+      "title": "Rename a stage",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "pipeline": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "a pipeline id"
+          },
+          "stage": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          }
+        },
+        "required": [
+          "pipeline",
+          "stage",
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "tasks.savePipeline",
       "title": "Save a pipeline",
       "kind": "change",

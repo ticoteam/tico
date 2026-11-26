@@ -1424,3 +1424,119 @@ describe('a list in made order (the list beside an open task, Newest)', () => {
     }
   });
 });
+
+describe('A board owner on the board (board settings, part 2)', () => {
+  const PEOPLE = [
+    { id: 'human:dana', kind: 'person', name: 'Dana Ito' },
+    { id: 'bot:pm', kind: 'agent', name: 'Product Manager' },
+  ];
+  const REC = {
+    id: 'eng',
+    name: 'Engineering',
+    goal: '',
+    prefix: null,
+    manager_id: 'bot:pm',
+    owner_id: 'human:dana',
+    factory_id: null,
+    settings_version: 3,
+    done: null,
+    closed: null,
+    stages: [
+      { id: 's1', name: 'Inbox', side: false, purpose: 'New work', owner: null, task_limit: null, requirements: [] },
+      { id: 's2', name: 'Doing', side: false, purpose: '', owner: null, task_limit: 5, requirements: [] },
+    ],
+  };
+  const named = () => queryClient.setQueryData(['directory'], { actors: PEOPLE, byId: Object.fromEntries(PEOPLE.map((a) => [a.id, a])) });
+  const seedAs = (p: Partial<Pipeline>) => {
+    seed([task('a1', 7, 'Fix the export', 's1'), task('a2', 8, 'Write the notes', 's2')]);
+    queryClient.setQueryData(pipelinesQuery.queryKey, [{ ...PIPE, manager: 'bot:pm', boardOwner: 'human:dana', ...p }]);
+  };
+
+  it('the head names the board owner beside its manager', async () => {
+    serve(() => ({ status: 200, body: {} }));
+    named();
+    seedAs({});
+    show(<TasksPage pipeline="eng" search={{}} />, '/tasks/eng');
+    expect(await screen.findByText('Owner: Dana Ito')).toBeTruthy();
+    expect(screen.getByText('Manager: Product Manager')).toBeTruthy();
+  });
+
+  it('a board with no owner set shows no owner line', async () => {
+    serve(() => ({ status: 200, body: {} }));
+    named();
+    seedAs({ boardOwner: null });
+    show(<TasksPage pipeline="eng" search={{}} />, '/tasks/eng');
+    await screen.findByTitle('Fix the export');
+    expect(screen.queryByText(/^Owner:/)).toBeNull();
+  });
+
+  it('Rename in a column menu edits the name in its head; Enter saves it and every task keeps its stage', async () => {
+    serve((url, method) => {
+      if (url === '/api/v2/pipelines/eng' && method === 'GET') return { status: 200, body: { pipeline: REC } };
+      if (url === '/api/v2/pipelines/eng') {
+        const body = posts.at(-1)!.body as typeof REC;
+        return { status: 200, body: { pipeline: { ...REC, stages: body.stages, settings_version: 4 } } };
+      }
+      return { status: 200, body: {} };
+    });
+    named();
+    seedAs({});
+    show(<TasksPage pipeline="eng" search={{}} />, '/tasks/eng');
+    fireEvent.click(await screen.findByRole('button', { name: 'More, Inbox' }));
+    expect(screen.getByRole('menuitem', { name: 'Edit board' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
+    const box = await screen.findByRole('textbox', { name: 'Stage name' });
+    fireEvent.change(box, { target: { value: 'Bot ideas' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    await waitFor(() => expect(posts).toHaveLength(1));
+    // The whole record goes back at the version read, with only the one name changed: nothing else in it is lost.
+    expect(posts[0]!.body).toMatchObject({ settings_version: 3, owner_id: 'human:dana', stages: [{ ...REC.stages[0], name: 'Bot ideas' }, REC.stages[1]] });
+    expect(await screen.findByRole('region', { name: 'Bot ideas' })).toBeTruthy();
+    // The head shows the new name, and every other column keeps its own.
+    expect(screen.getByRole('heading', { name: /Bot ideas/ })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: /Doing/ })).toBeTruthy();
+    expect(within(screen.getByRole('region', { name: 'Bot ideas' })).getByTitle('Fix the export')).toBeTruthy();
+    expect(stageOf('a1')).toBe('s1');
+  });
+
+  it('Esc leaves the name as it was and saves nothing', async () => {
+    serve(() => ({ status: 200, body: {} }));
+    seedAs({});
+    show(<TasksPage pipeline="eng" search={{}} />, '/tasks/eng');
+    fireEvent.click(await screen.findByRole('button', { name: 'More, Inbox' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
+    const box = await screen.findByRole('textbox', { name: 'Stage name' });
+    fireEvent.change(box, { target: { value: 'Bot ideas' } });
+    fireEvent.keyDown(box, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Stage name' })).toBeNull());
+    expect(screen.getByRole('heading', { name: /Inbox/ })).toBeTruthy();
+    expect(posts).toHaveLength(0);
+  });
+
+  it('a list section renames the same way', async () => {
+    serve((url, method) => {
+      if (url === '/api/v2/pipelines/eng' && method === 'GET') return { status: 200, body: { pipeline: REC } };
+      if (url === '/api/v2/pipelines/eng') return { status: 200, body: { pipeline: { ...REC, stages: [{ ...REC.stages[0], name: 'Bot ideas' }, REC.stages[1]], settings_version: 4 } } };
+      return { status: 200, body: {} };
+    });
+    seedAs({});
+    show(<TasksPage pipeline="eng" search={{ view: 'list' }} />, '/tasks/eng?view=list');
+    fireEvent.click(await screen.findByRole('button', { name: 'More, Inbox' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
+    const box = await screen.findByRole('textbox', { name: 'Stage name' });
+    fireEvent.change(box, { target: { value: 'Bot ideas' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    await waitFor(() => expect(posts).toHaveLength(1));
+    expect(posts[0]!.body).toMatchObject({ stages: [{ id: 's1', name: 'Bot ideas' }, { id: 's2', name: 'Doing' }] });
+  });
+
+  it('someone who may not change the board gets no Rename and no Edit board in a stage menu', async () => {
+    serve(() => ({ status: 200, body: {} }));
+    seedAs({ mayChange: false });
+    show(<TasksPage pipeline="eng" search={{}} />, '/tasks/eng');
+    fireEvent.click(await screen.findByRole('button', { name: 'More, Inbox' }));
+    expect(await screen.findByRole('menuitem', { name: 'Close all' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: 'Rename' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'Edit board' })).toBeNull();
+  });
+});
