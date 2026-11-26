@@ -550,11 +550,15 @@ def settle(c: Connection, attempt: Any) -> None:
 
 def return_guests(c: Connection, runner: str) -> bool:
     guests = c.execute(
-        """SELECT g.bot,coalesce(shared.id,base.id),g.return_pending,g.generation FROM burst_guests g
+        """SELECT g.bot,coalesce(shared.id,base.id,own.id),g.return_pending,g.generation FROM burst_guests g
         LEFT JOIN cloud_machines m ON m.bot='_shared'
         LEFT JOIN runners shared ON shared.id=m.runner_id AND m.state NOT IN ('deleted','failed')
                                 AND shared.revoked_at IS NULL AND shared.id<>g.runner_id
         LEFT JOIN runners base ON base.id=g.base_runner AND base.revoked_at IS NULL AND m.bot IS NULL
+        -- A base computer revoked since (its own cloud machine's, replaced): the machine's computer now.
+        LEFT JOIN cloud_machines o ON o.bot=g.bot AND o.mode='cloud' AND o.placement='own'
+                                  AND o.state NOT IN ('deleted','failed') AND m.bot IS NULL
+        LEFT JOIN runners own ON own.id=o.runner_id AND own.revoked_at IS NULL AND own.id<>g.runner_id
         WHERE g.runner_id=? AND g.return_pending<>''
           AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.bot_id=g.bot AND a.runner_id=g.runner_id
                           AND a.state IN ('leased','running'))""",

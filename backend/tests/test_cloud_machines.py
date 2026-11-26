@@ -4452,6 +4452,35 @@ def test_a_revoked_own_machine_is_replaced_while_its_bots_return_from_a_burst_co
     assert ticked(cloud, 1) == ["delete"]
 
 
+def test_a_burst_return_goes_to_the_replacement_when_its_base_computer_was_revoked(cloud):
+    """#3587 review: with no shared machine, a burst guest returns to the computer it left (`base_runner`). When that
+    was its own machine's computer, revoked since, the return goes to the machine that replaced it."""
+    computer = own_computer(cloud, "ops")
+    old = computer["runner_id"]
+    burst = runner(cloud.api, label="Burst")
+    with cloud.store.transaction() as c:
+        assert not CM.row(c, CM.SHARED)
+        generation = c.execute(
+            "UPDATE assignments SET runner_id=?,generation=generation+1 WHERE bot='ops' RETURNING generation",
+            (burst["runner_id"],),
+        ).fetchone()[0]
+        c.execute(
+            "INSERT INTO burst_guests(bot,runner_id,generation,base_runner,return_pending) VALUES(?,?,?,?,?)",
+            ("ops", burst["runner_id"], generation, old, "settled"),
+        )
+        c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), old))
+    assert ticked(cloud, CM.SYNC) == ["create"] and cloud.hq.calls[-1][1] == "ops"
+    code = cloud.hq.calls[-1][3]
+    assert ticked(cloud, 1) == ["delete"]
+    fresh = post(cloud.api, "runners/enroll", {"code": code, "label": "boat-vm", "platform": "linux"})
+    cloud.tick(CM.SYNC)  # HQ's list puts the new machine on the bot's row
+    cloud.tick(CM.SYNC)  # the next look returns the bot from the burst computer to it
+    assert sorted(m["state"] for m in cloud.hq.machines.values()) == ["deleted", "starting"]  # one replacement
+    assert placed(cloud)["ops"] == fresh["runner_id"]
+    with cloud.store.read() as c:
+        assert not c.execute("SELECT 1 FROM burst_guests WHERE bot='ops'").fetchone()
+
+
 def ticked(cloud, seconds):
     """HQ's calls from this one tick (`cloud.tick` returns every call so far), heartbeats left out."""
     before = len(cloud.hq.actions())
