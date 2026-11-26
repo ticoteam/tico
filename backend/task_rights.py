@@ -60,6 +60,15 @@ def participant(c, actor, row):
     return any(represents(c, actor, row[k]) for k in ('owner_id', 'requester_id'))
 
 
+def pipeline_head(c, actor, row):
+    """The manager or the owner of the task's pipeline: it works the pipeline's tasks (task_calls.can_work) and
+    changes their labels (hubdb._label_writer)."""
+    from . import task_engine as E
+
+    pipe = row.get('pipeline_id') and E.pipeline(c, row['pipeline_id']) or {}
+    return bool(actor) and actor in (pipe.get('manager_id'), pipe.get('owner_id'))
+
+
 def mover(c, actor, row, current=None):
     """A report's mover rights apply only to a task on which that report is a party."""
     from . import hubdb as H

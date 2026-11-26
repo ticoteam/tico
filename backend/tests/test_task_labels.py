@@ -1,7 +1,7 @@
 """Who changes a task's labels: a mover any label; a bot a classification label on a task it manages (its own, one
-it asked for, or one in a pipeline it manages); a label on a public roadmap or one Tico acts on keeps its gate. The
-publish approval that once let a bot add a public label went with the old engine: the refusal says a person adds it and
-names no removed command, and the publication preview answers 404 until it returns (backend/roadmaps.py NOT_YET)."""
+it asked for, or one in a pipeline it manages or owns); a label on a public roadmap or one Tico acts on keeps its gate.
+The publish approval that once let a bot add a public label went with the old engine: the refusal says a person adds it
+and names no removed command, and the publication preview answers 404 until it returns (backend/roadmaps.py NOT_YET)."""
 
 import json
 
@@ -48,6 +48,12 @@ def manage(api, pipeline, slug):
     """`slug` manages the pipeline, as the Product roadmap pipeline's manager is set for Head of Product."""
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE pipelines SET manager_id=? WHERE id=?", ("bot:" + slug, pipeline))
+
+
+def own(api, pipeline, slug):
+    """`slug` owns the pipeline, as a Release Owner owns the pipeline it moves tickets through."""
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE pipelines SET owner_id=? WHERE id=?", ("bot:" + slug, pipeline))
 
 
 def label(api, task_id, labels, token, expected=200, **extra):
@@ -135,6 +141,43 @@ def _a_bot_labels_no_private_task_it_cannot_see_nor_a_ticket_it_does_not_manage(
         headers=headers(ops),
     )
     assert r.status_code == 403 and r.json()["error"]["code"] == "identity", r.text
+
+
+def _a_pipelines_owner_bot_labels_its_tasks_as_its_manager_does_and_gains_no_more(api):
+    public_setup(api)
+    token = bot_token(api, "cpo")
+    ticket = post(api, "tasks", {"owner": "cmo", "title": "Ship the release", "body": "x", "pipeline": "engineering"})
+    # Neither manager nor owner of the pipeline: not its to change at all.
+    refused = label(api, ticket["id"], ["release:next"], token, expected=403)["error"]
+    assert refused["code"] == "identity", refused
+    own(api, "engineering", "cpo")
+    assert label(api, ticket["id"], ["release:next"], token)["labels"] == ["release:next"]
+    assert label(api, ticket["id"], [], token)["labels"] == []
+    # Owning one pipeline is nothing on another.
+    other = post(api, "tasks", {"owner": "cmo", "title": "Research imports", "body": "x", "pipeline": "product"})
+    refused = label(api, other["id"], ["area-imports"], token, expected=403)["error"]
+    assert refused["code"] == "identity", refused
+    # The owner's right is to labels only, as the manager's is.
+    r = api.post(
+        "/api/v2/tasks/" + ticket["id"],
+        json={
+            "version": get(api, "tasks/" + ticket["id"])["task"]["version"],
+            "labels": ["release:next"],
+            "due": "2026-12-01T00:00:00Z",
+        },
+        headers=headers(token),
+    )
+    assert r.status_code == 403 and r.json()["error"]["code"] == "identity", r.text
+    # Labels Tico acts on and public roadmap labels keep their gate, both ways.
+    refused = label(api, ticket["id"], ["goal:on"], token, expected=403)["error"]
+    assert refused["code"] == "label" and "how Tico runs the task" in refused["detail"]
+    refused = label(api, ticket["id"], ["roadmap", "release:next"], token, expected=403)["error"]
+    assert refused["code"] == "label" and "roadmap is a public roadmap label" in refused["detail"]
+    assert get(api, "tasks/" + ticket["id"])["task"]["labels"] == []
+    assert label(api, ticket["id"], ["goal:on", "roadmap"], "ben-test")["labels"] == ["goal:on", "roadmap"]
+    for wanted in (["roadmap"], ["goal:on"]):
+        assert label(api, ticket["id"], wanted, token, expected=403)["error"]["code"] == "label"
+    assert get(api, "tasks/" + ticket["id"])["task"]["labels"] == ["goal:on", "roadmap"]
 
 
 def _a_bot_still_changes_no_lane_or_number_and_a_mover_is_unchanged(api):
@@ -341,8 +384,8 @@ def _a_mover_and_the_tico_create_a_task_with_any_label_as_before(api):
 
 def _fresh(api):
     """A check's starting point on the shared hub, as on a new one: no refusal recorded and no hold open, every bot
-    active, no task open (a title may be asked for again), the two pipelines with no manager, and bots asked for
-    approvals on the public labels once the roadmap is set up."""
+    active, no task open (a title may be asked for again), the two pipelines with no manager or owner, and bots asked
+    for approvals on the public labels once the roadmap is set up."""
     pipelines(api)
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM refusals")
@@ -350,7 +393,7 @@ def _fresh(api):
         c.execute("UPDATE bots SET state='active' WHERE slug IN ('ops','cpo','cmo')")
         for (tid,) in c.execute("SELECT id FROM tasks WHERE status='open'").fetchall():
             H.task_close(c, SYSTEM, tid, "A fresh start for the next check.")
-        c.execute("UPDATE pipelines SET manager_id=NULL WHERE id IN (?, ?)", tuple(PIPELINES))
+        c.execute("UPDATE pipelines SET manager_id=NULL, owner_id=NULL WHERE id IN (?, ?)", tuple(PIPELINES))
     if getattr(api, "public_item", None) is not None:
         post(api, "roadmaps/settings", {"bot_public_approval": True})
 
@@ -364,6 +407,7 @@ def test_who_changes_a_tasks_labels(subtests, api):
         _a_public_roadmap_label_is_refused_both_ways_and_never_applied_silently,
         _a_label_tico_acts_on_stays_a_movers_even_on_the_bots_own_task,
         _a_bot_labels_no_private_task_it_cannot_see_nor_a_ticket_it_does_not_manage,
+        _a_pipelines_owner_bot_labels_its_tasks_as_its_manager_does_and_gains_no_more,
         _a_bot_still_changes_no_lane_or_number_and_a_mover_is_unchanged,
         _a_repeated_label_refusal_counts_once_per_task_an_hour_but_other_repeats_still_hold_the_chat,
         _label_refusals_on_different_tasks_each_count,
