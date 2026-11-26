@@ -146,7 +146,8 @@ def test_approval_is_the_only_stage_a_person_signs_and_qa_and_release_are_nobody
     ]
     assert gates == [("Approval", "page", "Spec", ANA)]
     stages = {s["name"]: s for s in (*product["stages"], *engineering["stages"])}
-    assert [R.document_of(r) for r in stages["Spec"]["requirements"]] == ["Spec"], "the decision model checks it first"
+    spec = [(R.document_of(r), r["who_oks"]) for r in stages["Spec"]["requirements"]]
+    assert spec == [("Spec", "none")], "the decision model checks it first, and no person signs it there"
     qa = {PS.requirement_key(r): r for r in stages["QA"]["requirements"]}
     assert (qa["page"]["who_oks"], R.document_of(qa["page"]), qa["page"]["person_id"]) == ("none", "QA report", None)
     assert "item:github.checks_pass" in qa

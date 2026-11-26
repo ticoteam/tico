@@ -392,7 +392,7 @@ PRESETS["product"] = {
             "Spec",
             "A spec a builder can build from.",
             2880,
-            [_approval("Spec", SPEC_RUBRIC)],  # the decision model checks it; a person approves it next
+            [{**_approval("Spec", SPEC_RUBRIC), "who_oks": "none"}],  # the decision model's; Approval is the person's
             task_limit=20,  # room for every owner
         ),
         _stage(
