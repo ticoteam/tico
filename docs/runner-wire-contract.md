@@ -76,6 +76,10 @@ rendered list of what the team learned there with why, since when and its eviden
 turn's message the first time a session meets it, and again when its text changes or the session is new; a resumed
 turn that already holds it leaves it out, and a compaction during that turn gives it back. An older server omits it
 and an older runner ignores it.
+Once the server's features say `run_notes`, the turn's result carries `notes`: for each list the claim offered (or
+the session had and is now told no longer applies), `given`, `held` or `retracted`. The server keeps it on the run
+(`attempt_notes.sent`), beside the lists the claim offered (`attempt_notes.offered`); a run's record reads them as
+`notes_sent` and `notes_offered`.
 
 Claim attempts may include `run_header`: at most 2,000 characters on where the turn's card stands now (stage, time in
 it, version, whose turn, what is met and missing, what others changed since the bot's last run there, the stage's rules

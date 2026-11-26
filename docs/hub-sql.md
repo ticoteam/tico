@@ -273,6 +273,12 @@ Every run records what woke it (`attempts.trigger_kind`), its tokens, and whethe
   run); `resumed` may carry `compacted`. NULL from an older runner. A new session for any reason but `none_saved` is
   also a line in its task's history (a `history_events` row of `kind = 'session'`). Unusual: `SELECT bot_id, count(*) FROM attempts
   WHERE session_kind = 'new' AND session_why <> 'none_saved' AND created_at > date('now', '-1 day') GROUP BY bot_id`.
+- **`notes_offered`, `notes_sent`** (in a run's record; stored in `attempt_notes(attempt_id, offered, sent)`, one row
+  per run that had notes): the task's pipeline and stage notes the claim handed the run (`pipeline`,
+  `stage`, comma-joined) and what the runner says its prompt did with each (JSON: `given`, `held` or `retracted`).
+  NULL when the task had no notes; `notes_sent` NULL from an older runner, which may still have sent them. Finished
+  runs offered notes with no report of what their prompt did: `SELECT a.id, a.bot_id, n.offered FROM attempt_notes n JOIN attempts a ON a.id = n.attempt_id WHERE n.offered IS NOT NULL AND n.sent IS NULL AND a.settled_at
+  IS NOT NULL`.
 
 `purpose` is a short label for what the run was for (`review PR`, `answer person message`): the place that wakes the bot may name it, otherwise it is the default for that bot and trigger, and runs from before it existed were filled the same way. A wake the map does not know reads `unknown`. Group by it: `SELECT purpose, sum(runs), sum(input_tokens) FROM run_weekly GROUP BY purpose`.
 

@@ -6842,7 +6842,10 @@ TURN_SELECT = (
     "message_id, task_id, exit, summary, input_tokens, cached_tokens, cache_write_tokens, output_tokens, "
     "usage_model AS model, "
     "provider, est_cost_usd, billing, trigger_kind, trigger_source, writes, outcome, did_nothing, purpose, "
-    "rotated, session_kind, session_why, prompt_tokens, usage_reason, rule_id"
+    "rotated, session_kind, session_why, prompt_tokens, usage_reason, rule_id, "
+    # The run's notes lists (backend/run_triggers.py notes): a table of its own, keyed by the run.
+    "(SELECT offered FROM attempt_notes WHERE attempt_id=attempts.id) AS notes_offered, "
+    "(SELECT sent FROM attempt_notes WHERE attempt_id=attempts.id) AS notes_sent"
 )
 LEASE = ("job_id", "runner_id", "generation", "token_hash", "state", "lease_until", "lane")
 

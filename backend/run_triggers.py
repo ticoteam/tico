@@ -25,6 +25,11 @@ Every run (its `attempts` row) records three things, all in plain code, none ask
   that failed because its prompt was too large to send even after compacting reads `new` / `prompt_too_long_after_compact`:
   Tico cleared the session for the next run. A new session for a reason other than `none_saved` is also a line in
   its task's history (field `session`).
+- `notes_offered`, `notes_sent`: the task's notes lists the claim carried (`pipeline`, `stage`, comma-joined;
+  backend/pipeline_notes.py) and what the runner says the prompt did with each (`notes`: given, held or retracted).
+  NULL when none were offered and none retracted, and `notes_sent` NULL from an older runner. The run's stored input is
+  only its message, so this is how anyone checks the notes reached the bot. Both are kept in `attempt_notes`, one row
+  per run that had any, and read into the run's record.
 - `purpose`: a short stable label for the work (`review PR`, `answer person message`), so a week of runs can be
   grouped by what they were for. The place that writes a wake may name it (`stamp(..., purpose=)`); a run nobody
   named gets `purpose_for(bot, trigger_kind)`, the same map that fills the label on runs from before it existed. A
@@ -44,6 +49,7 @@ its latest); the first of these is its outcome and later ones add nothing. A tas
 trigger or purpose is not known reads `unknown` for that field, and is still counted.
 """
 
+import json
 import re
 
 TRIGGERS = (
@@ -277,6 +283,19 @@ def session(conn, turn_id, session):
         row = conn.execute("SELECT task_id FROM attempts WHERE id=?", (turn_id,)).fetchone()
         new_session(conn, row[0] if row else None, why)
     return done
+
+
+def notes(conn, turn_id, notes):
+    """Record what the run's prompt did with its task's notes lists (`attempt_notes.sent`, JSON), a late result filed after its
+    lease expired included: it says what the prompt held, whenever it arrives. A runner that reports none (an older one,
+    or a turn offered none) writes nothing."""
+    sent = notes.model_dump(exclude_none=True) if notes is not None else {}
+    if not sent:
+        return 0
+    return conn.execute(
+        "INSERT INTO attempt_notes(attempt_id, sent) VALUES(?,?) ON CONFLICT(attempt_id) DO UPDATE SET sent=excluded.sent",
+        (turn_id, json.dumps(sent)),
+    ).rowcount
 
 
 def turn_result(conn, actor, row, outcome, event, to=None):

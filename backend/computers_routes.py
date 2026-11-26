@@ -96,6 +96,8 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
         # harness confirmed a new session (an older one has no such route).
         # `capacity_continue`: a run the model's capacity stopped after it acted may say its thread was kept
         # (`continues`), and a claim may name that thread (`continue_thread`) for the next turn to continue.
+        # `run_notes`: a run's result may say what its prompt did with the task's notes lists (`notes`; an older one
+        # refuses it).
         # `run_timings`: a run's result may carry where its time went on the computer (`timings`; an older one refuses it).
         # `run_timings_turn`: those timings may say how many model requests the turn made and whether it ran warm
         # (`model_calls`, `warm`; an older one refuses them).
@@ -113,6 +115,7 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
                 "run_pushes": True,
                 "run_rotation": True,
                 "run_session": True,
+                "run_notes": True,
                 "run_diagnostics": True,
                 "load_snapshot": True,
                 "attempt_thread": True,

@@ -6355,7 +6355,18 @@ class Execution:
         runner_wire.conversation(c, conv)
         runner_wire.conversation(c, conversation)  # the claim's copy (thread_payload) was made before
         wire_task = runner_wire.task(task)
-        learned_here = pipeline_notes.for_task(c, task) if task and not relationship else {}
+        # A command's turn is only what the person wrote (runner-rs/src/prompt.rs build), and a goal control sends the
+        # harness its objective, not the prompt (runner-rs/src/execute.rs start_turn): neither is offered notes.
+        said = (msg.get("refs") or {}) if msg else {}
+        typed = bool(said.get("command") or said.get("goal_action"))
+        learned_here = pipeline_notes.for_task(c, task) if task and not relationship and not typed else {}
+        if learned_here:
+            # The run's record says which lists its claim carried (backend/run_triggers.py `notes_offered`).
+            c.execute(
+                "INSERT INTO attempt_notes(attempt_id, offered) VALUES(?,?) "
+                "ON CONFLICT(attempt_id) DO UPDATE SET offered=excluded.offered",
+                (aid, ",".join(learned_here)),
+            )
         wire_config = runner_versions.wire_template(rooms.session_config(conv, row["bot_id"], config))
         session_fence = None
         moved_history = None
@@ -6930,6 +6941,7 @@ class Execution:
         run_triggers.pushed(c, row["id"], row["runner_id"], body.pushes)
         run_triggers.rotation(c, row["id"], body.rotated)
         run_triggers.session(c, row["id"], body.session)
+        run_triggers.notes(c, row["id"], body.notes)
         H.turn_finish(
             c,
             H.TICO_ACTOR,
@@ -8724,6 +8736,7 @@ class Execution:
         run_triggers.pushed(c, aid, row["runner_id"], body.pushes)
         run_triggers.rotation(c, aid, body.rotated)
         run_triggers.session(c, aid, body.session)
+        run_triggers.notes(c, aid, body.notes)
         # The runner's notices (a file left out of the commit) are shown beside the reply, not as the turn's summary.
         H.turn_finish(
             c,

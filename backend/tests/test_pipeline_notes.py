@@ -4,11 +4,17 @@ task's turn is handed; and the why a guard's refusal quotes.
 The org (backend/tests/helpers/org_rules.py): Ana owns the company, Ben and Cara are plain members, Ops and Finance are
 bots. Engineering is managed by the bot Finance; Product by nobody."""
 
+import pytest
+
 from backend import pipeline_notes as N
+from backend import run_triggers as RT
+from backend.models import RunNotes
 from backend.store import H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import assign, claim, get, post, ready, runner
 from backend.tests.helpers.org_rules import org
+from backend.tests.helpers.run_triggers import USAGE, start
+from backend.tests.helpers.sql import query
 
 BUILD, QA = "eng-build", "eng-qa"
 HEAVY = {
@@ -134,6 +140,71 @@ def test_the_claim_carries_the_notes_beside_the_task_and_none_when_there_are_non
     assert second["pipeline_notes"]["pipeline"].startswith("Notes for ")
     # The notes ride beside the task, never in it, so the task's digest and its printed form stay as they were.
     assert "notes" not in second["task"] and "pipeline_notes" not in second["task"]
+
+
+def test_a_run_records_the_lists_its_claim_offered_and_what_the_runner_says_its_prompt_did_with_them(api):
+    # The run's stored input is only its message, so this is how anyone checks the notes reached the bot.
+    engineering(api)
+    r = runner(api)
+    for bot in ("ops", "cpo"):
+        assign(api, r, bot)
+    ready(api, r, ["ops", "cpo"])
+
+    def task_for(bot, title):
+        with api.app.state.store.transaction() as c:
+            return H.task_create(c, H.TICO_ACTOR, title, "Do it.", f"bot:{bot}", lint=False)
+
+    def run(attempt, sent=None):
+        start(api, r, attempt)
+        body = {"outcome": "completed", "last_seq": 0, "text": "", "usage": USAGE}
+        post(api, f"attempts/{attempt['id']}/complete", {**body, **({"notes": sent} if sent else {})}, r["token"])
+        with api.app.state.store.read() as c:
+            row = H.turn(c, attempt["id"])
+        return row["notes_offered"], row["notes_sent"]
+
+    plain = task_for("ops", "Tidy the export")
+    first = claim(api, r)
+    assert first["task"]["id"] == plain["id"]
+    assert run(first) == (None, None)
+    post(api, f"pipelines/{plain['pipeline_id']}/notes", HEAVY)
+    task_for("cpo", "Fix the smoke test")
+    second = claim(api, r)
+    assert run(second, {"pipeline": "given"}) == ("pipeline", '{"pipeline": "given"}')
+    # An older runner sends no report: the query docs/hub-sql.md gives finds that run, through tico sql.
+    task_for("cpo", "Fix the flaky upload")
+    older = claim(api, r)
+    assert run(older) == ("pipeline", None)
+    unreported = query(
+        api,
+        "SELECT a.id, a.bot_id, n.offered FROM attempt_notes n JOIN attempts a ON a.id = n.attempt_id "
+        "WHERE n.offered IS NOT NULL AND n.sent IS NULL AND a.settled_at IS NOT NULL",
+    )
+    assert unreported["rows"] == [[older["id"], "cpo", "pipeline"]]
+
+
+@pytest.mark.parametrize("refs", ['{"command": "compact"}', '{"goal_action": "set", "goal_objective": "Ship it."}'])
+def test_a_command_turn_is_offered_no_notes_and_a_late_result_still_records_its_report(api, refs):
+    engineering(api)
+    r = runner(api)
+    assign(api, r, "ops")
+    ready(api, r, ["ops"])
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, H.TICO_ACTOR, "Fix the smoke test", "Do it.", "bot:ops", lint=False)
+    post(api, f"pipelines/{task['pipeline_id']}/notes", HEAVY)
+    assert turn_notes(api, task["id"])  # the task has notes a plain turn would be offered
+    with api.app.state.store.transaction() as c:
+        # The person typed a command (/compact) to the bot on its task, its prompt only that; or a goal control, which
+        # sends the harness its objective and not the prompt.
+        c.execute("UPDATE messages SET refs=? WHERE conversation_id=?", (refs, task["conversation_id"]))
+    typed = claim(api, r)
+    assert typed["task"]["id"] == task["id"] and "pipeline_notes" not in typed
+    start(api, r, typed)
+    with api.app.state.store.transaction() as c:
+        assert H.turn(c, typed["id"])["notes_offered"] is None
+        # A result filed after its lease expired settled the run: its report is still kept.
+        c.execute("UPDATE attempts SET settled_at=? WHERE id=?", (H.now(), typed["id"]))
+        assert RT.notes(c, typed["id"], RunNotes(pipeline="held")) == 1
+        assert H.turn(c, typed["id"])["notes_sent"] == '{"pipeline": "held"}'
 
 
 def test_a_bot_proposes_with_why_and_evidence_and_the_manager_decides_never_its_own(api):
