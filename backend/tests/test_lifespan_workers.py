@@ -4,6 +4,7 @@ whatever a worker did."""
 
 import asyncio
 import contextlib
+import dataclasses
 import logging
 import threading
 from datetime import datetime, timezone
@@ -211,6 +212,59 @@ def test_a_worker_that_ignores_its_stop_is_cancelled_at_the_deadline_and_the_sto
     finally:
         release.set()
         thread_ended.wait(5)
+
+
+def test_the_outbound_loops_are_told_to_stop_before_the_workers_end_and_joined_after(tmp_path, monkeypatch):
+    from backend import background
+
+    # A rehearsal copy runs the outbound, webhook and Finance loops' way out without the scheduler.
+    app = create_app(dataclasses.replace(api_settings(tmp_path), rehearsal=True))
+    calls = []
+    monkeypatch.setattr(background, "stop_all", lambda timeout=background.STOP_WAIT: calls.append(timeout))
+    seen_at_stop = []
+
+    async def inbound(stop):
+        await stop.wait()
+        seen_at_stop.append(list(calls))
+
+    monkeypatch.setattr(app.state.inbound, "loop", inbound)
+    with served(app):
+        pass
+    assert seen_at_stop == [[0]], "signalled with the other stops, before a worker ended"
+    assert calls == [0, background.STOP_WAIT], "and joined once the workers ended"
+
+
+def test_a_thread_call_of_a_cancelled_worker_is_still_waited_for_and_named(monkeypatch, caplog):
+    monkeypatch.setattr(lifespan_workers, "SHUTDOWN_SECONDS", 0.1)
+    monkeypatch.setattr(lifespan_workers, "THREAD_GRACE_SECONDS", 0.1)
+    began, release = threading.Event(), threading.Event()
+
+    def blocked():
+        began.set()
+        release.wait(WAY_OUT_SECONDS)
+
+    async def main():
+        workers = lifespan_workers.Workers(Gone(), Telemetry())
+
+        async def scheduler():
+            await workers.offload("scheduler", blocked)
+
+        workers.task("scheduler", scheduler())
+        loop = asyncio.get_running_loop()
+        with ThreadPoolExecutor(max_workers=1) as side:
+            assert await loop.run_in_executor(side, began.wait, WAY_OUT_SECONDS)
+        try:
+            await workers.shutdown()
+        finally:
+            release.set()
+
+    try:
+        with caplog.at_level(logging.ERROR, logger="tico.lifespan_workers"):
+            bounded(lambda: asyncio.run(main()), "way out")
+        said = " ".join(r.getMessage() for r in caplog.records)
+        assert "still running after the way out" in said and "['scheduler']" in said
+    finally:
+        release.set()
 
 
 def test_a_start_that_fails_part_way_stops_what_it_started_and_closes_the_store(tmp_path, monkeypatch):

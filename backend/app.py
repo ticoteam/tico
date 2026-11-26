@@ -581,13 +581,13 @@ def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions
             # this loop (backend/drains.py): the beat's due times and recovery never wait for Gmail or a connector.
             from . import drains
 
-            workers = drains.Drains(
+            drain = drains.Drains(
                 store,
                 auth,
                 on_error=lambda name, exc: telemetry.capture(drains.TELEMETRY[name], exc),
                 stopping=stop.is_set,
             ).start()
-            scheduler.drains = workers
+            scheduler.drains = drain
             # The steps that call GitHub, and the release check and update feeds, on a worker of their own beside
             # this loop (backend/heartbeat.py `Outside`): a slow GitHub never holds up a due time or a recovery.
             from . import heartbeat
@@ -605,8 +605,8 @@ def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions
             finally:
                 # No new claims or passes; a call already started finishes within its own timeout.
                 outside.stop.set()
-                await asyncio.to_thread(workers.stop, 75)
-                await asyncio.to_thread(outside.halt, 15)
+                await workers.offload("scheduler", drain.stop, 75)
+                await workers.offload("scheduler", outside.halt, 15)
 
         async def run_passes(scheduler):
             from . import heartbeat
@@ -631,7 +631,7 @@ def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions
                         await workers.offload("scheduler", scheduler.tick, ctx.at, ctx)
                         if scheduler.outside is not None:
                             # The release check, here only while the worker's thread is dead.
-                            await asyncio.to_thread(scheduler.outside.rest_fallback)
+                            await workers.offload("scheduler", scheduler.outside.rest_fallback)
                     except Exception as exc:
                         telemetry.capture("scheduler", exc)
                         import logging
@@ -639,7 +639,9 @@ def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions
                         logging.getLogger("tico.scheduler").error("Scheduler tick failed: %s", type(exc).__name__)
                 try:
                     # Seconds between beats (Automations > Heartbeat), read each pass: 10 by default, 5 to 60.
-                    await asyncio.wait_for(stop.wait(), timeout=await asyncio.to_thread(heartbeat.interval, store))
+                    await asyncio.wait_for(
+                        stop.wait(), timeout=await workers.offload("scheduler", heartbeat.interval, store)
+                    )
                 except TimeoutError:
                     pass
 
@@ -662,6 +664,8 @@ def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions
             # out (backend/background.py).
             from . import background
 
+            # Told to stop with the other stops (a join of no time), then joined after the workers end.
+            workers.on_stop("background", lambda: background.stop_all(0))
             workers.on_exit("background", lambda: asyncio.to_thread(background.stop_all))
         if timers:
             # The outbound gate's worker (backend/outbound_actions.py): rung by each commit that queues an action. A
