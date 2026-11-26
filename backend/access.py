@@ -635,7 +635,7 @@ def rename_person(c, roster, pid, name):
     if not person or not name or name == person["name"]:
         return False
     row = P._person({**person, "name": name})
-    _save_roster(c, {**roster, "people": [row if p["id"] == pid else p for p in people]})
+    _save_roster(c, {**roster, "people": [row if p["id"] == pid else p for p in roster["people"]]})
     _sync_human(c, row)
     return True
 
@@ -826,7 +826,7 @@ def change_email(c, actor, roster, pid, new_email, *, now, settings, via="app"):
     if old:
         _keep_mailbox(c, person, old)
     row = P._person({**person, "email": new})
-    _save_roster(c, {**roster, "people": [row if p["id"] == pid else p for p in people]})
+    _save_roster(c, {**roster, "people": [row if p["id"] == pid else p for p in roster["people"]]})
     _sync_human(c, row)
     access = _load_json(c, ACCESS)
     if access is not None and old:
