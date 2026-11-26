@@ -342,6 +342,51 @@ def test_a_run_says_whether_it_resumed_its_session_and_a_new_one_is_in_the_tasks
     assert notes == ([said] if said else [])
 
 
+@pytest.mark.parametrize(
+    "kind,idle_min,idle_s,cold",
+    [("resumed", 61, 3660, True), ("resumed", 59, 3540, False), ("new", 180, None, False)],
+)
+def test_a_resumed_run_records_how_long_its_session_sat_idle_since_the_bots_last_run_on_the_task(
+    api, kind, idle_min, idle_s, cold
+):
+    """idle_s runs from the bot's own latest settled run on the same task to this run's start: another bot's run, or
+    one on another task, does not reset it. Over an hour, a resumed run is a cold start; a new session never is."""
+    r = machine(api)
+    task = post(api, "tasks", {"owner": "ops", "title": "Watch the release", "body": "Each hour."})
+    other = post(api, "tasks", {"owner": "ops", "title": "Another task", "body": "Later."})
+    attempt = claim(api, r)
+    start(api, r, attempt)
+    with api.app.state.store.transaction() as c:
+        began = c.execute("SELECT created_at, task_id FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
+        assert began["task_id"] == task["id"]
+        at = datetime.fromisoformat(began["created_at"].replace("Z", "+00:00"))
+
+        def ago(minutes):
+            return (at - timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+        for rid, bot, tid, settled in (
+            ("older", "ops", task["id"], ago(idle_min + 30)),
+            ("last", "ops", task["id"], ago(idle_min)),
+            ("other-bot", "cpo", task["id"], ago(1)),
+            ("other-task", "ops", other["id"], ago(1)),
+        ):
+            c.execute(
+                "INSERT INTO attempts(id, bot_id, created_at, settled_at, exit, task_id) VALUES(?,?,?,?,'completed',?)",
+                (rid, bot, ago(idle_min + 40), settled, tid),
+            )
+    post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {"outcome": "completed", "last_seq": 0, "text": "", "usage": USAGE, "session": {"kind": kind}},
+        r["token"],
+    )
+    with api.app.state.store.read() as c:
+        got = c.execute(
+            f"SELECT a.idle_s, {RT.COLD_SQL} AS cold FROM attempts a WHERE a.id=?", (attempt["id"],)
+        ).fetchone()
+    assert (got["idle_s"], bool(got["cold"])) == (idle_s, cold)
+
+
 def test_a_completion_from_an_older_runner_has_no_session_and_a_session_that_is_too_long_is_refused(api):
     r = machine(api)
     post(api, "tasks", {"owner": "ops", "title": "Watch the release", "body": "Each hour."})

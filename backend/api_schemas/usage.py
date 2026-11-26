@@ -46,6 +46,24 @@ SCHEMAS.update(
                     "description": "Priced runs whose estimate may be low: the model "
                     "charges more for long prompts and the runner did not report every request's tokens",
                 },
+                "empty_runs": {"type": "integer", "description": "Runs that changed nothing: no write Tico counts"},
+                "empty_usd": {
+                    "type": "number",
+                    "description": "API-equivalent spend of the runs that changed nothing (estimate plus subscription)",
+                },
+                "cold_runs": {
+                    "type": "integer",
+                    "description": "Cold starts: runs that resumed a session idle more than an hour since the bot's last "
+                    "run on the same task, so the provider's cache had expired",
+                },
+                "cold_usd": {
+                    "type": "number",
+                    "description": "API-equivalent spend of the cold starts, each whole run (estimate plus subscription)",
+                },
+                "cold_cache_write_tokens": {
+                    "type": "integer",
+                    "description": "Tokens the cold starts wrote to the provider's cache again",
+                },
             }
         ),
         "Usage": obj(

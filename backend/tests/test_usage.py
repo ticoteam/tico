@@ -288,6 +288,44 @@ def test_a_bots_detail_lists_its_top_tasks_with_the_rest_summed_and_every_model_
     assert usage(api, bot="cpo")["tasks_more"] == {**usage(api, bot="cpo")["tasks_more"], "count": 0, "runs": 0}
 
 
+WAKE_FIELDS = ("empty_runs", "empty_usd", "cold_runs", "cold_usd", "cold_cache_write_tokens")
+
+
+def test_each_row_and_the_totals_say_what_runs_that_changed_nothing_and_cold_starts_cost(api):
+    """A run with no write changed nothing; a resumed run whose session sat idle more than an hour is a cold start.
+    Each grouping counts both with their API-equivalent spend (plan runs included), and its rows add up to the totals."""
+    seed(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET did_nothing=1 WHERE id IN ('t1','t5')")
+        c.execute("UPDATE attempts SET did_nothing=0 WHERE id IN ('t2','t3','t4')")
+        # 61 minutes idle: cold, with what it wrote to the cache again; 59 minutes: warm; a new session: never cold.
+        c.execute("UPDATE attempts SET session_kind='resumed', idle_s=3660, cache_write_tokens=700 WHERE id='t3'")
+        c.execute("UPDATE attempts SET session_kind='resumed', idle_s=3540, cache_write_tokens=50 WHERE id='t2'")
+        c.execute("UPDATE attempts SET session_kind='new', idle_s=NULL, cache_write_tokens=90 WHERE id='t4'")
+        c.execute("UPDATE attempts SET session_kind='new', did_nothing=1, idle_s=10800 WHERE id='t6'")  # outside
+    got = usage(api)
+    rows = {r["bot"]: r for r in got["rows"]}
+    assert {k: rows["ops"][k] for k in WAKE_FIELDS} == pytest.approx(
+        {"empty_runs": 1, "empty_usd": 0.0078, "cold_runs": 1, "cold_usd": 0.0038, "cold_cache_write_tokens": 700}
+    )
+    assert {k: rows["cpo"][k] for k in WAKE_FIELDS} == pytest.approx(
+        {"empty_runs": 1, "empty_usd": 7.5, "cold_runs": 0, "cold_usd": 0, "cold_cache_write_tokens": 0}
+    )
+    for group in ("bot", "day", "model", "task"):
+        each = usage(api, group=group)
+        for key in WAKE_FIELDS:
+            assert sum(r[key] for r in each["rows"]) == pytest.approx(each["totals"][key]), (group, key)
+            assert each["totals"][key] == pytest.approx(got["totals"][key]), (group, key)
+    # The opened bot: its totals and each day.
+    ops = usage(api, bot="ops")
+    assert (ops["totals"]["empty_runs"], ops["totals"]["cold_runs"]) == (1, 1)
+    assert [(d["day"], d["empty_runs"], d["cold_runs"]) for d in ops["daily"]] == [
+        (DAY, 1, 0),
+        ("2026-09-21", 0, 1),
+    ]
+    assert ops["tasks_more"]["empty_runs"] == 0 and ops["tasks_more"]["cold_usd"] == 0
+
+
 def test_a_bot_or_a_computer_cannot_ask(api):
     r = runner(api)
     assert api.get("/api/v2/usage", headers=headers(r["token"])).status_code in (401, 403)

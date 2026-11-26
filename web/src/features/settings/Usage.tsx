@@ -117,6 +117,25 @@ function AgentOpen({ where, bot }: { where: UsageWhere; bot: string }) {
         <span>
           <b>{t.runs}</b> runs
         </span>
+        <span title="Runs that made no write: they looked and nothing had moved. A reviewer’s approval with no write counts here too.">
+          <b>{t.empty_runs}</b> changed nothing
+          {t.empty_runs > 0 && (
+            <>
+              {' · '}
+              <b>{usd(t.empty_usd)}</b>
+            </>
+          )}
+        </span>
+        <span title="Runs that resumed a session idle for more than an hour since this agent’s last run on the task, so the cache had expired and the prompt was written again. The cost is the whole run.">
+          <b>{t.cold_runs}</b> cold {t.cold_runs === 1 ? 'start' : 'starts'}
+          {t.cold_runs > 0 && (
+            <>
+              {' · '}
+              <b>{usd(t.cold_usd)}</b>
+              {t.cold_cache_write_tokens > 0 && ` (${fmtTok(t.cold_cache_write_tokens)} tokens re-written)`}
+            </>
+          )}
+        </span>
         <span>
           <b>{fmtTok(tokens(t))}</b> tokens
         </span>

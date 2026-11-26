@@ -19,6 +19,7 @@ from fastapi import Query, Request
 from . import bot_access as A
 from . import models as M
 from . import providers, queue_purge, usage_limits, views
+from .run_triggers import COLD_SQL
 from .store import H, P, Problem
 from .usage_records import RUNS
 from .subscription_identity import usage_label
@@ -63,7 +64,11 @@ LOW = (
     + "))"
 )
 
-# Sums over the runs (usage_records.RUNS) shared by every grouping. A run with no token counts (a runtime that reports none,
+# A run's API-equivalent spend: its estimate whether billed by key or to a plan, as `spend` adds them up.
+SPENT = "CASE WHEN t.usage_reason IS NULL THEN coalesce(t.est_cost_usd, 0) ELSE 0 END"
+# Sums over the runs (usage_records.RUNS) shared by every grouping. `empty_*` are the runs that changed nothing
+# (`did_nothing`, no write), `cold_*` the resumed runs whose session sat idle past the 1-hour cache (run_triggers.COLD_SQL),
+# each with its API-equivalent spend; `cold_cache_write_tokens` is what those runs wrote to the cache again. A run with no token counts (a runtime that reports none,
 # or one from before usage) still counts as a run.
 SUMS = f"""count(DISTINCT t.id) AS runs,
   sum(coalesce(t.input_tokens, 0)) AS input_tokens,
@@ -77,7 +82,15 @@ SUMS = f"""count(DISTINCT t.id) AS runs,
             AND coalesce(t.input_tokens, 0) + coalesce(t.cached_tokens, 0) + coalesce(t.cache_write_tokens, 0)
               + coalesce(t.output_tokens, 0) > 0))
        THEN t.id END) AS api_unpriced,
-  count(DISTINCT CASE WHEN t.est_cost_usd IS NOT NULL AND t.usage_reason IS NULL AND {LOW} THEN t.id END) AS low_priced"""
+  count(DISTINCT CASE WHEN t.est_cost_usd IS NOT NULL AND t.usage_reason IS NULL AND {LOW} THEN t.id END) AS low_priced,
+  count(DISTINCT CASE WHEN a.did_nothing = 1 THEN t.id END) AS empty_runs,
+  sum(CASE WHEN a.did_nothing = 1 THEN {SPENT} ELSE 0 END) AS empty_usd,
+  count(DISTINCT CASE WHEN {COLD_SQL} THEN t.id END) AS cold_runs,
+  sum(CASE WHEN {COLD_SQL} THEN {SPENT} ELSE 0 END) AS cold_usd,
+  sum(CASE WHEN {COLD_SQL} THEN coalesce(t.cache_write_tokens, 0) ELSE 0 END) AS cold_cache_write_tokens"""
+# Each run's own attempts row (`a`), for what SUMS reads of the run beyond its usage: whether it changed nothing and
+# whether it resumed a cold session (backend/run_triggers.py). By primary key, in the same statement.
+RUN_ROW = "LEFT JOIN attempts a ON a.id = t.id"
 ROUTINE_JOIN = "LEFT JOIN schedule_occurrences o ON o.task_id = t.task_id LEFT JOIN schedules s ON s.id = o.schedule_id"
 EMPTY_DAY = {
     "runs": 0,
@@ -89,7 +102,14 @@ EMPTY_DAY = {
     "subscription_equiv_usd": 0.0,
     "unpriced_runs": 0,
     "low_estimate_runs": 0,
+    "empty_runs": 0,
+    "empty_usd": 0.0,
+    "cold_runs": 0,
+    "cold_usd": 0.0,
+    "cold_cache_write_tokens": 0,
 }
+# The figures that add up the same in a row and in `figures`.
+WAKES = ("empty_runs", "cold_runs", "cold_cache_write_tokens")
 
 
 def money(value):
@@ -110,6 +130,9 @@ def figures(row):
         "subscription_equiv_usd": money(row["subscription_usd"]),
         "unpriced_runs": row["api_unpriced"],
         "low_estimate_runs": row["low_priced"],
+        **{key: row[key] or 0 for key in WAKES},
+        "empty_usd": money(row["empty_usd"]),
+        "cold_usd": money(row["cold_usd"]),
     }
 
 
@@ -127,6 +150,7 @@ def raw(item):
         "api_priced": 0 if cost is None else 1,
         "api_unpriced": item["unpriced_runs"],
         "low_priced": item["low_estimate_runs"],
+        **{key: item[key] for key in (*WAKES, "empty_usd", "cold_usd")},
     }
 
 
@@ -319,7 +343,9 @@ def query(c, key, join, slugs, first, last, filters=None):
     if not slugs:
         return []
     where, args = runs_in(slugs, first, last, filters)
-    return c.execute(f"SELECT {key} AS k, {SUMS} FROM {RUNS} t {join} WHERE {where} GROUP BY k", args).fetchall()
+    return c.execute(
+        f"SELECT {key} AS k, {SUMS} FROM {RUNS} t {RUN_ROW} {join} WHERE {where} GROUP BY k", args
+    ).fetchall()
 
 
 def runs_in(slugs, first, last, filters=None):
@@ -393,6 +419,9 @@ def install(app, store, auth, mutate, settings):
             "api_priced",
             "api_unpriced",
             "low_priced",
+            *WAKES,
+            "empty_usd",
+            "cold_usd",
         )
         return figures({k: sum(r[k] or 0 for r in rows) for k in keys})
 

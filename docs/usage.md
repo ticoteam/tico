@@ -45,7 +45,10 @@ was spent.
 Click a bot on the Usage page to see what explains its spend, under the page's range and filters, from one request
 (`GET /api/v2/usage?bot=<slug>`):
 
-- **A summary**: its API-equivalent cost, runs, tokens and cache rate.
+- **A summary**: its API-equivalent cost, runs, tokens and cache rate, and two counts beside its runs: how many
+  **changed nothing** (made no write; a reviewer's approval with no write counts too) and how many were **cold starts**
+  (resumed a session idle more than an hour since the bot's last run on the same task, so the provider's 1-hour cache
+  had expired), each with what those runs cost, and for cold starts the tokens they wrote to the cache again.
 - **Tokens**: one bar split into four parts, with a legend giving each part's count and share of all tokens.
   - **Cache reads**: input the provider read from its prompt cache (`cached_tokens`). On most models these cost about a
     tenth of new input.
@@ -128,7 +131,8 @@ Usage > Limits; the hub decides who may change which, and a row it says is not y
 
 `GET /api/v2/usage?from=&to=&department=&bots=&group=bot|day|hour|routine|task|harness|model|effort|subscription` (UTC dates, default the last 7 days, at most 366) returns `rows` and
 `totals` with `runs`, `input_tokens`, `cached_tokens`, `cache_write_tokens` (NULL runs sum as 0), `output_tokens`, `est_cost_usd` (null when every API-billed run used an unpriced
-model or reported no usage), `subscription_equiv_usd`, `unpriced_runs`, `low_estimate_runs`, and on each row its `share` of the total. `?bot=<slug>` returns that bot's `daily` series and top
+model or reported no usage), `subscription_equiv_usd`, `unpriced_runs`, `low_estimate_runs`, `empty_runs` and `empty_usd` (runs that changed nothing),
+`cold_runs`, `cold_usd` and `cold_cache_write_tokens` (cold starts; `attempts.idle_s` holds each resumed run's idle seconds), and on each row its `share` of the total. `?bot=<slug>` returns that bot's `daily` series and top
 `routines`. The legacy `department` query parameter filters by group; `bots` (slugs, comma separated) narrows to those bots; `group` selects how rows are aggregated (`task`: the top 25 tasks by spend, a private one named only as one, one the reader cannot open only as that, runs with no task together). A group lead also sees the bots in the groups they lead, as `/usage/limits` lists them. See `GET /api/v2/openapi.json`.
 
 `from` and `to` also take exact UTC times (ISO-8601, `2026-11-18T17:00:00Z`; one with no offset is read as UTC): the window then runs
