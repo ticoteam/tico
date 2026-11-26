@@ -180,7 +180,8 @@ def pipeline_list(api, args):
     "tico_pipeline_show",
     "One pipeline, by id or name: its goal, manager, settings version and every stage in order, with who holds it, "
     "whether tasks leave it by hand, its task limit and what it takes to leave it (each requirement and who gives "
-    "its OK). `record` gives the whole settings record instead, as tico_pipeline_save takes it. Anyone on the team "
+    "its OK), and the notes in force on the pipeline and on each stage (what the team learned there, with why). "
+    "`record` gives the whole settings record instead, as tico_pipeline_save takes it. Anyone on the team "
     "may read it. Example: tico pipeline show product",
     {
         "pipeline": PIPELINE,
@@ -192,7 +193,19 @@ def pipeline_show(api, args):
     if args.get("record"):
         return {"pipeline": _record(api, args["pipeline"])}
     row, actors = _pipeline(api, args["pipeline"])
-    return {"pipeline": _shape(row, actors)}
+    shaped = _shape(row, actors)
+    # What the team learned there, in force: the pipeline's notes and each stage's under it.
+    noted = api.get(f"pipelines/{quote(str(row['id']), safe='')}/notes")
+    shaped["notes"] = [_note(n) for n in noted.get("notes") or []]
+    by_stage = {s["id"]: s.get("notes") or [] for s in noted.get("stages") or []}
+    for stage in shaped["stages"]:
+        stage["notes"] = [_note(n) for n in by_stage.get(stage.get("id"), [])]
+    return {"pipeline": shaped}
+
+
+def _note(row):
+    keep = ("id", "note", "why", "since", "evidence", "guard", "state", "revision")
+    return {k: row.get(k) for k in keep if row.get(k) not in (None, "")}
 
 
 @tool(
@@ -1123,6 +1136,160 @@ def command(args):
         return cli_plumbing.exit_code(exc)
 
 
+# ----------------------------------------------------------------------------- notes
+NOTE_ID = _s("The note's id (n_...), from tico pipeline note list or pipeline show")
+NOTE_STAGE = _s("The stage it is for: its id or name; leave out for the whole pipeline")
+NOTE_TEXT = _s("The note: what to do or not do, in one or two sentences")
+NOTE_WHY = _s("Why we have it: what went wrong or what it saves")
+NOTE_SINCE = _s("Since when: YYYY-MM-DD; today when left out")
+NOTE_EVIDENCE = _s("What showed it: a task, a pull request or a run (#4232)")
+NOTE_GUARD = _s("The guard whose refusal quotes this note (approval_first)")
+NOTE_LINE = _s("One line on what changed and why, kept under the note")
+NOTE_REASON = _s("Why, in one line; the proposer receives it")
+
+
+def _note_path(args):
+    return f"pipeline-notes/{quote(str(args['note_id']), safe='')}"
+
+
+def _note_body(args, *names):
+    return {k: args[k] for k in names if args.get(k) is not None}
+
+
+def _pipeline_id(api, args):
+    row, _ = _pipeline(api, args["pipeline"])
+    return quote(str(row["id"]), safe="")
+
+
+@tool(
+    "tico_pipeline_note_list",
+    "A pipeline's notes: what the team learned there, the pipeline's own and each stage's, each with why, since when, "
+    "its evidence and the lines on how it changed. `state` proposed lists proposals waiting on the manager. Anyone on "
+    "the team may read them. Example: tico pipeline note list engineering --state proposed",
+    {
+        "pipeline": PIPELINE,
+        "state": _s(
+            "active (default), proposed, retired, declined or any",
+            enum=["active", "proposed", "retired", "declined", "any"],
+        ),
+    },
+    required=("pipeline",),
+)
+def pipeline_note_list(api, args):
+    state = args.get("state") or "active"
+    return api.get(f"pipelines/{_pipeline_id(api, args)}/notes?state={quote(state)}")
+
+
+@tool(
+    "tico_pipeline_note_add",
+    "Add a note in force on a pipeline or one of its stages: the note, why, since when and its evidence. A bot's first "
+    "turn there reads it. People who may change the pipeline; a bot proposes instead (tico_pipeline_note_propose). "
+    'Example: tico pipeline note add engineering --stage QA --note "A pending approval is the ask" --why "Approvers '
+    'got two cards" --evidence "#4237"',
+    {
+        "pipeline": PIPELINE,
+        "stage": NOTE_STAGE,
+        "note": NOTE_TEXT,
+        "why": NOTE_WHY,
+        "since": NOTE_SINCE,
+        "evidence": NOTE_EVIDENCE,
+        "guard": NOTE_GUARD,
+    },
+    required=("pipeline", "note", "why"),
+    writes=True,
+)
+def pipeline_note_add(api, args):
+    body = _note_body(args, "stage", "note", "why", "since", "evidence", "guard")
+    return api.post(f"pipelines/{_pipeline_id(api, args)}/notes", body, key=_key(args))
+
+
+@tool(
+    "tico_pipeline_note_propose",
+    "Propose a note for a pipeline or one of its stages, when the team keeps repeating a mistake there: the note, why "
+    "and the evidence (a task, a pull request or a run), all required. It reaches no turn until the pipeline's manager "
+    "or a person accepts it; you receive their reason. To change or retire a note in force, propose its new wording "
+    'and say which it replaces in why. Example: tico pipeline note propose engineering --note "Big test runs go to '
+    'RunsOn" --why "A local run took the shared machine offline" --evidence "#4232"',
+    {
+        "pipeline": PIPELINE,
+        "stage": NOTE_STAGE,
+        "note": NOTE_TEXT,
+        "why": NOTE_WHY,
+        "evidence": NOTE_EVIDENCE,
+        "since": NOTE_SINCE,
+    },
+    required=("pipeline", "note", "why", "evidence"),
+    writes=True,
+)
+def pipeline_note_propose(api, args):
+    body = _note_body(args, "stage", "note", "why", "since", "evidence")
+    return api.post(f"pipelines/{_pipeline_id(api, args)}/notes/propose", body, key=_key(args))
+
+
+@tool(
+    "tico_pipeline_note_edit",
+    "Tighten or loosen a note in force: only the fields given change, and `message` (required) says what changed and "
+    "why, kept under the note. People who may change the pipeline. "
+    'Example: tico pipeline note edit n_1a2b3c4d --note "Runs over 100 tests go to RunsOn" -m "Loosened: small runs '
+    'stay local"',
+    {
+        "note_id": NOTE_ID,
+        "note": NOTE_TEXT,
+        "why": NOTE_WHY,
+        "since": NOTE_SINCE,
+        "evidence": NOTE_EVIDENCE,
+        "guard": NOTE_GUARD,
+        "message": NOTE_LINE,
+        "revision": {"type": "integer", "description": "The note's revision as you read it"},
+    },
+    required=("note_id", "message"),
+    writes=True,
+)
+def pipeline_note_edit(api, args):
+    body = {
+        **_note_body(args, "note", "why", "since", "evidence", "guard", "revision"),
+        "line": args.get("message", ""),
+    }
+    return api.post(_note_path(args), body, key=_key(args))
+
+
+@tool(
+    "tico_pipeline_note_retire",
+    "Retire a note in force, saying why: it reaches no turn and stays readable. People who may change the pipeline. "
+    'Example: tico pipeline note retire n_1a2b3c4d -m "The guard covers it now"',
+    {"note_id": NOTE_ID, "message": NOTE_LINE},
+    required=("note_id", "message"),
+    writes=True,
+)
+def pipeline_note_retire(api, args):
+    return api.post(_note_path(args) + "/retire", {"reason": args.get("message", "")}, key=_key(args))
+
+
+@tool(
+    "tico_pipeline_note_accept",
+    "Accept a proposed note, with a reason the proposer receives: it is in force from the next turn there. The "
+    "pipeline's manager or a person who may change the pipeline, never the proposer. "
+    'Example: tico pipeline note accept n_1a2b3c4d -m "Two refusals this week back it"',
+    {"note_id": NOTE_ID, "message": NOTE_REASON},
+    required=("note_id", "message"),
+    writes=True,
+)
+def pipeline_note_accept(api, args):
+    return api.post(_note_path(args) + "/accept", {"reason": args.get("message", "")}, key=_key(args))
+
+
+@tool(
+    "tico_pipeline_note_decline",
+    "Decline a proposed note, with a reason the proposer receives. The pipeline's manager or a person who may change "
+    'the pipeline, never the proposer. Example: tico pipeline note decline n_1a2b3c4d -m "The guard already refuses it"',
+    {"note_id": NOTE_ID, "message": NOTE_REASON},
+    required=("note_id", "message"),
+    writes=True,
+)
+def pipeline_note_decline(api, args):
+    return api.post(_note_path(args) + "/decline", {"reason": args.get("message", "")}, key=_key(args))
+
+
 # ----------------------------------------------------------------------------- joining the table
 AUDIENCE = {
     name: PEOPLE  # what a person's agent runs; a bot reads its own task with tico_task_show
@@ -1147,6 +1314,10 @@ AUDIENCE = {
         "tico_requirement_add",
         "tico_requirement_update",
         "tico_requirement_remove",
+        # A person adds, edits and retires notes; a bot proposes, and a manager bot accepts or declines.
+        "tico_pipeline_note_add",
+        "tico_pipeline_note_edit",
+        "tico_pipeline_note_retire",
     )
 }
 SHELL_ONLY = {"tico_task_wait"}
@@ -1178,6 +1349,9 @@ def _either(name):
 
 
 _CONFIRM = Arg("confirm", "--confirm")
+# A note's reason is `-m`, as on a task; its words are flags, so a line reads the same in any order.
+_NOTE_MESSAGE = (Arg("message", "-m", required=False), Arg("message", "--message", required=False))
+_NOTE_FLAGS = (Arg("note", "--note"), Arg("why", "--why"), Arg("evidence", "--evidence"))
 _FIRST = Arg("first", default=None)
 
 CLI = (
@@ -1225,6 +1399,48 @@ CLI = (
         "retire a pipeline (refused while it holds an open task); --confirm is its exact name" + CHANGERS,
         args=(_CONFIRM,),
         example="tico pipeline remove support --confirm Support",
+    ),
+    Group("pipeline note", "what the team learned on a pipeline or a stage, served to a bot's first turn there"),
+    Command(
+        "pipeline note list",
+        "a pipeline's notes and each stage's, with why and how each changed" + ANYONE,
+        example="tico pipeline note list engineering --state proposed",
+    ),
+    Command(
+        "pipeline note add",
+        "add a note in force on a pipeline or a stage: note, why, since, evidence" + " (people who may change it)",
+        args=_NOTE_FLAGS,
+        example='tico pipeline note add engineering --stage QA --note "A pending approval is the ask" --why "Approvers got two cards" --evidence "#4237"',
+    ),
+    Command(
+        "pipeline note propose",
+        "propose a note with its why and evidence; the pipeline's manager accepts or declines it" + ANYONE,
+        args=_NOTE_FLAGS,
+        example='tico pipeline note propose engineering --note "Big test runs go to RunsOn" --why "A local run took the shared machine offline" --evidence "#4232"',
+    ),
+    Command(
+        "pipeline note edit",
+        "tighten or loosen a note in force, saying what changed and why (people who may change the pipeline)",
+        args=_NOTE_MESSAGE,
+        example='tico pipeline note edit n_1a2b3c4d --note "Runs over 100 tests go to RunsOn" -m "Loosened: small runs stay local"',
+    ),
+    Command(
+        "pipeline note retire",
+        "retire a note in force, saying why (people who may change the pipeline)",
+        args=_NOTE_MESSAGE,
+        example='tico pipeline note retire n_1a2b3c4d -m "The guard covers it now"',
+    ),
+    Command(
+        "pipeline note accept",
+        "accept a proposed note with a reason the proposer receives (the manager or such a person, never the proposer)",
+        args=_NOTE_MESSAGE,
+        example='tico pipeline note accept n_1a2b3c4d -m "Two refusals this week back it"',
+    ),
+    Command(
+        "pipeline note decline",
+        "decline a proposed note with a reason the proposer receives (the manager or such a person, never the proposer)",
+        args=_NOTE_MESSAGE,
+        example='tico pipeline note decline n_1a2b3c4d -m "The guard already refuses it"',
     ),
     Group("stage", "one stage of a pipeline"),
     Command(

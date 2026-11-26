@@ -275,4 +275,21 @@ describe('Pipeline editor @s138', () => {
     fireEvent.click(within(enter).getByRole('button', { name: 'Add rule' }));
     expect(within(enter).getByRole('textbox', { name: 'Name' })).toBeTruthy();
   });
+
+  it('a saved side stage shows its notes, to retire them, but no rules', async () => {
+    const side = { id: 'o3', name: 'Returns desk', side: true, purpose: '', owner: null, task_limit: null, requirements: [] };
+    const rec = { ...REC, may_change: true, stages: [...REC.stages, side] };
+    const note = { id: 'n_s1', stage_id: 'o3', note: 'Photograph the box first.', why: 'Two claims had no proof.', since: '2026-11-18', evidence: '#12', guard: '', state: 'active', revision: 1, created_by: 'human:ana', changes: [] };
+    serve((url) => {
+      if (url === '/api/v2/pipelines/ops') return { status: 200, body: { pipeline: rec } };
+      if (url.startsWith('/api/v2/pipelines/ops/notes')) return { status: 200, body: { notes: [], stages: [{ id: 'o3', name: 'Returns desk', notes: [note] }] } };
+      return { status: 200, body: {} };
+    });
+    show(<PipelinePage pipeline="ops" fresh={false} />, '/tasks/ops/edit');
+    fireEvent.click(await screen.findByRole('button', { name: 'Open, Returns desk' }));
+    const notes = await screen.findByRole('region', { name: 'Notes' });
+    expect(await within(notes).findByText('Photograph the box first.')).toBeTruthy();
+    expect(within(notes).getByRole('button', { name: 'Retire' })).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'To leave' })).toBeNull();
+  });
 });
