@@ -84,6 +84,8 @@ vi.mock('@/data', async (orig) => ({
 }));
 // A feature's routing.ts is what the first load carries (the gate, counts, reads); its exports.ts the parts the root
 // loads when they first have something to show.
+// your look for your assistant is read by its own piece of the root (tico/look.test.ts has it), not served here
+vi.mock('@/tico/look', async (orig) => ({ ...(await orig<object>()), LookOnPage: () => null }));
 vi.mock('@/features/start/exports', () => ({ SetupChat: () => null }));
 vi.mock('@/features/start/routing', () => ({
   StartScreen: ({ screen }: { screen: string }) => <p>start: {screen}</p>,

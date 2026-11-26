@@ -74,7 +74,7 @@ import {
 import { usePhoneCards } from '@/shell/phone';
 import { PageIntro, TicoSheet, useTicoPower } from '@/tico';
 import { dot } from '@/tico/dot';
-import { useLookOnPage } from '@/tico/look';
+import { LookOnPage } from '@/tico/look';
 import { pageName, usePageName } from '@/tico/pageName';
 import { chatAddress, closeTask, notePlace, openOf, pageSearch } from '@/lib';
 
@@ -209,7 +209,6 @@ function App() {
   const me = useQuery(meQuery);
   const signedIn = me.isSuccess;
   useInitialReleaseRefresh(signedIn);
-  useLookOnPage(signedIn);
   const status = useLiveStatus();
   const held = useHeldCount();
   const panel = usePagePanelOpen();
@@ -358,6 +357,8 @@ function App() {
       </div>
       {/* each page's first-visit intro, in Tico's chat (it waits while the first run is owed) */}
       {signedIn ? <PageIntro /> : null}
+      {/* your look for your assistant on <html>: its own piece, so a read of it never draws the shell again */}
+      <LookOnPage signedIn={signedIn} />
       {/* Add teammate over any page (`?add=`), onto the team the address names */}
       <Later on={!!adding}>{adding ? <AddTeammate step={adding} team={addTo ?? ''} /> : null}</Later>
       <ActionsRoot dot={dotEl} fold={foldSheet} />
