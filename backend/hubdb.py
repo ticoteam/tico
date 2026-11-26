@@ -3202,10 +3202,12 @@ def number_pipeline(conn, actor, pipeline_id, note=""):
 
 
 def _labels(labels):
-    """Labels are lower-case free text, one word or a hyphenated few, unique, in the order given."""
+    """Labels are lower-case free text, one word or a hyphenated few, unique, in the order given. A key is the same
+    when normalized again (tag_create does), so a cut that leaves a trailing hyphen cannot pass a gate as one key and
+    be stored as another."""
     out = []
     for raw in labels if isinstance(labels, (list, tuple)) else str(labels or "").split(","):
-        one = re.sub(r"\s+", "-", str(raw or "").strip().lower()).strip("-")[:40]
+        one = re.sub(r"\s+", "-", str(raw or "").strip().lower()).strip("-")[:40].rstrip("-")
         if one and one not in out:
             out.append(one)
     return out[:20]

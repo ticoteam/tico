@@ -114,6 +114,9 @@ def _a_label_tico_acts_on_stays_a_movers_even_on_the_bots_own_task(api):
     item = post(api, "tasks", {"owner": "cpo", "title": "Research filters", "body": "x"})
     refused = label(api, item["id"], ["goal:on"], token, expected=403)["error"]
     assert refused["code"] == "label" and "how Tico runs the task" in refused["detail"]
+    # A key cut to 40 characters is checked as it is stored: padding cannot carry goal:on past the gate.
+    refused = label(api, item["id"], ["goal:on" + "-" * 33 + "x"], token, expected=403)["error"]
+    assert refused["code"] == "label" and "how Tico runs the task" in refused["detail"]
     assert get(api, "tasks/" + item["id"])["task"]["labels"] == []
 
 
