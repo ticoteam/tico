@@ -46,7 +46,7 @@ def record(c: sqlite3.Connection, actor: str, action: str, at: str | None = None
 def count(store: Any, who: Any, action: str) -> None:
     """One use by the caller of an answered request, in its own short write. Never raises."""
     try:
-        actor = getattr(who, "actor", None)
+        actor = str(getattr(who, "actor", "") or "")
         if not (H.is_bot(actor) or H.is_human(actor)):
             return
         with store.transaction() as c:
