@@ -949,7 +949,7 @@ def integrations_text(rows):
 
 def integration_text(page):
     out = [
-        f"# {page['title']} ({page['service']}, {page['kind']}, writes: {page['writes']}, owner: {page['owner']})",
+        f"# {page['title']} ({page['service']}, {page['kind']}, writes: {page['writes']}, owner: {page.get('owner') or page.get('owner_id') or 'owner'})",
         "",
         page["summary"],
         "",
