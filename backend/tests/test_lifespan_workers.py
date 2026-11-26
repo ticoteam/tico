@@ -144,6 +144,9 @@ def test_a_worker_that_dies_is_logged_filed_for_agent_ops_and_shows_on_health(tm
                 _, found = check_health._invariant_findings(c, H.now(), at, {})
             assert [f["key"] for f in found] == ["inv:worker_died"]
             assert "inbound" in found[0]["detail"]
+            assert "❓" in found[0]["fix"] and "nothing to do by hand" not in found[0]["fix"], (
+                "Agent Ops asks a person to restart: no run clears it"
+            )
             assert check_health.tag_of("inv:worker_died") == "urgent"
 
     # The next start runs every worker again, so the record is cleared and the check passes.

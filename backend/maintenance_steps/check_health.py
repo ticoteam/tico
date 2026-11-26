@@ -114,6 +114,11 @@ FIX_PAGE = (
     "check or the page where they fix it."
 )
 FIX_RUN = "Agent Ops: nothing to do by hand; the check clears when the next run no longer finds it."
+# A production check whose fix is a person's, not the next run's: what Agent Ops does instead of FIX_RUN.
+FIX_PERSON = {
+    "worker_died": "Agent Ops: only a restart of the server starts the worker again, and the check clears then. One ❓ on "
+    "this task to the person who runs the server, naming the worker and the time.",
+}
 
 
 def tag_of(check_id):
@@ -278,7 +283,7 @@ def _invariant_findings(c, now, at, notes, checks=None):
                     MH.SETUP,
                     f"Production check: {check.label}",
                     detail,
-                    f"{check.look} {FIX_RUN}",
+                    f"{check.look} {FIX_PERSON.get(check.id, FIX_RUN)}",
                     severity=MH.WARN,
                 )
             )
