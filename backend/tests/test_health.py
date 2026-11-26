@@ -1889,7 +1889,7 @@ def _refused_for_13_hours(c, settings, bot):
 
 
 def test_work_its_tasks_snooze_holds_is_never_refused_for_12_hours(environment):
-    """Tico Team, Nov 17: Health's 12-hour queued-work check opened a task on Product Manager every hour for a job
+    """Acme, Nov 17: Health's 12-hour queued-work check opened a task on its Product Manager every hour for a job
     its task's snooze held on purpose (task_wait), while the slow-queue check called the same job resting. Only
     ending the snooze cleared it. A snoozed task's notice is now never an aged refusal; any other refusal of the same
     job still is."""
@@ -1920,8 +1920,11 @@ def test_work_its_tasks_snooze_holds_is_never_refused_for_12_hours(environment):
         assert stuck == [] and [(row["bot"], row["reason"], row.get("resting")) for row in slow] == [
             ("ops", "task_wait", True)
         ]
-        # The same job refused for another reason: the bot is held for its failed runs. That is still reported.
+        # The snooze ends and the same job is refused for another reason: the bot is held for its failed runs. That
+        # is still reported after 12 hours.
+        H.task_unsnooze(c, owner, task["id"])
         failing(c, "ops", 3, held_at=H.shift(H.now(), hours=-14), probe_at=H.shift(H.now(), days=2))
+        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (notice["id"],)).fetchone()[0] == "queued"
         assert [
             (bot, reason != "task_wait")
             for bot, reason in _refused_for_13_hours(c, api.app.state.store.settings, "ops")
