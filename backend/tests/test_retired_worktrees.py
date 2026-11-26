@@ -406,7 +406,11 @@ def test_follow_replacement_moves_only_the_machines_bots_open_checkouts(prepared
     link = leave_on_old_computer(api, tid)
     with api.app_state.store.transaction() as c:
         assert W.follow_replacement(c, ['old'], 'r1', ['cpo']) == (0, 0)  # not a bot that runs there
-        assert W.follow_replacement(c, ['r1'], 'r1', ['cmo']) == (0, 0)  # not a retired computer
+        assert W.follow_replacement(c, ['r1'], 'r1', ['cmo']) == (0, 0)  # the new computer itself
+        revoked = c.execute("SELECT revoked_at FROM runners WHERE id='old'").fetchone()[0]
+        c.execute("UPDATE runners SET revoked_at=NULL WHERE id='old'")
+        assert W.follow_replacement(c, ['old'], 'r1', ['cmo']) == (0, 0)  # another computer, still registered
+        c.execute("UPDATE runners SET revoked_at=? WHERE id='old'", (revoked,))
         assert W.follow_replacement(c, ['old'], 'r1', ['cmo']) == (1, 0)
         row = dict(c.execute('SELECT * FROM task_links WHERE id=?', (link['link_id'],)).fetchone())
         detail = json.loads(row['detail'])

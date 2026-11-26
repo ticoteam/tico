@@ -3741,11 +3741,24 @@ async fn only_a_branch_that_tracks_its_upstream_is_published_already() {
 /// A ready checkout of `org/product` on task branch `tico/feature`, already pushed to origin, in a fresh workspace:
 /// (bare remote, workspace, checkout folder, its task link row).
 async fn backed_checkout(tmp: &Tmp, env: &Env) -> (PathBuf, PathBuf, PathBuf, Value) {
-    let (bare, _seed) = remote(&tmp.0, "product");
+    backed_checkout_of(tmp, env, "product", "0001").await
+}
+
+/// A checkout of repository org/`name` (task-`n`, link-`n`), its origin led to a local bare repository.
+async fn backed_checkout_of(
+    tmp: &Tmp,
+    env: &Env,
+    name: &str,
+    n: &str,
+) -> (PathBuf, PathBuf, PathBuf, Value) {
+    let (bare, _seed) = remote(&tmp.0, name);
+    let repo = format!("org/{name}");
+    let url = format!("https://github.com/{repo}.git");
+    worktrees::allow_test_destination(&repo, &bare.display().to_string());
     let workspace = tmp.0.join("ws");
     let base = workspace
         .join("repos")
-        .join(crate::repositories::base_folder("org/product"));
+        .join(crate::repositories::base_folder(&repo));
     std::fs::create_dir_all(base.parent().unwrap()).unwrap();
     sh(
         &tmp.0,
@@ -3756,24 +3769,12 @@ async fn backed_checkout(tmp: &Tmp, env: &Env) -> (PathBuf, PathBuf, PathBuf, Va
             base.to_str().unwrap(),
         ],
     );
+    sh(&base, &["remote", "set-url", "origin", &url]);
     sh(
         &base,
-        &[
-            "remote",
-            "set-url",
-            "origin",
-            "https://github.com/org/product.git",
-        ],
+        &["config", &format!("url.{}.insteadOf", bare.display()), &url],
     );
-    sh(
-        &base,
-        &[
-            "config",
-            &format!("url.{}.insteadOf", bare.display()),
-            "https://github.com/org/product.git",
-        ],
-    );
-    let tree = workspace.join("work/product");
+    let tree = workspace.join(format!("work/{name}"));
     sh(
         &base,
         &[
@@ -3788,7 +3789,7 @@ async fn backed_checkout(tmp: &Tmp, env: &Env) -> (PathBuf, PathBuf, PathBuf, Va
     sh(&tree, &["push", "-q", "origin", "tico/feature"]);
     sh(&tree, &["fetch", "-q", "origin"]);
     let mut row = json!({
-        "id": "link-0001", "task_id": "task-0001", "path": "work/product", "repo": "org/product",
+        "id": format!("link-{n}"), "task_id": format!("task-{n}"), "path": format!("work/{name}"), "repo": repo,
         "branch": "tico/feature", "owner": "bot:ops", "state": "pending",
         "detail_json": json!({"checkout_state": "attached_pending"}).to_string(),
     });
@@ -3994,6 +3995,12 @@ async fn a_copy_never_replaces_other_work_on_its_wip_branch() {
 
 /// Send origin's fetches and pushes of github.com/org/product to `to` instead of the test remote `bare`.
 fn lead_origin_to(workspace: &Path, bare: &Path, to: &str) {
+    worktrees::allow_test_destination("org/product", to);
+    lead_origin_unchecked(workspace, bare, to);
+}
+
+/// Rewrite origin's URL in the base clone to `to` without telling the destination check it is the repository.
+fn lead_origin_unchecked(workspace: &Path, bare: &Path, to: &str) {
     let base = workspace
         .join("repos")
         .join(crate::repositories::base_folder("org/product"));
@@ -4026,23 +4033,54 @@ async fn a_copy_goes_only_to_the_checkouts_own_repository() {
     let base = workspace
         .join("repos")
         .join(crate::repositories::base_folder("org/product"));
-    // A push URL sends pushes elsewhere than fetches: refused, nothing written there or at origin.
+    let refused = |e: worktrees::WtErr| {
+        assert!(
+            e.text().contains("not this task's repository"),
+            "{}",
+            e.text()
+        );
+    };
+    // A push URL sends pushes elsewhere than fetches.
     sh(
         &base,
         &["config", "remote.origin.pushurl", other.to_str().unwrap()],
     );
-    let refused = worktrees::back_up(&workspace, &row, &head, &env, true, "")
-        .await
-        .unwrap_err();
-    assert!(
-        refused.text().contains("not this task's repository"),
-        "{}",
-        refused.text()
+    refused(
+        worktrees::back_up(&workspace, &row, &head, &env, true, "")
+            .await
+            .unwrap_err(),
+    );
+    // A second push URL beside the repository's own: git pushes to both.
+    sh(
+        &base,
+        &["config", "remote.origin.pushurl", bare.to_str().unwrap()],
+    );
+    sh(
+        &base,
+        &[
+            "config",
+            "--add",
+            "remote.origin.pushurl",
+            other.to_str().unwrap(),
+        ],
+    );
+    refused(
+        worktrees::back_up(&workspace, &row, &head, &env, true, "")
+            .await
+            .unwrap_err(),
+    );
+    sh(&base, &["config", "--unset-all", "remote.origin.pushurl"]);
+    // A rewrite leading origin's own URL to another repository (QA, task #3448): origin still names the right one.
+    lead_origin_unchecked(&workspace, &bare, other.to_str().unwrap());
+    refused(
+        worktrees::back_up(&workspace, &row, &head, &env, true, "")
+            .await
+            .unwrap_err(),
     );
     assert_eq!(remote_head(&other, &wip), None);
     assert_eq!(remote_head(&bare, &wip), None);
-    // An origin naming another repository is refused too.
-    sh(&base, &["config", "--unset", "remote.origin.pushurl"]);
+    // An origin naming another repository is refused before anything is sent.
+    lead_origin_to(&workspace, other.as_path(), bare.to_str().unwrap());
     sh(
         &base,
         &[
@@ -4052,10 +4090,167 @@ async fn a_copy_goes_only_to_the_checkouts_own_repository() {
             "https://github.com/org/other.git",
         ],
     );
-    assert!(worktrees::back_up(&workspace, &row, &head, &env, false, "")
-        .await
-        .is_err());
+    refused(
+        worktrees::back_up(&workspace, &row, &head, &env, false, "")
+            .await
+            .unwrap_err(),
+    );
     assert_eq!(remote_head(&other, &wip), None);
+    assert_eq!(remote_head(&bare, &wip), None);
+}
+
+#[tokio::test]
+async fn a_copy_is_not_published_work() {
+    let tmp = Tmp::new();
+    let env = turn_env(&tmp.0, &[]);
+    let (_bare, workspace, tree, row) = backed_checkout(&tmp, &env).await;
+    let wip = worktrees::wip_branch(&row);
+    let head = commit(&tree, "one.txt");
+    worktrees::back_up(&workspace, &row, &head, &env, false, "")
+        .await
+        .unwrap();
+    // A fetch brings the copy in as origin/wip/...: the commit is still unpushed to the task branch.
+    sh(
+        &tree,
+        &[
+            "fetch",
+            "-q",
+            "origin",
+            &format!("refs/heads/{wip}:refs/remotes/origin/{wip}"),
+        ],
+    );
+    assert_eq!(
+        worktrees::inspect(&workspace, &row, &env, None).await["ahead"].as_i64(),
+        Some(1)
+    );
+    // An open task's checkout released with that commit only on the copy is kept.
+    let mut action_row = row.as_object().unwrap().clone();
+    action_row.insert("full_name".into(), json!("org/product"));
+    action_row.insert("release".into(), json!(true));
+    let kept = worktrees::act(&workspace, &mut action_row, "remove", &env, &[], || async {
+        true
+    })
+    .await
+    .unwrap_err();
+    assert!(kept.text().contains("unpushed commits"), "{}", kept.text());
+    assert!(tree.exists());
+}
+
+#[tokio::test]
+async fn a_copy_is_deleted_only_while_its_task_branch_still_holds_it() {
+    let tmp = Tmp::new();
+    let env = turn_env(&tmp.0, &[]);
+    let (bare, workspace, tree, row) = backed_checkout(&tmp, &env).await;
+    let wip = worktrees::wip_branch(&row);
+    let first = commit(&tree, "one.txt");
+    worktrees::back_up(&workspace, &row, &first, &env, false, "")
+        .await
+        .unwrap();
+    let second = commit(&tree, "two.txt");
+    sh(&tree, &["push", "-q", "origin", "tico/feature"]);
+    // The task branch was rewritten after `second` was shown to contain the copy: the delete is refused.
+    sh(
+        &tree,
+        &[
+            "push",
+            "-q",
+            "-f",
+            "origin",
+            "HEAD~2:refs/heads/tico/feature",
+        ],
+    );
+    assert!(
+        worktrees::delete_copy(&tree, "tico/feature", &second, &wip, &first, &env)
+            .await
+            .is_err()
+    );
+    assert_eq!(remote_head(&bare, &wip), Some(first.clone()));
+    // ...and deleted: the delete is refused too.
+    sh(&tree, &["push", "-q", "origin", ":refs/heads/tico/feature"]);
+    assert!(
+        worktrees::delete_copy(&tree, "tico/feature", &second, &wip, &first, &env)
+            .await
+            .is_err()
+    );
+    assert_eq!(remote_head(&bare, &wip), Some(first.clone()));
+    // With the task branch where it was shown, the copy goes and the branch stays.
+    sh(
+        &tree,
+        &["push", "-q", "origin", "HEAD:refs/heads/tico/feature"],
+    );
+    worktrees::delete_copy(&tree, "tico/feature", &second, &wip, &first, &env)
+        .await
+        .unwrap();
+    assert_eq!(remote_head(&bare, &wip), None);
+    assert_eq!(remote_head(&bare, "tico/feature"), Some(second));
+}
+
+/// A remote that takes connections and never answers: its URL and a signal for each connection it holds.
+async fn stalled_remote() -> (
+    String,
+    tokio::sync::mpsc::UnboundedReceiver<()>,
+    tokio::task::JoinHandle<()>,
+) {
+    let stalled = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/product.git", stalled.local_addr().unwrap());
+    let (reached, reached_rx) = tokio::sync::mpsc::unbounded_channel();
+    let holder = tokio::spawn(async move {
+        let mut open = vec![];
+        while let Ok((socket, _)) = stalled.accept().await {
+            open.push(socket);
+            let _ = reached.send(());
+        }
+    });
+    (url, reached_rx, holder)
+}
+
+#[tokio::test]
+async fn a_stalled_remote_holds_up_neither_the_checkouts_git_nor_its_removal() {
+    use std::time::Duration;
+    let tmp = Tmp::new();
+    let env = turn_env(&tmp.0, &[]);
+    let (bare, workspace, tree, row) = backed_checkout(&tmp, &env).await;
+    crate::gitlocks::own(std::slice::from_ref(&workspace));
+    let head = commit(&tree, "one.txt");
+    sh(&tree, &["push", "-q", "origin", "tico/feature"]);
+    sh(&tree, &["fetch", "-q", "origin"]);
+    let (held, mut reached, holder) = stalled_remote().await;
+    lead_origin_to(&workspace, &bare, &held);
+    // A copy is talking to the stalled remote...
+    let copying = {
+        let (workspace, row, env, head) =
+            (workspace.clone(), row.clone(), env.clone(), head.clone());
+        tokio::spawn(
+            async move { worktrees::back_up(&workspace, &row, &head, &env, false, "").await },
+        )
+    };
+    tokio::time::timeout(Duration::from_secs(60), reached.recv())
+        .await
+        .expect("the copy never reached the remote");
+    // ...while the repository's gated Git work goes on (the gate gives up after ten seconds).
+    worktrees::git(&tree, &env, &["status", "--porcelain"], true)
+        .await
+        .unwrap();
+    // And the task's removal finishes without waiting on the remote to delete the old copy.
+    let mut action_row = row.as_object().unwrap().clone();
+    action_row.insert("full_name".into(), json!("org/product"));
+    let removed = tokio::time::timeout(
+        Duration::from_secs(60),
+        worktrees::act(&workspace, &mut action_row, "remove", &env, &[], || async {
+            true
+        }),
+    )
+    .await
+    .expect("the removal waited on the remote");
+    assert!(
+        matches!(removed, Ok("removed")),
+        "{:?}",
+        removed.err().map(|e| e.text())
+    );
+    assert!(!tree.exists());
+    assert!(!copying.is_finished());
+    copying.abort();
+    holder.abort();
 }
 
 #[tokio::test]
@@ -4123,6 +4318,56 @@ async fn a_stalled_copy_holds_back_neither_the_next_pass_nor_its_reports() {
 }
 
 #[tokio::test]
+async fn a_stalled_copy_holds_back_no_other_checkouts_copy() {
+    use std::time::Duration;
+    let tmp = Tmp::new();
+    let env = turn_env(&tmp.0, &[]);
+    let (bare, workspace, tree, row) = backed_checkout(&tmp, &env).await;
+    let (other_bare, _, other_tree, other_row) =
+        backed_checkout_of(&tmp, &env, "second", "0002").await;
+    commit(&tree, "one.txt");
+    let other_head = commit(&other_tree, "two.txt");
+    let (held, mut reached, holder) = stalled_remote().await;
+    lead_origin_to(&workspace, &bare, &held);
+    let (client, _, routes, _) = routed_server().await;
+    let rows: Vec<Value> = [row, other_row.clone()]
+        .into_iter()
+        .map(|mut r| {
+            r["task_status"] = json!("open");
+            r
+        })
+        .collect();
+    routes.lock().unwrap().insert(
+        "GET /api/v2/runners/me/worktrees".into(),
+        (200, json!({ "worktrees": rows })),
+    );
+    for link in ["link-0001", "link-0002"] {
+        routes.lock().unwrap().insert(
+            format!("POST /api/v2/runners/me/worktrees/{link}/token"),
+            (200, json!({"configured": false})),
+        );
+    }
+    let manager = std::sync::Arc::new(worktrees::Worktrees::new(&workspace, client));
+    let host: std::sync::Arc<dyn worktrees::Host> = std::sync::Arc::new(test_lanes(&workspace));
+    tokio::time::timeout(Duration::from_secs(60), manager.clone().sync(host, vec![]))
+        .await
+        .expect("the pass waited for the copies");
+    tokio::time::timeout(Duration::from_secs(60), reached.recv())
+        .await
+        .expect("the first copy never reached its remote");
+    // The first copy is held; the second checkout's copy lands all the same.
+    tokio::time::timeout(Duration::from_secs(60), manager.copied("link-0002"))
+        .await
+        .expect("the second copy waited behind the first");
+    assert_eq!(
+        remote_head(&other_bare, &worktrees::wip_branch(&other_row)),
+        Some(other_head)
+    );
+    assert!(manager.backing_up(), "the first copy is still pushing");
+    holder.abort();
+}
+
+#[tokio::test]
 async fn removing_a_checkout_whose_head_is_on_its_task_branch_deletes_its_wip_copy() {
     let tmp = Tmp::new();
     let env = turn_env(&tmp.0, &[]);
@@ -4145,6 +4390,12 @@ async fn removing_a_checkout_whose_head_is_on_its_task_branch_deletes_its_wip_co
         "{:?}",
         removed.err().map(|e| e.text())
     );
+    worktrees::dropped(
+        &workspace
+            .join("repos")
+            .join(crate::repositories::base_folder("org/product")),
+    )
+    .await;
     assert_eq!(remote_head(&bare, &wip), None);
     assert_eq!(remote_head(&bare, "tico/feature"), Some(head));
 }
@@ -4172,6 +4423,12 @@ async fn a_wip_copy_holding_work_the_task_branch_lacks_survives_removal() {
         "{:?}",
         removed.err().map(|e| e.text())
     );
+    worktrees::dropped(
+        &workspace
+            .join("repos")
+            .join(crate::repositories::base_folder("org/product")),
+    )
+    .await;
     assert_eq!(remote_head(&bare, &wip), Some(head));
 }
 

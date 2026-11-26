@@ -217,6 +217,14 @@ pub async fn fetch_ungated_as_bot(path: &Path, env: &Env, args: &[&str], timeout
     run_once(&argv, env, None, timeout_s, true).await
 }
 
+/// A bot checkout's `ls-remote` or `push` run outside the repository's command gate, for the reason a fetch is
+/// (`fetch_ungated_as_bot`): it talks to the remote for up to two minutes and writes nothing local but a
+/// remote-tracking ref, under git's own lock. A stalled remote must not hold the gate the checkout's inspection,
+/// restore or cleanup wait on.
+pub async fn remote_ungated_as_bot(path: &Path, env: &Env, args: &[&str], timeout_s: u64) -> Ran {
+    fetch_ungated_as_bot(path, env, args, timeout_s).await
+}
+
 /// Git outside any checkout with the safegit prefix (safe_git.PREFIX): clones, `check-ref-format`.
 pub async fn bare(env: &Env, args: &[&str], timeout_s: u64) -> Ran {
     let mut argv = vec!["git".to_string()];
