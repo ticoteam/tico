@@ -3407,6 +3407,8 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
             usage[bot] = usage.get(bot, 0) + (0 if row['state'] == 'retired' else detail.get('size_mb', 0))
             if not finished_and_retired(row) and (error := current_error(row['state'], detail)):
                 failing.append((bot, error))
+            elif row['state'] == 'present' and detail.get('backup_error'):
+                failing.append((bot, str(detail['backup_error'])))  # still usable, but only on this disk
         names = _bot_names(c, [bot for bot, _ in failing])  # one read for the bots named, not one a worktree
         errors = [names[bot] + ': ' + error for bot, error in failing]
         if usage:

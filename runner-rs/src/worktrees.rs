@@ -1821,13 +1821,46 @@ pub fn backup_due(
 }
 
 /// Copy `head` of checkout `row` to its own wip/ branch on origin, the branch restore and recovery already read
-/// (`saved_history`). Only that branch is written; the checkout, its branch and its upstream are untouched.
-pub async fn back_up(workspace: &Path, row: &Value, head: &str, env: &Env) -> R<()> {
+/// (`saved_history`). Only that branch is written; the checkout, its branch and its upstream are untouched. The push
+/// goes only to the task link's repository (`machine_git`: this machine's own sign-in, which can write elsewhere):
+/// origin must name it, and a push URL that sends pushes somewhere fetches do not go is refused.
+pub async fn back_up(
+    workspace: &Path,
+    row: &Value,
+    head: &str,
+    env: &Env,
+    machine_git: bool,
+) -> R<()> {
     let path = safe_path(workspace, &text_of(&row["path"]))?;
     if !is_sha(head) {
         return Err(WtErr::msg("Not a commit"));
     }
     let wip = checked_branch(&wip_branch(row)).await?;
+    let origin = git(&path, env, &["config", "--get", "remote.origin.url"], false)
+        .await?
+        .stdout
+        .trim()
+        .to_string();
+    let resolved = |push: bool| {
+        let path = path.clone();
+        async move {
+            let mut args = vec!["remote", "get-url"];
+            if push {
+                args.push("--push");
+            }
+            args.push("origin");
+            git(&path, env, &args, true)
+                .await
+                .map(|o| o.stdout.trim().to_string())
+        }
+    };
+    if !repo_matches(&origin, &text_of(&row["repo"]), machine_git)
+        || resolved(true).await? != resolved(false).await?
+    {
+        return Err(WtErr::msg(
+            "Origin is not this task's repository; nothing pushed",
+        ));
+    }
     let pushed = git(
         &path,
         env,
@@ -1849,6 +1882,52 @@ pub async fn back_up(workspace: &Path, row: &Value, head: &str, env: &Env) -> R<
     )
     .await?;
     pushed.map(|_| ())
+}
+
+/// Where a checkout keeps its last failed copy (when, and why) so the hour's wait survives a restart of this
+/// computer's runner: a file in the worktree's own git folder, which goes with the worktree.
+fn failure_file(workspace: &Path, row: &Value) -> Option<PathBuf> {
+    let tree = safe_path(workspace, &text_of(&row["path"])).ok()?;
+    let pointer = std::fs::read_to_string(tree.join(".git")).ok()?;
+    let gitdir = PathBuf::from(pointer.trim().strip_prefix("gitdir:")?.trim());
+    Some(tree.join(gitdir).join("tico-backup-failed"))
+}
+
+/// Keep (`Some(reason)`) or clear (`None`) checkout `row`'s last failed copy.
+pub fn save_failure(workspace: &Path, row: &Value, reason: Option<&str>) {
+    let Some(file) = failure_file(workspace, row) else {
+        return;
+    };
+    match reason {
+        Some(reason) => {
+            let at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let _ = std::fs::write(file, format!("{at}\n{reason}"));
+        }
+        None => {
+            let _ = std::fs::remove_file(file);
+        }
+    }
+}
+
+/// What this computer knew of checkout `row`'s copies before a restart: the last failed one, if any, timed back to
+/// when it failed so `backup_due` keeps the hour's wait.
+pub fn saved_failure(workspace: &Path, row: &Value) -> Backup {
+    let saved = failure_file(workspace, row).and_then(|f| std::fs::read_to_string(f).ok());
+    let Some((at, reason)) = saved.as_deref().and_then(|t| t.split_once('\n')) else {
+        return Backup::default();
+    };
+    let failed = std::time::UNIX_EPOCH + Duration::from_secs(at.trim().parse().unwrap_or(0));
+    let ago = std::time::SystemTime::now()
+        .duration_since(failed)
+        .unwrap_or_default();
+    Backup {
+        head: String::new(),
+        at: Instant::now().checked_sub(ago),
+        error: Some(reason.chars().take(300).collect()),
+    }
 }
 
 /// The words a checkout shows for a failed copy: Tico's message and git's first line, without credentials.
@@ -3277,6 +3356,9 @@ pub struct Worktrees {
     client: Client,
     inner: Mutex<Inner>,
     pending: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// The copies to wip/ branches running beside the passes (`start_backups`): a slow remote never holds an action
+    /// or a report back.
+    backing_up: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// Bots whose worktree maintenance is running: no claim names them meanwhile.
     pub maintaining: Mutex<HashSet<String>>,
     /// The disk is low (disk_clean.rs): the next pass removes every finished task's worktree the server asked to
@@ -3291,6 +3373,7 @@ impl Worktrees {
             client,
             inner: Mutex::new(Inner::default()),
             pending: Mutex::new(None),
+            backing_up: Mutex::new(None),
             maintaining: Mutex::new(HashSet::new()),
             urgent: Default::default(),
         }
@@ -3540,7 +3623,8 @@ impl Worktrees {
             }
             reports.push(report);
         }
-        self.back_up_all(&rows, &mut reports).await;
+        self.note_backups(&rows, &mut reports);
+        self.start_backups(&rows, &reports);
         let mut inner = self.inner.lock().unwrap();
         inner.stats = stats;
         inner.errors = errors;
@@ -3597,41 +3681,14 @@ impl Worktrees {
         Ok((env, repo, token))
     }
 
-    /// Copy each inspected checkout's unpushed head to its wip/ branch when `backup_due`, and put the copy's
-    /// outcome on its report: the head copied (`backed_up`), or why the latest copy failed (`backup_error`).
-    async fn back_up_all(&self, rows: &[Value], reports: &mut [Value]) {
-        let mut backups = std::mem::take(&mut self.inner.lock().unwrap().backups);
+    /// Put each checkout's latest copy on its report: the head copied (`backed_up`), or why the latest copy failed
+    /// (`backup_error`). Forgets checkouts no longer listed.
+    fn note_backups(&self, rows: &[Value], reports: &mut [Value]) {
+        let mut inner = self.inner.lock().unwrap();
+        let ids: HashSet<String> = rows.iter().map(|r| text_of(&r["id"])).collect();
+        inner.backups.retain(|k, _| ids.contains(k));
         for (row, report) in rows.iter().zip(reports.iter_mut()) {
-            let link = text_of(&row["id"]);
-            let last = backups.get(&link).cloned();
-            let recorded = detail(row)
-                .get("backed_up")
-                .map(text_of)
-                .unwrap_or_default();
-            let known = last
-                .as_ref()
-                .map(|b| b.head.clone())
-                .filter(|h| !h.is_empty())
-                .unwrap_or(recorded);
-            if let Some(head) = backup_due(report, &known, last.as_ref(), Instant::now()) {
-                let outcome = match self
-                    .repository_env(&link, &text_of(&row["repo"]), false)
-                    .await
-                {
-                    Ok((env, _, _)) => back_up(&self.workspace, row, &head, &env).await,
-                    Err(e) => Err(e),
-                };
-                let entry = backups.entry(link.clone()).or_default();
-                entry.at = Some(Instant::now());
-                match outcome {
-                    Ok(()) => {
-                        entry.head = head;
-                        entry.error = None;
-                    }
-                    Err(e) => entry.error = Some(backup_error(&e)),
-                }
-            }
-            if let Some(b) = backups.get(&link) {
+            if let Some(b) = inner.backups.get(&text_of(&row["id"])) {
                 if is_sha(&b.head) {
                     report["backed_up"] = json!(b.head);
                 }
@@ -3640,9 +3697,77 @@ impl Worktrees {
                 }
             }
         }
-        let ids: HashSet<String> = rows.iter().map(|r| text_of(&r["id"])).collect();
-        backups.retain(|k, _| ids.contains(k));
-        self.inner.lock().unwrap().backups = backups;
+    }
+
+    /// Copy the inspected checkouts' unpushed heads to their wip/ branches in the background, unless the last
+    /// round is still running. The pass goes on without waiting: a push may take its full two minutes per checkout,
+    /// and a restore or a ready report queued behind a round of them would wait far longer (task #3448's review).
+    fn start_backups(self: &Arc<Self>, rows: &[Value], reports: &[Value]) {
+        let mut running = self.backing_up.lock().unwrap();
+        if running.as_ref().is_some_and(|r| !r.is_finished()) {
+            return;
+        }
+        let (rows, reports, me) = (rows.to_vec(), reports.to_vec(), self.clone());
+        *running = Some(tokio::spawn(async move {
+            me.back_up_all(&rows, &reports).await
+        }));
+    }
+
+    /// Whether a round of copies is still running (tests).
+    pub fn backing_up(&self) -> bool {
+        self.backing_up
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|r| !r.is_finished())
+    }
+
+    /// Copy each checkout whose `backup_due`, one at a time, recording each outcome as it ends (and on disk when it
+    /// failed, `save_failure`); the next pass's reports carry them.
+    async fn back_up_all(&self, rows: &[Value], reports: &[Value]) {
+        for (row, report) in rows.iter().zip(reports) {
+            let link = text_of(&row["id"]);
+            let last = self.inner.lock().unwrap().backups.get(&link).cloned();
+            let last = match last {
+                Some(last) => last,
+                None if report["state"] == "present" => {
+                    let saved = saved_failure(&self.workspace, row);
+                    let mut inner = self.inner.lock().unwrap();
+                    inner.backups.insert(link.clone(), saved.clone());
+                    saved
+                }
+                None => continue,
+            };
+            let recorded = detail(row)
+                .get("backed_up")
+                .map(text_of)
+                .unwrap_or_default();
+            let known = Some(last.head.clone())
+                .filter(|h| !h.is_empty())
+                .unwrap_or(recorded);
+            let Some(head) = backup_due(report, &known, Some(&last), Instant::now()) else {
+                continue;
+            };
+            let outcome = match self
+                .repository_env(&link, &text_of(&row["repo"]), false)
+                .await
+            {
+                Ok((env, listed, _)) => {
+                    let machine_git = listed.get("machine_git") == Some(&json!(true));
+                    back_up(&self.workspace, row, &head, &env, machine_git).await
+                }
+                Err(e) => Err(e),
+            };
+            let error = outcome.err().map(|e| backup_error(&e));
+            save_failure(&self.workspace, row, error.as_deref());
+            let mut inner = self.inner.lock().unwrap();
+            let entry = inner.backups.entry(link).or_default();
+            entry.at = Some(Instant::now());
+            if error.is_none() {
+                entry.head = head;
+            }
+            entry.error = error;
+        }
     }
 
     /// One action on one row: (the link's new state, its new detail_json when a restore changed it).

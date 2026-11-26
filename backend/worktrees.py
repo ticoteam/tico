@@ -192,6 +192,11 @@ def recovery_prompt(c, task, bot):
                 "This brings back published work on your current computer. Work that was not pushed "
                 "stayed on the retired computer; do not ask a person to restore this checkout first."
             )
+        elif row['state'] == 'present' and detail.get('backup_error'):
+            notes.append(  # the checkout still works; its unpushed commits are on this computer's disk alone
+                f"{detail['backup_error']} ({row['repo']}, branch {row['branch']}). Push your commits to the task "
+                "branch: a replaced computer loses what is on its disk alone."
+            )
     return notes
 
 
@@ -1189,7 +1194,8 @@ def follow_replacement(c, gone, computer, bots):
     """A cloud machine made again on a new disk: its new computer `computer` takes the place of the computers in `gone`
     (revoked). Each open checkout the machine's `bots` had there moves to `computer` as a queued recovery, so the new
     computer rebuilds it from the task branch or the newer wip/ copy its predecessor pushed, without the bot asking
-    (task #3448). A checkout of a finished task is closed instead, its last report kept as history. Other computers
+    (task #3448). A checkout of a finished task, one asked to be removed, or one of a task that changed hands is closed
+    instead, its last report kept as history. Other computers
     (a bot's own, re-registered by a person) never come here. Returns (moved, closed)."""
     gone = [g for g in gone if g and g != computer and retired(c, g)]
     owners = {'bot:' + b for b in bots}
@@ -1208,8 +1214,11 @@ def follow_replacement(c, gone, computer, bots):
             owner = detail.get('owner', existing['owner_id'])
             if owner not in owners or not existing['repo']:
                 continue  # another computer's bot, or an attached folder with no repository to rebuild from
-            if existing['task_status'] in CLOSED:
-                # Kept as the retired report (head, published head, unpushed count): reopening the task recovers it.
+            # Closed, not moved: a finished task; a checkout someone asked to delete (`tico task unlink`, which a
+            # rebuild would undo); a task that changed hands, whose new owner adds its own checkout. The last report
+            # is kept (head, published head, unpushed count, the wip/ copy's head): reopening the task recovers it.
+            changed_hands = owner != existing['owner_id']
+            if existing['task_status'] in CLOSED or changed_hands or detail.get('delete_requested'):
                 last = json.loads(status(c, existing, gone=True)['detail'] or '{}')
                 now = detail['record_changed'] = H.now()
                 detail.update(removed_by='replacement', release_reason=last.get('error') or RETIRED)
@@ -1219,8 +1228,6 @@ def follow_replacement(c, gone, computer, bots):
                 )
                 closed += 1
                 continue
-            if owner != existing['owner_id']:
-                continue  # the task changed hands: its new owner adds its own checkout
             _recovery(existing, detail)
             _reallocate(c, existing, detail, computer, owner)
             moved += 1

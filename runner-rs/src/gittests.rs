@@ -3851,7 +3851,7 @@ async fn an_unpushed_commit_is_copied_to_its_wip_branch_and_copied_again_only_on
     let report = worktrees::inspect(&workspace, &row, &env, None).await;
     assert_eq!(report["ahead"], 1, "{report}");
     assert_eq!(backup_due(&report, "", None, now), Some(head.clone()));
-    let copied = worktrees::back_up(&workspace, &row, &head, &env).await;
+    let copied = worktrees::back_up(&workspace, &row, &head, &env, false).await;
     assert!(copied.is_ok(), "{:?}", copied.err().map(|e| e.text()));
     assert_eq!(remote_head(&bare, &wip), Some(head.clone()));
     // The copy is not the task branch: the commit still counts as unpushed, and the task branch did not move.
@@ -3883,7 +3883,7 @@ async fn an_unpushed_commit_is_copied_to_its_wip_branch_and_copied_again_only_on
         backup_due(&moved, &head, Some(&last), now + BACKUP_EVERY),
         Some(newer.clone())
     );
-    worktrees::back_up(&workspace, &row, &newer, &env)
+    worktrees::back_up(&workspace, &row, &newer, &env, false)
         .await
         .unwrap();
     assert_eq!(remote_head(&bare, &wip), Some(newer));
@@ -3895,18 +3895,12 @@ async fn a_copy_that_cannot_be_pushed_says_why_keeps_the_checkout_and_is_retried
     use worktrees::{backup_due, Backup, BACKUP_RETRY};
     let tmp = Tmp::new();
     let env = turn_env(&tmp.0, &[]);
-    let (_bare, workspace, tree, row) = backed_checkout(&tmp, &env).await;
+    let (bare, workspace, tree, row) = backed_checkout(&tmp, &env).await;
     let head = commit(&tree, "one.txt");
-    // Origin refuses the push (here: it is gone).
-    let base = workspace
-        .join("repos")
-        .join(crate::repositories::base_folder("org/product"));
+    // Origin refuses the push (here: the repository it leads to is gone).
     let gone = tmp.0.join("gone.git");
-    sh(
-        &base,
-        &["remote", "set-url", "origin", gone.to_str().unwrap()],
-    );
-    let failed = worktrees::back_up(&workspace, &row, &head, &env)
+    lead_origin_to(&workspace, &bare, gone.to_str().unwrap());
+    let failed = worktrees::back_up(&workspace, &row, &head, &env, false)
         .await
         .unwrap_err();
     let shown = worktrees::backup_error(&failed);
@@ -3936,6 +3930,140 @@ async fn a_copy_that_cannot_be_pushed_says_why_keeps_the_checkout_and_is_retried
         None
     );
     assert!(backup_due(&report, "", Some(&last), now + BACKUP_RETRY).is_some());
+    // A restarted runner keeps the hour's wait and the reason: the failure is kept beside the worktree.
+    worktrees::save_failure(&workspace, &row, Some(&last.error.clone().unwrap()));
+    let restarted = worktrees::saved_failure(&workspace, &row);
+    assert_eq!(restarted.error, last.error);
+    assert_eq!(
+        backup_due(&report, "", Some(&restarted), Instant::now()),
+        None
+    );
+    assert!(backup_due(&report, "", Some(&restarted), Instant::now() + BACKUP_RETRY).is_some());
+    // A copy that later succeeds clears it.
+    worktrees::save_failure(&workspace, &row, None);
+    assert_eq!(worktrees::saved_failure(&workspace, &row).error, None);
+}
+
+/// Send origin's fetches and pushes of github.com/org/product to `to` instead of the test remote `bare`.
+fn lead_origin_to(workspace: &Path, bare: &Path, to: &str) {
+    let base = workspace
+        .join("repos")
+        .join(crate::repositories::base_folder("org/product"));
+    sh(
+        &base,
+        &[
+            "config",
+            "--unset",
+            &format!("url.{}.insteadOf", bare.display()),
+        ],
+    );
+    sh(
+        &base,
+        &[
+            "config",
+            &format!("url.{to}.insteadOf"),
+            "https://github.com/org/product.git",
+        ],
+    );
+}
+
+#[tokio::test]
+async fn a_copy_goes_only_to_the_checkouts_own_repository() {
+    let tmp = Tmp::new();
+    let env = turn_env(&tmp.0, &[]);
+    let (bare, workspace, tree, row) = backed_checkout(&tmp, &env).await;
+    let head = commit(&tree, "one.txt");
+    let wip = worktrees::wip_branch(&row);
+    let (other, _) = remote(&tmp.0, "other");
+    let base = workspace
+        .join("repos")
+        .join(crate::repositories::base_folder("org/product"));
+    // A push URL sends pushes elsewhere than fetches: refused, nothing written there or at origin.
+    sh(
+        &base,
+        &["config", "remote.origin.pushurl", other.to_str().unwrap()],
+    );
+    let refused = worktrees::back_up(&workspace, &row, &head, &env, true)
+        .await
+        .unwrap_err();
+    assert!(
+        refused.text().contains("not this task's repository"),
+        "{}",
+        refused.text()
+    );
+    assert_eq!(remote_head(&other, &wip), None);
+    assert_eq!(remote_head(&bare, &wip), None);
+    // An origin naming another repository is refused too.
+    sh(&base, &["config", "--unset", "remote.origin.pushurl"]);
+    sh(
+        &base,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://github.com/org/other.git",
+        ],
+    );
+    assert!(worktrees::back_up(&workspace, &row, &head, &env, false)
+        .await
+        .is_err());
+    assert_eq!(remote_head(&other, &wip), None);
+}
+
+#[tokio::test]
+async fn a_stalled_copy_holds_back_neither_the_next_pass_nor_its_reports() {
+    use std::time::Duration;
+    let tmp = Tmp::new();
+    let env = turn_env(&tmp.0, &[]);
+    let (bare, workspace, tree, row) = backed_checkout(&tmp, &env).await;
+    commit(&tree, "one.txt");
+    // A remote that takes the push and never answers.
+    let stalled = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let held = format!("http://{}/product.git", stalled.local_addr().unwrap());
+    let holder = tokio::spawn(async move {
+        let mut open = vec![];
+        while let Ok((socket, _)) = stalled.accept().await {
+            open.push(socket);
+        }
+    });
+    lead_origin_to(&workspace, &bare, &held);
+    let (client, seen, routes, _) = routed_server().await;
+    let mut row = row;
+    row["task_status"] = json!("open");
+    routes.lock().unwrap().insert(
+        "GET /api/v2/runners/me/worktrees".into(),
+        (200, json!({"worktrees": [row]})),
+    );
+    routes.lock().unwrap().insert(
+        "POST /api/v2/runners/me/worktrees/link-0001/token".into(),
+        (200, json!({"configured": false})),
+    );
+    let manager = std::sync::Arc::new(worktrees::Worktrees::new(&workspace, client));
+    let host: std::sync::Arc<dyn worktrees::Host> = std::sync::Arc::new(test_lanes(&workspace));
+    for pass in 0..2 {
+        tokio::time::timeout(
+            Duration::from_secs(60),
+            manager.clone().sync(host.clone(), vec![]),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("pass {pass} waited for the copy"));
+        assert!(manager.backing_up(), "the copy is still pushing");
+        let reports = manager.latest();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(
+            (reports[0]["state"].as_str(), reports[0]["ahead"].as_i64()),
+            (Some("present"), Some(1))
+        );
+    }
+    // One round at a time: the second pass started no second copy.
+    let tokens = seen
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(line, _)| line.ends_with("/token"))
+        .count();
+    assert_eq!(tokens, 1);
+    holder.abort();
 }
 
 #[tokio::test]
@@ -3945,7 +4073,7 @@ async fn removing_a_checkout_whose_head_is_on_its_task_branch_deletes_its_wip_co
     let (bare, workspace, tree, row) = backed_checkout(&tmp, &env).await;
     let wip = worktrees::wip_branch(&row);
     let head = commit(&tree, "one.txt");
-    worktrees::back_up(&workspace, &row, &head, &env)
+    worktrees::back_up(&workspace, &row, &head, &env, false)
         .await
         .unwrap();
     // The bot pushes its branch, then the task finishes and its checkout is removed.
@@ -3972,7 +4100,7 @@ async fn a_wip_copy_holding_work_the_task_branch_lacks_survives_removal() {
     let (bare, workspace, tree, row) = backed_checkout(&tmp, &env).await;
     let wip = worktrees::wip_branch(&row);
     let head = commit(&tree, "one.txt");
-    worktrees::back_up(&workspace, &row, &head, &env)
+    worktrees::back_up(&workspace, &row, &head, &env, false)
         .await
         .unwrap();
     // The bot drops that commit; the checkout is clean and has nothing unpushed, but the copy is the only record.
@@ -3997,7 +4125,7 @@ async fn a_checkout_rebuilt_on_a_fresh_disk_starts_from_its_wip_copy_not_the_old
     let env = turn_env(&tmp.0, &[]);
     let (bare, workspace, tree, row) = backed_checkout(&tmp, &env).await;
     let head = commit(&tree, "one.txt");
-    worktrees::back_up(&workspace, &row, &head, &env)
+    worktrees::back_up(&workspace, &row, &head, &env, false)
         .await
         .unwrap();
     assert_ne!(remote_head(&bare, "tico/feature"), Some(head.clone()));
