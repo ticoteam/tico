@@ -80,7 +80,8 @@ class Server:
                 "nextCursor": "page-2",
             }
         elif method == "tools/list":
-            result = {"tools": [{"name": "get_error", "annotations": {"readOnlyHint": True}}]}
+            # count_errors only reads, but this vendor leaves its hint off (an administrator may mark it Only reads).
+            result = {"tools": [{"name": "get_error", "annotations": {"readOnlyHint": True}}, {"name": "count_errors"}]}
         else:
             result = {"content": [{"type": "text", "text": "3 errors"}]}
         data = json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": result})
@@ -174,7 +175,7 @@ def test_a_token_only_server_is_offered_a_token_and_reaches_a_run_through_the_pr
     made = post(api, "mcp-tools", {"name": "Acme Errors", "url": MCP, "auth": "token", "token": TOKEN})
     tool = get(api, "api-tools/" + made["id"])
     assert tool["tool"]["delivery"] == "proxy" and tool["status"]["text"] == "Working"
-    assert tool["mcp"]["tools"] == 3 and tool["mcp"]["read_only"] == 2 and tool["mcp"]["auth"] == "token"
+    assert tool["mcp"]["tools"] == 4 and tool["mcp"]["read_only"] == 2 and tool["mcp"]["auth"] == "token"
     put(api, f"api-tools/{made['id']}/access/bot:ops", {"level": "read_write"})
     attempt = run(api)
     items, servers = runtime(api, attempt)
@@ -287,7 +288,7 @@ def test_an_oauth_server_without_registration_takes_the_client_a_person_gives(ap
         assert CLIENT_SECRET not in json.dumps([[str(v) for v in r] for r in c.execute("SELECT * FROM tools")])
     assert get(api, "api-tools/acme-errors")["mcp"]["client"] == "given"
     rows = post(api, "api-tools/acme-errors/check", {})["rows"]
-    assert rows[0]["ok"] and get(api, "api-tools/acme-errors")["mcp"]["tools"] == 3
+    assert rows[0]["ok"] and get(api, "api-tools/acme-errors")["mcp"]["tools"] == 4
 
 
 def test_a_read_caller_on_a_signed_in_tool_is_held_to_mcp_reads(api, server):
@@ -307,6 +308,61 @@ def test_a_read_caller_on_a_signed_in_tool_is_held_to_mcp_reads(api, server):
     r = mcp_call(api, servers[0], token, "tools/call", {"name": "resolve_error", "arguments": {}})
     assert r.status_code == 403 and "resolve_error" in r.json()["error"]["detail"]
     assert len(fake.seen) == calls + 1
+
+
+def tico(api, *argv, token="ana-test"):
+    from backend.tests.helpers.automation_cli import Client
+    from clients import cli_spec, hubcli
+
+    args = hubcli.parser().parse_args(list(argv))
+    return cli_spec.of(args).call(Client(api, token), args)
+
+
+def test_an_administrator_marks_an_unhinted_read_only_reads_and_a_read_bot_calls_it_after_a_restart(api, server):
+    """A vendor that leaves readOnlyHint off a read: only an administrator marks it Only reads, only a name the last
+    check listed, and a vendor-hinted name is already a read (not stored). The proxy reads the mark from the tool, so a
+    bot at Read calls it with no listing seen since the server started; an unmarked tool is refused with who can mark
+    it, and taking the mark off refuses the call again."""
+    from backend import tool_proxy
+
+    server(oauth=False)
+    post(api, "mcp-tools", {"name": "Acme Errors", "url": MCP, "auth": "token", "token": TOKEN})
+    path = "/api/v2/api-tools/acme-errors"
+    mark = lambda names, token="ana-test": api.patch(path, json={"only_reads": names}, headers=headers(token))  # noqa: E731
+    r = mark(["count_errors"], "cara-test")
+    assert r.status_code == 403 and r.json()["error"]["detail"] == "Only an administrator marks MCP tools Only reads"
+    r = mark(["export_everything"])
+    assert (
+        r.status_code == 422
+        and r.json()["error"]["detail"] == "Acme Errors's last check did not list export_everything"
+    )
+    assert get(api, "api-tools/acme-errors")["mcp"]["only_reads"] == []
+    # Marked from the command line; the vendor-hinted name is already a read and is not stored.
+    tico(api, "tool", "edit", "acme-errors", "--only-reads", "count_errors, list_errors")
+    mcp = get(api, "api-tools/acme-errors")["mcp"]
+    assert [(m["name"], m["by"], m["listed"]) for m in mcp["only_reads"]] == [("count_errors", "human:ana", True)]
+    assert mcp["read_only_names"] == ["list_errors", "get_error"]
+    with api.app.state.store.read() as c:
+        rows = c.execute("SELECT actor, detail FROM events WHERE action='tool.only_reads_changed'").fetchall()
+    assert [(r[0], json.loads(r[1])) for r in rows] == [("human:ana", {"added": ["count_errors"], "removed": []})]
+    put(api, "api-tools/acme-errors/access/bot:ops", {"level": "read"})
+    tool_proxy.READ_ONLY_TOOLS.clear()  # a restarted server: no tools/list seen, no vendor hint known
+    items, servers = runtime(api, run(api))
+    token = next(i["value"] for i in items if i["env"] == "ACME_ERRORS_MCP_TOKEN")
+    assert mcp_call(api, servers[0], token, "tools/call", {"name": "count_errors", "arguments": {}}).status_code == 200
+    r = mcp_call(api, servers[0], token, "tools/call", {"name": "resolve_error", "arguments": {}})
+    assert r.status_code == 403 and r.json()["error"]["detail"].endswith(
+        "is Read, and the MCP tool resolve_error is not marked read-only by its server. If it only reads, an "
+        "administrator can mark it Only reads in Tools > Acme Errors; otherwise set Read and write."
+    )
+    # The vendor drops the name: the mark stays, shown no longer listed, and a save that keeps it is no new mark.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tools SET mcp_tools=? WHERE id='acme-errors'", (json.dumps({"names": ["list_errors"]}),))
+    assert [m["listed"] for m in get(api, "api-tools/acme-errors")["mcp"]["only_reads"]] == [False]
+    assert mark(["count_errors"]).status_code == 200
+    # Taken off: the Read bot is refused again.
+    assert mark([]).status_code == 200
+    assert mcp_call(api, servers[0], token, "tools/call", {"name": "count_errors", "arguments": {}}).status_code == 403
 
 
 def signed_in(api, server):

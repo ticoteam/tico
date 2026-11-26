@@ -268,6 +268,7 @@ class McpVendor:
                 "tools": [
                     {"name": "search", "annotations": {"readOnlyHint": True}},
                     {"name": "delete_issue", "annotations": {"destructiveHint": True}},
+                    {"name": "count_leads"},  # only reads, but its server sends no hint
                 ]
             }
         else:
@@ -367,7 +368,7 @@ def test_mcp_at_read_passes_set_up_listings_and_read_only_tools_and_refuses_the_
     r = rpc("tools/call", name="delete_issue")
     assert (
         r.status_code == 403
-        and "the MCP tool delete_issue, which its server does not mark read-only" in r.json()["error"]["detail"]
+        and "the MCP tool delete_issue is not marked read-only by its server" in r.json()["error"]["detail"]
     )
     batch = [
         {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
@@ -670,6 +671,13 @@ def test_only_an_mcp_read_sent_to_exactly_the_tools_mcp_address_is_not_a_write(a
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tools SET created_at='2099-01-01T00:00:00Z' WHERE id='close-crm'")
     assert send("mcp", search) == 3
+    # An administrator's Only reads mark is a read for the gate as a hint is: at exactly the MCP address, nowhere else.
+    count = {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "count_leads"}}
+    assert send("mcp", count) == 4
+    with api.app.state.store.transaction() as c:
+        c.execute("""UPDATE tools SET mcp_only_reads='[{"name":"count_leads"}]' WHERE id='close-crm'""")
+    assert send("mcp", count) == 4
+    assert send("mcp/", count) == 5
 
 
 def test_write_keys_of_ads_payments_and_crm_tools_reach_runs_only_through_the_proxy_and_meet_the_gate(api):

@@ -635,18 +635,72 @@ def check_soon(store: Any, vault: Any, tool_id: str) -> threading.Thread:
     return thread
 
 
+# ---- Only reads: tools an administrator marked as only reading
+
+
+def only_reads(tool: Any) -> list[Json]:
+    """The tool's Only reads marks, [{name, by, at}]: names an administrator marked as only reading though the server
+    sends no readOnlyHint for them (docs/credential-vault.md#only-reads). [] for none or an unreadable column."""
+    try:
+        raw: object = json.loads(tool["mcp_only_reads"] or "null")
+    except (IndexError, KeyError, ValueError):
+        return []
+    marks = [_obj(m) for m in cast(list[object], raw)] if isinstance(raw, list) else []
+    return [m for m in marks if isinstance(m.get("name"), str)]
+
+
+def marked(tool: Any) -> frozenset[str]:
+    """The names a bot at Read may call on this tool by an administrator's mark (backend/tool_proxy.py)."""
+    return frozenset(m["name"] for m in only_reads(tool))
+
+
+def _listed(tool: Any) -> Json:
+    try:
+        return _obj(json.loads(tool["mcp_tools"] or "null"))
+    except ValueError:
+        return {}
+
+
+def set_only_reads(c: Any, actor: str, tool: Any, names: list[str]) -> None:
+    """Replace the tool's Only reads with `names` (the caller checked the actor is a credential administrator). A new
+    name must be in the last check's listing; a vendor-hinted name is already a read and is not stored; a stored name
+    the vendor no longer lists may stay. One `tool.only_reads_changed` event with what was added and removed."""
+    if not tool["mcp_url"]:
+        raise Problem(
+            "only_reads", f"{tool['name']} is not an MCP server: only its tools can be marked Only reads", 422
+        )
+    listed = _listed(tool)
+    hinted = set(_strs(listed.get("read_only")))
+    known = set(_strs(listed.get("names")))
+    before = {m["name"]: m for m in only_reads(tool)}
+    after: dict[str, Json] = {}
+    now = H.now()
+    for name in names:
+        if name in after or name in hinted:
+            continue
+        if name not in before and name not in known:
+            raise Problem("only_reads", f"{tool['name']}'s last check did not list {name}", 422)
+        after[name] = before.get(name) or {"name": name, "by": actor, "at": now}
+    added = [n for n in after if n not in before]
+    removed = [n for n in before if n not in after]
+    if not added and not removed:
+        return
+    c.execute(
+        "UPDATE tools SET mcp_only_reads=?,updated_at=? WHERE id=?",
+        (encode(list(after.values())) if after else None, now, tool["id"]),
+    )
+    H.event(c, actor, "tool.only_reads_changed", tool["id"], {"added": added, "removed": removed})
+
+
 # ---- what pages and runs see
 
 
 def view(c: Any, tool: Any, keys: list[Any]) -> Json | None:
-    """The MCP part of a tool's page, or None for an API tool: its address, how it signs in, who signed in, and the
-    tools its last check found (names, and how many are read-only). Never a token."""
+    """The MCP part of a tool's page, or None for an API tool: its address, how it signs in, who signed in, the tools
+    its last check found (names, and which the server marks read-only) and the ones marked Only reads. Never a token."""
     if not tool["mcp_url"]:
         return None
-    try:
-        listed = _obj(json.loads(tool["mcp_tools"] or "null"))
-    except ValueError:
-        listed = {}
+    listed = _listed(tool)
     meta = _meta(tool)
     sign_in = next((k for k in keys if k["kind"] == OAUTH), None)
     names = _strs(listed.get("names"))
@@ -657,7 +711,18 @@ def view(c: Any, tool: Any, keys: list[Any]) -> Json | None:
         "header": tool["auth_scheme"][7:] if (tool["auth_scheme"] or "").startswith("header:") else "Authorization",
         "tools": len(names) if listed else None,
         "read_only": len(_strs(listed.get("read_only"))),
-        "names": names[:200],
+        "names": names[:NAMES_MAX],
+        "read_only_names": _strs(listed.get("read_only"))[:NAMES_MAX],
+        # Marked Only reads by an administrator, with who and when; `listed` is false once the vendor drops the name.
+        "only_reads": [
+            {
+                "name": m["name"],
+                "by": str(m.get("by") or ""),
+                "at": str(m.get("at") or ""),
+                "listed": m["name"] in names,
+            }
+            for m in only_reads(tool)
+        ],
         "listed_at": listed.get("listed_at"),
         "signed_in_by": sign_in["updated_by"] if sign_in else None,
         "signed_in_at": sign_in["updated_at"] if sign_in else None,

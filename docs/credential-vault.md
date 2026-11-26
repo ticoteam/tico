@@ -197,6 +197,21 @@ resource_metadata=…`, RFC 9728, or `/.well-known/oauth-protected-resource`) **
 The tool's check is `initialize` and `tools/list` instead of a GET: Working or Key rejected as any tool's, and the
 number of tools the server lists, with how many it marks read-only (`readOnlyHint`).
 
+#### Only reads
+
+A bot at Read on an MCP tool with a Read and write key or a sign-in may call only the server's tools that only read:
+those the server's own `tools/list` marks `readOnlyHint`, and those a credential administrator marked **Only reads**.
+Many servers leave the hint off their reads, and the MCP specification treats hints from a server as untrusted, so the
+decision is the administrator's. Tap the tool count on the tool's page: **What it can do** lists every tool the last
+check found, with **Read-only (vendor)** on hinted ones and an **Only reads** switch on the rest (others see who marked
+it). `tico tool edit <tool> --only-reads a,b` sets the whole list from the command line. Only a name the last check
+listed can be marked; a hinted name is already a read. A marked name the server later drops stays, shown **no longer
+listed**, and a renamed tool needs a new mark. Each change is a `tool.only_reads_changed` event with what was added
+and removed. The proxy reads the marks from the tool on every call, so they hold across a restart; for the Rules gate a
+marked tool is a read only at the tool's exact MCP address, as a hinted one is. A bot at Read refused on an unmarked
+tool is told an administrator can mark it Only reads, or set Read and write. Mark only a tool you know only reads:
+every Read bot on the tool can call it.
+
 An MCP tool is granted by level like any tool, and a bot needs **no bot.yaml entry** for it: each run's
 `credential-runtime` lists the server of every MCP tool it holds (`mcp_servers`: name, address, transport and a header
 with the key's variable as `${VAR}`), and the runner passes it to the harness beside bot.yaml's own servers (bot.yaml's

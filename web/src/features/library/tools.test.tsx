@@ -1419,6 +1419,48 @@ describe('Tools', () => {
     expect(params(back)).toEqual(expected);
   });
 
+  it("lists an MCP tool's tools: the vendor's reads, and Only reads switches for administrators only", async () => {
+    const mcp = {
+      url: 'https://mcp.example.com/mcp',
+      transport: 'http',
+      auth: 'token',
+      header: 'Authorization',
+      tools: 3,
+      read_only: 1,
+      names: ['list_sources', 'get_growth_rows', 'push_growth_rows'],
+      read_only_names: ['list_sources'],
+      only_reads: [
+        { name: 'get_growth_rows', by: 'human:p1', at: '2026-12-02T00:00:00Z', listed: true },
+        { name: 'old_export', by: 'human:p1', at: '2026-12-01T00:00:00Z', listed: false },
+      ],
+      listed_at: null,
+      signed_in_by: null,
+      signed_in_at: null,
+      client: null,
+    };
+    const sent = serve();
+    queryClient.setQueryData(['directory'], { actors: people, byId: Object.fromEntries(people.map((p) => [p.id, p])) });
+    openApi({ mcp, keys: [KEY] });
+    expect(await screen.findByRole('button', { name: '3 tools, 1 read-only, 2 marked' })).toBeTruthy();
+    expect(screen.getByText('Read-only (vendor)')).toBeTruthy();
+    expect(screen.getByText('no longer listed')).toBeTruthy();
+    expect(screen.queryByRole('switch', { name: 'list_sources: Only reads' })).toBeNull();
+    expect(screen.getByRole('switch', { name: 'get_growth_rows: Only reads' }).getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(screen.getByRole('switch', { name: 'push_growth_rows: Only reads' }));
+    await waitFor(() =>
+      expect(writes(sent)).toEqual([{ url: '/api/v2/api-tools/t1', method: 'PATCH', body: { only_reads: ['get_growth_rows', 'old_export', 'push_growth_rows'] } }]),
+    );
+  });
+
+  it('shows who marked a tool Only reads, with no switch, to someone who is not an administrator', async () => {
+    serve();
+    queryClient.setQueryData(['directory'], { actors: people, byId: Object.fromEntries(people.map((p) => [p.id, p])) });
+    const mcp = { url: 'https://mcp.example.com/mcp', transport: 'http', auth: 'token', header: 'Authorization', tools: 1, read_only: 0, names: ['get_growth_rows'], read_only_names: [], only_reads: [{ name: 'get_growth_rows', by: 'human:p1', at: '2026-12-02T00:00:00Z', listed: true }], listed_at: null, signed_in_by: null, signed_in_at: null, client: null };
+    openApi({ mcp, can_manage: false });
+    expect(await screen.findByText('Only reads (marked by Pat Sample)')).toBeTruthy();
+    expect(screen.queryByRole('switch')).toBeNull();
+  });
+
   it('replaces a key: the value is only sent, never kept @s914 @s840', async () => {
     const FAKE = 'sk-new-fake-0000';
     const sent = serve();

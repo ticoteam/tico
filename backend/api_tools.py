@@ -73,7 +73,7 @@ import re
 import sqlite3
 import threading
 from datetime import date, datetime, timedelta, timezone
-from typing import Literal, NamedTuple
+from typing import Annotated, Literal, NamedTuple
 
 from fastapi import Query, Request
 from pydantic import ConfigDict, Field, SecretStr
@@ -1302,6 +1302,9 @@ class ToolUpdate(Contract):
     # Whether it holds records Tico reads in the background (backend/item_sources/jira.py `integration`): `outside` (the
     # vendor owns them) or `tico`; '' for neither. An administrator's to set.
     record_owner: Literal["", "outside", "tico"] | None = None
+    # An MCP tool's Only reads, the whole list: tool names its server sends no readOnlyHint for that a bot at Read may
+    # call (backend/mcp_connect.py `set_only_reads`). An administrator's to set.
+    only_reads: list[Annotated[str, Field(min_length=1, max_length=200)]] | None = Field(default=None, max_length=500)
     # Who can see it: null is Everyone, an audience Only listed (`set_audience`). Left out, it stays as it is.
     audience: AccessAudience | None = None
 
@@ -1467,9 +1470,14 @@ def create_tool(c, who, body, admins, vault=None):
     return _tool_view(tool_row(c, tool["id"]))
 
 
+ONLY_READS_ADMIN = "Only an administrator marks MCP tools Only reads"
+
+
 def update_tool(c, who, tool_id, body, admins, auth=None):
     """A tool's settings, and its Who can see it (`audience`, which the owner may change too)."""
-    asked = body.model_dump(exclude_none=True, exclude={"audience", "everyone_reads", "record_owner"})
+    if body.only_reads is not None and not _admin(c, who, admins):
+        raise Problem("forbidden", ONLY_READS_ADMIN, 403)
+    asked = body.model_dump(exclude_none=True, exclude={"audience", "everyone_reads", "record_owner", "only_reads"})
     audience_set = "audience" in body.model_fields_set
     if asked or not audience_set or getattr(who, "role", "") != "owner":
         # Its service, address, check or delivery: on an ads, payments or CRM tool a person's own (tool_access Rule P).
@@ -1502,6 +1510,9 @@ def update_tool(c, who, tool_id, body, admins, auth=None):
             )
         c.execute("UPDATE tools SET record_owner=?,updated_at=? WHERE id=?", (body.record_owner, H.now(), tool_id))
         H.event(c, who.actor, "tool.record_owner_changed", tool_id, {"after": body.record_owner})
+        tool = dict(tool_row(c, tool_id))
+    if body.only_reads is not None:
+        mcp_connect.set_only_reads(c, who.actor, tool, body.only_reads)
         tool = dict(tool_row(c, tool_id))
     fields = {k: v for k, v in _clean(asked).items()}
     merged = tool | fields
@@ -2414,10 +2425,16 @@ def install(app, store, auth, settings):
     )
     def update_api_tool(request: Request, tool_id: str, body: ToolUpdate):
         """A tool's settings and its Who can see it (`audience`: null for Everyone, or an audience for Only listed)."""
+
+        def authorize(c, w):
+            if body.only_reads is not None and not _admin(c, w, vault().admins):
+                raise Problem("forbidden", ONLY_READS_ADMIN, 403)  # said as itself, not as any other setting
+            setter(c, w)
+
         return change(
             request,
-            _Receipt(body, omit_none=("record_owner",)),  # a retry from before record_owner fingerprints the same
-            setter,
+            _Receipt(body, omit_none=("record_owner", "only_reads")),  # a retry from before them fingerprints the same
+            authorize,
             lambda c: update_tool(c, request.state.identity, tool_id, body, vault().admins, auth),
         )
 

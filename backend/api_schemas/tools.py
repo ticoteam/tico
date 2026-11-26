@@ -213,6 +213,12 @@ SCHEMAS['ApiTool'] = obj(
                         'tools': {'type': ['integer', 'null']},
                         'read_only': 'i',
                         'names': items('s'),
+                        'read_only_names': items('s') | {'description': 'The names its server marks readOnlyHint'},
+                        'only_reads': items(obj({'name': 's', 'by': 's', 'at': 's', 'listed': 'b'}))
+                        | {
+                            'description': 'Names an administrator marked Only reads (a bot at Read may call them), '
+                            'who marked each and when; listed is false once the last check no longer lists it'
+                        },
                         'listed_at': 'n',
                         'signed_in_by': 'n',
                         'signed_in_at': 'n',

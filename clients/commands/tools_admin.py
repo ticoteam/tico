@@ -157,7 +157,8 @@ def tool_create(api, args):
 @tool(
     "tico_tool_edit",
     "Change an API tool: rename it, its address, auth or check path, its delivery (proxy: Tico holds the key; "
-    "computer: runs get the value), Everyone can read, or who can see it. Only what you send changes.",
+    "computer: runs get the value), Everyone can read, who can see it, or an MCP tool's Only reads. Only what you "
+    "send changes.",
     {
         "id": TOOL_ID,
         "name": _s("The new name"),
@@ -172,6 +173,13 @@ def tool_create(api, args):
             "the vendor owns them; tico: Tico does); empty for none",
             enum=["", "outside", "tico"],
         ),
+        "only_reads": {
+            "type": ["array", "string"],
+            "items": {"type": "string"},
+            "description": "Administrators, an MCP tool: the whole list of its tools that only read though its server "
+            "does not mark them read-only (comma-separated on the command line); a bot at Read may call them. Only "
+            "names its last check listed; empty for none",
+        },
         "audience": AUDIENCE_PROP,
     },
     required=("id",),
@@ -182,9 +190,14 @@ def tool_edit(api, args):
     body = _given(args, fields)
     if "audience" in args:
         body["audience"] = args["audience"]
+    if args.get("only_reads") is not None:
+        given = args["only_reads"]
+        parts = given.split(",") if isinstance(given, str) else [p for v in given for p in str(v).split(",")]
+        body["only_reads"] = [p.strip() for p in parts if p.strip()]
     if not body:
         raise ValueError(
-            "Say what changes: name, address, auth, check path, delivery, everyone_reads, record_owner or audience"
+            "Say what changes: name, address, auth, check path, delivery, everyone_reads, record_owner, only_reads or "
+            "audience"
         )
     return _hide(_as_person(api).patch("api-tools/" + _api_tool(args), body, key=_key(args)))
 
@@ -839,8 +852,13 @@ TOOL_CLI = (
     ),
     Command(
         "tool edit",
-        "rename an API tool or change its address, auth, check path, delivery, Everyone can read or who can see it",
-        args=(Arg("everyone_reads", type=_on_off, metavar="on|off", action="store"), *_AUDIENCE_ARGS),
+        "rename an API tool or change its address, auth, check path, delivery, Everyone can read, who can see it or an "
+        "MCP tool's Only reads",
+        args=(
+            Arg("everyone_reads", type=_on_off, metavar="on|off", action="store"),
+            Arg("only_reads", metavar="NAME,NAME", action="store"),
+            *_AUDIENCE_ARGS,
+        ),
         exclusive=(("audience",),),
         example="tico tool edit linear --delivery proxy --everyone-reads off",
     ),

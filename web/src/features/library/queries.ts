@@ -982,6 +982,17 @@ export function editApiTool(tool: string, change: ApiToolChange) {
   );
 }
 
+/** An MCP tool's Only reads, the whole list: tools its server does not mark read-only that a bot at Read may call.
+    An administrator's to set; the server stores who marked each. */
+export function setOnlyReads(tool: string, names: string[]) {
+  return write<unknown>({
+    key: ['tools', 'api', tool],
+    optimistic: (cur: ApiTool | undefined) =>
+      cur?.mcp ? { ...cur, mcp: { ...cur.mcp, only_reads: cur.mcp.only_reads.filter((m) => names.includes(m.name)) } } : cur,
+    send: (idempotencyKey) => api.patch(`/api/v2/api-tools/${enc(tool)}`, { only_reads: names }, { idempotencyKey }),
+  });
+}
+
 /** A key's own end date (`''` clears it). A vendor's date is the vendor's: the server refuses a change to it. */
 export function setKeyExpiry(tool: string, key: string, expiresOn: string) {
   return write<unknown>({
