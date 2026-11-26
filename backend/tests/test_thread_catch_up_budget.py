@@ -164,7 +164,7 @@ def test_the_walks_budget_is_one_for_all_its_batches_and_a_cut_is_recorded(api, 
     monkeypatch.setattr(flight, "ACTIVE", rec)
     seed(api, [1, 1, 1, 1])
     with api.app.state.store.read_transaction() as c:
-        count, _ = thread_rail.catch_up_count(c, threads.viewer(api.app.state.auth, BEN))
+        count, _, _ = thread_rail.catch_up_count(c, threads.viewer(api.app.state.auth, BEN))
     assert count == 3
     taken = rec.take(int(time.time()) // 60 * 60)
     with api.app.state.store.transaction() as c:

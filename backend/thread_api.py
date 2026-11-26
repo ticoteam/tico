@@ -33,6 +33,7 @@ from pydantic import BaseModel, Field
 from . import (
     delivery,
     events,
+    flight,
     org_rule_check,
     page_owners,
     reach,
@@ -44,6 +45,17 @@ from . import (
 )
 from .store import H, Problem
 from .api_contract import api_v2
+
+
+def _timed_json(out):
+    """`out` as JSON, its encoding timed as the request's `encode` part for the flight recorder."""
+    from fastapi.responses import Response
+
+    from . import fast_json
+
+    with flight.part("encode"):
+        body = fast_json.dumps(out)
+    return Response(body, media_type="application/json")
 
 
 def require_message_read(c, auth, who, row):
@@ -774,26 +786,32 @@ def install(app, store, auth, mutate, rule_check):
     def catch_up(request: Request, cursor: str | None = None, limit: int | None = None):
         """Each thread with something new for the viewer, and each open Needs attention item, mentions first, with its
         new messages in tree order. `count` (at most 99) is the badge. POST .../read-all reads one."""
-        v = threads.viewer(auth, request.state.identity)
+        flight.handler_started()
+        with flight.part("viewer"):
+            v = threads.viewer(auth, request.state.identity)
         with store.read_transaction() as c:
-            return thread_rail.catch_up(c, v, cursor=cursor, limit=limit or thread_rail.CATCH_UP_LIMIT)
+            out = thread_rail.catch_up(c, v, cursor=cursor, limit=limit or thread_rail.CATCH_UP_LIMIT)
+        return _timed_json(out)
 
     @app.get(
         "/api/v2/threads/catch-up/count",
         **api_v2(
             "Threads",
             "countThreadCatchUp",
-            "Catch up's badge alone: `count`, how many items GET /api/v2/threads/catch-up lists (at most 99), and `ids`, their roots, in its order; no thread views, cards or shown messages",
+            "Catch up's badge alone: `count`, how many items GET /api/v2/threads/catch-up lists (at most 99), `ids`, their roots, in its order, and `mentions`, the ones that mention the viewer, in the same order, each with its `audience`, `kind`, `task_id` and, for a 1:1 DM, `with` (the other member's actor); no thread views, cards or shown messages",
             "ThreadCatchUpCount",
         ),
     )
     def catch_up_count(request: Request):
-        """Catch up's `count` and the roots it counts (`ids`): the menu's badge. It makes the same checks Catch up does
-        to decide which roots count, and builds no thread view or card and reads no message to show."""
-        v = threads.viewer(auth, request.state.identity)
+        """Catch up's `count`, the roots it counts (`ids`) and those that mention the viewer (`mentions`): the menu's
+        badge and asks. It makes the same checks Catch up does to decide which roots count, and builds no thread view or
+        card and reads no message to show."""
+        flight.handler_started()
+        with flight.part("viewer"):
+            v = threads.viewer(auth, request.state.identity)
         with store.read_transaction() as c:
-            count, ids = thread_rail.catch_up_count(c, v)
-            return {"count": count, "ids": ids}
+            count, ids, mentions = thread_rail.catch_up_count(c, v)
+        return _timed_json({"count": count, "ids": ids, "mentions": mentions})
 
     @app.get(
         "/api/v2/threads/home/{actor}",

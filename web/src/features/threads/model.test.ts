@@ -68,21 +68,30 @@ describe('names', () => {
 });
 
 describe('what asks you', () => {
-  it('is a thread Catch up flags as a mention, or a person\'s DM not read; an agent\'s DM only when flagged; never a task', () => {
+  it('is a thread Catch up\'s count names as a mention, or a person\'s DM not read; an agent\'s DM only when named; never a task', () => {
     const dm = row('d1', 3, { audience: 'personal', dm_with: [{ actor: 'human:me' }, { actor: 'human:ana' }], me: { unread: 1 } });
     const read = row('d2', 4, { audience: 'personal', dm_with: [{ actor: 'human:jo' }], me: { unread: 0 } });
     const agent = row('d3', 5, { audience: 'personal', dm_with: [{ actor: 'bot:gm' }], me: { unread: 4 } });
-    const asking = row('d4', 6, { audience: 'personal', dm_with: [{ actor: 'bot:qa' }], me: { unread: 1 } });
-    const team = row('h1', 5, { audience: 'home', home: { actor: 'group:g1' } });
-    const task = row('k1', 6, { task_id: 'k1' });
     const quiet = row('q1', 7);
     const a = asksOf(
-      { items: [{ thread: team, mention: true }, { thread: task, mention: true }, { thread: quiet, mention: false }, { thread: asking, mention: true }] },
-      [dm, read, quiet, agent, asking],
+      {
+        mentions: [
+          { id: 'h1', audience: 'home' },
+          { id: 'k1', audience: 'members', task_id: 'k1' },
+          { id: 'k2', audience: 'task' },
+          { id: 'd4', audience: 'personal', with: 'bot:qa' },
+        ],
+      },
+      [dm, read, quiet, agent],
       'human:me',
     );
     expect([...a.threads].sort()).toEqual(['d1', 'd4', 'h1']);
     expect([...a.mates].sort()).toEqual(['bot:qa', 'human:ana']);
+  });
+
+  it('names every thread the count says mentions you, past the 20 a page of cards held', () => {
+    const mentions = Array.from({ length: 25 }, (_, i) => ({ id: `t${i}`, audience: 'members' as const }));
+    expect(asksOf({ mentions }, [], 'human:me').threads.size).toBe(25);
   });
 });
 

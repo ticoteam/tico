@@ -26,6 +26,7 @@ database and events 90 days (`sweep`, run by the scheduler's hourly sweep).
 import asyncio
 import bisect
 import collections
+import contextlib
 import contextvars
 import hashlib
 import itertools
@@ -157,9 +158,10 @@ def _merge(into, hist):
         into[int(k)] = into.get(int(k), 0) + v
 
 
-# Per request: SQL milliseconds, write-lock wait milliseconds, statements and {statement: [n, ms]}, added to by the
-# request's own threads. The middleware sets a fresh list; threads the request runs on copy the context, so they add to
-# the same list. The statements let a slow request name where its SQL time went (TOP_STATEMENTS).
+# Per request: SQL milliseconds, write-lock wait milliseconds, statements, {statement: [n, ms]}, {part: ms} and when it
+# started (perf_counter), added to by the request's own threads. The middleware sets a fresh list; threads the request runs on copy the context, so they
+# add to the same list. The statements let a slow request name where its SQL time went (TOP_STATEMENTS), and the parts a
+# route names (`part`) where the rest went.
 _COST = contextvars.ContextVar("tico_flight_cost", default=None)
 # The request's method and ASGI scope, so a write transaction that holds the lock too long can name its route.
 _ROUTE = contextvars.ContextVar("tico_flight_route", default=None)
@@ -168,7 +170,7 @@ ACTIVE = None  # the server's recorder, for write transactions on connections it
 
 
 def request_started(method=None, scope=None):
-    cost = [0.0, 0.0, 0, {}]
+    cost = [0.0, 0.0, 0, {}, {}, time.perf_counter()]
     return cost, (_COST.set(cost), _ROUTE.set((method, scope) if scope is not None else None))
 
 
@@ -176,6 +178,29 @@ def request_finished(token):
     cost, route = token
     _COST.reset(cost)
     _ROUTE.reset(route)
+
+
+@contextlib.contextmanager
+def part(name):
+    """Time a named part of this request's work (`walk`, `encode`) into its slow sample's `parts`; a part named twice adds
+    up. Outside a recorded request it times nothing."""
+    cost = _COST.get()
+    if cost is None or len(cost) < 5:
+        yield
+        return
+    started = time.perf_counter()
+    try:
+        yield
+    finally:
+        cost[4][name] = cost[4].get(name, 0.0) + (time.perf_counter() - started) * 1000
+
+
+def handler_started():
+    """Mark the handler's first line: the request's `before` part is the time since it reached the server, less its
+    sign-in (the middleware takes that out), so a request that waited for a worker thread says so."""
+    cost = _COST.get()
+    if cost is not None and len(cost) > 5:
+        cost[4]["before"] = (time.perf_counter() - cost[5]) * 1000
 
 
 def _route_now():
@@ -410,6 +435,11 @@ def install_middleware(app, recorder):
             size = response.headers.get("content-length") if response is not None else None
             # Screen long-polls wait for new pixels; retain SQL/lock/processing time, exclude only deliberate sleeps.
             active_ms = max(0, (time.perf_counter() - started) * 1000 - getattr(request.state, "idle_wait_ms", 0))
+            if cost is not None and cost[4]:  # a route that names its parts: the sign-in is one of them
+                parts = cost[4]
+                parts["auth"] = request.state.auth_ms
+                if "before" in parts:
+                    parts["before"] = max(0.0, parts["before"] - request.state.auth_ms)
             app.state.timing.end(
                 key,
                 request.state.auth_ms,
@@ -484,8 +514,9 @@ class Recorder:
             self.dropped += 1
         sql_ms, wait_ms, queries = cost[:3] if cost else (0.0, 0.0, 0)
         statements = cost[3] if cost is not None and len(cost) > 3 else None
+        parts = cost[4] if cost is not None and len(cost) > 4 else None
         self.samples.append(
-            ("r", route, caller, status, ms, nbytes, actor, sql_ms, wait_ms, queries, statements, client)
+            ("r", route, caller, status, ms, nbytes, actor, sql_ms, wait_ms, queries, statements, client, parts)
         )
 
     def query(self, sql, ms, locked=False):
@@ -574,7 +605,7 @@ class Recorder:
                     if locked:
                         self.locked += 1
                 elif kind == "r":
-                    _, route, caller, status, ms, nbytes, actor, sql_ms, wait_ms, queries, statements, client = s
+                    _, route, caller, status, ms, nbytes, actor, sql_ms, wait_ms, queries, statements, client, parts = s
                     row = self.requests.get((route, caller))
                     if row is None:
                         row = self.requests[(route, caller)] = [0, 0, 0, 0.0, 0.0, {}, 0, 0.0, 0.0]
@@ -589,6 +620,7 @@ class Recorder:
                     row[8] += wait_ms
                     if ms >= SLOW_MS and len(self.slow) < SLOW_PER_MINUTE:
                         top = top_statements(statements, fingerprints)
+                        parts = {k: round(v, 1) for k, v in parts.items()} if parts else None
                         slow = (
                             int(time.time()),
                             route,
@@ -601,6 +633,7 @@ class Recorder:
                             round(wait_ms, 1),
                             queries,
                             json.dumps(top, separators=(",", ":")) if top else None,
+                            json.dumps(parts, separators=(",", ":")) if parts else None,
                         )
                         self.slow.append(slow)
                         self.slow_file.append(
@@ -617,6 +650,7 @@ class Recorder:
                                 "wait_ms": round(wait_ms, 1),
                                 "queries": queries,
                                 **({"top": top} if top else {}),
+                                **({"parts": parts} if parts else {}),
                             }
                         )
                 elif kind == "t":
@@ -852,8 +886,8 @@ class Recorder:
 def write(c, taken):
     c.executemany("INSERT OR REPLACE INTO flight_requests VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", taken["requests"])
     c.executemany(
-        "INSERT INTO flight_slow(created_at,route,caller,actor,ms,bytes,status,sql_ms,wait_ms,queries,top) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO flight_slow(created_at,route,caller,actor,ms,bytes,status,sql_ms,wait_ms,queries,top,parts) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
         taken["slow"],
     )
     c.execute("INSERT OR REPLACE INTO flight_process VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", taken["process"])
@@ -1781,9 +1815,13 @@ def view(c, minutes=60, sections=SECTIONS, now=None, since=None, until=None, rou
         out["web"] = _web(c, since, until)
     if "slow" in sections:
         out["slow"] = [
-            {**{k: r[k] for k in r.keys() if k != "top"}, **({"top": json.loads(r["top"])} if r["top"] else {})}
+            {
+                **{k: r[k] for k in r.keys() if k not in ("top", "parts")},
+                **({"top": json.loads(r["top"])} if r["top"] else {}),
+                **({"parts": json.loads(r["parts"])} if r["parts"] else {}),
+            }
             for r in c.execute(
-                "SELECT created_at,route,caller,actor,ms,bytes,status,sql_ms,wait_ms,queries,top FROM flight_slow "
+                "SELECT created_at,route,caller,actor,ms,bytes,status,sql_ms,wait_ms,queries,top,parts FROM flight_slow "
                 "WHERE created_at>=? ORDER BY id DESC LIMIT 50",
                 (since,),
             )

@@ -113,7 +113,7 @@ function seedThread(t: Thread, messages: ReturnType<typeof msg>[], next: string 
 /** The menu's list and catch-up, as the Threads page finds them. */
 function seedList(rows: Thread[] = [thread()]) {
   queryClient.setQueryData(threadKeys.list, { pages: [{ rows, next: null }], pageParams: [null] });
-  queryClient.setQueryData(threadKeys.catchUp, { count: 0, items: [] });
+  queryClient.setQueryData(threadKeys.catchUp, { count: 0, ids: [], mentions: [] });
 }
 const people = (actors: { id: string; kind: string; name: string; slug?: string; team?: string }[]) =>
   queryClient.setQueryData(['directory'], { actors, byId: Object.fromEntries(actors.map((a) => [a.id, a])) });

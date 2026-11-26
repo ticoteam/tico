@@ -200,7 +200,7 @@ vi.mock('@/features/threads/exports', () => ({
 vi.mock('@/features/threads/routing', async () => ({
   asksOf: (await vi.importActual<{ asksOf: unknown }>('@/features/threads/routing')).asksOf,
   threadQuery: (id: string) => q(`thread:${id}`, null),
-  catchUpQuery: { ...q('catch-up', { count: 0, items: [] }), queryFn: catchUpRead },
+  catchUpQuery: { ...q('catch-up', { count: 0, ids: [], mentions: [] }), queryFn: catchUpRead },
   threadListQuery: { queryKey: ['threads-list'], queryFn: async () => ({ rows: [], next: null }), initialPageParam: null, getNextPageParam: () => undefined, staleTime: Infinity },
 }));
 vi.mock('@/features/support/exports', () => ({ SupportChat: () => <p>support chat</p> }));

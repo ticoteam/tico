@@ -18,7 +18,7 @@ import base64
 import json
 import logging
 
-from . import task_privacy
+from . import flight, task_privacy
 from . import threads as T
 from .store import H, Problem
 
@@ -845,8 +845,6 @@ def _readable_new(c, v, roots, left, later=0):
         out[root] = (1, sum(hidden[root].values()) == 1)
     if waiting:
         log.warning("catch_up_unchecked reader=%s roots=%d", v.actor, len(waiting))
-        from . import flight
-
         flight.note(c, "catch_up_unchecked", {"reader": v.actor, "roots": len(waiting)})
     return out
 
@@ -1021,12 +1019,32 @@ def _first(items, n):
 
 
 def catch_up_count(c, v):
-    """(how many Catch up items the reader has, at most CATCH_UP_SHOWN; their root ids): the sidebar's badge, and the
-    set a client keeps from the live stream. It stops at CATCH_UP_SHOWN, and reads a message whole only where the walk's
-    per-message check needs it: no card, thread view or message to show."""
+    """(how many Catch up items the reader has, at most CATCH_UP_SHOWN; their root ids; the mention roots among them):
+    the menu's badge and asks, and the set a client keeps from the live stream. It stops at CATCH_UP_SHOWN, and reads a
+    message whole only where the walk's per-message check needs it: no card, thread view or message to show."""
     v = _viewer(v)
-    found = _first(_walk(c, v, _flags(c, v)), CATCH_UP_SHOWN)
-    return len(found), [it["row"]["id"] for it in found]
+    with flight.part("flags"):
+        flags = _flags(c, v)
+    with flight.part("walk"):
+        found = _first(_walk(c, v, flags), CATCH_UP_SHOWN)
+    with flight.part("mentions"):
+        mentions = _mention_roots(c, v, [it["row"] for it in found if it["mention"]])
+    return len(found), [it["row"]["id"] for it in found], mentions
+
+
+def _mention_roots(c, v, rows):
+    """The menu's asks among Catch up's items: for each root that mentions the reader, in order, {id, audience, kind,
+    task_id} and, for a 1:1 DM, `with`, the other member (an actor id, never a name). The walk has already checked that
+    the reader may read each one; who is in a DM is told as `dm_with` tells it."""
+    dms = T.dm_with(c, v, [r for r in rows if T.audience_of(r) == "personal"])
+    out = []
+    for r in rows:
+        item = {"id": r["id"], "audience": T.audience_of(r), "kind": r.get("kind"), "task_id": r.get("task_id")}
+        dm = dms.get(r["id"]) or {}
+        if dm.get("dm_with_count") == 1 and dm.get("dm_with"):
+            item["with"] = dm["dm_with"][0]["actor"]
+        out.append(item)
+    return out
 
 
 def catch_up(c, v, *, cursor=None, limit=CATCH_UP_LIMIT):
@@ -1044,13 +1062,22 @@ def catch_up(c, v, *, cursor=None, limit=CATCH_UP_LIMIT):
         if not all(isinstance(after[i], int) and not isinstance(after[i], bool) for i in (0, 1, 3)):
             raise Problem("cursor", "Unknown cursor", 422)
         after[3] = max(0, min(after[3], CATCH_UP_SCAN))
-    flags = _flags(c, v)
-    if after:
-        found = _first(_walk(c, v, flags, after), limit + 1)
-        count = len(_first(_walk(c, v, flags), CATCH_UP_SHOWN))
-    else:
-        found = _first(_walk(c, v, flags), max(limit + 1, CATCH_UP_SHOWN))
-        count = min(len(found), CATCH_UP_SHOWN)
+    with flight.part("flags"):
+        flags = _flags(c, v)
+    with flight.part("walk"):
+        if after:
+            found = _first(_walk(c, v, flags, after), limit + 1)
+            count = len(_first(_walk(c, v, flags), CATCH_UP_SHOWN))
+        else:
+            found = _first(_walk(c, v, flags), max(limit + 1, CATCH_UP_SHOWN))
+            count = min(len(found), CATCH_UP_SHOWN)
+    with flight.part("cards"):
+        return _cards(c, v, found, limit, count)
+
+
+def _cards(c, v, found, limit, count):
+    """Catch up's page from the walk's items (`found`): the first `limit` as cards with their new messages, within the
+    page's byte budget, and the cursor on."""
     page, more = found[:limit], len(found) > limit
     _count_exact(c, v, page)
     v._members = {}
