@@ -6,13 +6,13 @@ from a reader outside the page's audience.
 
 Bytes alone do not say which page a copy came from, so a copy whose bytes are a version of several pages names each of
 them, and its reader must be allowed every one: the safe side, never wider. A file posted into a chat that is
-byte for byte a page's version is treated as that page in the same way."""
+byte for byte a page's version is treated as that page in the same way, and so is a copy whose blob is also another
+file's version: naming a page only ever narrows who reads a blob (page_blob_visible needs every page it names)."""
 
 
 def up(conn):
     conn.execute(
         "INSERT OR IGNORE INTO page_identities(identity,file_id) "
         "SELECT DISTINCT a.blob_id,v.file_id FROM message_assets a JOIN blobs b ON b.id=a.blob_id "
-        "JOIN bot_file_versions v ON v.digest=b.digest JOIN pages p ON p.file_id=v.file_id "
-        "WHERE NOT EXISTS (SELECT 1 FROM bot_file_versions own WHERE own.blob_id=a.blob_id)"
+        "JOIN bot_file_versions v ON v.digest=b.digest JOIN pages p ON p.file_id=v.file_id"
     )

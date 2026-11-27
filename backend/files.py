@@ -269,6 +269,11 @@ def prime_visible(c, rows):
     privacy.snapshot(c)
     if read_cache.cache(c) is None:
         return
+    primed = _memo(c, "visible_primed_files")  # each file once per snapshot, whichever caller primed it first
+    rows = [row for row in rows if row["id"] not in primed]
+    if not rows:
+        return
+    primed.update(dict.fromkeys((row["id"] for row in rows), True))
     H.prime_tasks(
         c,
         {row["task_id"] for row in rows if row["task_id"]}
@@ -993,19 +998,7 @@ def prime_page_references(c, values):
     if found:
         deleted_page_refs(c, found)
         restricted_page_rows(c, found)
-        _prime_pages_visible(c, page_rows(c, found))  # page_ref_denials checks every page with file_visible
-
-
-def _prime_pages_visible(c, pages):
-    """prime_visible for the pages in `pages` ({file id: row}) not primed yet in this snapshot: a list primes its pages
-    together (prime_page_references), and each value's check afterwards reads nothing more for them."""
-    if read_cache.cache(c) is None:
-        return
-    primed = _memo(c, "visible_primed_pages")
-    fresh = [row for fid, row in pages.items() if fid not in primed]
-    if fresh:
-        prime_visible(c, fresh)
-        primed.update(dict.fromkeys((row["id"] for row in fresh), True))
+        prime_visible(c, list(page_rows(c, found).values()))  # page_ref_denials checks every page with file_visible
 
 
 def _primed_names_none(c, value):
@@ -1039,7 +1032,7 @@ def page_ref_denials(c, auth, who, refs, cache=None):
     # (a chat, a task) can be named in a thread its readers cannot open it from (thread_api.shared_files).
     pages = page_rows(c, ids)
     if auth:
-        _prime_pages_visible(c, pages)  # what file_visible reads below, for all of them at once
+        prime_visible(c, list(pages.values()))  # what file_visible reads below, for all of them at once
     cache = {} if cache is None else cache
     bound = relationship_runs.scope(c, who.attempt_id) if relationship and not auth else None
     sponsor = teammate_access._viewer_for(c, bound.sponsor) if bound else None

@@ -2998,7 +2998,7 @@ def send(c, who, hold_id, nonce, ingest=None, table=None, check=None, auth=None,
 
         # The reviewer reads what was sent: each page it names only as they may read it (a thread post or edit).
         result = {**result, "refs": readable_page_refs(c, auth, who, result["refs"])}
-    return {"hold": view_hold(c, who, _hold(c, hold_id), "reviewer"), "result": result}
+    return {"hold": view_hold(c, who, _hold(c, hold_id), "reviewer", auth=auth), "result": result}
 
 
 def appeal(c, who, hold_id, why):

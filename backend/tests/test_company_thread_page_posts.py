@@ -194,9 +194,11 @@ def test_sending_a_held_edit_anyway_answers_the_reviewer_with_the_page_as_they_m
     assert _doors(api, w, "ana")["message"] == REMOVED
 
 
-def test_a_copy_posted_before_shares_kept_the_link_follows_its_page_once_migrated(api):
+@pytest.mark.parametrize("also_a_file", [False, True], ids=["copy", "copy-also-a-file"])
+def test_a_copy_posted_before_shares_kept_the_link_follows_its_page_once_migrated(api, also_a_file):
     """A message from before this change holds a new blob of the page's bytes, not the page. The migration names that
-    blob as the page's, so narrowing the page takes the copy from every door, its download included, as it does a link."""
+    blob as the page's, so narrowing the page takes the copy from every door, its download included, as it does a link.
+    It does so too when the same blob is also another file's version (`also_a_file`): naming the page only narrows."""
     from importlib import import_module
 
     from backend import threads
@@ -210,6 +212,17 @@ def test_a_copy_posted_before_shares_kept_the_link_follows_its_page_once_migrate
         ben = threads.viewer(api.app.state.auth, api.app.state.auth.settings.test_identities["ben-test"])
         item = register(c, ben.who, version["digest"], version["size"], version["name"], version["mime"])
         old = threads.post(c, ben, w["thread"], "zqold deck", attachments=[{**item, "title": "Audience secret"}])
+        if also_a_file:  # a file of ops' whose version is that same blob, not a page
+            row = dict(c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone())
+            c.execute(
+                "INSERT INTO bot_files(%s) VALUES(%s)" % (",".join(row), ",".join("?" * len(row))),
+                [*{**row, "id": fid + "-file", "identity": row["identity"] + "-file"}.values()],
+            )
+            c.execute(
+                "INSERT INTO bot_file_versions(%s) VALUES(%s)"
+                % (",".join(version.keys()), ",".join("?" * len(version))),
+                [*{**dict(version), "file_id": fid + "-file", "blob_id": item["id"]}.values()],
+            )
         import_module("backend.migrations.20261127074210_page_copies_follow_their_page").up(c)
     w["message"] = old["id"]
     copy = [item["id"]]
