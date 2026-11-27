@@ -344,6 +344,45 @@ def test_health_counts_each_bots_session_worktrees_and_their_size_per_computer(e
     assert "session_worktrees:" + runner + ":ghost" not in checks  # 2 worktrees, 1 GB: no pile-up
     assert "Acme QA's 68 session worktrees take 102.0 GB" in checks["disk:" + runner]["summary"]
 
+    # A bot reading Health sees the computer's disk, not what each other bot keeps on it.
+    add_bot(api, "reader")
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES('reader','hermes','x',?,'human:ana')",
+            (H.now(),),
+        )
+    api.app.state.store.settings.test_identities["reader-bot"] = Identity("bot:reader", "bot", agent="hermes")
+    as_bot, _ = health_of(api, signed_in("reader-bot"))
+    assert as_bot["audience"] == "bot"
+    assert as_bot["computers"][0]["disk"]["total_bytes"] == 157 * gb
+    assert "session_worktrees" not in as_bot["computers"][0]["disk"]
+
+    # A size no computer has is refused at the door, and one stored by an older server is left out of Health
+    # instead of breaking its arithmetic.
+    from pydantic import ValidationError
+
+    huge = 10**320
+    with pytest.raises(ValidationError):
+        StructuredReadiness.model_validate(
+            {**report, "session_worktrees": {"at": "x", "bots": {qa: {"count": 1, "bytes": huge}}}}
+        )
+    with pytest.raises(ValidationError):
+        StructuredReadiness.model_validate(
+            {**report, "session_worktrees": {"at": "x", "bots": {"b" * 101: {"count": 1, "bytes": 1}}}}
+        )
+    stored = {
+        **report,
+        "session_worktrees": {
+            "at": "x",
+            "bots": {qa: {"count": 1, "bytes": 2**64 - 1}, "ghost": {"count": 40, "bytes": gb}},
+        },
+    }
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id=?", (json.dumps(stored), runner))
+    body, checks = health_of(api)
+    assert [row["bot"] for row in body["computers"][0]["disk"]["session_worktrees"]] == ["ghost"]
+    assert "session_worktrees:" + runner + ":ghost" in checks
+
     # Under both marks: shown on the disk row, no warning.
     small = {**report, "disk": {"total_bytes": 157 * gb, "free_bytes": 100 * gb}}
     small["session_worktrees"] = {"at": sessions["at"], "bots": {qa: {"count": 30, "bytes": 30 * gb}}}

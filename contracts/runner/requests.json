@@ -2478,6 +2478,7 @@
    "description": "One bot's session worktrees on the computer: how many and their size on disk.",
    "properties": {
     "bytes": {
+     "maximum": 9223372036854775807,
      "minimum": 0,
      "title": "Bytes",
      "type": "integer"
@@ -2506,11 +2507,10 @@
      "type": "string"
     },
     "bots": {
-     "additionalProperties": {
-      "$ref": "#/$defs/SessionWorktreesBot"
-     },
-     "propertyNames": {
-      "maxLength": 100
+     "patternProperties": {
+      "^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$": {
+       "$ref": "#/$defs/SessionWorktreesBot"
+      }
      },
      "title": "Bots",
      "type": "object"

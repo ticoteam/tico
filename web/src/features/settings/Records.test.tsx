@@ -185,6 +185,34 @@ describe('Settings › Health @s1082', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Check now' }));
     await waitFor(() => expect(read).toContain('/api/v2/health'));
   });
+
+  it("lists each bot's session worktrees on each computer with their size, small ones included", async () => {
+    const GB = 1024 ** 3;
+    const health = {
+      checks: [],
+      computers: [
+        {
+          id: 'r1',
+          label: 'QA box',
+          disk: {
+            total_bytes: 157 * GB,
+            free_bytes: 3 * GB,
+            session_worktrees: [
+              { bot: 'qa', name: 'Acme QA', count: 68, bytes: 102 * GB },
+              { bot: 'dev', name: 'Dev', count: 2, bytes: 1.5 * GB },
+            ],
+          },
+        },
+        { id: 'r2', label: 'Spare', disk: { total_bytes: 100 * GB, free_bytes: 90 * GB } },
+      ],
+    };
+    serve((url) => (url === '/api/v2/health' ? ok(health) : undefined));
+    show(<SettingsPage section="health" />, '/settings/health');
+    const region = await screen.findByRole('region', { name: 'Session worktrees' });
+    expect(within(region).getByTitle('Acme QA on QA box').textContent).toContain('68 worktrees, 102.0 GB');
+    expect(within(region).getByTitle('Dev on QA box').textContent).toContain('2 worktrees, 1.5 GB');
+    expect(within(region).queryByText(/Spare/)).toBeNull();
+  });
 });
 
 describe('Settings › Account', () => {

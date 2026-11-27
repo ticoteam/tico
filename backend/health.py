@@ -289,10 +289,18 @@ def _session_worktrees(document, names):
     bots = report.get("bots") if isinstance(report, dict) else None
     if not isinstance(bots, dict):
         return []
+    from .models import SESSION_WORKTREE_BYTES_MOST, SESSION_WORKTREES_MOST
+
+    def fits(value, most):
+        return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= most
+
+    # A stored report the model would refuse today (an older server took it) is left out, never divided by.
     rows = [
         {"bot": bot, "name": names.get(bot, bot), "count": row["count"], "bytes": row["bytes"]}
         for bot, row in bots.items()
-        if isinstance(row, dict) and isinstance(row.get("count"), int) and isinstance(row.get("bytes"), int)
+        if isinstance(row, dict)
+        and fits(row.get("count"), SESSION_WORKTREES_MOST)
+        and fits(row.get("bytes"), SESSION_WORKTREE_BYTES_MOST)
     ]
     return sorted(rows, key=lambda row: (-row["bytes"], -row["count"], row["bot"]))
 
@@ -2626,10 +2634,18 @@ def _fallback_lines(c, settings, on, carrying):
 
 def _bot_computers(computers):
     """A bot checking the team's health sees which computers are up, their release and disk, never who operates
-    them or their sign-in, container and browser errors."""
+    them, their sign-in, container and browser errors, or what each other bot keeps on their disk."""
     keep = ("id", "label", "online", "resting", "last_seen_at", "platform", "disk", "turn_counts", "turn_summary")
+
+    def disk(row):
+        return {k: v for k, v in row.items() if k != "session_worktrees"} if isinstance(row, dict) else row
+
     return [
-        {**{k: x.get(k) for k in keep}, "update": {k: x["update"].get(k) for k in ("release", "state", "label")}}
+        {
+            **{k: x.get(k) for k in keep},
+            "disk": disk(x.get("disk")),
+            "update": {k: x["update"].get(k) for k in ("release", "state", "label")},
+        }
         for x in computers
     ]
 

@@ -1578,11 +1578,16 @@ class DiskCleanupReadiness(Contract):
     still_low: StrictBool = False
 
 
+# Bounds that keep Health's arithmetic finite: a count and a size no real computer reaches (8 EiB).
+SESSION_WORKTREES_MOST = 1_000_000
+SESSION_WORKTREE_BYTES_MOST = 2**63 - 1
+
+
 class SessionWorktreesBot(Contract):
     """One bot's session worktrees on the computer: how many and their size on disk."""
 
-    count: int = Field(ge=0, le=1_000_000)
-    bytes: int = Field(ge=0)
+    count: int = Field(ge=0, le=SESSION_WORKTREES_MOST)
+    bytes: int = Field(ge=0, le=SESSION_WORKTREE_BYTES_MOST)
 
 
 SESSION_WORKTREE_BOTS = 200
@@ -1594,7 +1599,8 @@ class SessionWorktreesReadiness(Contract):
 
     at: str = Field(max_length=40)
     bots: Annotated[
-        dict[Annotated[str, Field(max_length=100)], SessionWorktreesBot],
+        # A bot id as the runner's session folders take it (runner-rs/src/sessions.rs slug_ok).
+        dict[Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")], SessionWorktreesBot],
         BeforeValidator(lambda v: dict(list(v.items())[:SESSION_WORKTREE_BOTS]) if isinstance(v, dict) else v),
     ] = Field(default_factory=dict)
 
