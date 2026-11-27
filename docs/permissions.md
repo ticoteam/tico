@@ -315,7 +315,6 @@ text at the doors it comes in by, before a bot reads it. Change it in **Settings
 |---|---|---|
 | Webhooks | A call whose automation opens a task for a bot or starts a bot's turn, and a rule's `create_task` on `webhook.received`. In a JSON body, only its strings of three words or more, not ids, numbers or links | Warn |
 | Mail | An inbound message a bot reads (`tico inbound read`): the subject and body | Warn |
-| Ideas | The public roadmap's suggestion form: the title and summary | Warn |
 | Watchers | A watcher's new task, except the Support Agent's HQ tickets, which [support triage](support.md#support-triage) checks | Warn |
 | Documents | A document or a link that the Rules Owner reads to suggest rules (Rules › External): the file's text, or the page the link fetches | Warn |
 | Slack | A message a person sends a bot in Slack (a DM or an @mention), and a message in a channel linked to a thread, with its edits | Warn |
@@ -915,22 +914,17 @@ and tasks follow the rule above ([Tico SQL](hub-sql.md)).
 Task movers (the team owner and humans on the leadership, product or engineering teams) attach
 and remove tags on any task. A bot attaches and removes a classification tag (`qa`, an area, a
 priority) on a task it manages: one it owns, one it asked for, or one whose pipeline it manages or owns,
-and only when it can already read the task. Two kinds of tag keep their gate for a bot, both to add
-and to remove: a tag on a public roadmap (Settings → Public roadmap) needs an OK of exactly that
-publication, given by a person from its preview, as public text does ([Roadmaps](roadmaps.md)), or
-a mover when the team does not ask bots for one; `goal:on` and `goal:off` change how Tico runs the
-task, so only a mover changes them. The same holds when a bot creates a task: it may give the new
-task classification tags, but a task created with `goal:on`, `goal:off` or a public roadmap tag is
-refused and nothing is created. A publication OK is for a task that exists, so the bot creates the
-task without the roadmap tag and then adds it with the OK, or asks a mover. A refusal says which
-tags need a person or an OK and why; an OK that is not given yet, already used or for other tags is
-the same refusal. It counts toward the bot's quarantine once per task an hour, so retrying it
+and only when it can already read the task. `goal:on` and `goal:off` keep their gate for a bot, both
+to add and to remove: they change how Tico runs the task, so only a mover changes them. The same holds
+when a bot creates a task: it may give the new task classification tags, but a task created with
+`goal:on` or `goal:off` is refused and nothing is created. A refusal says which tags need a person and
+why. It counts toward the bot's quarantine once per task an hour, so retrying it
 cannot quarantine the bot. A mover may also grant a bot one tag (the tag's bot writers,
 `tico tag update <tag> --version <n> --bot-writers <bot>`): that bot then attaches and removes that tag,
 and only that tag, on any task it can read, such as a test bot marking tickets passed or failed. The
 rest of the task stays out of its reach, and a change that touches any other tag is refused whole.
 Only a mover sets the list, so a bot that owns a tag cannot grant it to itself; `goal:on` and
-`goal:off` are never granted, a public roadmap tag keeps its gate, and an empty list
+`goal:off` are never granted, and an empty list
 (`--bot-writers ''`) revokes. The tag's page names the bots it is granted to. Nothing here makes a
 bot a mover. Creating and editing a tag is for
 those movers or that tag's owner, including a bot owner. A teammate may create a tag they own.

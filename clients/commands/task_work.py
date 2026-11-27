@@ -871,40 +871,6 @@ def roadmap_tasks(api, args):
     return api.get('roadmap-tasks', **{k: args[k] for k in ('sort', 'direction', 'limit', 'offset') if k in args})
 
 
-@tool(
-    "tico_roadmap_settings",
-    "Read or partially update company public roadmap settings. Only owners and admins change them. "
-    "Labels must already exist. Empty labels disables public roadmaps. Bot public edits need approval by default. "
-    "The read says which bot suggestions go to now (suggestions_receiver).",
-    {
-        "settings": {
-            "type": "object",
-            "properties": {
-                "labels": {"type": "array", "items": {"type": "string"}},
-                "cors_origins": {"type": "array", "items": {"type": "string"}},
-                "action_limit": {"type": "integer", "minimum": 1},
-                "suggestion_limit": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "description": "Visitor suggestions waiting at Suggested, overall",
-                },
-                "bot_public_approval": {"type": "boolean"},
-                "suggestions_bot": {
-                    "type": ["string", "null"],
-                    "description": "Slug of the active bot that receives visitor suggestions; null for Automatic",
-                },
-            },
-            "additionalProperties": False,
-        }
-    },
-    writes=True,
-)
-def roadmap_settings(api, args):
-    if args.get('settings') is not None:
-        return _as_person(api).post('roadmaps/settings', args['settings'], key=_key(args))
-    return api.get('roadmaps/settings')
-
-
 def _metadata(text):
     """A flag's type: tag metadata, a JSON object, or a usage error."""
     try:

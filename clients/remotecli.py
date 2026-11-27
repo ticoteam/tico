@@ -319,20 +319,6 @@ def run(args, who=None):
         return {"written": hubtools.write_fixture(found, Path(args.out or "."))}
     if fn == "roadmap tasks":
         return via_tool(client, args)
-    if fn == "roadmap settings":
-        # Any flag is a partial update of those settings; none reads them. An empty value clears a list.
-        names = ("labels", "cors_origins", "action_limit", "suggestion_limit", "bot_public_approval")
-        changes = {k: getattr(args, k) for k in names if getattr(args, k) is not None}
-        for k in ("labels", "cors_origins"):
-            if k in changes:
-                changes[k] = [v for v in changes[k] if v]
-        if args.suggestions_bot is not None or args.automatic:
-            changes["suggestions_bot"] = args.suggestions_bot
-        from clients import hubtools
-
-        return hubtools.roadmap_settings(
-            client, {"settings": changes or None, "operation_id": os.environ.get("HUB_OPERATION_ID")}
-        )
     if args.cmd in ("chat", "replay"):
         return via_tool(client, args)
     if fn == "audit":

@@ -1,11 +1,10 @@
 """Screening: outside text checked for prompt injection at the doors it comes in by, before a bot reads it
 (questions/injection-screen.json, docs/permissions.md "Screening").
 
-Six doors, each with its own mode (off, warn or hold; Settings > Security > Screening):
+Five doors, each with its own mode (off, warn or hold; Settings > Security > Screening):
 
   webhook  a call whose automation opens a task or starts a bot's turn, and a `create_task` rule on `webhook.received`
   mail     an inbound message (backend/inbound.py) a bot reads
-  idea     the public roadmap's suggestion form (backend/public_roadmaps.py)
   watcher  a watcher's new task (backend/watchers.py), except the Support Agent's HQ tickets, which support triage
            checks (backend/support_triage.py)
   document a document's text as the Rules Owner reads it (backend/counsel.py)
@@ -50,17 +49,18 @@ log = logging.getLogger("tico.screening")
 DEADLINE = 12
 
 SET = "injection-screen"
-SOURCES = ("webhook", "mail", "idea", "watcher", "document", "slack")
+# A mode saved for a door that is gone (`idea`, the removed public roadmap's suggestion form) is ignored: modes() reads
+# only these.
+SOURCES = ("webhook", "mail", "watcher", "document", "slack")
 MODES = ("off", "warn", "hold")
 LAYERS = ("patterns", "model")  # the two detectors, each switched on or off for every door
 # The first release observes only: Warn at every door, so nothing is held until the live eval
 # (`python -m evals.screening.run --live`) and a week of `screening.warned` audit rows show the hold line is safe. Turning
-# Hold on by default is this one line (webhook, idea and watcher; mail is never held).
-DEFAULTS = {"webhook": "warn", "mail": "warn", "idea": "warn", "watcher": "warn", "document": "warn", "slack": "warn"}
+# Hold on by default is this one line (webhook and watcher; mail is never held).
+DEFAULTS = {"webhook": "warn", "mail": "warn", "watcher": "warn", "document": "warn", "slack": "warn"}
 NAMES = {
     "webhook": "Webhooks",
     "mail": "Mail",
-    "idea": "Ideas",
     "watcher": "Watchers",
     "document": "Documents",
     "slack": "Slack",
@@ -870,7 +870,6 @@ class ScreeningModes(Contract):
 
     webhook: Optional[Literal["off", "warn", "hold"]] = None
     mail: Optional[Literal["off", "warn", "hold"]] = None
-    idea: Optional[Literal["off", "warn", "hold"]] = None
     watcher: Optional[Literal["off", "warn", "hold"]] = None
     document: Optional[Literal["off", "warn", "hold"]] = None
     patterns: Optional[bool] = None

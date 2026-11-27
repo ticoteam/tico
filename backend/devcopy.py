@@ -247,7 +247,6 @@ EMPTY = (
     "bills_inbound",  # emailed bills: senders, subjects and HQ delivery ids
     "usage_alerts",
     "task_requesters",
-    "roadmap_actions",
     # raw provider streams: customer text, and whatever the secret scrub missed
     "attempt_captures",
     "attempt_capture_drops",
@@ -910,12 +909,8 @@ def prune(c, days, keep_automations=False):
             if isinstance(rows, dict) and set(rows) & gone_all:
                 snapshot["rows"] = {t: r for t, r in rows.items() if t not in gone_all}
                 c.execute("UPDATE task_trash SET rows=? WHERE task_id=?", (json.dumps(snapshot), task_id))
-    # The secret that keys visitors' hashed addresses is the live install's; the copy gets its own.
     if "registry_metadata" in present:
-        c.execute(
-            "UPDATE registry_metadata SET value=? WHERE key='roadmap_ip_secret'", (json.dumps(secrets.token_hex(32)),)
-        )
-        # The Web Push key pair is the live install's too; the copy makes its own on first need.
+        # The Web Push key pair is the live install's; the copy makes its own on first need.
         c.execute("DELETE FROM registry_metadata WHERE key='web_push_vapid'")
     # Finance makes its tables inert itself: pending actions, undrained events, links to emptied holds, and the rows that
     # move money or call a provider (DEV_COPY_EMPTIED). Any Finance table present means the scrub runs: a copy missing one

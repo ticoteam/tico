@@ -774,7 +774,6 @@ _PROPOSABLE_AGENT_OPS = [
         ("POST", r"/api/v2/tasks/[^/]+/requesters/[^/]+/delete"),
         ("POST", r"/api/v2/tasks/[^/]+/links"),
         ("DELETE", r"/api/v2/tasks/[^/]+/links/[^/]+"),
-        ("POST", r"/api/v2/roadmaps/settings"),
         ("POST", r"/api/v2/inbound/inboxes/[^/]+/release"),
         ("POST", r"/api/v2/inbound/phone-requests(/[^/]+/accept)?"),
         # Who reads an inbox (backend/inbound.py `set_audience`): owner and admins, on their own click.
@@ -1271,7 +1270,6 @@ def describe(c, method, path, body, viewer=None, admins=()):
             r"/api/v2/github/product-repos",
             lambda g: f"Create the private, empty GitHub repository {body.get('org', '')}/{body.get('name', '')}",
         ),
-        (r"/api/v2/roadmaps/settings", lambda g: "Change the public roadmap: " + values(body)),
         (
             r"/api/v2/inbound/inboxes/([^/]+)/release",
             lambda g: (

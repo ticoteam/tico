@@ -1,7 +1,7 @@
 """Publication and requesters extend tasks; comments remain messages in their task thread.
 
-The public roadmap is off in this release: it was built on task types and steps, and comes back with the Product
-pipeline, on its stages. Its settings, a task's public fields and its requesters are kept."""
+The public roadmap, its pages, settings and visitor routes, is removed (task #4095). A task's public fields, the OK a
+bot needs to write them, and its requesters are kept; the signed-in Roadmap ranks the Product pipeline's tasks."""
 
 import hashlib
 import json
@@ -14,13 +14,13 @@ from pydantic import Field
 from . import hubdb as H
 from .models import Contract
 from .store import Problem
-from . import bot_settings as BS
 from .api_contract import api_v2, error
 
-# Anonymous suggestions waiting at Suggested, across every visitor: the per-address limit alone lets many
-# addresses queue unbounded work for the bot that receives them (the same overall cap as waiting pairings).
-SUGGESTIONS_WAITING_MAX = 20
 NOT_YET = 'The public roadmap is not available yet.'
+# Whether a bot's public text (or one acting for a person) needs an exact approved publication (approve). It was the
+# removed public roadmap settings' `bot_public_approval`, on by default; no setting turns it off any more. Tests that
+# check where a warned public text goes switch it off.
+BOTS_NEED_A_PUBLISH_OK = True
 
 
 # Public text someone wrote leaves a task event for its field (publication(), task_create); the first version's copies
@@ -30,62 +30,6 @@ def written(field):
         f"EXISTS(SELECT 1 FROM history_events e WHERE e.subject_type='task' AND e.subject_id=tasks.id "
         f"AND e.kind='{field}')"
     )
-
-
-def settings(c):
-    row = (
-        c.execute("SELECT value FROM registry_metadata WHERE key='roadmaps'").fetchone()
-        if H._has_table(c, 'registry_metadata')
-        else None
-    )
-    return {
-        'labels': [],
-        'cors_origins': [],
-        'action_limit': 10,
-        'suggestion_limit': SUGGESTIONS_WAITING_MAX,
-        'bot_public_approval': True,
-        'suggestions_bot': None,
-        **(json.loads(row[0]) if row else {}),
-    }
-
-
-def suggestions_receiver(c):
-    """The bot that gets visitor suggestions and the suggestions-full notice, and why: the bot chosen in settings
-    while it is active; otherwise Automatic, the first active or planned Feature Owner, then an active Product
-    Lead. Returns (id or None, 'chosen' | 'automatic' | 'chosen_archived' | 'chosen_inactive'), the last two
-    saying the chosen bot was passed over because it is archived (or gone), or paused, quarantined or planned."""
-    chosen = settings(c)['suggestions_bot']
-    source = 'automatic'
-    if chosen:
-        chosen = (H.resolve_bot(c, chosen) or {}).get('id', chosen)
-        state = (H._one(c, 'SELECT state FROM bots WHERE id=?', (chosen,)) or {'state': 'archived'})['state']
-        if state == 'active':
-            return chosen, 'chosen'
-        source = 'chosen_archived' if state == 'archived' else 'chosen_inactive'
-    for template, states in (
-        ('feature-owner', ('active', 'planned')),
-        ('product-lead', ('active',)),
-        ('product-manager', ('active',)),
-    ):
-        row = c.execute(
-            f"SELECT bc.bot FROM bot_config bc {BS.JOIN} JOIN bots b ON b.id=bc.bot "
-            f"WHERE s.template=? AND b.state IN (" + ','.join('?' * len(states)) + ") "
-            "ORDER BY bc.bot LIMIT 1",
-            (template, *states),
-        ).fetchone()
-        if row:
-            return row[0], source
-    return None, source
-
-
-def settings_view(c):
-    """The settings plus the bot suggestions go to right now, so a reader sees what Automatic means today."""
-    bot, source = suggestions_receiver(c)
-    name = H._one(c, 'SELECT display_name FROM bots WHERE id=?', (bot,)) if bot else None
-    return {
-        **settings(c),
-        'suggestions_receiver': {'bot': bot, 'name': (name and name['display_name']) or bot, 'source': source},
-    }
 
 
 def publication_payload(task_id, operation, values):
@@ -104,7 +48,7 @@ def exact_approval(c, actor):
         return False
     from . import strategy_acts
 
-    return strategy_acts.is_strategy_bot(actor) or settings(c)['bot_public_approval']
+    return strategy_acts.is_strategy_bot(actor) or BOTS_NEED_A_PUBLISH_OK
 
 
 def approve(c, actor, task_id, operation, values, approval_id=None):
@@ -232,28 +176,6 @@ def remove_requester(c, task_id, *, token=None, ident=None, actor=None):
         raise Problem('not_found', 'Requester not found', 404)
     c.execute('UPDATE tasks SET updated_at=? WHERE id=?', (H.now(), task_id))
     H.event(c, actor or H.TICO_ACTOR, 'task.requester.remove', task_id, {})
-    return {'removed': True}
-
-
-def withdraw(c, task_id, token):
-    """A visitor's token removes their request whatever became of the task since: unlabelled, off every
-    enabled roadmap, private, or in the trash (where its snapshot would otherwise bring them back)."""
-    digest = hashlib.sha256(token.encode()).hexdigest()
-    if c.execute('SELECT 1 FROM task_requesters WHERE task_id=? AND token_hash=?', (task_id, digest)).fetchone():
-        return remove_requester(c, task_id, token=token)
-    trash = (
-        c.execute('SELECT rows FROM task_trash WHERE task_id=? AND purged_at IS NULL', (task_id,)).fetchone()
-        if H._has_table(c, 'task_trash')
-        else None
-    )
-    snapshot = json.loads(trash[0]) if trash else {}
-    rows = snapshot.get('rows', {}).get('task_requesters') or []
-    kept = [r for r in rows if r.get('token_hash') != digest]
-    if len(kept) == len(rows):
-        raise Problem('not_found', 'Requester not found', 404)
-    snapshot['rows']['task_requesters'] = kept
-    c.execute('UPDATE task_trash SET rows=? WHERE task_id=?', (json.dumps(snapshot, default=str), task_id))
-    H.event(c, H.TICO_ACTOR, 'task.requester.remove', task_id, {'trashed': True})
     return {'removed': True}
 
 

@@ -1039,10 +1039,6 @@ def _install_request_guard(
                 )
             ):
                 raise Problem("not_found", "Not found", 404)
-            if request.url.path.startswith('/public/roadmaps/'):
-                from .public_roadmaps import guard as public_roadmap_guard
-
-                return await public_roadmap_guard(request, call_next, store)
             if request.url.path == "/healthz":
                 return await call_next(request)
             # A visual in a reply (backend/visuals.py): its signed token is the credential, and the app's cookies are
@@ -2202,9 +2198,6 @@ def _install_features(
     from .roadmaps import install_internal
 
     install_internal(app, store, auth, mutate, mover)
-    from .public_roadmaps import install as install_public_roadmaps
-
-    install_public_roadmaps(app, store, auth, mutate)
     from .company_page import api as company_page_api
 
     company_page_api.register(app, store, auth, mutate, settings)

@@ -13,7 +13,6 @@ from clients.commands.threads import _message_send, thread_upload
 from clients.commands._shared import _uploaded, _visuals, version_needed
 from clients.commands.task_work import (
     _posted_file,
-    roadmap_settings,
     task_attach,
     task_comment,
     task_label,
@@ -178,7 +177,6 @@ __all__ = [
     "repo_list",
     "repo_review",
     "repo_update",
-    "roadmap_settings",
     "run_export",
     "run_export_full",
     "support_file",

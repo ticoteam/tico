@@ -244,9 +244,8 @@ TASK_LANES = ("company", "product")
 # registry/people.yaml, so adding a mover is a roster edit. The environment owner always may.
 MOVER_TEAMS = ("leadership", "product", "engineering")
 # Labels are a mover's too, except that a bot may change a classification label on a task it manages
-# (_label_writer). Labels Tico acts on stay a mover's: a task goal (execution.task_goal) ...
+# (_label_writer). Labels Tico acts on stay a mover's: a task goal (execution.task_goal).
 WORKFLOW_LABELS = ("goal:on", "goal:off")
-# ...and a label on a public roadmap (roadmaps.settings), which roadmaps.approve checks for a bot.
 # A label refusal counts toward a quarantine once per task in this window (_escalate), so a bot
 # retrying a refusal it already had cannot quarantine itself in seconds.
 LABEL_REFUSAL_WINDOW_S = 3600
@@ -3374,17 +3373,13 @@ def _tag_bot_writers(conn, actor, row, writers, mover=None):
 
 
 def _granted_labels(conn, actor, row, keys):
-    """The labels in `keys` that a mover let `actor` set on any task it can read (tags.bot_writers). A public roadmap
-    label keeps its own gate even when granted."""
-    from .roadmaps import settings as roadmap_settings
-
+    """The labels in `keys` that a mover let `actor` set on any task it can read (tags.bot_writers)."""
     if not is_bot(actor) or not keys or not task_private_readable(conn, actor, row):
         return set()
-    public = set(roadmap_settings(conn)["labels"])
     granted = set()
     for key in keys:
         found = tag_by_key(conn, key)
-        if found and actor in found["bot_writers"] and key not in WORKFLOW_LABELS and key not in public:
+        if found and actor in found["bot_writers"] and key not in WORKFLOW_LABELS:
             granted.add(key)
     return granted
 
@@ -3409,8 +3404,7 @@ def hydrate_task_tags(conn, rows):
             by_id[value.pop("task_id")]["tags"].append(value)
 
 
-def _set_task_tags(conn, actor, task_id, labels, note="", approval_id=None, approved=False):
-    """`approved`: _label_writer already used this change's publish approval."""
+def _set_task_tags(conn, actor, task_id, labels, note=""):
     keys, resolved = _labels(labels), []
     for key in keys:
         row = tag_by_key(conn, key)
@@ -3419,14 +3413,6 @@ def _set_task_tags(conn, actor, task_id, labels, note="", approval_id=None, appr
         resolved.append((key, row))
     task_row = task(conn, task_id)
     old = task_labels(task_row)
-    from .roadmaps import settings as roadmap_settings, approve as approve_roadmap
-
-    if (
-        not approved
-        and task_row['visibility'] == 'public'
-        and (set(keys) - set(old)) & set(roadmap_settings(conn)['labels'])
-    ):
-        approve_roadmap(conn, actor, task_id, 'labels', {'labels': keys}, approval_id)
     old_ids = {r[0] for r in conn.execute("SELECT tag_id FROM task_tags WHERE task_id=?", (task_id,))}
     wanted, ordered = set(), []
     for key, row in resolved:
@@ -3445,21 +3431,17 @@ def _set_task_tags(conn, actor, task_id, labels, note="", approval_id=None, appr
         _task_event(conn, task_id, actor, "labels", _dump(old), _dump(keys), note)
 
 
-def _label_writer(conn, actor, row, labels, approval_id=None):
+def _label_writer(conn, actor, row, labels):
     """A bot that is not a mover changing labels on `row` (task_update): it may change a classification label
     on a task it manages, one it owns or asked for or whose pipeline it manages or owns, and nothing
-    else. A label Tico acts on (WORKFLOW_LABELS) stays a mover's. A label on a public roadmap puts the task
-    there once it is public, so adding or removing one takes the bot's exact approved publish approval
-    (roadmaps.approve), or a mover when the team does not ask bots for one. Refused as rule `label`, which
-    counts once per task an hour (_escalate). Returns whether the approval was used."""
-    from .roadmaps import settings as roadmap_settings, approve as approve_roadmap
-
+    else. A label Tico acts on (WORKFLOW_LABELS) stays a mover's. Refused as rule `label`, which counts once per task
+    an hour (_escalate)."""
     keys = _labels(labels)
     changed = sorted(set(keys) ^ set(task_labels(row)))
     granted = _granted_labels(conn, actor, row, changed)
     changed = [k for k in changed if k not in granted]
     if not changed:
-        return False
+        return
     teams = ", ".join(MOVER_TEAMS)
     if not task_participant(conn, actor, row) and not task_pipeline_head(conn, actor, row):
         refuse(
@@ -3470,89 +3452,40 @@ def _label_writer(conn, actor, row, labels, approval_id=None):
             f"whose pipeline it manages or owns; labels on {row['id']} are changed by a person on the {teams} teams",
             task=row["id"],
         )
-    settings = roadmap_settings(conn)
-    public = [k for k in changed if k in settings["labels"]]
     flow = [k for k in changed if k in WORKFLOW_LABELS]
-    if public and settings["bot_public_approval"] and approval_id and not flow:
-        # An approval that is pending, spent or for other labels is still this label refusal: a bot retrying
-        # it would otherwise count every retry and quarantine itself, as before.
-        try:
-            approve_roadmap(conn, actor, row["id"], "labels", {"labels": keys}, approval_id)
-        except Refused as exc:
-            if exc.rule != "approval":
-                raise
-            refuse(
-                conn,
-                actor,
-                "label",
-                f"{approval_id} is no OK of exactly this change; a person on the {teams} teams changes it",
-                task=row["id"],
-            )
-        return True
-    held = _held_labels(
-        flow,
-        public,
-        teams,
-        (
-            f"the public roadmap is not open to bots yet: a person on the {teams} teams changes it"
-            if settings["bot_public_approval"]
-            else f"a person on the {teams} teams changes it"
-        ),
-    )
-    if held:
-        rest = [k for k in changed if k not in public and k not in flow]
+    if flow:
+        rest = [k for k in changed if k not in flow]
         refuse(
             conn,
             actor,
             "label",
-            "; ".join(held) + (f". {', '.join(rest)} you may change on its own" if rest else ""),
+            _held_labels(flow, teams) + (f". {', '.join(rest)} you may change on its own" if rest else ""),
             task=row["id"],
         )
-    return False
 
 
-def _held_labels(flow, public, teams, publish):
-    """The clauses of a `label` refusal: `flow` labels Tico acts on, `public` roadmap labels and what `publish`
-    says the bot does about them."""
-    held = []
-    if flow:
-        held.append(
-            f"{', '.join(flow)} {'changes' if len(flow) == 1 else 'change'} how Tico runs the task, so "
-            f"a person on the {teams} teams changes {'it' if len(flow) == 1 else 'them'}"
-        )
-    if public:
-        held.append(
-            f"{', '.join(public)} {'is a public roadmap label' if len(public) == 1 else 'are public roadmap labels'}"
-            f" (adding or removing one puts the task on a roadmap or takes it off), so " + publish
-        )
-    return held
+def _held_labels(flow, teams):
+    """The clause of a `label` refusal for `flow`, the labels Tico acts on."""
+    return (
+        f"{', '.join(flow)} {'changes' if len(flow) == 1 else 'change'} how Tico runs the task, so "
+        f"a person on the {teams} teams changes {'it' if len(flow) == 1 else 'them'}"
+    )
 
 
 def _create_labels(conn, actor, keys):
     """A bot that is not a mover creating a task with `keys` (task_create): _label_writer's rule for the new task.
-    A classification label goes on as before; a label Tico acts on stays a mover's, and a public roadmap label is
-    refused before anything is written. A publish approval is for a task that exists (publication-preview), so the
-    refusal says to create the task without it and add it on the task. Refused as rule `label`."""
-    from .roadmaps import settings as roadmap_settings
-
-    settings = roadmap_settings(conn)
-    public = [k for k in keys if k in settings["labels"]]
+    A classification label goes on as before; a label Tico acts on stays a mover's, refused before anything is
+    written. Refused as rule `label`."""
     flow = [k for k in keys if k in WORKFLOW_LABELS]
-    teams = ", ".join(MOVER_TEAMS)
-    held = _held_labels(
-        flow,
-        public,
-        teams,
-        (
-            f"the public roadmap is not open to bots yet: create the task without {'it' if len(public) == 1 else 'them'}, "
-            f"and a person on the {teams} teams adds {'it' if len(public) == 1 else 'them'}"
-            if settings["bot_public_approval"]
-            else f"a person on the {teams} teams adds {'it' if len(public) == 1 else 'them'}"
-        ),
-    )
-    if held:
-        rest = [k for k in keys if k not in public and k not in flow]
-        refuse(conn, actor, "label", "; ".join(held) + (f". {', '.join(rest)} you may set on its own" if rest else ""))
+    if flow:
+        rest = [k for k in keys if k not in flow]
+        teams = ", ".join(MOVER_TEAMS)
+        refuse(
+            conn,
+            actor,
+            "label",
+            _held_labels(flow, teams) + (f". {', '.join(rest)} you may set on its own" if rest else ""),
+        )
 
 
 def _lane_for(conn, lane, owner, actor):
@@ -5052,14 +4985,14 @@ def task_create(
         ):
             refuse_stage_reader(conn, actor, parent)
         readers = shared
-    from .roadmaps import settings as roadmap_settings
+    from .roadmaps import BOTS_NEED_A_PUBLISH_OK
 
     # Bots (and Assistant/Agent Ops acting for a person) publish only through an approved publication.
     if visibility == 'public' or public_title or public_summary:
         from .strategy_acts import gate
 
         gate(conn, actor, "publish", f"publish a new task on the public roadmap: {public_title or title}")
-    bot_review = (is_bot(actor) or VIA.get()) and roadmap_settings(conn)['bot_public_approval']
+    bot_review = (is_bot(actor) or VIA.get()) and BOTS_NEED_A_PUBLISH_OK
     if bot_review and (visibility == 'public' or public_title or public_summary):
         # Said rather than dropped, so the bot knows its text is not on the roadmap.
         refuse(
@@ -5703,7 +5636,8 @@ def task_update(
             f"{', '.join(wanted)} on a task {'is' if len(wanted) == 1 else 'are'} changed by a person on "
             f"the {', '.join(MOVER_TEAMS)} teams, not by {actor_name(conn, actor)}",
         )
-    approved = labels is not None and not mover and _label_writer(conn, actor, row, labels, approval_id)
+    if labels is not None and not mover:
+        _label_writer(conn, actor, row, labels)
     if lane is not None:
         lane = _lane_for(conn, lane, row["owner_id"], actor)  # a task moves only onto company
     if title is not None:
@@ -5741,7 +5675,7 @@ def task_update(
         args[column] = value
         _task_event(conn, task_id, actor, field, row.get(column), value, note or "")
     if labels is not None:
-        _set_task_tags(conn, actor, task_id, labels, note or "", approval_id=approval_id, approved=approved)
+        _set_task_tags(conn, actor, task_id, labels, note or "")
         sets.append("updated_at=:updated_at")
     if rank is not None:
         sets.append("rank=:rank")

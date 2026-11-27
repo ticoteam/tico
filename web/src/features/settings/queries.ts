@@ -1046,27 +1046,6 @@ export const setCountPlanRuns = (on: boolean) =>
 export const purgeQueue = (scope: string) =>
   api.post<{ cancelled: number; kept_people: number; still_running: number }>('/api/v2/usage/queues/purge', { scope });
 
-// ---------------------------------------------------------------- tasks: the public roadmap (GET /api/v2/roadmaps/settings)
-
-export interface RoadmapView {
-  /** The labels (tag keys) whose tasks show on a public page at /public/roadmaps/<label>. */
-  labels: string[];
-  /** An agent's public words wait for a person's OK. */
-  bot_public_approval: boolean;
-}
-
-export const roadmapQuery = queryOptions({
-  queryKey: ['settings', 'roadmap'],
-  queryFn: ({ signal }) => api.get<RoadmapView>('/api/v2/roadmaps/settings', { signal }),
-});
-
-export const setRoadmap = (change: Partial<Pick<RoadmapView, 'labels' | 'bot_public_approval'>>) =>
-  write({
-    key: roadmapQuery.queryKey,
-    optimistic: (v: RoadmapView | undefined) => v && { ...v, ...change },
-    send: (idempotencyKey) => api.post<RoadmapView>('/api/v2/roadmaps/settings', change, { idempotencyKey }),
-  });
-
 export interface TagRow {
   id: string;
   key: string;

@@ -15,6 +15,7 @@ import pytest
 from backend import bot_settings as BS
 from backend import call_slots as CS
 from backend import org_rule_check as K
+from backend import roadmaps
 from backend import thread_attention, threads, updates
 from backend.auth import Identity
 from backend.names import SUPPORT_ACTOR, SUPPORT_NAME
@@ -1756,7 +1757,7 @@ def test_a_breaking_final_text_after_a_safe_tool_reply_is_still_held(ruled):
 # ---- where a warning goes -----------------------------------------------------------------------------------------
 
 
-def test_a_warning_goes_on_each_field_a_task_write_sets_and_never_on_a_title(ruled):
+def test_a_warning_goes_on_each_field_a_task_write_sets_and_never_on_a_title(ruled, monkeypatch):
     api, _ = ruled
     color_rule(api, if_broken="warn")
     task = task_for_ops(api)
@@ -1768,7 +1769,7 @@ def test_a_warning_goes_on_each_field_a_task_write_sets_and_never_on_a_title(rul
     row = sql(api, "SELECT title, note FROM tasks WHERE id=?", (task["id"],))[0]
     assert row["title"] == title and asked(api, task["id"]) == "Draft it."
     assert row["note"].startswith("Warning:") and row["note"].endswith("Waiting on the vendor.")
-    post(api, "roadmaps/settings", {"bot_public_approval": False})
+    monkeypatch.setattr(roadmaps, "BOTS_NEED_A_PUBLISH_OK", False)  # bots publish without an OK
     made = post(
         api,
         "tasks",
@@ -1786,7 +1787,7 @@ def test_a_warning_goes_on_each_field_a_task_write_sets_and_never_on_a_title(rul
     assert made["public_title"] == "Our favorite color is red" and made["title"] == "Ship the palette"
     words = asked(api, made_id)
     assert words.startswith("Warning:") and words.endswith("Internal draft.")
-    # Published with no summary, the public roadmap shows the line as its summary, the title kept whole.
+    # Published with no summary, the line is its public summary, the title kept whole.
     assert made["public_summary"].startswith("Warning:")
 
 
@@ -2043,15 +2044,15 @@ def test_with_no_rule_in_force_bot_writes_resolve_no_audience(ruled, monkeypatch
 
 
 def public_output(api, task_id):
-    """The task's public title and summary as stored: what a public roadmap shows once it is back."""
+    """The task's public title and summary as stored."""
     [row] = sql(api, "SELECT public_title AS title, public_summary AS summary FROM tasks WHERE id=?", (task_id,))
     return row
 
 
-def test_a_warned_publish_puts_its_line_on_the_public_summary_the_roadmap_shows(ruled):
+def test_a_warned_publish_puts_its_line_on_the_public_summary(ruled, monkeypatch):
     api, _ = ruled
     color_rule(api, if_broken="warn")
-    post(api, "roadmaps/settings", {"bot_public_approval": False})
+    monkeypatch.setattr(roadmaps, "BOTS_NEED_A_PUBLISH_OK", False)  # bots publish without an OK
     drafted = post(
         api,
         "tasks",
@@ -2086,10 +2087,10 @@ def test_a_warned_publish_puts_its_line_on_the_public_summary_the_roadmap_shows(
     assert shown["title"] == "Our favorite color is red" and shown["summary"].startswith("Warning:")
 
 
-def test_publishing_while_clearing_a_summary_judges_only_what_is_published(ruled):
+def test_publishing_while_clearing_a_summary_judges_only_what_is_published(ruled, monkeypatch):
     api, judge = ruled
     color_rule(api)
-    post(api, "roadmaps/settings", {"bot_public_approval": False})
+    monkeypatch.setattr(roadmaps, "BOTS_NEED_A_PUBLISH_OK", False)  # bots publish without an OK
     drafted = post(
         api,
         "tasks",
@@ -2129,10 +2130,10 @@ def test_a_warned_daily_with_slides_carries_its_line_on_the_stored_bullets(ruled
     assert "Ship the palette" not in judge.calls[-1]["state"]["output"]
 
 
-def test_a_warned_summary_at_the_cap_publishes_with_its_line(ruled):
+def test_a_warned_summary_at_the_cap_publishes_with_its_line(ruled, monkeypatch):
     api, _ = ruled
     color_rule(api, if_broken="warn")
-    post(api, "roadmaps/settings", {"bot_public_approval": False})
+    monkeypatch.setattr(roadmaps, "BOTS_NEED_A_PUBLISH_OK", False)  # bots publish without an OK
     summary = ("Our favorite color is red. " * 400)[:7999] + "Z"
     drafted = post(
         api,
@@ -2179,10 +2180,10 @@ def upload(api, name, text="# Draft", token="ops-test"):
     return r.json()["file"]
 
 
-def test_a_second_warned_publish_of_a_summary_at_the_cap_keeps_one_line(ruled):
+def test_a_second_warned_publish_of_a_summary_at_the_cap_keeps_one_line(ruled, monkeypatch):
     api, _ = ruled
     color_rule(api, if_broken="warn")
-    post(api, "roadmaps/settings", {"bot_public_approval": False})
+    monkeypatch.setattr(roadmaps, "BOTS_NEED_A_PUBLISH_OK", False)  # bots publish without an OK
     summary = ("Our favorite color is red. " * 400)[:7999] + "Z"
     drafted = post(
         api,

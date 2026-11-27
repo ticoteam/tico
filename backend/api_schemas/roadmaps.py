@@ -1,5 +1,6 @@
 # pyright: strict
-"""The answers of the Roadmaps routes (backend/roadmaps.py, backend/public_roadmaps.py; openapi_v2 gathers them)."""
+"""The answers of the Roadmaps routes (backend/roadmaps.py; openapi_v2 gathers them): the signed-in Roadmap and a task's
+requesters."""
 
 from typing import Any
 
@@ -31,7 +32,7 @@ SCHEMAS.update(
                 "visibility": {"enum": ["public", "private"]},
                 "public_title": {
                     "type": "string",
-                    "description": "The text a public roadmap shows; empty until written",
+                    "description": "The task's public title; empty until written",
                 },
                 "size": {"type": ["number", "null"]},
                 "version": "i",
@@ -77,24 +78,5 @@ SCHEMAS.update(
         "TaskRequesterUpdated": obj({"updated": "b"}, required=[]),
         "TaskRequesterRemoved": obj({"removed": "b"}, required=[]),
         "TaskCommentModerated": obj({"moderated": "b"}),
-        "RoadmapSettingsView": obj(
-            {
-                "labels": items("s")
-                | {"description": "Tag keys: /public/roadmaps/{label} is a public roadmap of the tasks with one"},
-                "cors_origins": items("s"),
-                "action_limit": {"type": "integer", "description": "Requests per visitor per day"},
-                "suggestion_limit": {"type": "integer", "description": "Visitor suggestions waiting for review"},
-                "bot_public_approval": "b",
-                "suggestions_bot": {"type": ["string", "null"], "description": "The chosen bot; null is Automatic"},
-                "suggestions_receiver": obj(
-                    {
-                        "bot": "n",
-                        "name": "n",
-                        "source": {"enum": ["chosen", "automatic", "chosen_archived", "chosen_inactive"]},
-                    }
-                )
-                | {"description": "Who visitor suggestions go to now, and why"},
-            }
-        ),
     }
 )

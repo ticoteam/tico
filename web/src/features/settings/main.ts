@@ -4,12 +4,12 @@ import { configQuery, meQuery } from '@/data';
 import { agentsQuery, computersQuery } from '@/features/team/routing';
 import {
   accessQuery,
+  askQuery,
   billingQuery,
   changelogQuery,
   contactTypesQuery,
   healthQuery,
   historyQuery,
-  roadmapQuery,
   screeningQuery,
   subscriptionsQuery,
 } from './queries';
@@ -67,7 +67,7 @@ export function mainQuery(section: SectionId) {
     case 'providers':
       return subscriptionsQuery;
     case 'tasks':
-      return roadmapQuery;
+      return askQuery;
     case 'contacts':
       return contactTypesQuery;
     case 'security':
