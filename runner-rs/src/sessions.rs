@@ -571,7 +571,7 @@ async fn upstream_or_none(path: &Path, env: &Env) -> Result<String, Fault> {
     }
 }
 
-/// Why no new session worktree may be made at `path` now, or "": the bot's folder already holds SESSION_CAP of them on
+/// Why no new session worktree may be made at `path` now, or "": the bot's folder already holds SESSION_CAP worktrees on
 /// this computer, or its volume has under SESSION_FLOOR free. Nothing is removed to make room.
 fn room_for(path: &Path) -> String {
     let held = path
@@ -581,6 +581,9 @@ fn room_for(path: &Path) -> String {
             entries
                 .flatten()
                 .filter(|e| e.path() != path && e.file_type().is_ok_and(|t| t.is_dir()))
+                // A worktree has its .git file from the start of `git worktree add`; an empty folder a stopped runner
+                // left before git ran (checkout_groups::prepare) holds no checkout and takes no place.
+                .filter(|e| e.path().join(".git").symlink_metadata().is_ok())
                 .count()
         })
         .unwrap_or(0);

@@ -967,6 +967,23 @@ async fn a_bot_at_its_session_worktree_cap_gets_no_new_one_and_keeps_using_its_o
 }
 
 #[tokio::test]
+async fn empty_folders_a_stopped_runner_left_do_not_count_toward_the_session_worktree_cap() {
+    let tmp = Tmp::new();
+    let (projects, main) = bot_checkout(&tmp.0);
+    let env = turn_env(&tmp.0, &[]);
+    // The runner makes a task's folder before git adds the worktree (checkout_groups::prepare); a runner stopped in
+    // between leaves it empty.
+    for n in 0..sessions::SESSION_CAP {
+        std::fs::create_dir_all(sessions::path_for(&projects, "ops", &format!("left{n}"))).unwrap();
+    }
+    let task = sessions::path_for(&projects, "ops", "real");
+    assert_eq!(
+        sessions::ensure(&main, &task, "real", &env).await.unwrap(),
+        ("origin/main".into(), "".into())
+    );
+}
+
+#[tokio::test]
 async fn no_session_worktree_is_made_under_5_gb_free_but_one_already_made_is_used() {
     let tmp = Tmp::new();
     let (projects, main) = bot_checkout(&tmp.0);
