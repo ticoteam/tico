@@ -56,19 +56,18 @@ export function receiptOf(m: ChatMessage): AssistantOk | null {
   return [answer_id, task_id, title, stage].every((x) => typeof x === 'string' && x) ? (r as AssistantOk) : null;
 }
 
-/* The receipt's card: the task and stage named back, and Undo while that OK still stands, which is the person's own
-   Undo of an answer (task.undoAnswer). Whether it stands changes after the receipt is written, so the card reads the
-   task: Undo shows while one of its requirements holds this answer and may take it back. A refusal (the stage moved
-   on in the meantime) is said, and the task is read again. */
+/* The receipt's card: the task and stage named back, and Undo until that OK was taken back, which is the person's own
+   Undo of an answer (task.undoAnswer). The server takes back an OK while the task is in that stage, and one that moved
+   it on while it has not moved since; that can change after the receipt is written, so the card offers Undo unless
+   the task's history says the OK was undone (its line's `delegation.undone`), and says the server's refusal when the
+   task moved on since. Either way the task is read again. */
 function Receipt({ ok }: { ok: AssistantOk }) {
   const task = useQuery(taskDetailQuery(ok.task_id));
-  const holds = task.data?.to_leave?.find((r) => r.answer?.id === ok.answer_id);
+  const undone = task.data?.events?.some((e) => e.delegation?.answer_id === ok.answer_id && e.delegation.undone);
   const undo = async () => {
     const r = await run('task.undoAnswer', { task: ok.task_id, answer: ok.answer_id }, { via: 'click' });
-    if (!r.ok) {
-      toast(refusal(r, "Couldn't undo"));
-      void task.refetch();
-    }
+    if (!r.ok) toast(refusal(r, "Couldn't undo"));
+    await task.refetch();
   };
   return (
     <AskCard
@@ -76,7 +75,7 @@ function Receipt({ ok }: { ok: AssistantOk }) {
       note={`${ok.stage} · via assistant`}
       label="OK'd for you"
       target={`assistant-ok:${ok.answer_id}`}
-      actions={holds?.may.includes('undo') ? <Button onClick={undo}>Undo</Button> : undefined}
+      actions={task.data && !undone ? <Button onClick={undo}>Undo</Button> : undefined}
     />
   );
 }

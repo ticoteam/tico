@@ -339,9 +339,11 @@ export function Conversation({ id, variant, title, actor, session, from, starter
 
   /* ---- a jump from the Outline: page back until the message is loaded, then bring it to the middle */
   const { fetchNextPage } = timeline;
+  // Listened for once the first page is drawn: a jump that waited for this chat pages back from there.
+  const drawn = rows.length > 0;
   useEffect(
     () =>
-      onJump(id, (message) => {
+      !drawn ? undefined : onJump(id, (message) => {
         void (async () => {
           for (let n = 0; n <= JUMP_PAGES; n++) {
             if (scroller.current?.scrollToKey(message)) return;
@@ -353,7 +355,7 @@ export function Conversation({ id, variant, title, actor, session, from, starter
           if (!scroller.current?.scrollToKey(message)) toast({ text: 'That message is not in this chat', kind: 'failed' });
         })();
       }),
-    [id, fetchNextPage],
+    [id, fetchNextPage, drawn],
   );
 
   /* ---- where the person is: scrolled up past UP_PX, the asks over the box fade; up more than a window, Jump to latest
