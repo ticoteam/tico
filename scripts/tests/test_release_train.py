@@ -1550,7 +1550,7 @@ def test_waiting_high_risk_candidates_share_one_approval_record(installs, monkey
         (issue,) = filed(gh, rt.APPROVAL_LABEL)
         assert rt.open_approvals(gh) == [(version, issue)]
         assert rt.find_approval(gh, previous, state="all") is None
-        assert rt.pending_approval(gh, AUTO) is None
+        assert rt.pending_approval(gh, HIGH) is None
         assert issue["body"].startswith("Candidate %s at %s" % (version, sha[:12]))
         assert "@octocat" not in issue["body"]
         if patch == 201:
