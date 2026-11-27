@@ -32,14 +32,13 @@ const METHODS: &[&str] = &["npm", "pip", "script", "binary"];
 const POLICIES: &[&str] = &["latest", "pinned"];
 const AUTH_METHODS: &[&str] = &["device-code", "subscription", "api-key"];
 const ACTIONS: &[&str] = &["update", "pin", "unpin"];
-/// The adapters hosts/mod.rs has (a manifest's `host` must name one).
+/// The adapters hosts/mod.rs has (a manifest's `host` must name one, unless it runs on the generic ACP host).
 const HOSTS: &[&str] = &[
     "antigravity",
     "claude",
     "codex",
     "cursor",
     "gemini",
-    "grok",
     "musecode",
     "pi",
     "fake",
@@ -244,6 +243,8 @@ pub struct Manifest {
     /// Variables every command the runner runs with this harness sets (version probes, logins), e.g. an
     /// auto-updater's off switch. Sorted by name.
     pub env: Vec<(String, String)>,
+    /// `protocol = "acp"`: the CLI runs on the generic ACP host (hosts/acp_host.rs) as its `[acp]` table says.
+    pub acp: Option<crate::hosts::acp_host::AcpSpec>,
 }
 
 impl Manifest {
@@ -356,6 +357,8 @@ pub fn parse(data: &toml::Table, source: &str) -> Result<Manifest, String> {
         "env",
         "runtime",
         "capabilities",
+        "protocol",
+        "acp",
     ];
     let mut extra: Vec<&String> = data
         .keys()
@@ -393,10 +396,22 @@ pub fn parse(data: &toml::Table, source: &str) -> Result<Manifest, String> {
     let Some(name) = name else {
         return Err(format!("{at}: name is required"));
     };
-    let host = data.get("host").and_then(|v| v.as_str()).unwrap_or("");
-    if !name_re.is_match(host) || !HOSTS.contains(&host) {
+    let acp = match data.get("protocol") {
+        None => false,
+        Some(toml::Value::String(p)) if p == "acp" => true,
+        Some(toml::Value::String(p)) if p == "native" => false,
+        Some(_) => return Err(format!("{at}: protocol is native or acp")),
+    };
+    if acp != data.contains_key("acp") {
         return Err(format!(
-            "{at}: host '{host}' is not an adapter in runner-rs/src/hosts/"
+            "{at}: protocol = \"acp\" and an [acp] table go together"
+        ));
+    }
+    let host = data.get("host").and_then(|v| v.as_str()).unwrap_or("");
+    // An ACP CLI needs no adapter of its own: its host is the name the runner knows it by.
+    if !name_re.is_match(host) || !(acp || HOSTS.contains(&host)) {
+        return Err(format!(
+            "{at}: host '{host}' is not an adapter in runner-rs/src/hosts/ (an ACP CLI says protocol = \"acp\")"
         ));
     }
     let executable = data
@@ -671,6 +686,18 @@ pub fn parse(data: &toml::Table, source: &str) -> Result<Manifest, String> {
             ))
         }
     };
+    // The runner finds an executable, login and [env] by host and capabilities by runtime: one name for both.
+    if acp && runtime != host {
+        return Err(format!(
+            "{at}: an ACP harness's runtime is its host ({host})"
+        ));
+    }
+    let acp = match data.get("acp") {
+        Some(raw) if acp => Some(crate::hosts::acp_host::AcpSpec::parse(
+            raw, executable, &at,
+        )?),
+        _ => None,
+    };
     let capabilities = parse_capabilities(data.get("capabilities"), &at)?;
     Ok(Manifest {
         id: ident.into(),
@@ -692,6 +719,7 @@ pub fn parse(data: &toml::Table, source: &str) -> Result<Manifest, String> {
         runtime,
         capabilities,
         env,
+        acp,
     })
 }
 
@@ -939,6 +967,11 @@ pub fn login_command(runtime: &str) -> Option<Login> {
 
 fn manifest_for(runtime: &str) -> Option<&'static Manifest> {
     manifests().values().find(|m| m.runtime == runtime)
+}
+
+/// How the generic ACP host runs `runtime`, when its manifest says `protocol = "acp"`.
+pub fn acp_spec(runtime: &str) -> Option<crate::hosts::acp_host::AcpSpec> {
+    manifest_for(runtime).and_then(|m| m.acp.clone())
 }
 
 /// The capabilities of `runtime`'s manifest, else every fallback (a runtime with no manifest).
@@ -2551,6 +2584,95 @@ mod tests {
                 .collect::<Vec<_>>(),
         )
         .unwrap()
+    }
+
+    /// A manifest for a CLI that speaks ACP and has no Rust host: the whole registration.
+    const ACP_CLI: &str = r#"id = "acme-agent"
+name = "Acme Agent"
+host = "acme"
+executable = "acme"
+providers = ["acme"]
+protocol = "acp"
+
+[auth]
+methods = ["api-key"]
+api_key_env = ["ACME_API_KEY"]
+
+[acp]
+args = ["--acp", "--model", "{model}"]
+default_model = "acme-1"
+"#;
+
+    fn acp_manifest(text: &str) -> Result<Manifest, String> {
+        parse(&toml::from_str(text).unwrap(), "acme-agent.toml")
+    }
+
+    #[test]
+    fn an_acp_cli_is_registered_by_its_manifest_alone() {
+        let m = acp_manifest(ACP_CLI).unwrap();
+        assert_eq!((m.host.as_str(), m.runtime.as_str()), ("acme", "acme"));
+        let spec = m.acp.expect("protocol = \"acp\" carries its [acp] table");
+        assert_eq!(
+            spec.argv("acme", None, None),
+            ["acme", "--acp", "--model", "acme-1"]
+        );
+        assert_eq!(spec.label, "acme");
+        // Grok Build is one: its manifest, not a Rust host, says how it runs.
+        let all = built_in();
+        let acp: Vec<&str> = all
+            .iter()
+            .filter(|(_, m)| m.acp.is_some())
+            .map(|(id, _)| id.as_str())
+            .collect();
+        assert_eq!(acp, ["grok"]);
+        assert_eq!(acp_spec("grok"), all["grok"].acp);
+        assert_eq!(
+            acp_spec("pi"),
+            None,
+            "pi keeps its own host until its ACP adapter is turned on"
+        );
+        assert_eq!(executable_for("grok"), "grok");
+
+        let cases = [
+            (ACP_CLI.replace("protocol = \"acp\"\n", ""), "protocol = \"acp\" and an [acp] table go together"),
+            (
+                ACP_CLI.replace("[acp]\nargs = [\"--acp\", \"--model\", \"{model}\"]\ndefault_model = \"acme-1\"\n", ""),
+                "protocol = \"acp\" and an [acp] table go together",
+            ),
+            (ACP_CLI.replace("protocol = \"acp\"", "protocol = \"mcp\""), "protocol is native or acp"),
+            (ACP_CLI.replace("protocol = \"acp\"", "protocol = \"native\""), "protocol = \"acp\" and an [acp] table go together"),
+            (ACP_CLI.replace("host = \"acme\"", "host = \"acme\"\nruntime = \"acme-cli\""), "an ACP harness's runtime is its host (acme)"),
+            (ACP_CLI.replace("default_model = \"acme-1\"\n", ""), "acp.default_model is needed"),
+            (ACP_CLI.replace("host = \"acme\"", "host = \"Acme\""), "host 'Acme' is not an adapter"),
+        ];
+        for (text, error) in cases {
+            let got = acp_manifest(&text).unwrap_err();
+            assert!(got.contains(error), "{got}");
+        }
+        // Without protocol = "acp" a host must be a Rust adapter, and Grok no longer has one.
+        let native = ACP_CLI.replace("protocol = \"acp\"\n", "").replace(
+            "[acp]\nargs = [\"--acp\", \"--model\", \"{model}\"]\ndefault_model = \"acme-1\"\n",
+            "",
+        );
+        assert!(acp_manifest(&native)
+            .unwrap_err()
+            .contains("host 'acme' is not an adapter"));
+        let grok = BUILT_IN.iter().find(|(n, _)| *n == "grok.toml").unwrap().1;
+        let (before, after) = grok.split_once("\n[acp]").unwrap();
+        let rest = &after[after.find("# What Tico does differently").unwrap()..];
+        let native_grok = format!("{}\n{rest}", before.replace("protocol = \"acp\"\n", ""));
+        let got = parse(&toml::from_str(&native_grok).unwrap(), "grok.toml").unwrap_err();
+        assert!(got.contains("host 'grok' is not an adapter"), "{got}");
+        // Two ACP CLIs are two hosts: each claims its own name.
+        let other = ACP_CLI
+            .replace("acme-agent", "beta-agent")
+            .replace("\"acme\"", "\"beta\"");
+        let both = load_from(&[
+            ("acme-agent.toml".into(), ACP_CLI.into()),
+            ("beta-agent.toml".into(), other),
+        ])
+        .unwrap();
+        assert_eq!(both.len(), 2);
     }
 
     #[test]

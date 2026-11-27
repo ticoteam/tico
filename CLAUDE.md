@@ -113,6 +113,8 @@ calling a change done, walk this list and say in the PR which entries applied:
 - **Runners**: the Rust runner, on a Mac and in the Docker image.
 - **Harnesses**: every harness, through the capabilities in its `runner-rs/harnesses/*.toml`, never by comparing names.
   A capability is on only when the harness really does it; unknown is reported as unknown.
+  A CLI that speaks ACP runs on the generic host (`runner-rs/src/hosts/acp_host.rs`) from its manifest's `[acp]`
+  table (`protocol = "acp"`, docs/harnesses.md): add a manifest, not a Rust host. Claude, Codex and Antigravity keep their own.
 - **Who acts**: a human, a bot, Agent Ops acting for a human, and an external agent over MCP.
 - **Reverse states**: a way in needs a way out and a way to see it. Snooze needs unsnooze, close needs reopen,
   grant needs revoke.

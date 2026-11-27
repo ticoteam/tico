@@ -295,7 +295,8 @@ Astra 6, Sol 6, Sol 6.1, Fable 5.1 and Opus 5 remain readable for existing confi
 Terra 6.1 (`gpt-6.1-terra`) is offered on Codex with your own ChatGPT plan. The Tico AI Gateway does not offer it.
 No existing bot is migrated automatically.
 
-Cursor Agent and Grok Build already have runner adapters and appear when their providers are enabled.
+Cursor Agent and Grok Build already have runner adapters (Grok's is the generic ACP host) and appear when their
+providers are enabled.
 Cursor currently offers Auto; its effort field says **Managed by harness** because the CLI has no
 separate effort switch. Before adding named Cursor models, confirm their exact identifiers with
 [`cursor-agent --list-models`](https://cursor.com/docs/cli/reference/parameters) on the relevant account.
@@ -479,11 +480,15 @@ names what the CLI changed.
 
 ## Writing a harness
 
-A harness is a manifest plus a host adapter.
+A harness is a manifest plus a host adapter. A CLI that speaks ACP (Agent Client Protocol: JSON-RPC over its stdin and
+stdout) needs no adapter: its manifest says `protocol = "acp"` and how to run it (see **A CLI that speaks ACP** below).
+Claude Code, Codex and Antigravity keep hosts of their own; the other harnesses move to ACP as their CLIs gain it. Grok
+Build is the first; pi, Gemini CLI, Muse Code and Cursor still run on their own hosts until their ACP adapters are
+turned on.
 
 1. **Host adapter**: `runner-rs/src/hosts/<host>.rs` (`start_thread`, `start_turn`, `interrupt`, and events on the
    host's channel). Add it to the `Host` enum in `runner-rs/src/hosts/mod.rs` and to `make_host` in
-   `runner-rs/src/execute.rs`.
+   `runner-rs/src/execute.rs`. Skip this step for an ACP CLI.
 2. **Manifest**: `runner-rs/harnesses/<id>.toml`. The file name is the id.
 
    ```toml
@@ -538,6 +543,40 @@ A harness is a manifest plus a host adapter.
    comparison with a CLI name outside the host adapters: add a capability instead.
 
 Loading fails loudly on a bad manifest, naming the file and the field.
+
+### A CLI that speaks ACP
+
+`runner-rs/src/hosts/acp_host.rs` runs any CLI that speaks ACP from its manifest. It starts one process per bot with the
+first thread, says `initialize`, opens each thread with `session/new` (or resumes one), sends each turn as
+`session/prompt`, streams `session/update` as the turn's text, thoughts and tool calls, answers a tool's
+`session/request_permission`, and stops a turn with `session/cancel`. A thread with another model, effort or
+environment restarts the process (never during a turn), and a process that exits fails its running turn; the next
+thread starts it again.
+
+```toml
+host = "acme"                  # any name; the runtime must be the same (runtime defaults to host)
+protocol = "acp"               # native (the default: a Rust host) | acp
+
+[acp]
+args = ["acp", "-m", "{model}", "--effort", "{effort}"]   # the command line after the executable
+label = "acme agent"           # what errors and logs call it; default: the executable
+default_model = "acme-1"       # {model} when the bot names none (needed when args use {model})
+efforts = ["low", "high"]      # the efforts the CLI takes; another is default_effort. Empty: any the bot names
+default_effort = "high"        # needed when args use {effort}
+mcp_servers = "acp"            # acp: the bot's servers in ACP's shape | none
+resume = "auto"                # auto: session/resume or session/load, as initialize says | load | resume
+permission = "turn"            # turn: given while a turn runs on that session | allow | refuse
+request_timeout_s = 120        # one request's answer, and one write to the agent
+stop_wait_s = 5                # how long a stop waits for the agent's input
+cancel_wait_s = 15             # how long session/cancel may wait (default: the runner's interrupt wait)
+
+[acp.env]                      # set on the agent's process only; [env] also covers logins and version probes
+ACME_TELEMETRY = "off"
+```
+
+What stays different per CLI is its sign-in: a login store the runner hands to the bot user, or a `file` sign-in check,
+is a few lines in `runner-rs/src/hosts/<host>.rs` reached from `prepare_login_home` and `file_signed_in` in
+`runner-rs/src/hosts/mod.rs` (Grok's are in `hosts/grok.rs`). Everything else is the manifest.
 
 ## Capabilities
 

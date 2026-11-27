@@ -2706,7 +2706,13 @@ except PermissionError:
         .success());
     rt.block_on(async {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        let host = crate::hosts::grok::GrokHost::new("acme", &exe, tx);
+        let host = crate::hosts::acp_host::AcpHost::new(
+            "acme",
+            "grok",
+            &exe,
+            crate::harness_tools::acp_spec("grok").unwrap(),
+            tx,
+        );
         let settings = crate::hosts::Settings {
             env: env.clone(),
             cwd: root.display().to_string(),
