@@ -21,13 +21,14 @@ the version they were shown. The task's history records the answer via assistant
 """
 
 import re
-from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, cast
 
-from fastapi import FastAPI, Request
+from fastapi import Request
 
+from . import api_routing
 from . import models as M
 from .api_contract import api_v2, error
+from .deps import Injected
 from .store import H as _H
 from .store import Problem
 
@@ -313,41 +314,46 @@ def _shown(conn: "sqlite3.Connection", who: "Identity") -> Row:
     return {"gives_oks": on(conn, str(who.actor)), "may_change": task_asks.own_click(who)}
 
 
-def install(app: FastAPI, store: Any, mutate: Callable[..., Any]) -> None:
-    @app.get(
-        "/api/v2/assistant/settings",
-        **api_v2(
-            "Assistant",
-            "getAssistantOkSettings",
-            "Whether your Assistant gives OKs for you when you tell it to, and whether this caller may change it (only "
-            "your own click in Tico: never your Assistant, Agent Ops or a personal token)",
-            "AssistantOkSettingsResult",
-        ),
-    )
-    def assistant_settings_show(request: Request):
-        """Whether your Assistant gives OKs for you when you tell it to."""
-        who = request.state.identity
-        if not H.is_human(who.actor):
-            raise Problem("forbidden", "Only a person has this setting", 403)
-        with store.read() as c:
-            return _shown(c, who)
+# ----------------------------------------------------------------------------- routes
+router = api_routing.router()
 
-    @app.post(
-        "/api/v2/assistant/settings",
-        **api_v2(
-            "Assistant",
-            "setAssistantOkSettings",
-            "Let your Assistant give OKs for you when you tell it to, or stop it: your own click only",
-            "AssistantOkSettingsResult",
-            responses={"403": error("Not your own click (person_only)")},
-        ),
-    )
-    def assistant_settings_set(request: Request, body: M.AssistantOkSettings):
-        """Let your Assistant give OKs for you when you tell it to, or stop it. Only your own click."""
-        who = request.state.identity
 
-        def work(c: "sqlite3.Connection") -> Row:
-            set_on(c, who, body.gives_oks)
-            return _shown(c, who)
+@router.get(
+    "/api/v2/assistant/settings",
+    **api_v2(
+        "Assistant",
+        "getAssistantOkSettings",
+        "Whether your Assistant gives OKs for you when you tell it to, and whether this caller may change it (only "
+        "your own click in Tico: never your Assistant, Agent Ops or a personal token)",
+        "AssistantOkSettingsResult",
+    ),
+)
+def assistant_settings_show(request: Request, deps: Injected) -> Row:
+    """Whether your Assistant gives OKs for you when you tell it to."""
+    who = request.state.identity
+    if not H.is_human(who.actor):
+        raise Problem("forbidden", "Only a person has this setting", 403)
+    store: Any = deps.store  # its read() is typed loosely
+    with store.read() as c:
+        return _shown(c, who)
 
-        return mutate(request, body, work)
+
+@router.post(
+    "/api/v2/assistant/settings",
+    **api_v2(
+        "Assistant",
+        "setAssistantOkSettings",
+        "Let your Assistant give OKs for you when you tell it to, or stop it: your own click only",
+        "AssistantOkSettingsResult",
+        responses={"403": error("Not your own click (person_only)")},
+    ),
+)
+def assistant_settings_set(request: Request, body: M.AssistantOkSettings, deps: Injected) -> Any:
+    """Let your Assistant give OKs for you when you tell it to, or stop it. Only your own click."""
+    who = request.state.identity
+
+    def work(c: "sqlite3.Connection") -> Row:
+        set_on(c, who, body.gives_oks)
+        return _shown(c, who)
+
+    return deps.mutate(request, body, work)

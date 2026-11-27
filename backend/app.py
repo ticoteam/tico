@@ -2540,7 +2540,7 @@ def _install_features(
     )  # bots a person lets view their Assistant chat (docs/assistant.md)
     from . import assistant_oks
 
-    assistant_oks.install(app, store, mutate)  # a person lets their Assistant give OKs on their word
+    api_routing.include(app, assistant_oks.router)  # a person lets their Assistant give OKs on their word
     from .mcp import install_mcp
 
     install_mcp(app, settings)
