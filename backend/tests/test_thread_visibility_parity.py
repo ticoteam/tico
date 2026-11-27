@@ -26,11 +26,14 @@ by every door refusing everything.
 The fictional company (backend/tests/helpers/company.py): Ana owns it, Ben is an admin, Cara a plain person; ops and
 finance are bots."""
 
+import json
+
 import pytest
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import events as E
 from backend import read_deps, threads
+from backend import sql as S
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.helpers import engine as X
@@ -342,15 +345,21 @@ def test_a_page_attached_in_a_thread_is_removed_by_every_door_for_exactly_the_re
 def test_the_owner_reads_the_page_comment_through_tico_sql_as_through_every_other_door(api, world):
     mid = world["messages"]["commented"]
     r = api.post(
-        "/api/v2/sql", json={"sql": f"SELECT refs FROM messages WHERE id='{mid}'"}, headers=headers(PEOPLE["ana"])
+        "/api/v2/sql", json={"sql": f"SELECT * FROM messages WHERE id='{mid}'"}, headers=headers(PEOPLE["ana"])
     )
     assert r.status_code == 200, r.text
-    (row,) = r.json()["rows"]
-    assert _attachments(row[0]) == REMOVED
+    body = r.json()
+    (row,) = body["rows"]
+    assert _attachments(row[body["columns"].index("refs")]) == REMOVED
+    # Nothing of the page in any column: not its file, its title, its name or its words.
+    whole = json.dumps(row)
+    for secret in (world["file"], "Audience secret", "weekly.html", "Acme weekly review", "42 deals"):
+        assert secret not in whole, secret
 
 
-def test_the_owner_reads_the_page_comment_through_tico_sql_when_the_company_has_a_call_follow_up(api, world):
-    """The page check falls through to call follow-ups once any exist, and reads each one's call: still one answer."""
+def _add_call_follow_up(api, world):
+    """A call follow-up task in the company: from then on a private task's read also asks whether its reader reads
+    the thread of some follow-up's call (call_follow_ups.thread_reader)."""
     store = api.app.state.store
     with store.transaction() as c:
         other = H.task_create(c, "human:cara", "Check the date", "From the call.", "bot:ops", private=True, lint=False)
@@ -367,8 +376,36 @@ def test_the_owner_reads_the_page_comment_through_tico_sql_when_the_company_has_
             (world["threads"]["company"], now, now, now),
         )
         c.execute("INSERT INTO call_follow_ups(task_id,call_id,bot_id) VALUES(?,'call-parity','ops')", (other["id"],))
+
+
+# The internal tables the trusted page check reads (backend/sql.py source_tables); a caller's own SQL never does.
+CHECK_ONLY_TABLES = ("meeting_participant_readers", "meeting_task_links", "call_follow_ups", "calls")
+
+
+def test_the_owner_reads_the_page_comment_through_tico_sql_when_the_company_has_a_call_follow_up(api, world):
+    """The page check falls through to call follow-ups once any exist, and reads each one's call: still one answer."""
+    _add_call_follow_up(api, world)
     assert _sql_attachments(api, world, "ana") == REMOVED
     assert _sql_attachments(api, world, "ben") == [world["file"]]
+
+
+def test_the_tables_the_page_check_reads_stay_closed_to_the_caller_s_own_sql(api, world):
+    """Listed for Tico's own check, not for the caller: named directly, or in the same query as a page the check runs
+    for, each is refused for a person and for an agent, and none is a table tico sql offers."""
+    _add_call_follow_up(api, world)
+    mid = world["messages"]["commented"]
+    for table in CHECK_ONLY_TABLES:
+        assert table not in S._ALL_EXPOSED and table not in S.GRANTED_SOURCES, table
+        for reader in ("ana", "ben", "ops"):
+            token = _token(world, reader)
+            for sql in (
+                f"SELECT * FROM {table}",
+                f"SELECT count(*) FROM {table}",
+                f"SELECT refs, (SELECT count(*) FROM {table}) FROM messages WHERE id='{mid}'",
+                f"SELECT * FROM main.{table}",
+            ):
+                detail = query(api, sql, token, expected=422)["error"]["detail"]
+                assert "prohibited" in detail or detail == "not authorized", (table, reader, sql, detail)
 
 
 def test_narrowing_a_page_resets_every_reader_s_stream_that_started_before_it(api, world):
