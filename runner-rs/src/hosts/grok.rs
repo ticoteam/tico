@@ -114,6 +114,11 @@ pub fn signed_in(env: &Env) -> Option<bool> {
 }
 
 const REQUEST_TIMEOUT: u64 = 120;
+/// How long one write to grok may take; a request's answer then has REQUEST_TIMEOUT of its own.
+const WRITE_WAIT: Duration = Duration::from_secs(REQUEST_TIMEOUT);
+/// How long a stop waits for grok's input before ending the process anyway.
+const STOP_WAIT: Duration = Duration::from_secs(5);
+type Client = acp::Client<ChildStdin, Prompt>;
 pub const DEFAULT_MODEL: &str = "grok-4.6";
 const DEFAULT_EFFORT: &str = "high";
 /// The operator's own MCP servers Grok would pick up from other tools' files (~/.claude.json, ~/.cursor/mcp.json)
@@ -169,9 +174,9 @@ struct Shared {
     bot: String,
     program: String,
     tx: Events,
-    /// Requests in flight; a `session/prompt`'s answer comes back to `finish`. Grok runs with --always-approve, so a
-    /// tool's permission is given (acp::permission).
-    client: acp::Client<ChildStdin, Prompt>,
+    /// The running process's client, a new one for each process: requests in flight, a `session/prompt`'s answer
+    /// coming back to `finish`. Grok runs with --always-approve, so a tool's permission is given (acp::permission).
+    client: Mutex<Arc<Client>>,
     /// The command and environment it runs with, and how to stop it.
     child: Mutex<Option<Running>>,
     turns: Mutex<HashMap<String, String>>,
@@ -192,7 +197,7 @@ impl GrokHost {
             bot: bot.into(),
             program: program.into(),
             tx,
-            client: acp::Client::default(),
+            client: Mutex::new(Arc::new(Client::new(None, WRITE_WAIT))),
             child: Mutex::new(None),
             turns: Mutex::new(HashMap::new()),
             reply: Mutex::new(HashMap::new()),
@@ -245,7 +250,8 @@ impl GrokHost {
             .stdout
             .take()
             .ok_or_else(|| failed("grok agent has no stdout"))?;
-        self.0.client.connect(child.stdin.take()).await;
+        let client = Arc::new(Client::new(child.stdin.take(), WRITE_WAIT));
+        *self.0.client.lock().unwrap() = client.clone();
         log(&format!(
             "grok[{}]: agent started pid {}",
             self.0.bot,
@@ -270,11 +276,12 @@ impl GrokHost {
             let mut lines = acp::Reader::new(stdout);
             while let Ok(Some(line)) = lines.next().await {
                 if let acp::Line::Message(msg) = line {
-                    host.on_message(msg).await;
+                    host.on_message(&client, msg).await;
                 }
             }
             gone.store(true, Ordering::SeqCst);
-            for prompt in host.0.client.close() {
+            // Its own client only: a process started since keeps its requests.
+            for prompt in client.close() {
                 host.finish(
                     &prompt.session,
                     &prompt.turn,
@@ -290,7 +297,9 @@ impl GrokHost {
     pub fn start(&self) {}
 
     pub async fn stop(&self) {
-        self.0.client.disconnect().await;
+        // A write grok is not reading holds its input until WRITE_WAIT: the stop does not wait behind it, as ending
+        // the process ends that write.
+        let _ = tokio::time::timeout(STOP_WAIT, self.client().disconnect()).await;
         let child = self.0.child.lock().unwrap().take();
         if let Some((_, _, stopper, gone)) = child {
             stopper.terminate(Duration::from_secs(5));
@@ -354,38 +363,38 @@ impl GrokHost {
         }
     }
 
-    async fn write(&self, msg: &Value) -> Result<(), HostError> {
-        self.running()?;
-        self.0.client.write(msg).await.map_err(closed)
+    fn client(&self) -> Arc<Client> {
+        self.0.client.lock().unwrap().clone()
     }
 
     async fn request(&self, method: &str, params: Value) -> Result<Value, HostError> {
         self.running()?;
         let wait = Duration::from_secs(REQUEST_TIMEOUT);
-        match self.0.client.request(method, params, wait).await {
+        match self.client().request(method, params, wait).await {
             Ok(result) => Ok(result),
             Err(RequestError::Write(e)) => Err(closed(e)),
             Err(RequestError::Late) => Err(failed(format!(
                 "{method} timed out after {REQUEST_TIMEOUT}s"
             ))),
-            Err(RequestError::Gone) => Err(failed(format!("{method}: grok agent exited"))),
+            Err(RequestError::Ended) => Err(failed(format!("{method}: grok agent exited"))),
             Err(RequestError::Refused(err)) => {
                 Err(failed(format!("{method}: {}", acp::error_text(&err))))
             }
         }
     }
 
-    async fn on_message(&self, msg: Value) {
+    /// One message from the process whose client is `client`.
+    async fn on_message(&self, client: &Client, msg: Value) {
         match acp::classify(&msg) {
             Message::Response { id, reply } => {
-                if let Some((prompt, reply)) = self.0.client.resolve(&id, reply) {
+                if let Some((prompt, reply)) = client.resolve(&id, reply) {
                     self.finish(&prompt.session, &prompt.turn, reply);
                 }
             }
             // The agent asks its ACP client something.
             Message::Request { id, method, params } => {
                 let reply = acp::answer(id, &method, &params, acp::Permission::Give);
-                let _ = self.write(&reply).await;
+                let _ = client.write(&reply).await;
             }
             Message::Notification { method, params } => {
                 let p = Some(params).filter(|p| p.is_object()).unwrap_or(json!({}));
@@ -567,21 +576,39 @@ impl GrokHost {
             session: thread_id.into(),
             turn: turn.clone(),
         });
-        self.running()?;
-        self.0
-            .client
-            .send("session/prompt", acp::prompt(thread_id, text), slot)
-            .await
-            .map_err(closed)?;
+        let sent = match self.running() {
+            Ok(()) => self
+                .client()
+                .send("session/prompt", acp::prompt(thread_id, text), slot)
+                .await
+                .map_err(|e| match e {
+                    RequestError::Write(e) => closed(e),
+                    _ => failed("grok agent exited"),
+                }),
+            Err(e) => Err(e),
+        };
+        if let Err(e) = sent {
+            // No turn runs: the thread is free for the next one, or for a new environment.
+            self.0.turns.lock().unwrap().remove(thread_id);
+            self.0.reply.lock().unwrap().remove(&turn);
+            return Err(e);
+        }
         Ok(turn)
     }
 
+    /// `session/cancel`, given up after the keeper's interrupt wait when grok is not reading its input.
     pub async fn interrupt(&self, thread_id: &str) -> Result<(), HostError> {
-        self.write(&acp::cancel(thread_id)).await
+        self.running()?;
+        let by = tokio::time::Instant::now() + crate::keeper::INTERRUPT_WAIT;
+        if self.client().cancel_by(thread_id, by).await {
+            Ok(())
+        } else {
+            Err(failed("grok agent did not take session/cancel"))
+        }
     }
 }
 
-/// grok's input closed, or a write to it failed.
+/// grok's input closed, or a write to it failed or timed out.
 fn closed(e: Option<std::io::Error>) -> HostError {
     match e {
         None => failed("grok agent stdin closed"),
@@ -745,7 +772,8 @@ mod tests {
                 .lock()
                 .unwrap()
                 .insert("sess-1".into(), "turn-1".into());
-            host.0.client.expect(
+            let client = Client::new(None, WRITE_WAIT);
+            client.expect(
                 3,
                 acp::Slot::Hold(Prompt {
                     session: "sess-1".into(),
@@ -757,7 +785,8 @@ mod tests {
                 .lines()
                 .filter(|l| !l.trim().is_empty())
             {
-                host.on_message(serde_json::from_str(line).unwrap()).await;
+                host.on_message(&client, serde_json::from_str(line).unwrap())
+                    .await;
             }
             let mut got = vec![];
             while let Ok(mut ev) = rx.try_recv() {

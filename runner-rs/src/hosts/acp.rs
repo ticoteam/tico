@@ -221,44 +221,64 @@ pub enum Slot<T> {
     Hold(T),
 }
 
-/// Why `Client::request` has no result.
+/// Why `Client::request` or `Client::send` has no result.
 #[derive(Debug)]
 pub enum RequestError {
-    /// It could not be written (`write`'s error).
+    /// It could not be written (`write`'s error; TimedOut when the agent did not read it in time).
     Write(Option<std::io::Error>),
     /// No answer in the time it had.
     Late,
-    /// The agent's output ended first.
-    Gone,
+    /// The agent's output ended, before the request was sent or while it waited.
+    Ended,
     /// The agent answered with an error.
     Refused(Value),
 }
 
-/// The client side of a connection whose one reader runs in the background: requests in flight by id.
-pub struct Client<W, T> {
-    input: Input<W>,
-    pending: Mutex<HashMap<i64, Slot<T>>>,
-    next_id: AtomicI64,
+/// The requests in flight, and whether the agent's output has ended: one lock, so a request is never registered
+/// after `close` drained them.
+struct Pending<T> {
+    slots: HashMap<i64, Slot<T>>,
+    closed: bool,
 }
 
-impl<W: AsyncWrite + Unpin, T> Default for Client<W, T> {
-    fn default() -> Self {
-        Client {
-            input: tokio::sync::Mutex::new(None),
-            pending: Mutex::new(HashMap::new()),
-            next_id: AtomicI64::new(0),
-        }
+/// The client side of one agent process whose one reader runs in the background: requests in flight by id. A process
+/// gets a client of its own, so the reader of one that went cannot end or answer the next one's requests.
+pub struct Client<W, T> {
+    input: Input<W>,
+    pending: Mutex<Pending<T>>,
+    next_id: AtomicI64,
+    /// How long one write may take: an agent that stops reading its input does not hold it, or a stop, longer.
+    write_wait: Duration,
+}
+
+/// Removes a request's waiter when its `Client::request` ends however it ends, a dropped future included.
+struct Forget<'a, T> {
+    pending: &'a Mutex<Pending<T>>,
+    id: i64,
+}
+
+impl<T> Drop for Forget<'_, T> {
+    fn drop(&mut self) {
+        let mut pending = self.pending.lock().unwrap_or_else(|p| p.into_inner());
+        pending.slots.remove(&self.id);
     }
 }
 
 impl<W: AsyncWrite + Unpin, T> Client<W, T> {
-    fn pending(&self) -> std::sync::MutexGuard<'_, HashMap<i64, Slot<T>>> {
-        self.pending.lock().unwrap_or_else(|p| p.into_inner())
+    pub fn new(input: Option<W>, write_wait: Duration) -> Self {
+        Client {
+            input: tokio::sync::Mutex::new(input),
+            pending: Mutex::new(Pending {
+                slots: HashMap::new(),
+                closed: false,
+            }),
+            next_id: AtomicI64::new(0),
+            write_wait,
+        }
     }
 
-    /// Write to `input` from now on (a new process), or to nothing.
-    pub async fn connect(&self, input: Option<W>) {
-        *self.input.lock().await = input;
+    fn pending(&self) -> std::sync::MutexGuard<'_, Pending<T>> {
+        self.pending.lock().unwrap_or_else(|p| p.into_inner())
     }
 
     /// Close the input: the agent reads its end.
@@ -266,28 +286,63 @@ impl<W: AsyncWrite + Unpin, T> Client<W, T> {
         drop(self.input.lock().await.take());
     }
 
-    pub async fn write(&self, msg: &Value) -> Result<(), Option<std::io::Error>> {
-        write(&self.input, msg).await
+    /// One message, written by `by`. One not written in time may be half a line, so the input is closed then.
+    async fn write_by(
+        &self,
+        msg: &Value,
+        by: tokio::time::Instant,
+    ) -> Result<(), Option<std::io::Error>> {
+        match tokio::time::timeout_at(by, write(&self.input, msg)).await {
+            Ok(written) => written,
+            Err(_) => {
+                self.disconnect().await;
+                Err(Some(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "the agent did not read its input in time",
+                )))
+            }
+        }
     }
 
-    /// Send `method` with the next id (1 first), its answer going to `slot`; nothing is left waiting when the write
-    /// fails.
+    /// One message, within the client's write wait.
+    pub async fn write(&self, msg: &Value) -> Result<(), Option<std::io::Error>> {
+        self.write_by(msg, tokio::time::Instant::now() + self.write_wait)
+            .await
+    }
+
+    /// `session/cancel` for `session`, given up at `by`: true once written.
+    pub async fn cancel_by(&self, session: &str, by: tokio::time::Instant) -> bool {
+        self.write_by(&cancel(session), by).await.is_ok()
+    }
+
+    /// The next id (1 first) for `slot`; Ended once the output has.
+    fn register(&self, slot: Slot<T>) -> Result<i64, RequestError> {
+        let mut pending = self.pending();
+        if pending.closed {
+            return Err(RequestError::Ended);
+        }
+        let id = self.next_id.fetch_add(1, Ordering::SeqCst) + 1;
+        pending.slots.insert(id, slot);
+        Ok(id)
+    }
+
+    /// Send `method`, its answer going to `slot`; nothing is left waiting when it cannot be sent.
     pub async fn send(
         &self,
         method: &str,
         params: Value,
         slot: Slot<T>,
-    ) -> Result<i64, Option<std::io::Error>> {
-        let id = self.next_id.fetch_add(1, Ordering::SeqCst) + 1;
-        self.pending().insert(id, slot);
+    ) -> Result<i64, RequestError> {
+        let id = self.register(slot)?;
         if let Err(e) = self.write(&request(id, method, params)).await {
-            self.pending().remove(&id);
-            return Err(e);
+            self.pending().slots.remove(&id);
+            return Err(RequestError::Write(e));
         }
         Ok(id)
     }
 
-    /// Send `method` and wait up to `wait` for its answer; one that comes later is dropped.
+    /// Send `method` and wait up to `wait` for its answer once written; one that comes later is dropped, and so is
+    /// the waiter of a request whose future is dropped.
     pub async fn request(
         &self,
         method: &str,
@@ -295,16 +350,17 @@ impl<W: AsyncWrite + Unpin, T> Client<W, T> {
         wait: Duration,
     ) -> Result<Value, RequestError> {
         let (tx, rx) = oneshot::channel();
-        let id = self
-            .send(method, params, Slot::Wait(tx))
+        let id = self.register(Slot::Wait(tx))?;
+        let _forget = Forget {
+            pending: &self.pending,
+            id,
+        };
+        self.write(&request(id, method, params))
             .await
             .map_err(RequestError::Write)?;
         match tokio::time::timeout(wait, rx).await {
-            Err(_) => {
-                self.pending().remove(&id);
-                Err(RequestError::Late)
-            }
-            Ok(Err(_)) => Err(RequestError::Gone),
+            Err(_) => Err(RequestError::Late),
+            Ok(Err(_)) => Err(RequestError::Ended),
             Ok(Ok(Ok(result))) => Ok(result),
             Ok(Ok(Err(err))) => Err(RequestError::Refused(err)),
         }
@@ -313,13 +369,13 @@ impl<W: AsyncWrite + Unpin, T> Client<W, T> {
     /// Wait for request `id`'s answer in `slot`, as if it had been sent so (a test's agent side).
     #[cfg(test)]
     pub fn expect(&self, id: i64, slot: Slot<T>) {
-        self.pending().insert(id, slot);
+        self.pending().slots.insert(id, slot);
     }
 
     /// The answer to request `id`: given to its waiter, or handed back with what it holds. None for an id not in
     /// flight (answered, given up, or never sent).
     pub fn resolve(&self, id: &Value, reply: Reply) -> Option<(T, Reply)> {
-        match id.as_i64().and_then(|i| self.pending().remove(&i))? {
+        match id.as_i64().and_then(|i| self.pending().slots.remove(&i))? {
             Slot::Wait(tx) => {
                 let _ = tx.send(reply);
                 None
@@ -328,9 +384,14 @@ impl<W: AsyncWrite + Unpin, T> Client<W, T> {
         }
     }
 
-    /// The agent's output ended: every waiter gets `RequestError::Gone`, and what the rest held is handed back.
+    /// The agent's output ended: every waiter gets `RequestError::Ended`, what the rest held is handed back, and any
+    /// request from now on is refused at once.
     pub fn close(&self) -> Vec<T> {
-        let slots: Vec<Slot<T>> = self.pending().drain().map(|(_, s)| s).collect();
+        let slots: Vec<Slot<T>> = {
+            let mut pending = self.pending();
+            pending.closed = true;
+            pending.slots.drain().map(|(_, s)| s).collect()
+        };
         slots
             .into_iter()
             .filter_map(|slot| match slot {
@@ -353,9 +414,12 @@ mod tests {
         Reader<DuplexStream>,
     ) {
         let (ours, theirs) = duplex(64 * 1024);
-        let client = Arc::new(Client::default());
-        client.connect(Some(ours)).await;
+        let client = Arc::new(Client::new(Some(ours), Duration::from_secs(5)));
         (client, Reader::new(theirs))
+    }
+
+    fn in_flight(client: &Client<DuplexStream, &'static str>) -> usize {
+        client.pending().slots.len()
     }
 
     async fn next_message(agent: &mut Reader<DuplexStream>) -> Value {
@@ -457,7 +521,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn the_output_ending_ends_every_request_in_flight() {
-        let (client, _agent) = pair().await;
+        let (client, mut agent) = pair().await;
         client
             .send("session/prompt", prompt("s-1", "hi"), Slot::Hold("turn-1"))
             .await
@@ -469,13 +533,88 @@ mod tests {
                     .await
             }
         });
-        // Until the request is written and waiting.
-        while client.pending().len() < 2 {
-            tokio::task::yield_now().await;
-        }
+        // A request is waiting before it is written, so once the agent has read both, both are in flight.
+        next_message(&mut agent).await;
+        assert_eq!(next_message(&mut agent).await["method"], "session/load");
         assert_eq!(client.close(), vec!["turn-1"]);
-        assert!(matches!(waiting.await.unwrap(), Err(RequestError::Gone)));
-        assert!(client.pending().is_empty());
+        assert!(matches!(waiting.await.unwrap(), Err(RequestError::Ended)));
+        assert_eq!(in_flight(&client), 0);
+    }
+
+    #[tokio::test]
+    async fn nothing_is_sent_or_left_waiting_once_the_output_ended() {
+        let (client, mut agent) = pair().await;
+        assert!(client.close().is_empty());
+        assert!(matches!(
+            client
+                .send("session/prompt", prompt("s-1", "hi"), Slot::Hold("turn-1"))
+                .await,
+            Err(RequestError::Ended)
+        ));
+        assert!(matches!(
+            client
+                .request("session/new", json!({}), Duration::from_secs(5))
+                .await,
+            Err(RequestError::Ended)
+        ));
+        assert_eq!(
+            in_flight(&client),
+            0,
+            "no prompt stranded after the reader ended"
+        );
+        client.disconnect().await;
+        assert_eq!(agent.next().await.unwrap(), None, "nothing was written");
+    }
+
+    #[tokio::test]
+    async fn a_dropped_request_leaves_nothing_waiting() {
+        let (client, mut agent) = pair().await;
+        let waiting = tokio::spawn({
+            let c = client.clone();
+            async move {
+                c.request("session/load", json!({}), Duration::from_secs(60))
+                    .await
+            }
+        });
+        let id = next_message(&mut agent).await["id"].clone();
+        assert_eq!(in_flight(&client), 1);
+        waiting.abort();
+        assert!(waiting.await.unwrap_err().is_cancelled());
+        assert_eq!(
+            in_flight(&client),
+            0,
+            "the dropped request's waiter is gone"
+        );
+        assert!(
+            deliver(&client, json!({"jsonrpc": "2.0", "id": id, "result": {}}))
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_write_the_agent_does_not_read_is_given_up_and_closes_the_input() {
+        // A pipe too small for the request: the agent never reads it.
+        let (ours, _theirs) = duplex(8);
+        let client: Client<DuplexStream, &'static str> =
+            Client::new(Some(ours), Duration::from_millis(100));
+        match client
+            .request("initialize", json!({}), Duration::from_secs(60))
+            .await
+        {
+            Err(RequestError::Write(Some(e))) => {
+                assert_eq!(e.kind(), std::io::ErrorKind::TimedOut)
+            }
+            other => panic!("expected a timed-out write, got {other:?}"),
+        }
+        assert_eq!(in_flight(&client), 0);
+        // Half a line went: the input is not written to again, so a stop never waits behind it.
+        assert!(matches!(client.write(&cancel("s-1")).await, Err(None)));
+        assert!(
+            !client
+                .cancel_by("s-1", tokio::time::Instant::now() + Duration::from_secs(5))
+                .await
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -485,7 +624,7 @@ mod tests {
             .request("initialize", json!({}), Duration::from_millis(50))
             .await;
         assert!(matches!(late, Err(RequestError::Late)));
-        assert!(client.pending().is_empty(), "nothing left waiting");
+        assert_eq!(in_flight(&client), 0, "nothing left waiting");
         let id = next_message(&mut agent).await["id"].clone();
         assert!(
             deliver(&client, json!({"jsonrpc": "2.0", "id": id, "result": {}}))
@@ -504,15 +643,15 @@ mod tests {
                 .await,
             Err(RequestError::Write(None))
         ));
-        assert!(client.pending().is_empty());
+        assert_eq!(in_flight(&client), 0);
         // An agent that went away: its end of the pipe is gone.
         let (client, agent) = pair().await;
         drop(agent);
         assert!(matches!(
             client.send("initialize", json!({}), Slot::Hold("x")).await,
-            Err(Some(_))
+            Err(RequestError::Write(Some(_)))
         ));
-        assert!(client.pending().is_empty());
+        assert_eq!(in_flight(&client), 0);
     }
 
     #[tokio::test]
