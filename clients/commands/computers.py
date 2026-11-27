@@ -133,6 +133,12 @@ def computer_summary(row):
         "recent_errors": len(readiness.get("recent_errors") or []),
         "latest_sample": row.get("latest_sample"),
         "overloaded": bool(row.get("overloaded")),
+        # Its Turns line: what runs and why queued work waits, naming where a checkout is (#3967 AC-4).
+        "turns": str(row.get("turn_summary") or "")[:400],
+        "waits": [
+            {"words": str(w.get("reason") or "")[:160], "count": w.get("count"), "code": w.get("code") or None}
+            for w in ((row.get("turn_counts") or {}).get("waits") or [])[:5]
+        ],
     }
 
 

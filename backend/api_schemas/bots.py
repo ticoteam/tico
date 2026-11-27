@@ -159,6 +159,27 @@ SCHEMAS.update(
                     "or null while it can run. A bot being made on a task names it (`task`) and the ask it waits on "
                     "(`ask`); `open_ask` opens that ask on its task",
                 },
+                "wait": {
+                    "type": ["object", "null"],
+                    "properties": {
+                        "detail": {"type": "string"},
+                        "code": {"type": "string"},
+                        "fix": {
+                            "type": ["object", "null"],
+                            "properties": {
+                                "label": {"type": "string"},
+                                "href": {"type": ["string", "null"]},
+                                "post": {"type": "string"},
+                            },
+                        },
+                        "until": {"type": ["string", "null"]},
+                    },
+                    "description": "For a caller who can read it: what stops the bot's queued work, in the words its "
+                    "chat says (backend/wait_reasons.py), with the claim's `code`, the one fix (a page to open, or "
+                    "`post` for an action such as Wake now) and, at a usage limit, `until` its reset. Null when it has "
+                    "no queued work or nothing stops it. The plan and the computer holding its work are named only to a "
+                    "caller who may change the bot",
+                },
                 "access": ref("Access"),
                 "onboarding_state": "s",
                 "template": "s",

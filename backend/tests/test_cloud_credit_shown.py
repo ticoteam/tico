@@ -57,7 +57,11 @@ def test_a_machine_refused_for_credit_is_out_of_credit_everywhere_while_hq_still
         assert events.credit_overlay(c, {"bot": "botops", "state": "running"})["state"] == "running"
         assert holds.warning(c, "bot:botops") == holds.CREDIT_WARNING
         blocked = thread_bot_status._blocked(c, "botops", thread_bot_status._location(c, "botops"), None)
-        assert blocked == (thread_bot_status.OUT_OF_CREDIT, {"label": "Fix", "href": "#/settings/billing"})
+        assert blocked == (
+            thread_bot_status.OUT_OF_CREDIT,
+            {"label": "Fix", "href": "#/settings/billing"},
+            "out_of_credit",
+        )
     # The same word again (no credit added) changes nothing.
     cloud_access.apply(store, cloud_access.current(store))
     assert _shown(api)["access"] == "frozen"

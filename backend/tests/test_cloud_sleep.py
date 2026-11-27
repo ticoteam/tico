@@ -18,7 +18,7 @@ from backend import (
     views,
 )
 from backend.store import H, encode
-from backend.tests.helpers.api import assign, claim, get, ready, runner  # noqa: F401
+from backend.tests.helpers.api import assign, claim, get, headers, ready, runner  # noqa: F401
 from backend.tests.helpers.cloud_machines import cloud, enrolled, stopped_when_idle, work  # noqa: F401
 from backend.tests.helpers.start_places import memory
 from backend.tests.helpers.thread_halfway import bot_status, new_thread, say
@@ -418,3 +418,50 @@ def test_resting_chat_labels_do_not_say_starting_or_not_reporting(cloud, recent_
     with cloud.store.read() as c:
         label, _ = views.queued_label(c, 'ops', views.machine(c, 'ops'), cloud.store.settings)
         assert CM.ASLEEP in label and start_places.NOT_REPORTING not in label
+
+
+def test_a_machine_woken_for_work_that_ran_nothing_says_so_not_asleep(cloud):
+    """#3967: a Builder's machine read "asleep; starts when work can run" for an hour while its one wake had run
+    nothing, and it is never woken again for the same work. The chat says when it was woken and that nothing ran."""
+    asleep_bot(cloud)
+    thread = new_thread(cloud.api)
+    say(cloud.api, thread['id'], '@ops can you check this?')
+    woke = int(time.time()) - 1800
+    with cloud.store.transaction() as c:
+        [job] = [r[0] for r in c.execute("SELECT id FROM jobs WHERE bot_id='ops' AND state='queued'")]
+        c.execute("UPDATE cloud_machines SET wake_key=?,woke_at=? WHERE bot='ops'", ('job:' + job, woke))
+    status = bot_status(cloud.api, thread['id'])[0]
+    when = time.strftime('%H:%M', time.gmtime(woke))
+    assert CM.ASLEEP not in status['detail']
+    assert f'woken at {when} UTC and ran nothing' in status['detail']
+    with cloud.store.transaction() as c:  # review 2: a stopped machine marked stuck still says its wake was spent
+        c.execute("UPDATE cloud_machines SET problem='stuck' WHERE bot='ops'")
+    stuck = bot_status(cloud.api, thread['id'])[0]
+    assert f'woken at {when} UTC and ran nothing' in stuck['detail'] and stuck['code'] == 'wake_spent'
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE cloud_machines SET problem='' WHERE bot='ops'")
+    with cloud.store.read() as c:  # Health's Turns line says it too, never "asleep; starts when work can run"
+        line = start_places.describe(start_places.summary(c, cloud.row()['runner_id'], cloud.store.settings))
+    assert f'waiting: its cloud machine was woken at {when} UTC and ran nothing' in line and CM.ASLEEP not in line
+    # Wake now, for those who manage the bot: it forgets the spent wake, so the next look wakes the machine.
+    assert status['fix']['label'] == 'Wake now' and status['code'] == 'wake_spent'
+    assert cloud.api.post(status['fix']['post'], headers=headers('cara-test')).status_code == 403
+    # Bot show offers Wake now by the same check, never to one who may change the bot but not manage it (review 2).
+    from backend.thread_bot_status import own_wait
+
+    with cloud.store.read() as c:
+        assert own_wait(c, 'ops', detailed=True, manages=False)['fix'] is None
+        assert own_wait(c, 'ops', detailed=True, manages=True)['fix']['label'] == 'Wake now'
+    assert cloud.api.get('/api/v2/bots/ops', headers=headers()).json()['wait']['fix']['label'] == 'Wake now'
+    response = cloud.api.post(status['fix']['post'], headers=headers())
+    assert response.status_code == 200 and response.json() == {'woken': True}
+    assert 'ran nothing' not in bot_status(cloud.api, thread['id'])[0]['detail']
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE cloud_machines SET wake_key=?,woke_at=? WHERE bot='ops'", ('job:' + job, woke))
+        # Newer work is woken for afresh, and an Always on machine is woken anyway: neither wake is spent.
+        c.execute("UPDATE cloud_machines SET always_on=1 WHERE bot='ops'")
+    assert 'ran nothing' not in bot_status(cloud.api, thread['id'])[0]['detail']
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE cloud_machines SET always_on=0 WHERE bot='ops'")
+    say(cloud.api, thread['id'], '@ops and this too')
+    assert 'ran nothing' not in bot_status(cloud.api, thread['id'])[0]['detail']

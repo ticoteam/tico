@@ -1239,6 +1239,10 @@ def describe(c, method, path, body, viewer=None, admins=()):
         ),
         (r"/api/v2/bots/([^/]+)/cloud-machine", lambda g: f"Change bot {bot(g[0])}'s cloud machine: " + values(body)),
         (
+            r"/api/v2/bots/([^/]+)/cloud-machine/wake",
+            lambda g: f"Wake bot {bot(g[0])}'s cloud machine again for its waiting work.",
+        ),
+        (
             r"/api/v2/bots/([^/]+)/cloud-machine/replace",
             lambda g: f"Replace bot {bot(g[0])}'s cloud machine and delete its disk. The next task starts a fresh one.",
         ),

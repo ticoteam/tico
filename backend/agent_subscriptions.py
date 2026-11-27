@@ -217,6 +217,8 @@ class Payment:
     held_subscription: str = ""
     delivery: Literal["claim", "legacy", "model_exit"] = "claim"
     exit_computer: Any = None
+    # The plan's name when it waits for its usage limit to reset at `until` (the chat says so, backend/wait_reasons.py).
+    limited: str = ""
 
     def wait_text(self, auth: Any, who: Any) -> str:
         return plan_exits.waiting(self.exit_computer, auth, who) if self.exit_computer else self.reason
@@ -409,11 +411,14 @@ def resolve(
         reset, held = min(resets)
         hold: Row = HOLD.get(c, "", HOLD.subscription_login(held), runtime, loads) if held else {}
         when = MS._when(reset.isoformat())
+        limited = ""
         if HOLD.payment(hold.get("error")):
             reason = f"payment past due, retry at {when}"
+        elif hold.get("capacity"):
+            reason = f"busy until {when}"
         else:
-            reason = f"busy until {when}" if hold.get("capacity") else f"next reset {when}"
-        return Payment(None, f"{payer_label()}: {reason}", reset, held_subscription=held)
+            reason, limited = f"next reset {when}", payer_label()
+        return Payment(None, f"{payer_label()}: {reason}", reset, held_subscription=held, limited=limited)
     if probing:
         return Payment(None, f"{payer_label()}: checking usage after the reset")
     if refreshing:

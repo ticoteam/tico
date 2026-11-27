@@ -5,6 +5,7 @@ from typing import Any
 
 from .store import H, readiness_document
 from . import bot_settings as BS
+from .wait_reasons import TURNS_COLON
 
 START_SECONDS = 180
 
@@ -510,10 +511,21 @@ def summaries(c, runner_ids, settings, default=None, *, classify=True):
     return value(c, ("start_summaries", ids, bool(classify)), lambda: _summaries(c, ids, settings, default, classify))
 
 
+# The runner's own words for a leased turn's wait (models.py's closed list), as the Turns line says them. Installed
+# runners send "pre-start requirements" while a turn's preparation (a fetch, its worktree, a lock) runs past its grace:
+# said here as what it is, never as the whole cause (#3967 AC-8). The others already name their cause.
+RUNNER_WAITS = {'pre-start requirements': 'its checkout to be prepared'}
+
+# A queued job this old is asked why it waits even below the turns warning level (`classify=False`): Health puts a
+# wait this old under Needs a look (health.turns_late), so it must have its real cause, never plain "queued" (#3967).
+LATE_MINUTES = 15
+
+
 def _summaries(c, runner_ids, settings, default=None, classify=True):
     from . import performance
     from .batch_work import report, storage_error
-    from .cloud_machines import ASLEEP, STALE, resting
+    from .cloud_machines import ASLEEP, STALE, WAKE_SPENT, resting
+    from .cloud_machines import waiting as machine_waiting
 
     out: dict[str, dict[str, Any]] = {
         rid: dict(running=0, starting=0, waiting=0, queued=0, start_seconds=START_SECONDS) for rid in runner_ids
@@ -522,13 +534,18 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
     if not runner_ids:
         return out
 
-    def add(rid, reason, count, since):
+    def add(rid, reason, count, since, code='', home=''):
         out[rid]['waiting'] += count
         old = groups[rid].setdefault(reason, {'reason': reason, 'count': 0, 'oldest': since})
+        if code:
+            old.setdefault('code', code)  # the claim's own code, for an agent reading its status (wait_reasons)
+        if home:
+            old.setdefault('home', home)  # the one computer holding its checkout or saved session: its fix opens it
         old['count'] += count
         old['oldest'] = min(old['oldest'], since)
 
     now = H.now()
+    late = H.shift(now, minutes=-LATE_MINUTES)
     marks = ",".join("?" * len(runner_ids))
     for row in c.execute(
         "SELECT a.runner_id,a.state,a.created_at,a.lease_until,p.start_until,p.wait_reason,"
@@ -540,13 +557,15 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
         if row['state'] == 'running':
             out[rid]['running'] += 1
         elif row['wait_reason']:
-            add(rid, row['wait_reason'], 1, row['waiting_since'] or row['created_at'])
+            reason = RUNNER_WAITS.get(row['wait_reason'], row['wait_reason'])
+            add(rid, reason, 1, row['waiting_since'] or row['created_at'])
         elif row['lease_until'] > now and (not row['managed'] or (row['start_until'] or '') > now):
             out[rid]['starting'] += 1
         else:
             out[rid]['queued'] += 1
     from . import read_cache
-    from .execution import PRIME_QUEUED, claim_refusal, queued_reasons
+    from . import wait_reasons
+    from .execution import PRIME_QUEUED, claim_refusal, continuation_run, queued_reasons
 
     runners = {
         row['id']: row for row in c.execute(f"SELECT * FROM runners_with_state WHERE id IN ({marks})", runner_ids)
@@ -557,35 +576,60 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
     samples = {}
     oldest_reason = {}
     overflow = {}
-    reasons = {
-        'cooling_off': 'quota',
-        'limit': 'spending limit',
-        'not_ready': 'computer readiness',
-        'readiness_unknown': 'computer readiness',
-        'sign_in_rejected': 'sign-in',
-        'payer_wait': 'Paid by',
-        'payer_update': 'a runner update',
-        'draining': 'bot paused',
-        'run_hold': 'stopped runs',
-        'backoff': 'a failed run',
-        'budget': 'run budget',
-        'bot_limit': 'at its turn limit',
-        'task_wait': 'a snooze, prerequisite, person or check',
-        'task_next_run': 'the next run or a stored resume condition',
-        'on_ice': 'a card On ice',
-    }
-    for row in c.execute(
+    labels = {}  # a computer's label, read once
+
+    def asleep_words(bot):
+        """A sleeping machine's words for its bot's work: that a wake for it ran nothing, when one did (#3967 AC-5)."""
+        words = machine_waiting(c, bot)
+        return words if words.startswith(WAKE_SPENT) else ASLEEP
+
+    def home_of(refused, job_id=None, homes=None):
+        """The one computer holding a refused job's checkout or saved session, by id, or ''."""
+        if refused == 'continuation_home' and job_id and not homes:
+            saved = continuation_run(c, job_id)
+            homes = {saved['runner_id']} if saved else None
+        return next(iter(homes)) if homes and len(homes) == 1 else ''
+
+    def phrase(refused, job_id=None, homes=None):
+        """The Turns line's words for a refusal (backend/wait_reasons.py), naming the computer that holds a task's
+        checkout or a turn's saved session."""
+        if refused == 'continuation_home' and job_id and not homes:
+            saved = continuation_run(c, job_id)
+            homes = {saved['runner_id']} if saved else None
+        names = []
+        for home in sorted(homes or ()):
+            if home not in labels:
+                found = c.execute("SELECT label FROM runners WHERE id=?", (home,)).fetchone()
+                labels[home] = found['label'] if found else ''
+            if labels[home]:
+                names.append(labels[home])
+        return wait_reasons.turns(refused, home=', '.join(names[:3]))
+
+    recorded = None  # {bot: the refusal the scheduler last recorded}, read once on the first late bot
+
+    def recent_refusals(queued):
+        """The scheduler's recorded refusals (queue_refusals) still current, for the late bots among these rows."""
+        from .queue_refusals import MAX_GAP_SECONDS, states
+
+        fresh = H.shift(now, seconds=-MAX_GAP_SECONDS)
+        bots = [row['bot_id'] for row in queued if row['oldest'] < late]
+        return {bot: seen for bot, seen in states(c, bots).items() if seen.get('observed_at', '') >= fresh}
+
+    queued_rows = c.execute(
         f"SELECT a.runner_id,j.bot_id,j.held,count(*) n,min(j.created_at) oldest,{BS.CONFIG} AS config,"
         "b.state bot_state,EXISTS (SELECT 1 FROM agent_subscriptions p WHERE p.bot=j.bot_id) has_payer "
         "FROM jobs j JOIN assignments a ON a.bot=j.bot_id JOIN bots b ON b.id=j.bot_id "
         f"JOIN bot_config bc ON bc.bot=j.bot_id {BS.JOIN} WHERE a.runner_id IN (" + marks + ") AND j.state='queued' "
         "GROUP BY a.runner_id,j.bot_id,j.held",
         runner_ids,
-    ):
+    ).fetchall()
+    for row in queued_rows:
         rid = row['runner_id']
         runner = runners.get(rid)
         ready = read_cache.readiness(c, rid, runner['readiness']) if runner else {}
         why = 'bot paused' if row['bot_state'] != 'active' else ''
+        code = 'paused' if why else ''
+        home = ''
         if not why and row['held']:
             # A notice batch, digest or routine run its release policy holds (backend/wake_presets.py): no claim takes
             # it before its release, so it is not queued work the computer leaves waiting.
@@ -615,6 +659,7 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
             if classify:
                 try:
                     if sample is None or sample:
+                        worktree_waits = {}
                         for job, refused in queued_reasons(
                             c,
                             settings,
@@ -623,12 +668,16 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
                             default,
                             ignore_refusals=STALE if sleeping else (),
                             sample=sample,
+                            worktree_waits=worktree_waits,
                         ):
                             if refused or sleeping:
-                                reason = reasons.get(refused, 'pre-start requirements') if refused else ASLEEP
-                                add(rid, reason, 1, job['created_at'])
+                                job_id = job['id'] if 'id' in job.keys() else None
+                                homes = worktree_waits.get(job_id)
+                                reason = phrase(refused, job_id, homes) if refused else asleep_words(row['bot_id'])
+                                home = home_of(refused, job_id, homes) if refused else ''
+                                add(rid, reason, 1, job['created_at'], refused or '', home)
                                 counted += 1
-                                found = (job['created_at'], job['id'], reason)
+                                found = (job['created_at'], job['id'], reason, refused or '')
                                 if not sleeping and (rid not in oldest_reason or found < oldest_reason[rid]):
                                     oldest_reason[rid] = found
                 except Exception as exc:
@@ -638,7 +687,7 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
             if counted == row['n']:
                 continue
             if sleeping:
-                add(rid, ASLEEP, row['n'] - counted, row['oldest'])
+                add(rid, asleep_words(row['bot_id']), row['n'] - counted, row['oldest'])
                 continue
             assert sample is not None
             count = len(sample) - counted
@@ -648,7 +697,40 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
                 refused, _ = claim_refusal(
                     c, settings, runner, row['bot_id'], row['config'], False, ready, default=default
                 )
-                why = reasons.get(refused, 'pre-start requirements') if refused else ''
+                why = phrase(refused) if refused else ''
+                code = refused or ''
+            if not why and runner and row['oldest'] < late:
+                # The claim's bot-level check above names no job's hold, and below warning it is not asked at all
+                # (it costs a claim's reads a bot on each Health poll). Work this old still has its real cause: the
+                # refusal the scheduler last recorded for the bot (queue_refusals), read once for every bot here.
+                # Only a checkout or saved session held on another computer asks the claim about that one job, to
+                # name the computer.
+                if recorded is None:
+                    recorded = recent_refusals(queued_rows)
+                seen = recorded.get(row['bot_id'])
+                if seen and seen.get('runner_id') == rid and seen.get('reason'):
+                    code = seen['reason']
+                    homes = None
+                    if code in wait_reasons.HOME_CODES and seen.get('job'):
+                        try:
+                            worktree_waits = {}
+                            for job, refused in queued_reasons(
+                                c,
+                                settings,
+                                rid,
+                                row['bot_id'],
+                                default,
+                                sample=[seen['job']],
+                                worktree_waits=worktree_waits,
+                            ):
+                                if refused == code:
+                                    homes = worktree_waits.get(job['id'])
+                        except Exception as exc:
+                            if storage_error(exc):
+                                raise
+                            report('computer queue check', row['bot_id'], exc, logger='tico.health')
+                    why = phrase(code, seen.get('job'), homes)
+                    home = home_of(code, seen.get('job'), homes)
         if not count:
             continue
         if not why:
@@ -656,13 +738,13 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
                 holds[rid] = computer_hold(c, rid, status=statuses[rid], row=runners.get(rid))
             why = holds[rid][0] if holds[rid] else ''
         if why:
-            add(rid, why, count, row['oldest'])
+            add(rid, why, count, row['oldest'], code, home)
         else:
             out[rid]['queued'] += count
     for rid, count in overflow.items():
         if rid in oldest_reason:
-            since, _, why = oldest_reason[rid]
-            add(rid, why, count, since)
+            since, _, why, code = oldest_reason[rid]
+            add(rid, why, count, since, code)
         elif holds.get(rid):
             add(rid, holds[rid][0], count, groups[rid][holds[rid][0]]['oldest'])
         else:
@@ -673,6 +755,8 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
 
 
 def describe(counts):
+    from .cloud_machines import WAKE_SPENT
+
     parts = [f"{counts['running']} running", f"{counts['starting']} starting"]
     now = H.parse_ts(H.now())
     for wait in counts['waits']:
@@ -681,7 +765,11 @@ def describe(counts):
         age = f"{minutes // 60} h" if minutes >= 60 else f"{minutes} min"
         reason = (
             "waiting: " + wait['reason']
-            if wait['reason'].startswith(('computer busy', 'computer not reporting', 'at ', 'asleep;', BUILD_WAIT))
+            if wait['reason'].startswith(
+                ('computer busy', 'computer not reporting', 'at ', 'asleep;', WAKE_SPENT, BUILD_WAIT, *TURNS_COLON)
+            )
+            else "waiting " + wait['reason']
+            if wait['reason'].startswith('(code:')
             else "waiting for " + wait['reason']
         )
         parts.append(f"{wait['count']} {reason} (oldest {age})")
