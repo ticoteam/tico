@@ -2993,7 +2993,12 @@ def send(c, who, hold_id, nonce, ingest=None, table=None, check=None, auth=None,
         result = fn(c, bot, hold, replay, ingest.ingest, gate, ingest.inputs)
     else:
         result = fn(c, bot, hold, replay, ingest, gate)
-    return {"hold": view_hold(c, who, _hold(c, hold_id), "reviewer"), "result": result}
+    if isinstance(result, dict) and result.get("refs"):
+        from .files import readable_page_refs
+
+        # The reviewer reads what was sent: each page it names only as they may read it (a thread post or edit).
+        result = {**result, "refs": readable_page_refs(c, auth, who, result["refs"])}
+    return {"hold": view_hold(c, who, _hold(c, hold_id), "reviewer", auth=auth), "result": result}
 
 
 def appeal(c, who, hold_id, why):
