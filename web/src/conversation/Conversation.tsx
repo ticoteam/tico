@@ -339,8 +339,9 @@ export function Conversation({ id, variant, title, actor, session, from, starter
 
   /* ---- a jump from the Outline: page back until the message is loaded, then bring it to the middle */
   const { fetchNextPage } = timeline;
-  // Listened for once the first page is drawn: a jump that waited for this chat pages back from there.
-  const drawn = rows.length > 0;
+  // Listened for once the first page is in (the list is drawn then, even for an empty page with older ones behind
+  // it): a jump that waited for this chat pages back from there.
+  const drawn = !!timeline.data;
   useEffect(
     () =>
       !drawn ? undefined : onJump(id, (message) => {

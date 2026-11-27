@@ -8,6 +8,7 @@ import type * as Live from '@/live';
 import { Composer } from './Composer';
 import { Toasts } from '@/kit/Toast';
 import { Conversation } from './Conversation';
+import { jumpTo } from './Outline';
 import { Message } from './Message';
 import { showPageName } from '@/tico/pageName';
 import type { Session } from './Session';
@@ -317,6 +318,19 @@ describe('Conversation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     await waitFor(() => expect(sends()).toHaveLength(2));
     expect((sends()[1]?.body as { refs: unknown }).refs).toEqual({ from_page: { page: 'tasks', label: 'Tasks' } });
+  });
+
+  it('pages back for a jump when the first page came empty with older pages behind it', async () => {
+    // the chat-activity cutoff can leave the first page with no messages and a cursor (backend/threads.py)
+    queryClient.setQueryData(key, { pages: [{ messages: [], next_cursor: 'c1', read_marks: {} }], pageParams: [null] });
+    const asked: string[] = [];
+    serve((url) => {
+      asked.push(url);
+      return { status: 200, body: { messages: [msg(5, 'bot:qa', 'The one')], next_cursor: null, read_marks: {} } };
+    });
+    jumpTo(T, 'm5');
+    show();
+    await waitFor(() => expect(asked.some((u) => u.includes('/timeline') && u.includes('cursor=c1'))).toBe(true));
   });
 
   it('follows and reads new messages at the bottom, and waits for the reader to scroll back otherwise', async () => {
