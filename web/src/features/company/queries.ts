@@ -1,5 +1,5 @@
 import { queryOptions } from '@tanstack/react-query';
-import { api } from '@/api/client';
+import { api, operation } from '@/api/client';
 import type {
   CompanyFloor,
   FactoryCreated,
@@ -404,14 +404,13 @@ export function createFactory(name: string, goal: string) {
 export type Team = Group & { lead?: string };
 export const groupsQuery = queryOptions({
   queryKey: keys.groups(),
-  queryFn: ({ signal }) => api.get<Team[]>('/api/v2/groups', { signal }),
+  queryFn: ({ signal }): Promise<Team[]> => operation('GET /api/v2/groups', {}, { signal }),
 });
 
 /** A teammate into another group (it leaves the one it was in), or out of its group when `to` is empty. */
 export function moveTeammate(who: string, from: string, to: string) {
   const agent = who.startsWith('bot:');
   const bare = who.slice(who.indexOf(':') + 1);
-  const kind = agent ? 'bots' : 'people';
   const source = agent ? queryClient.getQueryData<Team[]>(groupsQuery.queryKey)?.find((g) => g.id === from) : undefined;
   const index = source?.bots.findIndex((id, i) => id === bare || source.bot_slugs[i] === bare) ?? -1;
   const id = source?.bots[index] ?? bare;
@@ -422,8 +421,10 @@ export function moveTeammate(who: string, from: string, to: string) {
   return write<Team>({
     key: groupsQuery.queryKey,
     optimistic: (gs: Team[] | undefined) => gs?.map((g) => (g.id === to ? add(strip(g)) : strip(g))),
-    send: (idempotencyKey) =>
-      to ? api.patch<Team>(`/api/v2/groups/${enc(to)}`, { add: { [kind]: [id] } }, { idempotencyKey }) : api.patch<Team>(`/api/v2/groups/${enc(from)}`, { remove: { [kind]: [id] } }, { idempotencyKey }),
+    send: (idempotencyKey) => {
+      const members = agent ? { bots: [id] } : { people: [id] };
+      return operation('PATCH /api/v2/groups/{gid}', { path: { gid: to || from }, body: to ? { add: members } : { remove: members } }, { idempotencyKey });
+    },
   });
 }
 
@@ -440,7 +441,7 @@ export function setTeamLead(gid: string, who: string) {
   return write<Team>({
     key: groupsQuery.queryKey,
     optimistic: (gs: Team[] | undefined) => gs?.map((g) => (g.id === gid ? { ...g, lead } : g)),
-    send: (idempotencyKey) => api.patch<Team>(`/api/v2/groups/${enc(gid)}`, { lead }, { idempotencyKey }),
+    send: (idempotencyKey) => operation('PATCH /api/v2/groups/{gid}', { path: { gid }, body: { lead } }, { idempotencyKey }),
     settle: (gs: Team[] | undefined, saved: Team) => (saved?.id ? gs?.map((g) => (g.id === saved.id ? { ...g, ...saved } : g)) : gs),
   });
 }

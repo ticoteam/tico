@@ -2,7 +2,8 @@
 """TypeScript types for the person-facing API (backend/openapi_v2.py), printed: the web app's src/api/schema.d.ts
 (web/scripts/gen-api-types.ts calls build(), and writes that generated, uncommitted file). The document is built
 in-process from the same function that writes GET /api/v2/openapi.json, so no server runs. Each component schema becomes an exported type; each operation gets
-<Name>Params, <Name>Body and <Name>Response.
+<Name>Params, <Name>Body and <Name>Response, and ApiOperations maps each "METHOD /path" to its path and query
+parameters, body and answer, for the web client's typed `operation` (web/src/api/client.ts).
 """
 
 import json
@@ -125,6 +126,40 @@ def params_type(op):
     return '{\n' + '\n'.join(sorted(fields)) + '\n}'
 
 
+def fields_type(op, where):
+    """One operation's path or query parameters as an object type, `never` when it has none."""
+    fields = []
+    for param in op.get('parameters', []):
+        if param.get('in') != where:
+            continue
+        optional = '' if param.get('required') or where == 'path' else '?'
+        name = param['name']
+        key = name if re.match(r'^[A-Za-z_]\w*$', name) else json.dumps(name)
+        kind = ts_type(param.get('schema', {}))
+        # An optional query value may also be given as null (undefined already fits `?`): the client leaves it out.
+        if optional and 'null' not in kind.split(' | '):
+            kind += ' | null'
+        fields.append('%s%s: %s;' % (key, optional, kind))
+    return '{ ' + ' '.join(sorted(fields)) + ' }' if fields else 'never'
+
+
+def operations_type(ops):
+    """ApiOperations: "METHOD /path" to what the call takes and gives, by the per-operation names above. Header
+    parameters are left out: the only one is Idempotency-Key, which the client sends itself."""
+    lines = [
+        '/** Every operation by "METHOD /path": what `operation` in src/api/client.ts checks a call against. */',
+        'export interface ApiOperations {',
+    ]
+    for op_id, method, path, op in sorted(ops, key=lambda item: (item[2], item[1])):
+        base = op_id[:1].upper() + op_id[1:]
+        lines.append(
+            '  %s: { path: %s; query: %s; body: %sBody; response: %sResponse };'
+            % (json.dumps(method.upper() + ' ' + path), fields_type(op, 'path'), fields_type(op, 'query'), base, base)
+        )
+    lines.append('}\n')
+    return '\n'.join(lines)
+
+
 def build(document):
     lines = [HEADER]
     schemas = document['components']['schemas']
@@ -149,6 +184,7 @@ def build(document):
         lines.append('export type %s = %s;' % (names[0], params_type(op)))
         lines.append('export type %s = %s;' % (names[1], body_type(op)))
         lines.append('export type %s = %s;\n' % (names[2], response_type(op)))
+    lines.append(operations_type(ops))
     return '\n'.join(lines).rstrip() + '\n'
 
 

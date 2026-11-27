@@ -163,5 +163,8 @@ L35 to L39) and the lifespan, install-closure and router rules (L40 to L42). The
   them: their source is `backend/openapi_v2.py`, where a rebase conflict is resolved. A route joins the stable API on its
   own decorator, `@app.get(path, **api_v2(tag, operationId, summary, answer))` (backend/api_contract.py), which also
   takes what FastAPI cannot see in the handler (a body read by hand, extra errors, no sign-in, an optional key).
+- Web calls to a route in that spec use `operation('METHOD /path', { path, query, body }, opts)` from
+  `web/src/api/client.ts`: schema.d.ts's ApiOperations types it from the spec, so a wrong path, parameter, body or
+  answer field fails `npm run typecheck`. Use it for new calls and move a feature's calls to it when you next touch them.
 - Comments say why in the present tense; they do not name who asked or when. No divider lines, no narration of the
   change, no commented-out code. A suppression (`noqa`, `type: ignore`, `#[allow]`) says why on the same line.
