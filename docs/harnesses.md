@@ -578,6 +578,16 @@ What stays different per CLI is its sign-in: a login store the runner hands to t
 is a few lines in `runner-rs/src/hosts/<host>.rs` reached from `prepare_login_home` and `file_signed_in` in
 `runner-rs/src/hosts/mod.rs` (Grok's are in `hosts/grok.rs`). Everything else is the manifest.
 
+A new built-in ACP harness needs no Rust host module of its own: add its manifest, its entry in `BUILT_IN`
+(`runner-rs/src/harness_tools.rs`) and its provider in the backend catalog (`backend/providers.py`). The generic host
+assumes sign-in happens outside ACP, through an API key in the environment or the CLI's own login store; it never
+sends ACP's `authenticate`.
+
+The host keeps a process only once it has answered `initialize`; one that refuses is stopped and reaped, never reused.
+A restart waits for the old process to be reaped, not just for its output to close, so two never run side by side.
+A session runs one turn at a time: a second `start_turn` on it is refused. Once a turn is cancelled, every permission
+it asks for is answered `cancelled`, whatever `permission` says.
+
 ## Capabilities
 
 Code never asks which CLI a bot runs; it asks the manifest's `[capabilities]`. The server

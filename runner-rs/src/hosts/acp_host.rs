@@ -272,7 +272,33 @@ struct Prompt {
     turn: String,
 }
 
-type Running = (Vec<String>, Env, super::Stopper, Arc<AtomicBool>);
+/// The running process: its command and environment, how to stop it, and two ends watched apart. Its output can
+/// close while the process still runs (and holds its login store and folder), so a replacement waits for the exit.
+struct Running {
+    cmd: Vec<String>,
+    env: Env,
+    stopper: super::Stopper,
+    /// Its output closed: nothing more comes back from it.
+    ended: Arc<AtomicBool>,
+    /// True once the process is reaped and its error output read.
+    exited: tokio::sync::watch::Receiver<bool>,
+}
+
+impl Running {
+    fn alive(&self) -> bool {
+        !self.ended.load(Ordering::SeqCst) && !*self.exited.borrow()
+    }
+}
+
+/// Waits up to `wait` for the process `exited` watches to be reaped; whether it was.
+async fn reaped(mut exited: tokio::sync::watch::Receiver<bool>, wait: Duration) -> bool {
+    tokio::time::timeout(wait, exited.wait_for(|done| *done))
+        .await
+        .is_ok_and(|r| r.is_ok())
+}
+
+/// How long a process told to stop has to end before SIGKILL.
+const STOP_GRACE: Duration = Duration::from_secs(5);
 
 struct Shared {
     allocation: super::Allocation,
@@ -289,7 +315,10 @@ struct Shared {
     child: Mutex<Option<Running>>,
     /// The running process's `initialize` answer: what it can do.
     init: Mutex<Value>,
+    /// The turn running on each session.
     turns: Mutex<HashMap<String, String>>,
+    /// Turns told to stop with `session/cancel`: their permission requests are cancelled, as ACP requires.
+    cancelled: Mutex<HashSet<String>>,
     reply: Mutex<HashMap<String, String>>,
     boundary: Mutex<HashSet<String>>,
     /// The `messageId` of each turn's last text chunk.
@@ -314,6 +343,7 @@ impl AcpHost {
             child: Mutex::new(None),
             init: Mutex::new(Value::Null),
             turns: Mutex::new(HashMap::new()),
+            cancelled: Mutex::new(HashSet::new()),
             reply: Mutex::new(HashMap::new()),
             boundary: Mutex::new(HashSet::new()),
             message: Mutex::new(HashMap::new()),
@@ -344,10 +374,11 @@ impl AcpHost {
             .lock()
             .unwrap()
             .as_ref()
-            .is_some_and(|(_, _, _, gone)| !gone.load(Ordering::SeqCst))
+            .is_some_and(Running::alive)
     }
 
-    /// Start the agent with `cmd` in `env` (and the manifest's `[acp.env]`) and say `initialize`.
+    /// Start the agent with `cmd` in `env` (and the manifest's `[acp.env]`) and say `initialize`. The process is
+    /// this host's only once it has answered: one that did not is stopped and reaped, never reused.
     async fn launch(&self, cmd: Vec<String>, env: Env) -> Result<(), HostError> {
         let label = self.label().to_string();
         let mut command = super::harness_command(None, &cmd[0]);
@@ -366,45 +397,46 @@ impl AcpHost {
             .map_err(|e| failed(format!("could not start {label}: {e}")))?;
         self.0.allocation.mark();
         let _stderr = crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &full);
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| failed(format!("{label} has no stdout")))?;
-        let client = Arc::new(Client::new(child.stdin.take(), self.0.spec.request_timeout));
-        *self.0.client.lock().unwrap() = client.clone();
-        *self.0.init.lock().unwrap() = Value::Null;
+        let stdin = child.stdin.take();
+        let Some(stdout) = child.stdout.take() else {
+            let (stopper, exited) = super::own(child);
+            stopper.terminate(STOP_GRACE);
+            let _ = exited.await;
+            return Err(failed(format!("{label} has no stdout")));
+        };
+        let client = Arc::new(Client::new(stdin, self.0.spec.request_timeout));
         log(&format!(
             "{}[{}]: agent started pid {}",
             self.0.runtime,
             self.0.bot,
             child.id().map_or("?".into(), |p| p.to_string())
         ));
-        let (stopper, exited) = super::own(child);
-        let gone = Arc::new(AtomicBool::new(false));
-        let flag = gone.clone();
+        let (stopper, status) = super::own(child);
+        let (reaped_tx, exited) = tokio::sync::watch::channel(false);
         let diagnostics = self.0.tx.clone();
         let reaper = format!("{label} reaper ended");
         tokio::spawn(async move {
-            let status = exited
+            let status = status
                 .await
                 .unwrap_or_else(|_| Err(std::io::Error::other(reaper)));
             _stderr.drained().await;
             let code = super::return_code(&status);
             let _ = diagnostics.send(json!({"kind": "error", "error": crate::run_diagnostics::process_reason(code, &_stderr.tail()), "exit_code": code, "process_exit": true}));
-            flag.store(true, Ordering::SeqCst);
+            let _ = reaped_tx.send(true);
         });
-        *self.0.child.lock().unwrap() = Some((cmd, env, stopper, gone.clone()));
+        let ended = Arc::new(AtomicBool::new(false));
         let host = self.clone();
+        let (reader, closed) = (client.clone(), ended.clone());
         tokio::spawn(async move {
             let mut lines = acp::Reader::new(stdout);
             while let Ok(Some(line)) = lines.next().await {
                 if let acp::Line::Message(msg) = line {
-                    host.on_message(&client, msg).await;
+                    host.on_message(&reader, msg).await;
                 }
             }
-            gone.store(true, Ordering::SeqCst);
+            closed.store(true, Ordering::SeqCst);
             // Its own client only: a process started since keeps its requests.
-            for prompt in client.close() {
+            for prompt in reader.close() {
                 host.finish(
                     &prompt.session,
                     &prompt.turn,
@@ -412,27 +444,54 @@ impl AcpHost {
                 );
             }
         });
-        let init = self.request("initialize", json!({"protocolVersion": acp::PROTOCOL_VERSION, "clientCapabilities": {"fs": {"readTextFile": false, "writeTextFile": false}}})).await?;
-        *self.0.init.lock().unwrap() = init;
-        Ok(())
+        let params = json!({"protocolVersion": acp::PROTOCOL_VERSION, "clientCapabilities": {"fs": {"readTextFile": false, "writeTextFile": false}}});
+        match self.ask(&client, "initialize", params).await {
+            Ok(init) => {
+                *self.0.init.lock().unwrap() = init;
+                *self.0.client.lock().unwrap() = client;
+                *self.0.child.lock().unwrap() = Some(Running {
+                    cmd,
+                    env,
+                    stopper,
+                    ended,
+                    exited,
+                });
+                Ok(())
+            }
+            Err(e) => {
+                client.disconnect().await;
+                stopper.terminate(STOP_GRACE);
+                if !reaped(exited, STOP_GRACE * 2).await {
+                    log(&format!(
+                        "{}[{}]: {label} did not exit after a failed initialize",
+                        self.0.runtime, self.0.bot
+                    ));
+                }
+                Err(e)
+            }
+        }
     }
 
     /// Nothing runs until the first thread says which model, effort and environment the bot uses.
     pub fn start(&self) {}
 
     pub async fn stop(&self) {
+        self.end().await;
+    }
+
+    /// Stop the process and wait for it to be reaped, past its output closing; whether it was (or none ran).
+    async fn end(&self) -> bool {
         // A write the agent is not reading holds its input until the request timeout: the stop does not wait behind
         // it, as ending the process ends that write.
         let _ = tokio::time::timeout(self.0.spec.stop_wait, self.client().disconnect()).await;
         let child = self.0.child.lock().unwrap().take();
-        if let Some((_, _, stopper, gone)) = child {
-            stopper.terminate(Duration::from_secs(5));
-            for _ in 0..60 {
-                if gone.load(Ordering::SeqCst) {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
+        match child {
+            Some(running) => {
+                running.stopper.terminate(STOP_GRACE);
+                // SIGKILL follows the grace, so the reap is due soon after it.
+                reaped(running.exited, STOP_GRACE * 2).await
             }
+            None => true,
         }
     }
 
@@ -449,7 +508,7 @@ impl AcpHost {
             .lock()
             .unwrap()
             .as_ref()
-            .map(|(c, e, _, _)| (c.clone(), e.clone()));
+            .map(|r| (r.cmd.clone(), r.env.clone()));
         let env = if !settings.env.is_empty() {
             settings.env.clone()
         } else {
@@ -475,7 +534,13 @@ impl AcpHost {
                     self.label()
                 )));
             }
-            self.stop().await;
+            // Its replacement never runs beside it: both would hold the same login store and folders.
+            if !self.end().await {
+                return Err(failed(format!(
+                    "the previous {} did not exit",
+                    self.label()
+                )));
+            }
         }
         self.launch(cmd, env).await
     }
@@ -494,8 +559,13 @@ impl AcpHost {
 
     async fn request(&self, method: &str, params: Value) -> Result<Value, HostError> {
         self.running()?;
+        self.ask(&self.client(), method, params).await
+    }
+
+    /// `method` asked of the process whose client is `client`.
+    async fn ask(&self, client: &Client, method: &str, params: Value) -> Result<Value, HostError> {
         let wait = self.0.spec.request_timeout;
-        match self.client().request(method, params, wait).await {
+        match client.request(method, params, wait).await {
             Ok(result) => Ok(result),
             Err(RequestError::Write(e)) => Err(self.closed(e)),
             Err(RequestError::Late) => Err(failed(format!(
@@ -517,18 +587,25 @@ impl AcpHost {
         }
     }
 
-    /// Whether a tool's permission asked for on session `params.sessionId` is given.
+    /// Whether a tool's permission asked for on session `params.sessionId` is given. Never during a turn told to
+    /// stop: ACP has the client answer `cancelled` once it sends `session/cancel`.
     fn gives(&self, params: &Value) -> acp::Permission {
-        let give = match self.0.spec.permission {
-            Permissions::Allow => true,
-            Permissions::Refuse => false,
-            Permissions::Turn => self
-                .0
-                .turns
-                .lock()
-                .unwrap()
-                .contains_key(&text_of(&params["sessionId"])),
-        };
+        let turn = self
+            .0
+            .turns
+            .lock()
+            .unwrap()
+            .get(&text_of(&params["sessionId"]))
+            .cloned();
+        let cancelled = turn
+            .as_ref()
+            .is_some_and(|t| self.0.cancelled.lock().unwrap().contains(t));
+        let give = !cancelled
+            && match self.0.spec.permission {
+                Permissions::Allow => true,
+                Permissions::Refuse => false,
+                Permissions::Turn => turn.is_some(),
+            };
         if give {
             acp::Permission::Give
         } else {
@@ -632,7 +709,7 @@ impl AcpHost {
         if !self.0.done_turns.lock().unwrap().insert(turn.into()) {
             return;
         }
-        self.0.turns.lock().unwrap().remove(sid);
+        self.end_turn(sid, turn);
         let text = self
             .0
             .reply
@@ -687,6 +764,16 @@ impl AcpHost {
         self.emit(event("status", s, None, json!({"state": "idle"})));
     }
 
+    /// Session `sid` no longer runs `turn`; a turn started on it since keeps its place.
+    fn end_turn(&self, sid: &str, turn: &str) {
+        let mut turns = self.0.turns.lock().unwrap();
+        if turns.get(sid).is_some_and(|t| t == turn) {
+            turns.remove(sid);
+        }
+        drop(turns);
+        self.0.cancelled.lock().unwrap().remove(turn);
+    }
+
     fn servers(&self, settings: &Settings) -> Value {
         match self.0.spec.mcp_servers {
             McpServers::Acp => json!(crate::mcp::acp_config(&settings.mcp_servers, &settings.env)),
@@ -734,11 +821,17 @@ impl AcpHost {
 
     pub async fn start_turn(&self, thread_id: &str, text: &str) -> Result<String, HostError> {
         let turn = uuid::Uuid::new_v4().to_string();
-        self.0
-            .turns
-            .lock()
-            .unwrap()
-            .insert(thread_id.into(), turn.clone());
+        {
+            // One turn per session: a second would take the first's updates, and its end would drop the first's.
+            let mut turns = self.0.turns.lock().unwrap();
+            if turns.contains_key(thread_id) {
+                return Err(failed(format!(
+                    "{} already has a turn running on this thread",
+                    self.label()
+                )));
+            }
+            turns.insert(thread_id.into(), turn.clone());
+        }
         self.0
             .reply
             .lock()
@@ -761,7 +854,7 @@ impl AcpHost {
         };
         if let Err(e) = sent {
             // No turn runs: the thread is free for the next one, or for a new environment.
-            self.0.turns.lock().unwrap().remove(thread_id);
+            self.end_turn(thread_id, &turn);
             self.0.reply.lock().unwrap().remove(&turn);
             return Err(e);
         }
@@ -776,9 +869,13 @@ impl AcpHost {
         )))
     }
 
-    /// `session/cancel`, given up after the cancel wait when the agent is not reading its input.
+    /// `session/cancel`, given up after the cancel wait when the agent is not reading its input. The turn counts as
+    /// cancelled from before the notification goes, so no permission it asks for afterwards is given.
     pub async fn interrupt(&self, thread_id: &str) -> Result<(), HostError> {
         self.running()?;
+        if let Some(turn) = self.0.turns.lock().unwrap().get(thread_id) {
+            self.0.cancelled.lock().unwrap().insert(turn.clone());
+        }
         let by = tokio::time::Instant::now() + self.0.spec.cancel_wait();
         if self.client().cancel_by(thread_id, by).await {
             Ok(())
@@ -1034,14 +1131,27 @@ ACME_NO_TELEMETRY = "1""#,
         );
         let host = with(Permissions::Refuse);
         assert_eq!(permission_answer(&host, "in-turn").await, refused);
+        // A turn told to stop gets none, whatever the manifest gives.
+        for permission in [Permissions::Allow, Permissions::Turn] {
+            let host = with(permission);
+            host.0.cancelled.lock().unwrap().insert("turn-1".into());
+            assert_eq!(permission_answer(&host, "in-turn").await, refused);
+        }
     }
 
     /// A fake ACP agent. It records every line it reads in FAKE_CALLS, says FAKE_CAPS in its `initialize` answer, and
     /// names each new session after its own pid. A prompt's text picks the turn: `hi` streams "Hello", asks a tool's
     /// permission and ends with " there" once answered; `wait` ends only on `session/cancel`; `exit` exits mid-turn;
-    /// `refuse` answers with an error.
+    /// `ask after cancel` asks a permission once cancelled; `close` closes its output and exits a second later, deaf to
+    /// SIGTERM; anything else answers with an error. FAKE_LIFE records when it starts and exits; while the file
+    /// FAKE_INIT_FAIL_ONCE exists, `initialize` is refused (once) and the agent keeps running.
     const FAKE_AGENT: &str = r#"#!/usr/bin/env python3
-import json, os, sys
+import json, os, signal, sys, time
+def life(what):
+    if os.environ.get("FAKE_LIFE"):
+        with open(os.environ["FAKE_LIFE"], "a") as f:
+            f.write("%s %d\n" % (what, os.getpid()))
+life("start")
 def say(m):
     m["jsonrpc"] = "2.0"
     print(json.dumps(m), flush=True)
@@ -1056,16 +1166,25 @@ for line in sys.stdin:
     msg = json.loads(line)
     method, p = msg.get("method"), msg.get("params") or {}
     if method is None:
-        if "perm" in waiting:
+        if msg.get("id") == "perm-1" and "perm" in waiting:
             pid, sid = waiting.pop("perm")
             chunk(sid, " there", "m1")
             say({"id": pid, "result": {"stopReason": "end_turn"}})
+        elif msg.get("id") == "perm-2" and "perm2" in waiting:
+            say({"id": waiting.pop("perm2"), "result": {"stopReason": "cancelled"}})
         continue
     if method == "session/cancel":
         if "cancel" in waiting:
             say({"id": waiting.pop("cancel"), "result": {"stopReason": "cancelled"}})
+        elif "ask" in waiting:
+            # A tool still running when the cancel came asks anyway: the client must answer cancelled.
+            say({"id": "perm-2", "method": "session/request_permission", "params": {"sessionId": p["sessionId"], "toolCall": {"toolCallId": "t2"}, "options": [{"kind": "allow_once", "optionId": "once"}]}})
+            waiting["perm2"] = waiting.pop("ask")
         continue
-    if method == "initialize":
+    if method == "initialize" and os.path.exists(os.environ.get("FAKE_INIT_FAIL_ONCE") or "/nonexistent"):
+        os.remove(os.environ["FAKE_INIT_FAIL_ONCE"])
+        say({"id": msg["id"], "error": {"code": -32000, "message": "refused by pid %d" % os.getpid()}})
+    elif method == "initialize":
         say({"id": msg["id"], "result": {"protocolVersion": 1, "agentCapabilities": json.loads(os.environ.get("FAKE_CAPS") or "{}"), "agentInfo": {"env": os.environ.get("ACME_ONLY_IN_THE_AGENT")}}})
     elif method == "session/new":
         sessions += 1
@@ -1082,8 +1201,16 @@ for line in sys.stdin:
             waiting["perm"] = (msg["id"], sid)
         elif text == "wait":
             waiting["cancel"] = msg["id"]
+        elif text == "ask after cancel":
+            waiting["ask"] = msg["id"]
         elif text == "exit":
             sys.exit(3)
+        elif text == "close":
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            os.close(1)
+            time.sleep(1)
+            life("exit")
+            os._exit(0)
         else:
             say({"id": msg["id"], "error": {"code": -32000, "message": "usage limit reached"}})
     else:
@@ -1224,7 +1351,7 @@ ACME_ONLY_IN_THE_AGENT = "yes""#
                 "headers": [{"name": "Authorization", "value": "Bearer synthetic-token"}]}]),
             "the bot's servers in ACP's shape, their variables filled in"
         );
-        let cmd = host.0.child.lock().unwrap().as_ref().unwrap().0.clone();
+        let cmd = host.0.child.lock().unwrap().as_ref().unwrap().cmd.clone();
         assert_eq!(cmd, [fake.program.as_str(), "--model", "acme-2", "acp"]);
         assert!(
             !s.env.contains_key("ACME_ONLY_IN_THE_AGENT"),
@@ -1492,6 +1619,157 @@ ACME_ONLY_IN_THE_AGENT = "yes""#
         );
         assert!(host.alive());
         host.interrupt(&third).await.unwrap();
+        host.stop().await;
+    }
+
+    /// Whether process `pid` still exists (reaped processes do not).
+    fn exists(pid: i32) -> bool {
+        unsafe { libc::kill(pid, 0) == 0 }
+    }
+
+    #[tokio::test]
+    async fn an_agent_that_refuses_initialize_is_reaped_and_never_reused() {
+        let fake = Fake::new();
+        let host = AcpHost::new(
+            "acme",
+            "acme",
+            &fake.program,
+            acme("load", "turn"),
+            mpsc::unbounded_channel().0,
+        );
+        let once = fake.dir.join("fail-once");
+        std::fs::write(&once, "").unwrap();
+        let s = settings(
+            &fake,
+            fake.env(
+                "{}",
+                &[("FAKE_INIT_FAIL_ONCE", &once.display().to_string())],
+            ),
+        );
+        let refused = host.resume_thread("saved-1", &s).await;
+        let Err(HostError::Failed(m)) = refused else {
+            panic!("initialize was refused: {refused:?}");
+        };
+        let pid: i32 = m
+            .strip_prefix("initialize: refused by pid ")
+            .unwrap_or_else(|| panic!("{m}"))
+            .parse()
+            .unwrap();
+        assert!(
+            !host.alive(),
+            "an agent that did not initialize is not ours"
+        );
+        assert!(
+            !exists(pid),
+            "and it is stopped and reaped before the error"
+        );
+        // The retry, with the same settings, starts a new agent and initializes it before opening the conversation.
+        assert_eq!(host.resume_thread("saved-1", &s).await.unwrap(), "saved-1");
+        assert_eq!(
+            fake.methods(),
+            ["initialize", "initialize", "session/load"],
+            "nothing was asked of the agent that refused"
+        );
+        host.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_restart_waits_for_an_agent_whose_output_closed_to_exit() {
+        let fake = Fake::new();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = AcpHost::new("acme", "acme", &fake.program, acme("load", "turn"), tx);
+        let life = fake.dir.join("life");
+        let s = settings(
+            &fake,
+            fake.env("{}", &[("FAKE_LIFE", &life.display().to_string())]),
+        );
+        let thread = host.start_thread("acme", &s).await.unwrap();
+        host.start_turn(&thread, "close").await.unwrap();
+        let events = until(&mut rx, &["turn_failed", "turn_completed"]).await;
+        assert_eq!(events.last().unwrap()["error"], "acme agent exited");
+        assert!(!host.alive(), "its output closed: it takes no more turns");
+        let again = host.start_thread("acme", &s).await.unwrap();
+        let (old, new) = (pid_of(&thread), pid_of(&again));
+        assert_eq!(
+            std::fs::read_to_string(&life)
+                .unwrap()
+                .lines()
+                .collect::<Vec<_>>(),
+            [
+                format!("start {old}"),
+                format!("exit {old}"),
+                format!("start {new}")
+            ],
+            "the replacement started only once the old agent had exited"
+        );
+        host.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_second_turn_on_a_busy_thread_is_refused_and_the_first_keeps_its_updates() {
+        let fake = Fake::new();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = AcpHost::new("acme", "acme", &fake.program, acme("load", "turn"), tx);
+        let thread = host
+            .start_thread("acme", &settings(&fake, fake.env("{}", &[])))
+            .await
+            .unwrap();
+        let first = host.start_turn(&thread, "wait").await.unwrap();
+        let second = host.start_turn(&thread, "hi").await;
+        assert!(
+            matches!(&second, Err(HostError::Failed(m)) if m == "acme agent already has a turn running on this thread"),
+            "{second:?}"
+        );
+        assert_eq!(host.0.turns.lock().unwrap().get(&thread), Some(&first));
+        host.interrupt(&thread).await.unwrap();
+        let events = until(&mut rx, &["turn_completed", "turn_failed"]).await;
+        let done = events.last().unwrap();
+        assert_eq!(
+            (&done["kind"], &done["turn_id"]),
+            (&json!("turn_completed"), &json!(first))
+        );
+        assert_eq!(
+            fake.methods()
+                .iter()
+                .filter(|m| *m == "session/prompt")
+                .count(),
+            1,
+            "the second prompt never went (read once the turn ended: the fake has logged all it got)"
+        );
+        host.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_turn_gets_no_more_permissions() {
+        let fake = Fake::new();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = AcpHost::new("acme", "acme", &fake.program, acme("load", "turn"), tx);
+        let thread = host
+            .start_thread("acme", &settings(&fake, fake.env("{}", &[])))
+            .await
+            .unwrap();
+        let turn = host.start_turn(&thread, "ask after cancel").await.unwrap();
+        host.interrupt(&thread).await.unwrap();
+        let events = until(&mut rx, &["turn_completed", "turn_failed"]).await;
+        let done = events.last().unwrap();
+        assert_eq!(
+            (&done["status"], &done["turn_id"]),
+            (&json!("interrupted"), &json!(turn))
+        );
+        let answer = fake
+            .calls()
+            .into_iter()
+            .find(|c| c["id"] == "perm-2")
+            .expect("the host answered the permission asked after the cancel");
+        assert_eq!(
+            answer["result"]["outcome"],
+            json!({"outcome": "cancelled"}),
+            "a turn told to stop is given nothing, even with permission = \"turn\""
+        );
+        assert!(
+            host.0.cancelled.lock().unwrap().is_empty(),
+            "the ended turn is forgotten"
+        );
         host.stop().await;
     }
 }
