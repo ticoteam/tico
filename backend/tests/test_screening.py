@@ -448,6 +448,16 @@ def test_a_company_with_the_retired_ideas_door_saved_still_loads_and_keeps_its_o
     assert "idea" not in stored and stored["watcher"] == "hold" and stored["patterns"] is False
 
 
+def test_the_assistant_is_offered_only_the_live_doors():
+    """The Assistant's screen action takes the doors screening has: a retired door (Ideas) is refused, not offered."""
+    from backend import screen_actions
+    from backend.store import Problem
+
+    screen_actions.check("settings.setScreening", {"door": "watcher", "mode": "hold"})
+    with pytest.raises(Problem):
+        screen_actions.check("settings.setScreening", {"door": "idea", "mode": "hold"})
+
+
 # ---------------------------------------------------------------------------------------------- fail open at the doors
 def broken(*args, **kwargs):
     raise RuntimeError("the model check broke")
