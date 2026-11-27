@@ -668,7 +668,8 @@ def refuses_ok_by(
     Agent Ops (acting for a person, confirmed or not, or as itself), a personal token, or anything else acting for them.
     Else None. A send back stays theirs to give, except on a page several people approve: its first answer, OK or send
     back, settles it for all of them, so either is only an approver's own click. On the answer route (`task_id`), the
-    person's own Assistant giving a plain OK on their word, with their setting on, passes (backend/assistant_oks.py).
+    person's own Assistant, or Agent Ops, giving a plain OK on their word, with their setting on, passes
+    (backend/assistant_oks.py).
     """
     said = str(value or "").strip().casefold()
     if said not in ("ok", "no"):
@@ -686,7 +687,7 @@ def refuses_ok_by(
     found = conn.execute("SELECT kind FROM requirements WHERE id=?", (requirement_id,)).fetchone()
     if not (found and found[0] == "ok" and said == "ok"):
         return None
-    if via == "assistant" and task_id:
+    if via in ("assistant", "botops") and task_id:
         return _assistant_ok(conn, str(getattr(who, "actor", "")), task_id, requirement_id)
     return words
 

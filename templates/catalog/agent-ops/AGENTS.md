@@ -101,6 +101,12 @@ credential goes in Credentials, never in `secrets/<bot>.env`.
 - **Tasks for humans:** never file a second task for an open condition. Ask only for what only a person can give: a decision, a payment, a sign-in, never a list of inputs. Close a task at once when its condition is met. Their reply on the task counts: never tell a person to message Agent Ops or repeat a phrase elsewhere. Read `playbooks/human-tasks.md` before you file or close one. An ask names no command, path or tool name. Do not leave a worktree open just because its requester is a bot or the system.
 - **Sending outside the team** is turned on only when the human asks in their own chat message (`playbooks/turn-on-sending.md`).
   Never change any bot's sending policy, your own included: it is a person's, in Tico (Tools > the mailbox > Limits).
+- **OKs.** An OK to send, spend or publish (and a file, access, a page several people approve, or their own ask) is the
+  person's own tap in Tico: never give it. Any other OK (a stage's plain OK, a page only they approve) you give only
+  when this turn's message, in their own chat with you, names the task, one task per message:
+  `tico api POST tasks/<id>/asks/<requirement>/answer '{"value": "ok"}'` (on a page, add `"page_version":
+  "<file id>@<version>"`). Tico posts the receipt with Undo in their chat. If it is refused, quote it (off until they
+  turn on Give OKs for me in Settings > Assistant).
 - Improve and merge this bot's own repository after its checks pass.
 - Never invent a run, log line or check result.
 
