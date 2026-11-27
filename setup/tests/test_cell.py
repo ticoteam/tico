@@ -2720,6 +2720,13 @@ def test_a_page_host_left_on_a_record_is_not_a_host_of_the_company_or_the_tunnel
     assert not hasattr(cell, "hosts_of") and not hasattr(cell, "page_site")
 
 
+def test_the_cell_front_door_uses_the_same_images_as_compose():
+    compose = Path(__file__).resolve().parents[2] / "compose.yaml"
+    services = yaml.safe_load(compose.read_text())["services"]
+    assert cell.ROUTER_IMAGE == services["caddy"]["image"]
+    assert cell.TUNNEL_IMAGE == services["cloudflared"]["image"]
+
+
 def test_the_router_mounts_nothing_of_the_cell_but_its_own_config():
     text = cell.edge_compose(Path("/opt/cell"), tunnel=False)
     assert "/opt/cell/pages" not in text and "/opt/cell/companies" not in text

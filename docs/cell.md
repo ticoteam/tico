@@ -69,9 +69,10 @@ python3 -m setup cell init --tunnel-token-file /root/tunnel-token --domain tico.
    hottest stacks. All the stacks are kept in `/srv/tico-cell/profiles/` (the newest 20). This is the `profile` debug
    tool ([cell stats](cell-stats.md)).
 
-The retired Company page's `--page-domain` is gone. A cell an older core set it on keeps it in `cell.json` until the
-next `init`, which drops it and the tunnel's `*.<page domain>` route. Delete that domain's wildcard DNS record in
-Cloudflare afterwards; until then its requests get the router's 404 for an unknown host.
+The retired Company page's `--page-domain` is gone. The tunnel's `*.<page domain>` route goes at the next command
+that rewrites the tunnel's routes (`add`, `remove`, `route set` or `init`); `init` also drops the domain from
+`cell.json`. Delete that domain's wildcard DNS record in Cloudflare afterwards; until then its requests get the
+router's 404 for an unknown host.
 
 `--meet-domain HOST` turns on Tico Meet calls for every company on the host ([Tico Meet](#tico-meet)).
 
