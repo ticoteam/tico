@@ -61,7 +61,7 @@ def holding(api):
     """Hold at every door that holds: the shipped default is Warn everywhere (observe only), and these tests check the
     hold path. The settings test reads the defaults themselves."""
     with api.app.state.store.transaction() as c:
-        S.save_modes(c, "human:ana", {"webhook": "hold", "idea": "hold", "watcher": "hold"})
+        S.save_modes(c, "human:ana", {"webhook": "hold", "watcher": "hold"})
 
 
 @pytest.fixture
@@ -394,7 +394,6 @@ def test_owners_and_admins_set_the_modes_and_run_the_test(api):
     assert view["defaults"] == {
         "webhook": "warn",
         "mail": "warn",
-        "idea": "warn",
         "watcher": "warn",
         "document": "warn",
         "slack": "warn",
@@ -402,7 +401,6 @@ def test_owners_and_admins_set_the_modes_and_run_the_test(api):
     assert view["modes"] == {
         "webhook": "hold",
         "mail": "warn",
-        "idea": "hold",
         "watcher": "hold",
         "document": "warn",
         "slack": "warn",
@@ -424,6 +422,30 @@ def test_owners_and_admins_set_the_modes_and_run_the_test(api):
         assert c.execute("SELECT count(*) FROM screening_verdicts").fetchone()[0] == 0
         assert c.execute("SELECT actor FROM events WHERE action='judge.call' LIMIT 1").fetchone()[0] == "human:ana"
     assert notes(api) == [] and notes(api, "screening.warned") == []  # a test holds nothing
+
+
+def test_a_company_with_the_retired_ideas_door_saved_still_loads_and_keeps_its_other_settings(api):
+    """The Ideas door had no caller once the Company page went, so it is gone: a company that saved its mode still
+    loads, its other doors and switches stay as saved, and the next save drops the old key."""
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (
+                S.KEY,
+                json.dumps({"webhook": "off", "idea": "hold", "watcher": "hold", "mail": "warn", "patterns": False}),
+            ),
+        )
+    view = get(api, "screening")
+    assert "idea" not in view["modes"] and "idea" not in view["defaults"]
+    assert "idea" not in [s["id"] for s in view["sources"]]
+    assert view["modes"]["webhook"] == "off" and view["modes"]["watcher"] == "hold"
+    assert view["layers"] == {"patterns": False, "model": True}
+    assert api.put("/api/v2/screening", json={"idea": "hold"}, headers=headers()).status_code == 422
+    saved = api.put("/api/v2/screening", json={"document": "hold"}, headers=headers()).json()
+    assert saved["modes"]["webhook"] == "off" and saved["modes"]["document"] == "hold"
+    with api.app.state.store.read() as c:
+        stored = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key=?", (S.KEY,)).fetchone()[0])
+    assert "idea" not in stored and stored["watcher"] == "hold" and stored["patterns"] is False
 
 
 # ---------------------------------------------------------------------------------------------- fail open at the doors
