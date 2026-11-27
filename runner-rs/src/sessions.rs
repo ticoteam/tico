@@ -571,6 +571,27 @@ async fn upstream_or_none(path: &Path, env: &Env) -> Result<String, Fault> {
     }
 }
 
+/// Free bytes on the volume `path` will be made on (it may not exist yet); u64::MAX when unreadable.
+#[cfg(not(test))]
+fn free_bytes(path: &Path) -> u64 {
+    let mut probe = path;
+    while !probe.exists() {
+        match probe.parent() {
+            Some(up) => probe = up,
+            None => break,
+        }
+    }
+    crate::readiness::disk_usage(probe)
+        .map(|d| d.1)
+        .unwrap_or(u64::MAX)
+}
+
+/// A test sees only the free space it sets (FREE_BYTES), never its machine's: that volume may be nearly full.
+#[cfg(test)]
+fn free_bytes(_: &Path) -> u64 {
+    FREE_BYTES.with(|v| v.get()).unwrap_or(u64::MAX)
+}
+
 /// Why no new session worktree may be made at `path` now, or "": the bot's folder already holds SESSION_CAP worktrees on
 /// this computer, or its volume has under SESSION_FLOOR free. Nothing is removed to make room.
 fn room_for(path: &Path) -> String {
@@ -592,19 +613,7 @@ fn room_for(path: &Path) -> String {
             "this bot already holds {held} session worktrees on this computer, and the limit is {SESSION_CAP}; one frees when its task is finished"
         );
     }
-    // The folder may not exist yet: read the volume it will be made on.
-    let mut probe = path;
-    while !probe.exists() {
-        match probe.parent() {
-            Some(up) => probe = up,
-            None => break,
-        }
-    }
-    let free = crate::readiness::disk_usage(probe)
-        .map(|d| d.1)
-        .unwrap_or(u64::MAX);
-    #[cfg(test)]
-    let free = FREE_BYTES.with(|v| v.get()).unwrap_or(free);
+    let free = free_bytes(path);
     if free < SESSION_FLOOR {
         return format!(
             "only {:.1} GB free on this computer, and a new session worktree needs 5 GB",
