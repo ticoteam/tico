@@ -186,9 +186,13 @@ SHARE_REFUSED = (
 def shared_files(c, files, who, attachments):
     """The items an upload's files would be for files already in Tico that a post shares, in order: each version's bytes
     as a new blob of the poster's, which threads._post links to the message as it links an upload, so whoever reads the
-    message opens it and the file keeps its own access. Only a version of a file the poster may open is shared."""
+    message opens it and the file keeps its own access. Only a version of a file the poster may open is shared.
+
+    A page is never copied: its item names the page's version (visuals.linked), as a task comment's does, so each
+    reader is checked against the page's audience as it is now, wherever the thread is read or the page opened. Page
+    permissions are independent of the thread's: narrowing a page takes it from the thread's readers outside it."""
     from .blobs import register
-    from .files import stored_version, version_refusal as files_version_refusal
+    from .files import page_rows, stored_version, version_refusal as files_version_refusal
 
     items = []
     for attachment in attachments:
@@ -203,8 +207,12 @@ def shared_files(c, files, who, attachments):
         # may not (a page's audience, a scan, a fenced blob).
         if version is None or files_version_refusal(c, files.auth, who, row, number, stored_version(c, fid, number)):
             raise Problem("not_found", SHARE_REFUSED.format(ref=f"{fid}@{number}"), 404)
+        title = title or row["title"] or version["name"]
+        if page_rows(c, [fid]):
+            items.append(visuals.linked(fid, dict(version), title))
+            continue
         item = register(c, who, version["digest"], version["size"], version["name"], version["mime"])
-        item["title"] = title or row["title"] or version["name"]
+        item["title"] = title
         items.append(item)
     return items
 

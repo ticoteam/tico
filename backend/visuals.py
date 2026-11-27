@@ -627,26 +627,32 @@ def attach(c, who, files, blobs, items, *, task_id=None, conversation_id=None):
                 version = _clean_version(c, who, files, blobs, fid, version, cleaned, mime)
                 kind = kind_of(mime, version["size"]) if len(cleaned) <= LIMITS[kind] else "file"
         number = int(version["version"])
-        out.append(
-            {
-                "id": fid,
-                "file_id": fid,
-                "version": number,
-                "ref": f"{fid}@{number}",
-                "title": title or version["name"],
-                "kind": kind,
-                "name": version["name"],
-                "size": version["size"],
-                "content_type": version.get("mime") or mime,
-                "url": f"/api/v2/files/{fid}?v={number}",
-                **({"unembedded": unembedded} if unembedded else {}),
-            }
-        )
+        out.append(linked(fid, version, title, kind, unembedded))
         report.append({"ref": f"{fid}@{number}", "kind": kind, "unembedded": unembedded})
         H.event(
             c, who.actor, "message.visual", task_id or conversation_id, {"file": fid, "version": number, "kind": kind}
         )
     return out, report
+
+
+def linked(fid, version, title="", kind=None, unembedded=()):
+    """A message's attachment that names a version of a file rather than copying its bytes: every read checks its reader
+    against the file now (a page's audience: files.page_ref_denials), and its address is the file's own."""
+    number = int(version["version"])
+    mime = (version.get("mime") or "").split(";", 1)[0].strip().lower()
+    return {
+        "id": fid,
+        "file_id": fid,
+        "version": number,
+        "ref": f"{fid}@{number}",
+        "title": title or version["name"],
+        "kind": kind or kind_of(mime, version.get("size")),
+        "name": version["name"],
+        "size": version["size"],
+        "content_type": version.get("mime") or mime,
+        "url": f"/api/v2/files/{fid}?v={number}",
+        **({"unembedded": list(unembedded)} if unembedded else {}),
+    }
 
 
 def _clean_version(c, who, files, blobs, fid, version, cleaned, mime):
