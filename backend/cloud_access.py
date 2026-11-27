@@ -34,8 +34,9 @@ Until HQ has answered, a Tico Cloud cell (TICO_CELL=1, which `setup cell` sets) 
 UNKNOWN: its first ask can run before its Gateway key is enrolled. A new or changed key asks at once (`sync_later`).
 
 Tico Cloud has no trial (Nov 27, 2026): a company runs on its credit and freezes at $0 like any other. Nothing locks a
-company for time: an answer still saying `trial_over` is an unusable shape (the last word is kept), and a lock kept
-from before the trial went away (`TRIAL_OVER`) counts as no word, so the next answer decides.
+company for time: a lock for `trial_over`, in an answer from an HQ that still sends it or kept from before, is read as
+what its balance says (`untrial`): open with credit left, frozen (out of credit) at $0. Everything else in the answer
+stands, so the company stays a cloud one with its balance and billing page.
 """
 
 import json
@@ -51,7 +52,7 @@ log = logging.getLogger(__name__)
 KEY = "cloud-access"
 ACCESS = ("open", "frozen", "locked")
 REASONS = (None, "out_of_credit", "unpaid")
-TRIAL_OVER = "trial_over"  # the reason a trial once locked a company for; never a lock now
+TRIAL_OVER = "trial_over"  # the reason a trial once locked a company for; never a lock now (`untrial`)
 SYNC = timedelta(seconds=60)  # how often HQ is asked while the company is a cloud one
 UNKNOWN = timedelta(hours=1)  # and while it is not (or HQ has not said yet, off a Tico Cloud cell)
 OPEN_PATHS = ("/api/me", "/api/v2/me", "/api/status", "/api/v2/cloud-access", "/api/v2/system/storage/export")
@@ -88,11 +89,22 @@ def _int(value):
     return value
 
 
+def untrial(value):
+    """A lock for TRIAL_OVER read as its balance says: frozen (out of credit) at $0 or less, else open. Any other
+    answer as it is."""
+    if not isinstance(value, dict) or value.get("access") != "locked" or value.get("reason") != TRIAL_OVER:
+        return value
+    if (value.get("balance_micros") or 0) <= 0:
+        return {**value, "access": "frozen", "reason": "out_of_credit"}
+    return {**value, "access": "open", "reason": None}
+
+
 def parse(value):
     """HQ's `cloud` object, field by field, or None for a company that is not a cloud one. Raises ValueError for any
     other shape, so nothing odd decides whether people can work."""
     if value is None:
         return None
+    value = untrial(value)
     if not isinstance(value, dict) or value.get("access") not in ACCESS or value.get("reason") not in REASONS:
         raise ValueError("not a cloud access answer")
     return {
@@ -105,17 +117,21 @@ def parse(value):
 
 
 def state(c):
-    """The kept state, or None (not a cloud company, HQ has not said, or a trial lock kept from before: no lock)."""
+    """The kept state, or None (not a cloud company, or HQ has not said). A trial lock kept from before reads as its
+    balance says (`untrial`)."""
+    found = untrial(_kept(c))
+    return found if isinstance(found, dict) and found.get("access") in ACCESS else None
+
+
+def _kept(c):
+    """The kept row as written, or None."""
     from .read_cache import metadata
 
     row = metadata(c, KEY)
     try:
-        found = json.loads(row[0]) if row else None
+        return json.loads(row[0]) if row else None
     except (ValueError, TypeError):
         return None
-    if not isinstance(found, dict) or found.get("access") not in ACCESS or found.get("reason") == TRIAL_OVER:
-        return None
-    return found
 
 
 def access(c):
@@ -218,7 +234,7 @@ def apply(store, cloud, at=None):
     `at`: when HQ answered (ISO), now by default. Returns the state."""
     at = at or H.now()
     with store.transaction() as c:
-        before = state(c)
+        before, held = state(c), _kept(c)
         kept = None
         if cloud is None:
             c.execute("DELETE FROM registry_metadata WHERE key=?", (KEY,))
@@ -238,7 +254,8 @@ def apply(store, cloud, at=None):
                 "company",
                 {"from": was, "to": now, "reason": (cloud or {}).get("reason")},
             )
-        if recovered(before, kept):
+        # `held`: a trial lock kept from before reads open in `before`, but was a lock when the machines were refused.
+        if recovered(before, kept) or recovered(held if isinstance(held, dict) else None, kept):
             # HQ took credit (its word went back to open, or the balance rose): every machine it refused for credit
             # may start now, a stopped one with no bot wanting it included, so no page keeps saying out of credit.
             c.execute(
