@@ -158,7 +158,10 @@ SCHEMAS.update(
                 "bots": items({"type": "string"}),
                 "bot_slugs": items({"type": "string"}),
                 "order": "i",
-            }
+                "lead": "s",
+            },
+            # `lead` (bot:<id>, person:<id> or "") is sent only to a caller who may read leads.
+            required=["id", "name", "parent", "people", "bots", "bot_slugs", "order"],
         ),
         "GroupList": items(ref("Group")),
         "ReportOrderView": obj(

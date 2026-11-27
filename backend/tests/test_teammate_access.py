@@ -609,3 +609,28 @@ def test_a_page_of_teammates_hides_exactly_the_strangers_and_its_thread_view_agr
         members = api.get(f"/api/v2/threads/{thread_id}", headers=headers(tokens[name])).json()["members"]["members"]
         actors = {m["actor"] for m in members}
         assert ("bot:counsel" in actors) is sees and "bot:analyst" in actors, name
+
+
+def test_a_group_change_answers_only_what_the_list_shows_its_caller(acme):
+    """A lead's change to its group answers the group as GET /groups shows that lead: no bot it may not see (id or
+    label) and no person hidden from it."""
+    api, tokens = acme
+    api.patch(
+        "/api/v2/groups/legal", json={"lead": "person:cara", "add": {"bots": ["analyst"]}}, headers=headers("ana-test")
+    )
+    set_access(api, "bots/analyst", see=NOBODY, read=NOBODY, write=NOBODY)
+    set_access(
+        api,
+        "humans/fay",
+        token="fay-test",
+        see={"people": ["fay"]},
+        read={"people": ["fay"]},
+        write={"people": ["fay"]},
+    )
+    listed = next(g for g in get(api, "groups", "cara-test") if g["id"] == "legal")
+    r = api.patch("/api/v2/groups/legal", json={"add": {"people": ["fay"]}}, headers=headers("cara-test"))
+    assert r.status_code == 200, r.text
+    changed = r.json()
+    assert "analyst" not in listed["bots"] and "analyst" not in changed["bots"] + changed["bot_slugs"]
+    assert changed["people"] == ["cara"]  # Fay moved in, but Cara may not see her
+    assert "fay" in next(g for g in get(api, "groups", "ana-test") if g["id"] == "legal")["people"]

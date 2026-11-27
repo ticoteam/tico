@@ -1,6 +1,6 @@
 // The one way the app talks to the server: same-origin cookie, JSON in and out, an Idempotency-Key on every write,
 // retries through a restart, and refusals as typed errors. Only src/api, src/data, src/live and features' queries.ts may call it (lint).
-import type { Problem } from '@/api/schema';
+import type { ApiOperations, Problem } from '@/api/schema';
 import { newId } from '@/lib/ids';
 
 /** A refusal or failure. `code` is the server's Problem code, `network` when nothing answered, `http_<status>` otherwise. */
@@ -151,3 +151,64 @@ export const api = {
   /** `body` only for the few routes that take one on DELETE (the server answers 422 without it). */
   delete: <T>(path: ApiPath, opts?: RequestOptions, body?: unknown) => request<T>('DELETE', path, body, opts),
 };
+
+/* Typed operations. `operation('PATCH /api/v2/groups/{gid}', { path: { gid }, body: { lead } }, { idempotencyKey })`
+   is `api.patch` with the OpenAPI v2 spec's types checked by tsc: a path or method the API does not have, a missing or
+   wrong path or query parameter, a body field it does not take, or a use of a field its answer does not have fails
+   `npm run typecheck`. A path part is encoded, so pass it raw. One call names one operation (a union of names is
+   refused). Only routes that carry JSON (or a form) are in ApiOperations: a stream, file bytes, an image, CSV or HTML
+   keep their own reads.
+   The types are ApiOperations in schema.d.ts (scripts/gen_ui_types.py, from backend/openapi_v2.py). The call goes
+   through `request`, so the caller still owns its Idempotency-Key, its abort signal and `once`, and retries are the
+   same; caching, optimistic writes and the live stream's invalidation stay with src/data (`write`, query keys).
+   New calls use it, and a feature moves to it when it is next touched (the Team chart's groups were first:
+   features/company/queries.ts). `api.get<T>` stays for a route outside the spec. */
+
+export type OperationName = keyof ApiOperations;
+type Empty = Record<never, never>;
+type PathInput<O extends ApiOperations[OperationName]> = [O['path']] extends [never] ? { path?: never } : { path: O['path'] };
+type QueryInput<O extends ApiOperations[OperationName]> = [O['query']] extends [never]
+  ? { query?: never }
+  : Empty extends O['query']
+    ? { query?: O['query'] }
+    : { query: O['query'] };
+type BodyInput<O extends ApiOperations[OperationName]> = [O['body']] extends [never]
+  ? { body?: never }
+  : O['bodyRequired'] extends true
+    ? { body: O['body'] }
+    : { body?: O['body'] };
+/** What one operation takes: its path parameters, its query and its body, each only where the spec has one. */
+export type OperationInput<K extends OperationName> = PathInput<ApiOperations[K]> & QueryInput<ApiOperations[K]> & BodyInput<ApiOperations[K]>;
+/** What one operation answers (`void` for an empty answer, `string` for a stream or file). */
+export type OperationAnswer<K extends OperationName> = ApiOperations[K]['response'];
+/** True for a union of names: its input types would mix, so one call could send one operation's input to another. */
+type Several<K, All = K> = K extends unknown ? ([All] extends [K] ? false : true) : never;
+type OperationArgs<K extends OperationName> = [Several<K>] extends [false]
+  ? Empty extends OperationInput<K>
+    ? [input?: OperationInput<K>, opts?: RequestOptions]
+    : [input: OperationInput<K>, opts?: RequestOptions]
+  : [one_operation_per_call: never];
+
+/** The URL for one call: each `{name}` from `path`, encoded, then the query's set values in the order given (a list
+    as the key repeated; undefined and null left out). */
+function operationUrl(template: string, path: Record<string, string | number> = {}, query: Record<string, unknown> = {}): ApiPath {
+  const filled = template.replace(/\{([^}]+)\}/g, (_, name: string) => {
+    const value = path[name];
+    if (value === undefined) throw new Error(`${template} needs ${name}`);
+    return encodeURIComponent(String(value));
+  });
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    for (const one of Array.isArray(value) ? value : [value]) if (one !== undefined && one !== null) search.append(key, String(one));
+  }
+  const text = search.toString();
+  return (text ? `${filled}?${text}` : filled) as ApiPath;
+}
+
+/** One typed call by its "METHOD /path" in the OpenAPI v2 spec. */
+export function operation<K extends OperationName>(name: K, ...[input, opts]: OperationArgs<K>): Promise<OperationAnswer<K>> {
+  const space = name.indexOf(' ');
+  const method = name.slice(0, space) as Method;
+  const given = (input ?? {}) as { path?: Record<string, string | number>; query?: Record<string, unknown>; body?: unknown };
+  return request<OperationAnswer<K>>(method, operationUrl(name.slice(space + 1), given.path, given.query), given.body, opts);
+}
