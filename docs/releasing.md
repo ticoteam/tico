@@ -148,9 +148,9 @@ The train validates a head in one of two ways. A **full** validation is the whol
 Stable (TIDY) takes a canary release only once it is approved. The repository variable `RELEASE_NEEDS_PERSON`
 decides who approves:
 
-- **Off (the default, and unset).** A release is approved automatically when every gate is green and its notes list no
-  High risk item. Stable's update closes its issue with "approved automatically (no high-risk items;
-  RELEASE_NEEDS_PERSON is off)". A release whose notes list a High risk item, or were cut short, still waits for a
+- **Off (the default, and unset).** A release is approved automatically when every gate is green and its notes are
+  complete, High risk items included: the notes still list them first. Stable's update closes its issue with
+  "approved automatically (RELEASE_NEEDS_PERSON is off)". A release whose notes were cut short still waits for a
   person.
 - **On.** Every release waits for a person, as below.
 
