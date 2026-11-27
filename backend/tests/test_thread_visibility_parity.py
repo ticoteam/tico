@@ -332,34 +332,43 @@ def test_a_page_attached_in_a_thread_is_removed_by_every_door_for_exactly_the_re
     w = world
     fid = w["file"]
     # Ben is the page's audience and ops made it; the owner, Cara and the external agent read the task's thread but not
-    # the page (the owner's `tico sql` read is the expected failure below).
+    # the page.
     expected = {"ben": [fid], "ops": [fid], "ana": REMOVED, "cara": REMOVED, "finance": REMOVED}
     for reader, shown in expected.items():
         assert _attachment_doors(api, w, reader) == dict.fromkeys(DOORS, shown), reader
-        if reader != "ana":
-            assert _sql_attachments(api, w, reader) == shown, (reader, "sql")
+        assert _sql_attachments(api, w, reader) == shown, (reader, "sql")
 
 
-class KnownSqlRefusal(Exception):
-    """The one failure the expected failure below accepts: the query refused whole with tico sql's UDF error."""
-
-
-@pytest.mark.xfail(
-    strict=True,
-    raises=KnownSqlRefusal,  # only the documented 422: a 200 with a wrong answer fails outright
-    reason="tico sql's page check reads meeting_participant_readers on the guarded connection and fails the whole "
-    "query for a reader in the page's audience who is no party to its task (here the owner); the follow-up task fixes it",
-)
 def test_the_owner_reads_the_page_comment_through_tico_sql_as_through_every_other_door(api, world):
     mid = world["messages"]["commented"]
     r = api.post(
         "/api/v2/sql", json={"sql": f"SELECT refs FROM messages WHERE id='{mid}'"}, headers=headers(PEOPLE["ana"])
     )
-    if r.status_code == 422 and "user-defined function raised exception" in r.text:
-        raise KnownSqlRefusal(r.text)
     assert r.status_code == 200, r.text
     (row,) = r.json()["rows"]
     assert _attachments(row[0]) == REMOVED
+
+
+def test_the_owner_reads_the_page_comment_through_tico_sql_when_the_company_has_a_call_follow_up(api, world):
+    """The page check falls through to call follow-ups once any exist, and reads each one's call: still one answer."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        other = H.task_create(c, "human:cara", "Check the date", "From the call.", "bot:ops", private=True, lint=False)
+        now = H.now()
+        c.execute(
+            "INSERT INTO live_meetings(id,owner_actor,title,state,window_ms,created_at,updated_at,started_at) "
+            "VALUES('lm-parity','human:cara','Launch call','ended',30000,?,?,?)",
+            (now, now, now),
+        )
+        c.execute(
+            "INSERT INTO calls(id,thread_id,live_meeting_id,connector_actor,title,state,room_name,started_at,"
+            "created_at,updated_at) VALUES('call-parity',?,'lm-parity','human:cara','Launch call','ended',"
+            "'room-parity',?,?,?)",
+            (world["threads"]["company"], now, now, now),
+        )
+        c.execute("INSERT INTO call_follow_ups(task_id,call_id,bot_id) VALUES(?,'call-parity','ops')", (other["id"],))
+    assert _sql_attachments(api, world, "ana") == REMOVED
+    assert _sql_attachments(api, world, "ben") == [world["file"]]
 
 
 def test_narrowing_a_page_resets_every_reader_s_stream_that_started_before_it(api, world):

@@ -1912,6 +1912,12 @@ def connect(
             "live_meeting_access",
             "live_meeting_bots",
             "live_meeting_turns",
+            # A private task's reader by a meeting it came from or a call it follows up (hubdb.task_private_readable),
+            # read when a page's check asks whether its reader may read the task the page is attached to.
+            "meeting_participant_readers",
+            "meeting_task_links",
+            "call_follow_ups",
+            "calls",
             "letters",
             "letter_proofs",
             "letter_outbox_grants",
