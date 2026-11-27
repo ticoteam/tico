@@ -296,8 +296,8 @@ the file viewer. See [Visuals in replies](visuals.md#self-hosting).
 
 ## Company page on its own domain
 
-The Company page is retired. The wizard still accepts `--reader-origin` (`TICO_READER_ORIGIN`), but the server and
-Caddy no longer serve anything on it, and the flag will be removed.
+The Company page is retired, and the wizard no longer takes `--reader-origin`. An install that saved one still loads
+its settings; the next run writes no `TICO_READER_ORIGIN`. Delete the page host's DNS record if you made one.
 
 
 ## Run recovery

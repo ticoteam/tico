@@ -137,7 +137,7 @@ class Service:
             return None
         c = self.make_cell().load(slug)
         name = (host or "").strip().lower().rsplit(":", 1)[0] if not (host or "").startswith("[") else ""
-        if not c or c.get("state") == "removed" or name not in C.hosts_of(c):
+        if not c or c.get("state") == "removed" or name not in C.app_hosts(c):
             return None
         return c
 
