@@ -12,7 +12,6 @@ import { SUPPORT_URL, usePlanLock } from './queries';
    Check again opens it. */
 
 const WHY: Record<string, string> = {
-  trial_over: 'Your trial has ended.',
   unpaid: "This month's payment didn't go through.",
 };
 

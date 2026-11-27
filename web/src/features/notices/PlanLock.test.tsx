@@ -40,7 +40,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe('Your plan needs attention @s1224', () => {
   it('reads the lock from a refusal, and only from a locked one', () => {
-    expect(lockOf(locked('trial_over'))).toEqual({ reason: 'trial_over', billingUrl: PAY });
+    expect(lockOf(locked('unpaid'))).toEqual({ reason: 'unpaid', billingUrl: PAY });
     expect(lockOf(locked(null, 'http://plain.example.com'))?.billingUrl).toBe('https://app.tico.dev/billing');
     expect(lockOf(new ApiError(402, 'out_of_credit', '', false))).toBeNull();
     expect(lockOf(new ApiError(500, 'locked', '', false))).toBeNull();
@@ -80,11 +80,11 @@ describe('Your plan needs attention @s1224', () => {
   it('offers the owner the download of every file', async () => {
     queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'owner', slug: null });
     await refuse(() => {
-      throw locked('trial_over');
+      throw locked('unpaid');
     });
     show(<PlanLock />);
     const lock = await screen.findByRole('alertdialog');
-    expect(within(lock).getByText('Your trial has ended.')).toBeTruthy();
+    expect(within(lock).getByText("This month's payment didn't go through.")).toBeTruthy();
     expect(within(lock).getByRole('button', { name: 'Download files' })).toBeTruthy();
   });
 

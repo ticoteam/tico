@@ -159,7 +159,7 @@ export function Billing() {
         figures={[
           { label: 'Balance', value: micros(b.balance_micros), target: 'setting:balance', sub: status(b) },
           { label: month ? monthWords(b.month) : 'This month', value: micros(total) },
-          { label: 'Plan', value: b.cloud?.plan ?? 'Your own servers', sub: b.cloud?.trial_days_left != null ? `${b.cloud.trial_days_left} days of trial left` : undefined },
+          { label: 'Plan', value: b.cloud?.plan ?? 'Your own servers' },
         ]}
       />
       <Section name="Credit" count={credits.length} target="setting:credit">

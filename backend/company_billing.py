@@ -16,8 +16,8 @@ Only the owner and admins see the page; the routes refuse everyone else (backend
 micro-dollars end to end: an answer with a float anywhere is refused rather than shown. The key goes only in the
 request's header, only to a URL `clients/gateway.py safe_base` allows, and never follows a redirect.
 
-A Tico Cloud company's answer carries `cloud` (HQ billing/company.py): its access (open, frozen or locked), plan, trial
-end and billing page, checked field by field (backend/cloud_access.py `parse`) and None for every other company. The
+A Tico Cloud company's answer carries `cloud` (HQ billing/company.py): its access (open, frozen or locked), plan
+and billing page, checked field by field (backend/cloud_access.py `parse`) and None for every other company. The
 route keeps it (cloud_access.from_billing), so opening the page after paying opens the app at once.
 
 What the page shows when it can't show billing (`state`): `no_gateway` (this install has no gateway key: billing comes
