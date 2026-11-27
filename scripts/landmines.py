@@ -92,7 +92,7 @@ def big_t(match):
 # against the first name under backend/ (a module or a package). finance.actions is the one bridge Core may import: the
 # agent budget's hold and settle on a run (execution.finance_run_hold) and Finance's setup and grants go through it.
 NON_CORE = re.compile(
-    r"finance\w*|bookkeeper|bills_address|growth\w*|market\w*|company_page|lenses|calendar_\w+|call\w*"
+    r"finance\w*|bookkeeper|bills_address|growth\w*|market\w*|lenses|calendar_\w+|call\w*"
     r"|live_meetings|meeting\w*|mail\w*|email_\w+|letters|postal_mail|slack_\w+|granola_mcp"
 )
 CORE_BRIDGE = ("finance", "actions")

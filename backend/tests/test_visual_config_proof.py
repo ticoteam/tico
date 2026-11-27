@@ -165,9 +165,9 @@ def test_actual_generated_bytes_and_supervisor_are_bound_to_observed_process(tmp
         runtime.observe(root=root, environ=env, directory=generated)
 
 
-def test_a_generated_reader_site_is_observed_the_way_it_was_written(tmp_path, monkeypatch):
-    """The Company page's reader site is in the generated file only when a reader origin is set. Observing must read that
-    same setting, or a correctly written file would never match the observation."""
+def test_a_reader_origin_left_set_is_written_and_observed_without_a_reader_site(tmp_path, monkeypatch):
+    """The retired Company page's reader origin may still be set on an install. The writer leaves it out and so must
+    observing, or a correctly written file would never match the observation."""
     root, generated = tmp_path / "source", tmp_path / "generated"
     (root / "docker").mkdir(parents=True)
     generated.mkdir()
@@ -179,7 +179,7 @@ def test_a_generated_reader_site_is_observed_the_way_it_was_written(tmp_path, mo
         **wire.configuration(request()),
     }
     caddy_assets.prepare(env | {"TICO_CADDY_DIR": str(generated)})
-    assert b"reader.acme.example" in (generated / "caddy.json").read_bytes()
+    assert b"reader.acme.example" not in (generated / "caddy.json").read_bytes()
     monkeypatch.setattr(runtime, "capabilities", lambda root: {"revision": "a" * 40, "runtime_files": {}})
     monkeypatch.setattr(runtime, "census", lambda path: ID)
     observed = runtime.observe(root=root, environ=env, directory=generated)

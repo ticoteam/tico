@@ -222,10 +222,6 @@ ACTIONS = {
         ("github", "merge", "shipped", "deploy"),
     ),
     "note_queue_refusals": ("note why a bot's queued work is not starting", ("queue", "refused", "bots", "health")),
-    "start_editions": (
-        "start the Company page editions that came due and send waiting reader notices",
-        ("company", "page", "edition", "readers"),
-    ),
     "screen_waiting": ("screen outside text a restart left waiting", ("screening", "outside", "text")),
     "screen_skills": (
         "screen each proposed skill and update before an admin can approve it",
@@ -350,12 +346,6 @@ def _strategy_bot(c, settings):
 
     row = H.bot(c, strategy_bot.SLUG)
     return bool(row) and row["state"] != "archived"
-
-
-def _company_page_open(c, settings):
-    from .company_page import schedule
-
-    return schedule.transparency(c) != "closed"
 
 
 def _skills_proposed(c, settings):

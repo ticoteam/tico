@@ -2,7 +2,7 @@
 """Tico's icons: the files in backend/assets (scripts/build-brand-icons.sh makes the PNGs from the SVGs in
 backend/assets/tico), served under /assets/.
 
-The server's own pages (sign-in, Connecting GitHub, the company page) link them, the web manifest names the app icons,
+The server's own pages (sign-in, Connecting GitHub) link them, the web manifest names the app icons,
 a push shows icon-192.png, and two root paths browsers ask for on their own (/favicon.ico and /apple-touch-icon.png)
 hold the same PNG bytes. Nothing is copied or redrawn: the bytes are read from backend/assets.
 """
@@ -17,7 +17,7 @@ from .store import Problem
 
 ASSETS = Path(__file__).resolve().parent / "assets"
 
-# The Tico mark, for every page of the server that is not the company page (backend/company_page/render.py).
+# The Tico mark, for every page of the server.
 HEAD = (
     '<link rel="icon" href="/assets/tico/tico-mark.svg" type="image/svg+xml">'
     '<link rel="icon" href="/assets/favicon-32.png" type="image/png" sizes="32x32">'
@@ -26,8 +26,7 @@ HEAD = (
     '<meta name="theme-color" content="#fbfbf8" media="(prefers-color-scheme: light)">'
 )
 
-# The two root paths, as a file of backend/assets and its media type. Both hosts answer them: the hub with the Tico mark,
-# the reader host with the team's logo when one is set (backend/company_page/reader_app.py).
+# The two root paths, as a file of backend/assets and its media type.
 ROOT: dict[str, tuple[str, str]] = {
     "/favicon.ico": ("favicon-32.png", "image/png"),
     "/apple-touch-icon.png": ("apple-touch-icon.png", "image/png"),
@@ -40,8 +39,6 @@ FILES: dict[str, tuple[str, str]] = {
 }
 PUBLIC_PATHS: frozenset[str] = frozenset(ROOT) | frozenset(FILES)
 CACHE = "public, max-age=86400"
-# A team's logo can change, so the reader host keeps the copy it serves for an hour rather than a day.
-TEAM_CACHE = "public, max-age=3600"
 # A brand file is only ever shown as an image. Served as a document, it gets no script and no framing.
 HEADERS: dict[str, str] = {
     "Cache-Control": CACHE,

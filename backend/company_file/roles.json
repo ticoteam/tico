@@ -4085,7 +4085,7 @@
    "department": "core",
    "lead": false,
    "core": true,
-   "summary": "Writes the company update for each period from what teammates report in Tico, with every figure's source and date, and skips a period with nothing new. The update is the source each audience's edition on the Company page reads from. It drafts a file for the owner; it never publishes an edition, and a person drafts, approves and publishes each one. Each teammate still writes their own update.",
+   "summary": "Writes the company update for each period from what teammates report in Tico, with every figure's source and date, and skips a period with nothing new. It drafts a file for the owner; it never publishes the update, and a person decides whether and where it is shared. Each teammate still writes their own update.",
    "when": "Built in: writes the company update each period from what the team reports, as a draft for the owner to review. Nothing reaches an audience without a person's approval.",
    "tags": [],
    "pains": [],

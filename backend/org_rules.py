@@ -648,12 +648,6 @@ def matching(c, author, recipients=(), place=None):
     return out
 
 
-def outside_edition_rules(c):
-    """The active rules whose Who is Outside editions (backend/company_page/editions.py). No teammate's write matches
-    this Who (`_hits` never reads it): it reaches only what the Company page sends outside."""
-    return [row for row in _active(c) if row["who"].get("outside_editions")]
-
-
 def _names(rule, key):
     """Whether a rule's Who names a teammate, and whether its With does (an empty With names no one). The one check
     `applies_to` and `teammate_rules` both read, so the two cannot drift apart."""

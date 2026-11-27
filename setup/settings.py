@@ -191,7 +191,7 @@ class Settings:
     visual_origin: str = ""
     visual_same_origin: str = ""
     caddy_visuals: str = ""
-    reader_origin: str = ""  # the Company page's own HTTPS origin (docs/company-page.md); Caddy serves it
+    reader_origin: str = ""  # the Company page's own HTTPS origin (retired: nothing serves it); Caddy serves it
     runner_url: str = ""  # passive endpoint preservation is not DNS authority
     gateway_url: str = ""
     visual_secret: str = ""  # private saved env only, never a flag or public state
@@ -475,7 +475,7 @@ def visual_host(value: str, canonical: str, runner_host="") -> str:
 
 
 def reader_host(value: str, canonical: str, *taken: str) -> str:
-    """The Company page's own origin (docs/company-page.md): a plain DNS host of its own on the standard HTTPS port,
+    """The Company page's own origin (retired: nothing serves it): a plain DNS host of its own on the standard HTTPS port,
     never the app's, the runner's, the visual origin's or an alias. Caddy serves it, so the tunnel is not an option."""
     if not value:
         return ""

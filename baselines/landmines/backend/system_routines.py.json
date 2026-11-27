@@ -1,6 +1,6 @@
 {
   "backend/system_routines.py": {
-    "core-imports-app": 2,
+    "core-imports-app": 1,
     "no-install-closure": 1
   }
 }

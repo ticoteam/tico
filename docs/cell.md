@@ -410,10 +410,9 @@ python3 -m setup cell add --company ticoteam --own-domain --domain hub.tico.team
   in its own zone if it has one (`hub.ticofiles.com`). A host under the wildcard that has a DNS record of its own
   (`hub.tico.team` and `runner.tico.team` point at the old instance today) must be changed to that CNAME or deleted.
   Cloudflare's universal certificate covers one label below the zone, so a deeper name needs a certificate of its own.
-- **`--page-host HOST`** (for example `acme.tico.page`): the company's [Company page](company-page.md) host. The cell
-  serves its files from `pages/<slug>/current` in the company's folder, without waking the company: the home page,
-  `data.json`, `feed.xml` and `/assets/*`, for GET and HEAD only, and never with a reader's cookie or a query string.
-  Every other request on that host goes to the company's server, as for its domain. The host is refused with
+- **`--page-host HOST`** (for example `acme.tico.page`): the host of the company's Company page, which is retired. The
+  router answers 404 to every request on it and serves nothing from the company's `pages/<slug>` folder. The host is
+  refused with
   `bad_domain` when it is the company's own domain, an alias or its visuals host, and with `domain_taken` when another
   company has it.
   Leaving the flag
@@ -431,8 +430,7 @@ python3 -m setup cell add --company ticoteam --own-domain --domain hub.tico.team
   invite, owner link, backup, company file), its sign-in, network, preset and support keys, and the ones that belong
   to a single-company install: `CLOUDFLARE_TUNNEL_TOKEN`, `COMPOSE_PROFILES`, `COMPOSE_PROJECT_NAME`,
   `TICO_UPDATER_URL`, `TICO_UPDATES`, `TICO_CELL`, `TICO_TAG`, `TICO_PORT`, `TICO_EXPECTED_AWS_ACCOUNT`,
-  `TICO_EXPECTED_AWS_ROLE`, `TICO_CADDY*`, `TICO_TUNNEL*`, the page's `TICO_READER_ORIGIN` and
-  `TICO_COMPANY_PAGE_DIR`, and the KMS settings (`TICO_CREDENTIAL_KMS_KEY`, `_CONTEXT`, `_ACCESS_KEY_ID`,
+  `TICO_EXPECTED_AWS_ROLE`, `TICO_CADDY*`, `TICO_TUNNEL*`, the page's `TICO_READER_ORIGIN`, and the KMS settings (`TICO_CREDENTIAL_KMS_KEY`, `_CONTEXT`, `_ACCESS_KEY_ID`,
   `_SECRET_ACCESS_KEY`, `_REGION`: only `--kms-key` and `--kms-credentials-file` set them). So pass the team name and sign-in button as `--company-name` and `--signin-label`,
   not in the file. The values are secrets: never printed, masked in every detail. Passing `--env-file` again replaces
   `extra.env`; leaving it out keeps it.

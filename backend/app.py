@@ -1278,8 +1278,6 @@ def _install_request_guard(
                 limit = (
                     1024 * 1024
                     if request.url.path == "/api/v2/team/icon"
-                    else 2 * 1024 * 1024
-                    if request.url.path == "/api/v2/company-page/logo"
                     else settings.upload_max_bytes
                     if media_raw
                     else settings.upload_max_bytes + 11_000_000
@@ -2203,9 +2201,6 @@ def _install_features(
 
     install_internal(app, store, auth, mutate, mover)
     api_routing.include(app, roadmaps.router)
-    from .company_page import api as company_page_api
-
-    company_page_api.register(app, store, auth, mutate, settings)
     from .service_keys import install_service_keys
 
     install_service_keys(app, store, auth, mutate)
@@ -2488,12 +2483,6 @@ def _install_features(
     from . import finance_ads_routes
 
     finance_ads_routes.install(app, store, auth, mutate)  # Finance: ad spend import settings on ad tools' pages
-    from .company_page import api_readers
-
-    api_readers.register(app, store, auth, mutate)  # Company page readers, invites and messages, for owners and admins
-    from .company_page import api_editions
-
-    api_editions.register(app, store, auth, mutate)  # the Company page's editions and their approvals
     from . import bills_address
 
     bills_address.install(app, store, auth)  # the bills address: emailed bills become draft bills
@@ -2737,7 +2726,4 @@ def _install_features(
 
     cors.install(app, settings)  # last, so it is outermost: a preflight is answered before sign-in
     org_rule_check.seal(app)  # every write registered above can be sent from a hold, whatever installed when
-    from .company_page import reader_app
-
-    reader_app.install(app, store, auth, settings)  # outside even that: the reader origin never reaches anything above
     return MAX_REPORT_BYTES, automations, screen_sessions

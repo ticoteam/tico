@@ -31,7 +31,6 @@ ORDER = [
     "queue_check",
     "ci_sweep",
     "updates",
-    "company_page",
     "thread_digest",
     "thread_bot_digest",
     "thread_loop_guard",

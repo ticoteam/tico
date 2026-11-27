@@ -1486,32 +1486,6 @@ def test_a_draft_matching_45_rules_is_checked_in_2_calls_each_rule_once(ruled):
     assert [json.loads(e["detail"])["questions"] for e in events(api, "judge.call")] == [40, 5]
 
 
-def test_an_outside_edition_with_45_rules_is_checked_in_2_calls_not_refused(ruled):
-    api, judge = ruled
-    for n in range(44):
-        rule(api, {"kind": "internal", "text": f"Keep note {n} short.", "who": {"outside_editions": True}})
-    rule(api, {"kind": "internal", "text": COLOR, "who": {"outside_editions": True}})
-    store = api.app.state.store
-    clean = K.outside_edition(store, judge, "Our launch went well.", to="press@example.com")
-    assert clean["outcome"] == "pass" and len(clean["rules"]) == 45
-    assert [len(call["questions"]) for call in judge.calls] == [40, 5]
-    texts = [r["text"] for call in judge.calls for r in call["state"]["rules"]]
-    assert len(texts) == len(set(texts)) == 45
-    broken = K.outside_edition(store, judge, "Our favorite color is red.", to="press@example.com")
-    assert broken["outcome"] == "held" and broken["reason"] == "broken"
-    color = next(r["id"] for r in broken["rules"] if r["text"] == COLOR)
-    assert broken["broken"] == [color] and len(judge.calls) == 4
-    again = K.outside_edition(store, judge, "Our favorite color is red.", to="press@example.com")
-    assert again["broken"] == [color] and len(judge.calls) == 4, "the verdict is cached"
-    audit = [json.loads(e["detail"]) for e in events(api, "judge.call")]
-    assert [(a["operation"], a["questions"], a["broken"]) for a in audit] == [
-        ("outside_edition", 40, 0),
-        ("outside_edition", 5, 0),
-        ("outside_edition", 40, 0),
-        ("outside_edition", 5, 1),
-    ]
-
-
 def test_rule_checks_and_ask_ingest_count_their_own_daily_calls(ruled):
     api, _ = ruled
     from backend import judge as B

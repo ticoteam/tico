@@ -3,7 +3,7 @@
 Open Company from the desktop sidebar or the mobile More menu (it was called Overview; ⌘K still finds it by that name).
 It is where Tico opens. Strategy, Finance (for those who see it) and Growth sit under it in the sidebar; its chevron
 folds them, kept per browser. Company is one page (`#/home`), with no tabs: your own cards and pages, the
-[Floor](#floor) first. Its ⋯ has **Share** for owners and admins ([Company page](company-page.md)). The addresses of the
+[Floor](#floor) first. The addresses of the
 views it once had (`#/overview`, `#/overview/floor`, `#/overview/campus`, `#/overview/graph`, `#/overview/factories`)
 open it. The team chart is on Strategy › Org (`#/strategy/org`), goals by teammate on Strategy › Goals and rules by
 teammate on Rules › Company.
