@@ -260,9 +260,19 @@ def _finish(c, roster, people, changed):
     return roster
 
 
+def with_bot_slugs(c, found):
+    """Each row's `bot_slugs` beside its `bots`: `bots` holds ids (the key a client calls with), `bot_slugs` the same
+    bots by the label people read. The Group schema has both, on the list and on a change's answer."""
+    slugs = {row["id"]: row["slug"] for row in c.execute("SELECT id,slug FROM bots")}
+    for group in found:
+        group["bot_slugs"] = [slugs.get(bot, bot) for bot in group["bots"]]
+    return found
+
+
 def one(c, roster, gid, can_see=None):
     configs = _configs(c)
-    return next(row for row in rows(roster, configs, _archived(c), can_see, True) if row["id"] == gid)
+    row = next(row for row in rows(roster, configs, _archived(c), can_see, True) if row["id"] == gid)
+    return with_bot_slugs(c, [row])[0]
 
 
 def _may_change(auth, who):
@@ -788,12 +798,7 @@ def install(app, store, auth, mutate, settings):
             access = auth.bot_accesses(c, who)
             roster = _roster(c)
             found = rows(roster, _configs(c), _archived(c), lambda slug: access.get(slug, auth.FULL)["see"], True)
-            out = visible_rows(c, auth, who, roster, found)
-            # `bots` holds ids (the key a client calls with); `bot_slugs` the same bots by the label people read.
-            slugs = {row["id"]: row["slug"] for row in c.execute("SELECT id,slug FROM bots")}
-            for group in out:
-                group["bot_slugs"] = [slugs.get(bot, bot) for bot in group["bots"]]
-            return out
+            return with_bot_slugs(c, visible_rows(c, auth, who, roster, found))
 
     @app.post(
         "/api/v2/groups",

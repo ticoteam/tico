@@ -400,11 +400,11 @@ export function createFactory(name: string, goal: string) {
   });
 }
 
-/** A group with its lead (sent when the caller may read leads; not in the schema). */
-export type Team = Group & { lead?: string };
+/** A group on the chart; its `lead` comes only to a caller who may read leads. */
+export type Team = Group;
 export const groupsQuery = queryOptions({
   queryKey: keys.groups(),
-  queryFn: ({ signal }): Promise<Team[]> => operation('GET /api/v2/groups', {}, { signal }),
+  queryFn: ({ signal }) => operation('GET /api/v2/groups', {}, { signal }),
 });
 
 /** A teammate into another group (it leaves the one it was in), or out of its group when `to` is empty. */

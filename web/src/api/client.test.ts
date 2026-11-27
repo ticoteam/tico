@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { api, ApiError, operation, RETRY_FOR_MS } from './client';
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
+import { api, ApiError, operation, type OperationAnswer, RETRY_FOR_MS } from './client';
 import type { Group } from './schema';
 
 // The proxies' answer while the server restarts (backend/caddy_assets.py HOLD_BODY).
@@ -138,6 +138,13 @@ describe('typed operations (operation)', () => {
     expect(keys).toEqual([null, null]);
   });
 
+  it('sends a route whose body is optional without one', async () => {
+    answers = [() => ok({ deleted: true })];
+    await operation('DELETE /api/v2/automations/{aid}', { path: { aid: 'a1' } }, { idempotencyKey: 'k3' });
+    expect(sent).toEqual([{ url: '/api/v2/automations/a1', method: 'DELETE', body: null }]);
+    expect(keys).toEqual(['k3']);
+  });
+
   it('stops when its read is called off', async () => {
     answers = [starting];
     const stop = new AbortController();
@@ -164,6 +171,15 @@ describe('typed operations (operation)', () => {
       void operation('GET /api/v2/bots/{bot}/rules', { path: { bot: 'a' }, query: { limit: 'five' } });
       // @ts-expect-error: a read takes no body
       void operation('GET /api/v2/groups', { body: { name: 'x' } });
+      // @ts-expect-error: Empty is closed, so no field fits
+      void operation('POST /api/v2/kpis/{kid}/archive', { path: { kid: 'k1' }, body: { why: 'old' } });
+      // @ts-expect-error: an event stream is read by src/live, not as one JSON answer
+      void operation('GET /api/v2/events', {});
+      // @ts-expect-error: file bytes are not JSON or text
+      void operation('GET /api/v2/files/{fid}/versions/{number}', { path: { fid: 'f1', number: 1 } });
+      const either = 'GET /api/v2/groups' as 'GET /api/v2/groups' | 'PATCH /api/v2/groups/{gid}';
+      // @ts-expect-error: one call names one operation, or PATCH's input could go out as a GET
+      void operation(either, { path: { gid: 'g1' }, body: { lead: '' } });
       void (async () => {
         const groups = await operation('GET /api/v2/groups');
         // @ts-expect-error: the answer is a list of Group, which has no `title`
@@ -171,5 +187,10 @@ describe('typed operations (operation)', () => {
       })();
     };
     expect(typeof never).toBe('function');
+    // A 201 answer is the spec's (which declares no shape for this one), not void.
+    expectTypeOf<OperationAnswer<'POST /api/v2/skills/proposals'>>().toBeUnknown();
+    // A team chart change answers the whole Group, its bots' labels and its lead included.
+    expectTypeOf<OperationAnswer<'PATCH /api/v2/groups/{gid}'>>().toEqualTypeOf<Group>();
+    expectTypeOf<Group['lead']>().toEqualTypeOf<string | undefined>();
   });
 });

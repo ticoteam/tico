@@ -155,7 +155,9 @@ export const api = {
 /* Typed operations. `operation('PATCH /api/v2/groups/{gid}', { path: { gid }, body: { lead } }, { idempotencyKey })`
    is `api.patch` with the OpenAPI v2 spec's types checked by tsc: a path or method the API does not have, a missing or
    wrong path or query parameter, a body field it does not take, or a use of a field its answer does not have fails
-   `npm run typecheck`. A path part is encoded, so pass it raw.
+   `npm run typecheck`. A path part is encoded, so pass it raw. One call names one operation (a union of names is
+   refused). Only routes that carry JSON (or a form) are in ApiOperations: a stream, file bytes, an image, CSV or HTML
+   keep their own reads.
    The types are ApiOperations in schema.d.ts (scripts/gen_ui_types.py, from backend/openapi_v2.py). The call goes
    through `request`, so the caller still owns its Idempotency-Key, its abort signal and `once`, and retries are the
    same; caching, optimistic writes and the live stream's invalidation stay with src/data (`write`, query keys).
@@ -170,13 +172,22 @@ type QueryInput<O extends ApiOperations[OperationName]> = [O['query']] extends [
   : Empty extends O['query']
     ? { query?: O['query'] }
     : { query: O['query'] };
-type BodyInput<O extends ApiOperations[OperationName]> = [O['body']] extends [never] ? { body?: never } : { body: O['body'] };
+type BodyInput<O extends ApiOperations[OperationName]> = [O['body']] extends [never]
+  ? { body?: never }
+  : O['bodyRequired'] extends true
+    ? { body: O['body'] }
+    : { body?: O['body'] };
 /** What one operation takes: its path parameters, its query and its body, each only where the spec has one. */
 export type OperationInput<K extends OperationName> = PathInput<ApiOperations[K]> & QueryInput<ApiOperations[K]> & BodyInput<ApiOperations[K]>;
 /** What one operation answers (`void` for an empty answer, `string` for a stream or file). */
 export type OperationAnswer<K extends OperationName> = ApiOperations[K]['response'];
-type OperationArgs<K extends OperationName> =
-  Empty extends OperationInput<K> ? [input?: OperationInput<K>, opts?: RequestOptions] : [input: OperationInput<K>, opts?: RequestOptions];
+/** True for a union of names: its input types would mix, so one call could send one operation's input to another. */
+type Several<K, All = K> = K extends unknown ? ([All] extends [K] ? false : true) : never;
+type OperationArgs<K extends OperationName> = [Several<K>] extends [false]
+  ? Empty extends OperationInput<K>
+    ? [input?: OperationInput<K>, opts?: RequestOptions]
+    : [input: OperationInput<K>, opts?: RequestOptions]
+  : [one_operation_per_call: never];
 
 /** The URL for one call: each `{name}` from `path`, encoded, then the query's set values in the order given (a list
     as the key repeated; undefined and null left out). */

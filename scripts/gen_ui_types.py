@@ -2,8 +2,8 @@
 """TypeScript types for the person-facing API (backend/openapi_v2.py), printed: the web app's src/api/schema.d.ts
 (web/scripts/gen-api-types.ts calls build(), and writes that generated, uncommitted file). The document is built
 in-process from the same function that writes GET /api/v2/openapi.json, so no server runs. Each component schema becomes an exported type; each operation gets
-<Name>Params, <Name>Body and <Name>Response, and ApiOperations maps each "METHOD /path" to its path and query
-parameters, body and answer, for the web client's typed `operation` (web/src/api/client.ts).
+<Name>Params, <Name>Body and <Name>Response, and ApiOperations maps each "METHOD /path" that carries JSON to its path
+and query parameters, body and answer, for the web client's typed `operation` (web/src/api/client.ts).
 """
 
 import json
@@ -74,6 +74,8 @@ def object_type(schema):
     extra = schema.get('additionalProperties')
     if not props and isinstance(extra, dict):
         return 'Record<string, ' + ts_type(extra) + '>'
+    if not props and extra is False:
+        return 'Record<string, never>'
     if not props:
         return 'Record<string, unknown>'
     required = set(schema.get('required', []))
@@ -89,17 +91,38 @@ def object_type(schema):
     return '{\n' + '\n'.join(lines) + '\n}'
 
 
+def success(op):
+    """The first declared 2xx answer that has a body (200, 201, 202...), else None: none, or a bodyless 204."""
+    responses = op.get('responses', {})
+    for code in sorted(c for c in responses if c.startswith('2')):
+        if responses[code].get('content'):
+            return responses[code]
+    return None
+
+
 def response_type(op):
-    """The 200 answer: JSON schema when declared, string for event streams and file bytes."""
-    ok = op.get('responses', {}).get('200')
+    """The success answer: JSON schema when declared, string for event streams and file bytes, void when bodyless."""
+    ok = success(op)
     if ok is None:
         return 'void'
-    content = ok.get('content', {})
+    content = ok['content']
     if 'application/json' in content:
         return ts_type(content['application/json'].get('schema', {}))
-    if content:
-        return 'string'
-    return 'void'
+    return 'string'
+
+
+# What `request` in web/src/api/client.ts carries: a JSON or form body (FormData), and a JSON answer read whole. A
+# stream (text/event-stream), file bytes, images, CSV or HTML would be read wrong or only once the stream closes, so
+# those operations stay out of ApiOperations; their <Name> types stay for the hand-made calls that read them.
+OPERATION_BODIES = ('application/json', 'multipart/form-data')
+
+
+def json_operation(op):
+    body = op.get('requestBody')
+    if body and not any(media in body.get('content', {}) for media in OPERATION_BODIES):
+        return False
+    ok = success(op)
+    return ok is None or set(ok['content']) == {'application/json'}
 
 
 def body_type(op):
@@ -145,16 +168,27 @@ def fields_type(op, where):
 
 def operations_type(ops):
     """ApiOperations: "METHOD /path" to what the call takes and gives, by the per-operation names above. Header
-    parameters are left out: the only one is Idempotency-Key, which the client sends itself."""
+    parameters are left out: the only one is Idempotency-Key, which the client sends itself. `bodyRequired` is the
+    spec's requestBody.required, so a route that takes its body optionally can be called without one."""
     lines = [
         '/** Every operation by "METHOD /path": what `operation` in src/api/client.ts checks a call against. */',
         'export interface ApiOperations {',
     ]
     for op_id, method, path, op in sorted(ops, key=lambda item: (item[2], item[1])):
+        if not json_operation(op):
+            continue
         base = op_id[:1].upper() + op_id[1:]
+        required = 'true' if (op.get('requestBody') or {}).get('required') else 'false'
         lines.append(
-            '  %s: { path: %s; query: %s; body: %sBody; response: %sResponse };'
-            % (json.dumps(method.upper() + ' ' + path), fields_type(op, 'path'), fields_type(op, 'query'), base, base)
+            '  %s: { path: %s; query: %s; body: %sBody; bodyRequired: %s; response: %sResponse };'
+            % (
+                json.dumps(method.upper() + ' ' + path),
+                fields_type(op, 'path'),
+                fields_type(op, 'query'),
+                base,
+                required,
+                base,
+            )
         )
     lines.append('}\n')
     return '\n'.join(lines)
