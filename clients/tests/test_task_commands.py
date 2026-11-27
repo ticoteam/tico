@@ -801,3 +801,37 @@ def test_approve_sends_a_document_approvals_whole_key_and_its_visit():
     api = Recorder({"id": "T1", "version": 3, "to_leave": [entry]})
     hubtools.BY_NAME["tico_task_approve"]["fn"](api, {"id": "T1", "version": 3})
     assert api.writes()[0][2] == {"value": "ok", "version": 3, "page_version": "f1@2", "visit_id": "v1"}
+
+
+def test_agent_ops_approves_as_the_person_with_the_whole_key():
+    """Agent Ops' `tico task approve` reads the task and answers as the person whose own chat asked it (the run's
+    turn, `delegate`), so it finds the OK waiting on them and sends a document's whole submission key and visit."""
+
+    class AgentOps(Recorder):
+        def __init__(self, task):
+            super().__init__(task)
+            self.__dict__["_tico_is_agent_ops"] = True
+            self.delegated = []
+
+        def call(self, method, path, body=None, key=None, query=None, delegate=False):
+            self.delegated.append((method, path, delegate))
+            if method == "GET":
+                return {"task": self.task}
+            return super().call(method, path, body, key, query, delegate)
+
+    entry = {
+        "requirement_id": "r1",
+        "line": "Spec",
+        "may": ["ok", "no"],
+        "approval": {"document": "Spec", "visit_id": "v1", "file_id": "f1", "version": 2, "page_version": "f1@2,f2@1"},
+    }
+    api = AgentOps({"id": "T1", "version": 3, "to_leave": [entry]})
+    hubtools.BY_NAME["tico_task_approve"]["fn"](api, {"id": "T1", "version": 3})
+    assert api.writes() == [
+        (
+            "POST",
+            "tasks/T1/asks/r1/answer",
+            {"value": "ok", "version": 3, "page_version": "f1@2,f2@1", "visit_id": "v1"},
+        )
+    ]
+    assert api.delegated == [("GET", "tasks/T1", True), ("POST", "tasks/T1/asks/r1/answer", True)]

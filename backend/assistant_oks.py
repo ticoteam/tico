@@ -1,6 +1,6 @@
 # pyright: strict
-"""A person's own Assistant gives an OK for them on their word, when they turned that on (spec "Your assistant gives an
-OK when you tell it to", task #3968).
+"""A person's own Assistant, or Agent Ops, gives an OK for them on their word, when they turned that on (spec "Your
+assistant gives an OK when you tell it to", tasks #3968 and #3981 for Agent Ops).
 
 Off by default: a person with no row in `assistant_ok_settings` has it off, and only their own click in Tico
 (task_asks.own_click) turns it on or off, never their Assistant's turn, Agent Ops or a personal token.
@@ -10,8 +10,9 @@ answer is refused before anything is written (`refusal`, read by the answer rout
 - the OK is delegable: a plain OK (no content bound to it: a send, money, a file or access stays their own click), not
   on their own ask, or a page only they approve (a page several people approve stays their own click);
 - the turn cites their own message in their own Assistant room (backend/assistant.py `instruction`, held for the
-  request in H.DELEGATION; a call turn they spoke counts), unedited when the answer is written, at most WORDS_TTL_S
-  old, that says yes (`says_yes`) to this task and no other (`names`);
+  request in H.DELEGATION; a call turn they spoke counts), or, for Agent Ops (H.VIA "botops"), their own line to it in
+  their own chat with it (`_own_agent_ops_line`), unedited when the answer is written, at most WORDS_TTL_S old, that
+  says yes (`says_yes`) to this task and no other (`names`);
 - that message lent no OK before, here or anywhere, even one since undone: one message, one OK
   (`assistant_ok_uses`, written in the answer's own transaction);
 - on a page, every version it OKs was attached before they spoke, and the decision model passed it (a page Jev was
@@ -47,6 +48,9 @@ PAGE_CHANGED = "The page changed after you said OK: look at it again"
 NOT_PASSED = "The decision model has not passed this page: it needs your own look in Tico"
 OWN_ONLY = "Only you turn Give OKs for me on or off, in Settings → Assistant"
 WORDS_KEPT = 500  # of the person's words, on the history line
+# Who gives an OK on the person's word (H.VIA): their Assistant, and Agent Ops. The Tools Owner never does.
+VIAS = ("assistant", "botops")
+AGENT_OPS = "bot:" + _H.FLEET_MAINTAINER
 
 # Words that name no task on their own: a title's other words name it.
 _GENERIC = frozenset(
@@ -195,11 +199,42 @@ def _passed(conn: "sqlite3.Connection", page: Row) -> bool:
 
 
 def _record() -> Row | None:
-    """The delegation record this request holds (H.DELEGATION), when it is the person's Assistant's (H.VIA)."""
+    """The delegation record this request holds (H.DELEGATION), when it is the person's Assistant's or Agent Ops' (H.VIA).
+    Agent Ops' counts only when it is acting on their own chat message (`run` "live"): its other ways of holding their
+    rights (their comment on a task, a request another bot carried, words they gave their Assistant) cite no words to it.
+    """
     record: Any = H.DELEGATION.get()
-    if str(H.VIA.get() or "") != "assistant" or not isinstance(record, dict):
+    via = str(H.VIA.get() or "")
+    if via not in VIAS or not isinstance(record, dict):
+        return None
+    if via == "botops" and (cast(Row, record).get("run") != "live" or cast(Row, record).get("by")):
         return None
     return cast(Row, record)
+
+
+def _own_agent_ops_line(conn: "sqlite3.Connection", said: Row, by: str) -> bool:
+    """Whether a message is the person's own line to Agent Ops in their own Tico chat with it: typed by them (no Assistant
+    or relay wrote or routed it, not from Slack), to Agent Ops, in a room of the two of them alone that is no task's."""
+    refs: Any = said.get("refs") or {}
+    if not isinstance(refs, dict):
+        return False
+    refs = cast(Row, refs)
+    if any(refs.get(k) for k in ("via", "assistant", "slack", "routing", "comment", "task", "spoken")):
+        return False
+    room: Any = H.conversation(conn, said.get("conversation_id")) if said.get("conversation_id") else None
+    if not isinstance(room, dict):
+        return False
+    room = cast(Row, room)
+    participants: Any = room.get("participants") or []
+    return (
+        said.get("sender_id") == by
+        and said.get("recipient_id") == AGENT_OPS
+        and said.get("kind") == "say"
+        and set(cast(list[str], participants)) == {by, AGENT_OPS}
+        and not room.get("task_id")
+        and room.get("scope") != "task"
+        and not room.get("closed_at")
+    )
 
 
 def _said(conn: "sqlite3.Connection", cited: str) -> Row | None:
@@ -221,7 +256,7 @@ def _said(conn: "sqlite3.Connection", cited: str) -> Row | None:
 
 def refusal(conn: "sqlite3.Connection", by: str, row: Row, requirement: Row) -> str | None:
     """For an `ok` that the Assistant or Agent Ops makes (task_asks.acting_for_people): None when it is the person's
-    Assistant giving a delegable OK on their word with the setting on, else the words it is refused with."""
+    Assistant, or Agent Ops, giving a delegable OK on their word with the setting on, else the words it is refused with."""
     from . import task_asks
 
     record = _record()
@@ -233,6 +268,7 @@ def refusal(conn: "sqlite3.Connection", by: str, row: Row, requirement: Row) -> 
     said = _said(conn, cited)
     if (
         not said
+        or (str(H.VIA.get() or "") == "botops" and not _own_agent_ops_line(conn, said, by))
         or said.get("sender_id") != by
         or str(said.get("created_at") or "") < H.shift(H.now(), seconds=-WORDS_TTL_S)
         or not says_yes(said.get("body"), row)
@@ -266,7 +302,7 @@ def shown_delegation(conn: "sqlite3.Connection", auth: Any, who: "Identity", eve
     """A history line's delegation as a reader sees it: the person's words (kept on the line, as validated when the
     answer was written), and `cited` (the message and its chat) only for a reader who may open that chat (auth's
     conversation check), else null. None on a line their Assistant did not give on their word."""
-    if event.get("via") != "assistant":
+    if event.get("via") not in VIAS:
         return None
     data: Any = H._json(event.get("data"), {})
     lent: Any = cast(Row, data).get("delegation") if isinstance(data, dict) else None
@@ -289,7 +325,7 @@ RECEIPT = "assistant_ok"  # the receipt's refs key: {answer_id, task_id, title, 
 
 
 def receipt(conn: "sqlite3.Connection", row: Row, answer_id: str, lent: Row) -> None:
-    """The Assistant's receipt in the chat the person spoke in: "OK'd: <title>, <stage>", a card whose refs carry the
+    """The receipt in the chat the person spoke in, from whoever gave the OK (their Assistant, or Agent Ops): "OK'd: <title>, <stage>", a card whose refs carry the
     answer to undo (POST /api/v2/answers/{answer_id}/undo) and the task. Whether Undo still applies is the task's own
     read: the answer's requirement lists `undo` in `may` while it does."""
     room = H.conversation(conn, lent["cited"].get("conversation_id")) if lent["cited"].get("conversation_id") else None
@@ -300,11 +336,10 @@ def receipt(conn: "sqlite3.Connection", row: Row, answer_id: str, lent: Row) -> 
     stage = str(at.get("name") or "")
     title = str(row.get("title") or "")
     refs = {RECEIPT: {"answer_id": answer_id, "task_id": row["id"], "title": title, "stage": stage}, "task": row["id"]}
-    via = H.VIA.set("")  # the Assistant's own line, not one written for the person
+    sender = AGENT_OPS if str(H.VIA.get() or "") == "botops" else H.assistant_actor(conn)
+    via = H.VIA.set("")  # the bot's own line, not one written for the person
     try:
-        H._write_message(
-            conn, H.assistant_actor(conn), person, f"OK'd: {title}, {stage}", room, "say", refs, None, None
-        )
+        H._write_message(conn, sender, person, f"OK'd: {title}, {stage}", room, "say", refs, None, None)
     finally:
         H.VIA.reset(via)
 
