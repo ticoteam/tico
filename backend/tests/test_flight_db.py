@@ -598,6 +598,22 @@ def test_an_existing_flight_file_is_left_as_it_is_by_the_drop(store, monkeypatch
     assert hub_flight_tables(store.settings.db_path) == set() and target.exists()
 
 
+def test_a_flight_file_left_empty_by_a_crash_before_its_seed_is_seeded_by_the_drop(store, monkeypatch):
+    """A boot that made the file and stopped before seeding it (the drop rolled back with it): the next boot's drop
+    still copies the history in, instead of taking an empty file as seeded."""
+    target = old_server_database(store, monkeypatch)
+    assert flight._create(target)
+    flight._schema(target)  # made, with its tables, and never seeded
+
+    with closing(sqlite3.connect(store.settings.db_path, isolation_level=None)) as c:
+        migrations.apply(c)
+
+    assert hub_flight_tables(store.settings.db_path) == set()
+    with flight.tables(store) as c:
+        assert [r[0] for r in c.execute("SELECT created_at FROM flight_requests")] == [NOW - 600]
+        assert [r[0] for r in c.execute("SELECT kind FROM flight_events ORDER BY id")] == ["start", "seeded"]
+
+
 def test_a_flight_file_that_cannot_be_made_never_stops_the_drop(store, monkeypatch):
     """The file is disposable: a folder that cannot take it loses the old history, logged, and the server still boots."""
     old_server_database(store, monkeypatch)
