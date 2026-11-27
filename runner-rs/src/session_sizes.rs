@@ -67,6 +67,7 @@ pub fn report(found: &BTreeMap<String, (u64, u64)>, at: f64) -> Value {
 #[derive(Default)]
 pub struct SessionSizes {
     last: Mutex<Option<Instant>>,
+    task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     report: Mutex<Option<Value>>,
 }
 
@@ -80,20 +81,21 @@ impl SessionSizes {
         self.report.lock().unwrap().clone()
     }
 
-    /// Start a measurement of `projects`/sessions unless one started within MEASURE_EVERY.
+    /// Start a measurement of `projects`/sessions unless one is still running or one started within MEASURE_EVERY.
     pub fn check(self: &Arc<Self>, projects: &Path) {
+        let mut task = self.task.lock().unwrap();
+        let mut last = self.last.lock().unwrap();
+        if task.as_ref().is_some_and(|t| !t.is_finished())
+            || last.is_some_and(|at| at.elapsed() < MEASURE_EVERY)
         {
-            let mut last = self.last.lock().unwrap();
-            if last.is_some_and(|at| at.elapsed() < MEASURE_EVERY) {
-                return;
-            }
-            *last = Some(Instant::now());
+            return;
         }
+        *last = Some(Instant::now());
         let (me, sessions): (Arc<Self>, PathBuf) = (self.clone(), projects.join("sessions"));
-        tokio::task::spawn_blocking(move || {
+        *task = Some(tokio::task::spawn_blocking(move || {
             let report = report(&measure(&sessions), crate::util::epoch_s());
             *me.report.lock().unwrap() = Some(report);
-        });
+        }));
     }
 }
 
