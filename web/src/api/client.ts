@@ -152,9 +152,10 @@ export const api = {
   delete: <T>(path: ApiPath, opts?: RequestOptions, body?: unknown) => request<T>('DELETE', path, body, opts),
 };
 
-/* Typed operations. `operation('PATCH /api/v2/groups/{gid}', { path: { gid }, body: { lead } }, { idempotencyKey })` is `api.patch` with
-   the OpenAPI v2 spec's types checked by tsc: a path or method the API does not have, a missing or wrong path or query
-   parameter, a body field it does not take, or a use of a field its answer does not have fails `npm run typecheck`.
+/* Typed operations. `operation('PATCH /api/v2/groups/{gid}', { path: { gid }, body: { lead } }, { idempotencyKey })`
+   is `api.patch` with the OpenAPI v2 spec's types checked by tsc: a path or method the API does not have, a missing or
+   wrong path or query parameter, a body field it does not take, or a use of a field its answer does not have fails
+   `npm run typecheck`. A path part is encoded, so pass it raw.
    The types are ApiOperations in schema.d.ts (scripts/gen_ui_types.py, from backend/openapi_v2.py). The call goes
    through `request`, so the caller still owns its Idempotency-Key, its abort signal and `once`, and retries are the
    same; caching, optimistic writes and the live stream's invalidation stay with src/data (`write`, query keys).
