@@ -1,0 +1,5 @@
+{
+  "backend/account_routes.py": {
+    "no-install-closure": 1
+  }
+}

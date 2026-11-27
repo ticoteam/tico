@@ -1,0 +1,5 @@
+{
+  "backend/connectors_floor.py": {
+    "no-install-closure": 1
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "backend/cloud_agents.py": {
+    "no-install-closure": 1
+  }
+}

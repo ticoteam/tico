@@ -1,0 +1,5 @@
+{
+  "backend/shared_bots.py": {
+    "no-install-closure": 1
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "backend/assistant_changes.py": {
+    "no-install-closure": 1
+  }
+}

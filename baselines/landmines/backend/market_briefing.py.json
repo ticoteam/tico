@@ -1,0 +1,5 @@
+{
+  "backend/market_briefing.py": {
+    "no-install-closure": 1
+  }
+}

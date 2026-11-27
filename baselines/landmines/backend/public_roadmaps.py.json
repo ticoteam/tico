@@ -1,0 +1,5 @@
+{
+  "backend/public_roadmaps.py": {
+    "no-install-closure": 1
+  }
+}

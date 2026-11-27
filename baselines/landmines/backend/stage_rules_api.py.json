@@ -1,0 +1,5 @@
+{
+  "backend/stage_rules_api.py": {
+    "no-install-closure": 1
+  }
+}

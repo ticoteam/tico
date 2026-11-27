@@ -1,5 +1,6 @@
 {
   "backend/learnings.py": {
-    "core-imports-app": 3
+    "core-imports-app": 3,
+    "no-install-closure": 1
   }
 }

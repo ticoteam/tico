@@ -127,6 +127,8 @@ def test_each_architecture_rule_finds_its_bad_case_and_not_its_good_one(rule, pa
 
 HUB_SQL = "backend/migrations/20261201000000_thing.sql"
 HUB_PY = "backend/migrations/20261201000000_thing.py"
+APP = "backend/app.py"
+ROUTES = "backend/thing_routes.py"
 
 
 @pytest.mark.parametrize(
@@ -359,6 +361,173 @@ def test_no_tauri_leaves_history_tests_of_its_removal_and_customer_repositories_
     assert "no-tauri" not in hits("scripts/tests/test_osv_gate.py", removed)
 
 
+@pytest.mark.parametrize(
+    ("path", "bad", "good"),
+    [
+        (APP, "import asyncio\nasyncio.create_task(loop())\n", "workers.add('loop', loop)\n"),
+        (APP, "import asyncio as aio\naio.create_task(loop())\n", "aio.sleep(0)\n"),
+        (APP, "from asyncio import create_task\ncreate_task(loop())\n", "create_task(request, body)\n"),
+        (APP, "from asyncio import create_task as spawn\nspawn(loop())\n", "spawn = 1\n"),
+        (
+            APP,
+            "asyncio.get_running_loop().create_task(loop())\n",
+            "asyncio.get_running_loop().run_in_executor(None, f)\n",
+        ),
+        (APP, "asyncio.ensure_future(loop())\n", "await asyncio.wait_for(stop.wait(), timeout=60)\n"),
+        (
+            APP,
+            "async def a():\n    async with asyncio.TaskGroup() as aio:\n        aio.create_task(x())\n\n\n"
+            "def b():\n    import asyncio as aio\n\n    aio.create_task(loop())\n",
+            "from asyncio import TaskGroup as TG\n\n\nasync def run():\n    async with TG() as g:\n        g.create_task(work())\n",
+        ),
+        (
+            APP,
+            "from asyncio import create_task as spawn\n\n\nasync def start(items):\n    [spawn for spawn in items]\n"
+            "    spawn(work())\n",
+            "async def start(items):\n    [create_task for create_task in items]\n    create_task(request)\n",
+        ),
+        (
+            APP,
+            "from asyncio.tasks import ensure_future as launch\nlaunch(work())\n",
+            "from asyncio.tasks import gather\ngather(work())\n",
+        ),
+        (
+            APP,
+            "if on: from asyncio import create_task as ct; ct(work())\n",
+            "def a():\n    from asyncio import create_task\n\n\ndef b(create_task):\n    create_task(request)\n",
+        ),
+        (
+            APP,
+            "def b():\n    from asyncio import create_task\n    create_task(work())\n",
+            "async def run():\n    async with asyncio.TaskGroup() as group:\n        group.create_task(work())\n",
+        ),
+        (
+            APP,
+            "asyncio.create_task(\n    loop(),\n    name='x',\n)\n",
+            "cap, create_task, preflight = register_task_routes(app)\ntasks.install(app, create_task)\n",
+        ),
+    ],
+)
+def test_no_lifespan_task_finds_a_raw_task_in_the_app_and_not_the_task_helper(path, bad, good):
+    assert hits(path, bad).get("no-lifespan-task") == 1
+    assert "no-lifespan-task" not in hits(path, good)
+
+
+def test_no_lifespan_task_reads_only_the_app_and_only_code():
+    assert hits(APP, '# asyncio.create_task(loop()) would die silently\nHELP = "asyncio.create_task(x)"\n') == {}
+    for path in ("backend/lifespan_workers.py", "backend/tasks.py", "backend/tests/test_app.py", "clients/x.py"):
+        assert "no-lifespan-task" not in hits(path, "import asyncio\nasyncio.create_task(loop())\n"), path
+
+
+ROUTE = "    @app.get('/x')\n    def x():\n        pass\n"
+DEEP = ROUTE.replace("    ", "        ")
+
+
+@pytest.mark.parametrize(
+    ("bad", "good"),
+    [
+        ("def install(app, store, auth):\n" + ROUTE, "def install_id(c):\n" + ROUTE),
+        ("def register_people(app, store):\n" + ROUTE, "def register_people(admin_only, app, store):\n" + ROUTE),
+        (
+            "def install(app: FastAPI, store: Any) -> None:\n" + ROUTE,
+            "def install(c: Any, app: FastAPI) -> None:\n" + ROUTE,
+        ),
+        ("def register_foo(app: 'FastAPI', store):\n" + ROUTE, "def register(c, who, digest):\n" + ROUTE),
+        ("def install(\n    app,\n    store,\n):\n" + ROUTE, "def install(\n    store,\n    app,\n):\n" + ROUTE),
+        (
+            "def register(  # the old way\n    app: Any, store: Any\n) -> None:\n" + ROUTE,
+            "def installer(app):\n    pass\n",
+        ),
+        ("async def install_calls(app, store):\n" + ROUTE, "def install_routes(application, store):\n" + ROUTE),
+        ("def _install_features(app, settings):\n" + ROUTE, "def _installer(c):\n" + ROUTE),
+        (
+            "def _register_updates(app):\n    app.add_api_route('/u', u)\n",
+            "def _register_updates(app):\n    other(app)\n",
+        ),
+        ("def install(*, app, store):\n" + ROUTE, "def install(store, *, app):\n" + ROUTE),
+        (
+            "def register(app, /, store):\n    app.router.add_api_route('/x', x)\n",
+            "def register(app: str):\n    return app\n",
+        ),
+        (
+            "class Mount:\n    def install(self, app, store):\n" + DEEP,
+            "class Mount:\n    def install(self, store, app):\n" + DEEP,
+        ),
+        (
+            "class Mount:\n    @classmethod\n    def register(klass: type, app):\n        app.mount('/s', s)\n",
+            "class Mount:\n    @staticmethod\n    def register(store, app):\n        app.mount('/s', s)\n",
+        ),
+        (
+            "class Mount:\n    @staticmethod\n    def install(app):\n        app.websocket('/w')(w)\n",
+            "def install(self, app):\n" + ROUTE,
+        ),
+        (
+            "def register(app):\n    @app.post('/register')\n    def handle(body):\n        pass\n",
+            "app = api_routing.router()\n\n\n@app.post('/register')\ndef register(app: Payload):\n    return app\n",
+        ),
+        (
+            "def install(app, store):\n    api_routing.include(app, router(store))\n",
+            "def install(app, store):\n    api_routing.include(other, router(store))\n",
+        ),
+        (
+            "from .api_routing import include\n\n\ndef _register_x(app):\n    include(app, r)\n",
+            "def _register_x(app):\n    seal(app, r)\n",
+        ),
+        (
+            "def install(app):\n    app.add_api_websocket_route('/w', w)\n",
+            "def install(app, settings):\n    app.add_middleware(CORSMiddleware, allow_origins=settings.origins)\n",
+        ),
+        ("def f():\n    def register_routes(app=None):\n" + DEEP, "def router():\n    return api_routing.router()\n"),
+    ],
+)
+def test_no_install_closure_finds_each_app_installer_that_adds_routes(bad, good):
+    assert hits(ROUTES, bad).get("no-install-closure") == 1
+    assert "no-install-closure" not in hits(ROUTES, good)
+
+
+def test_no_install_closure_reports_the_def_line_and_reads_only_shipped_backend_code():
+    text = "x = 1\n\n\ndef install(\n    app,\n    store,\n):\n" + ROUTE
+    assert landmines.hits_in(ROUTES, text, landmines.RULES)["no-install-closure"] == [(4, "def install(")]
+    assert hits(ROUTES, '"""def install(app, store): app.get(1)."""\n# def register(app):\n') == {}
+    for path in ("backend/tests/test_thing.py", "backend/tests/helpers/app.py", "clients/x.py", "scripts/x.py"):
+        assert "no-install-closure" not in hits(path, "def install(app, store):\n" + ROUTE), path
+
+
+@pytest.mark.parametrize(
+    ("bad", "good"),
+    [
+        ("from fastapi import APIRouter\nr = APIRouter()\n", "from . import api_routing\nr = api_routing.router()\n"),
+        ("import fastapi\nr = fastapi.APIRouter(prefix='/x')\n", "def router() -> fastapi.APIRouter:\n    pass\n"),
+        ("from fastapi import APIRouter as R\nr = R()\n", "from fastapi import APIRouter as R\nr: R\n"),
+        ("from fastapi.routing import APIRouter as Rt\nr = Rt(tags=['x'])\n", "from fastapi.routing import APIRoute\n"),
+        (
+            "if on: from fastapi import APIRouter as R; r = R()\n",
+            "def f():\n    from fastapi import APIRouter as R\n\n\nR()\n",
+        ),
+        (
+            "from fastapi import APIRouter\n\n\nclass Mine(APIRouter):\n    pass\n",
+            "class Mine(api_routing.TicoRoute):\n    pass\n",
+        ),
+        (
+            "import fastapi.routing\n\n\nclass Mine(fastapi.routing.APIRouter):\n    pass\n",
+            "class Mine(Router):\n    pass\n",
+        ),
+        ("app.include_router(r)\n", "api_routing.include(app, r)\n"),
+        ("app.include_router(\n    r,\n    prefix='/x',\n)\n", "include_router = None\n"),
+    ],
+)
+def test_no_bare_apirouter_finds_a_bare_router_and_include_router(bad, good):
+    assert hits(ROUTES, bad).get("no-bare-apirouter") == 1
+    assert "no-bare-apirouter" not in hits(ROUTES, good)
+
+
+def test_no_bare_apirouter_allows_api_routing_tests_and_text():
+    bare = "from fastapi import APIRouter\nr = APIRouter()\napp.include_router(r)\n"
+    for path in ("backend/api_routing.py", "backend/tests/test_api_routing.py", "clients/x.py"):
+        assert "no-bare-apirouter" not in hits(path, bare), path
+    assert hits(ROUTES, '# never app.include_router(r)\nHELP = "APIRouter()"\n') == {}
+
+
 def test_core_imports_app_counts_each_non_core_module_of_a_multi_line_import():
     text = "from . import (\n    mail,\n    tasks,  # Core\n    calendar_api,\n    growth_core as growth,\n)\n"
     found = landmines.hits_in(CORE, text, landmines.RULES)["core-imports-app"]
@@ -565,6 +734,9 @@ def test_a_true_lessons_table_passes():
         "L37",
         "L38",
         "L39",
+        "L40",
+        "L41",
+        "L42",
     )  # the real rules cite rows this one-row table does not have
     assert [p for p in lesson_problems(text) if not any(i in p for i in cited_elsewhere)] == []
 

@@ -1,0 +1,5 @@
+{
+  "backend/bot_copy.py": {
+    "no-install-closure": 1
+  }
+}

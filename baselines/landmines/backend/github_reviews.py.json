@@ -1,0 +1,5 @@
+{
+  "backend/github_reviews.py": {
+    "no-install-closure": 1
+  }
+}

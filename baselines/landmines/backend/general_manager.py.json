@@ -1,0 +1,5 @@
+{
+  "backend/general_manager.py": {
+    "no-install-closure": 1
+  }
+}

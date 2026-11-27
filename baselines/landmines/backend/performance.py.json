@@ -1,0 +1,5 @@
+{
+  "backend/performance.py": {
+    "no-install-closure": 1
+  }
+}

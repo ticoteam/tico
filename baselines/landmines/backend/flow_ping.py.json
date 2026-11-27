@@ -1,0 +1,5 @@
+{
+  "backend/flow_ping.py": {
+    "no-install-closure": 1
+  }
+}

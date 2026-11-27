@@ -1,0 +1,5 @@
+{
+  "backend/compute_pool.py": {
+    "no-install-closure": 1
+  }
+}

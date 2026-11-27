@@ -1,0 +1,5 @@
+{
+  "backend/chat_goals.py": {
+    "no-install-closure": 1
+  }
+}

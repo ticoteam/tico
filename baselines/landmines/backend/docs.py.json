@@ -1,0 +1,5 @@
+{
+  "backend/docs.py": {
+    "no-install-closure": 1
+  }
+}

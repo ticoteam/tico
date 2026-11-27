@@ -1,0 +1,5 @@
+{
+  "backend/meeting_items.py": {
+    "no-install-closure": 1
+  }
+}

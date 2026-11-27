@@ -1,0 +1,5 @@
+{
+  "backend/personal_alerts.py": {
+    "no-install-closure": 1
+  }
+}

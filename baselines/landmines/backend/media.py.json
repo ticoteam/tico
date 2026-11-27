@@ -1,5 +1,6 @@
 {
   "backend/media.py": {
-    "core-imports-app": 7
+    "core-imports-app": 7,
+    "no-install-closure": 1
   }
 }

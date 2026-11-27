@@ -1,0 +1,5 @@
+{
+  "backend/screening.py": {
+    "no-install-closure": 1
+  }
+}

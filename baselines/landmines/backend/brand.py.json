@@ -1,0 +1,5 @@
+{
+  "backend/brand.py": {
+    "no-install-closure": 1
+  }
+}

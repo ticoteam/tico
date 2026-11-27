@@ -1,0 +1,5 @@
+{
+  "backend/skill_usage.py": {
+    "no-install-closure": 1
+  }
+}

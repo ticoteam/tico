@@ -1,0 +1,5 @@
+{
+  "backend/mcp_oauth.py": {
+    "no-install-closure": 1
+  }
+}

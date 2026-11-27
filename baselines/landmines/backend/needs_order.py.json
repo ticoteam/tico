@@ -1,0 +1,5 @@
+{
+  "backend/needs_order.py": {
+    "no-install-closure": 1
+  }
+}

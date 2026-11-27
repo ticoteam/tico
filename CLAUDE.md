@@ -133,8 +133,10 @@ flight file, not the database.
 
 ## Refactor rules
 - `desktop/` (Electron) is the single desktop shell.
-- New routes use `routing.router()` and `Depends(get_deps)` once they land; no new `install(app, ...)` closures.
-- New background work registers in the lifespan worker list; no new ad-hoc `asyncio.create_task` loops.
+- New routes use `api_routing.router()` with `deps.Injected` services and `api_routing.include(app, router)`; no new
+  `install(app, ...)` closures, and no `APIRouter(` or `include_router` outside `backend/api_routing.py`.
+- New background work registers in the lifespan workers (`backend/lifespan_workers.py`); no `asyncio.create_task` in
+  `backend/app.py`.
 - `runner_support/` is frozen: no new file in it outside its tests, and no new import of it from `backend/` or
   `clients/`. Prefer `runner-rs`.
 - Core never imports a Non-Core module (Finance, Growth, Market, Calendar, Calls, Meetings, Mail, Letters, Slack,
@@ -142,8 +144,8 @@ flight file, not the database.
 - Never add `flight_*` tables to `hub.db`.
 
 `scripts/landmines.py` enforces the `runner_support/`, Core, `flight_*` and desktop rules (`skills/honest-code/LESSONS.md`
-L35 to L39). The new-file rule needs a base: run `python3 scripts/landmines.py --check --base origin/main`
-(`scripts/lint.sh` passes `LINT_BASE_REF`, as CI does).
+L35 to L39) and the lifespan, install-closure and router rules (L40 to L42). The new-file rule needs a base: run
+`python3 scripts/landmines.py --check --base origin/main` (`scripts/lint.sh` passes `LINT_BASE_REF`, as CI does).
 
 ## Conventions
 - Create persistent schema changes with `python3 scripts/new_migration.py name` (`--py` for `up(conn)`):

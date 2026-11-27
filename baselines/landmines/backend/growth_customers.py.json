@@ -1,0 +1,5 @@
+{
+  "backend/growth_customers.py": {
+    "no-install-closure": 1
+  }
+}

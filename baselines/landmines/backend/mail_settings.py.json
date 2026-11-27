@@ -1,0 +1,5 @@
+{
+  "backend/mail_settings.py": {
+    "no-install-closure": 1
+  }
+}
