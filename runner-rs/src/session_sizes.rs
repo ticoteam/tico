@@ -1,6 +1,6 @@
 //! Each bot's session worktrees on this computer (`sessions/bot-<bot>/<task>`, crate::sessions) and their size, for
 //! the readiness report (`session_worktrees`, backend/models.py SessionWorktreesReadiness). Health shows them per
-//! computer and warns about a pile-up before the disk fills (TIDY QA held 68 of them, 102 GB, and nothing said so).
+//! computer and warns about a pile-up before the disk fills (one QA bot held 68 of them, 102 GB, and nothing said so).
 //! Measuring walks every file, so it runs on a blocking thread at most once per MEASURE_EVERY and the last result is
 //! reported until the next.
 

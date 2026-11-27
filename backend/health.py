@@ -277,7 +277,7 @@ def runner_route_latency(c, now=None):
 
 
 # A bot's session worktrees on one computer that Health warns about: more than docs/sessions.md allows a bot, or more
-# than this share of the computer's disk (TIDY QA filled its disk with 68 of them, 102 GB).
+# than this share of the computer's disk (one QA bot filled a disk with 68 of them, 102 GB).
 SESSION_WORKTREES_MAX = 30
 SESSION_WORKTREES_DISK_SHARE = 0.25
 

@@ -303,7 +303,7 @@ def test_a_low_disk_check_names_the_computers_own_clean_up(environment):
 
 
 def test_health_counts_each_bots_session_worktrees_and_their_size_per_computer(environment):
-    """TIDY QA's disk filled with 68 session worktrees (102 GB) and nothing said so. The runner reports each bot's
+    """A QA bot's disk filled with 68 session worktrees (102 GB) and nothing said so. The runner reports each bot's
     session worktrees and their size (runner-rs/src/session_sizes.rs); Health shows them on the computer's disk row,
     warns when one bot holds more than the documented 30 or a quarter of the disk, and the disk warning names it."""
     from backend.models import StructuredReadiness
@@ -311,10 +311,10 @@ def test_health_counts_each_bots_session_worktrees_and_their_size_per_computer(e
     api = environment()
     runner = enrolled(api)
     gb = 1024**3
-    add_bot(api, "tidy-qa")
+    add_bot(api, "acme-qa")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bots SET display_name='TIDY QA' WHERE slug='tidy-qa'")
-        qa = c.execute("SELECT id FROM bots WHERE slug='tidy-qa'").fetchone()["id"]
+        c.execute("UPDATE bots SET display_name='Acme QA' WHERE slug='acme-qa'")
+        qa = c.execute("SELECT id FROM bots WHERE slug='acme-qa'").fetchone()["id"]
     sessions = {
         "at": "2026-11-27T06:00:00+00:00",
         "bots": {qa: {"count": 68, "bytes": 102 * gb}, "ghost": {"count": 2, "bytes": gb}},
@@ -336,13 +336,13 @@ def test_health_counts_each_bots_session_worktrees_and_their_size_per_computer(e
         )
     body, checks = health_of(api)
     rows = body["computers"][0]["disk"]["session_worktrees"]
-    assert rows[0] == {"bot": qa, "name": "TIDY QA", "count": 68, "bytes": 102 * gb}
+    assert rows[0] == {"bot": qa, "name": "Acme QA", "count": 68, "bytes": 102 * gb}
     assert [row["bot"] for row in rows] == [qa, "ghost"]  # largest first
     pile = checks["session_worktrees:" + runner + ":" + qa]
     assert pile["status"] == "warn"
-    assert "TIDY QA has 68 session worktrees" in pile["summary"] and "102.0 GB" in pile["summary"]
+    assert "Acme QA has 68 session worktrees" in pile["summary"] and "102.0 GB" in pile["summary"]
     assert "session_worktrees:" + runner + ":ghost" not in checks  # 2 worktrees, 1 GB: no pile-up
-    assert "TIDY QA's 68 session worktrees take 102.0 GB" in checks["disk:" + runner]["summary"]
+    assert "Acme QA's 68 session worktrees take 102.0 GB" in checks["disk:" + runner]["summary"]
 
     # Under both marks: shown on the disk row, no warning.
     small = {**report, "disk": {"total_bytes": 157 * gb, "free_bytes": 100 * gb}}
