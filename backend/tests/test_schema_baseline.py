@@ -64,6 +64,12 @@ def test_a_new_database_has_the_schema_of_the_floor_upgraded(shapes):
     assert not differences(new, upgraded)
 
 
+def test_neither_hub_has_a_flight_table_the_recorders_own_file_has_them(shapes):
+    """backend/flight.py makes the flight_* tables in hub.flight.db: the lazy-table scan must not add them to the hub."""
+    (new, _), (upgraded, _), _ = shapes
+    assert [n for n in (*new, *upgraded) if n.split(" ", 1)[1].startswith("flight")] == []  # "table flight_db"
+
+
 def test_both_record_every_migration_file_and_a_second_start_changes_nothing(shapes):
     (new, recorded), (_, upgraded), (again, recorded_again) = shapes
     files = {m.version for m in migrations.files()}

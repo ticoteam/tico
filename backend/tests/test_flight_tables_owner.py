@@ -14,8 +14,9 @@ OWNERS = ("backend/flight.py", "backend/migrations/")
 SKIP_DIRS = {".git", ".venv", "node_modules", "build", "target", "tests", "__pycache__"}
 # Readers that cannot call flight.py, each with the line count it holds. The cell host's stats push runs a fixed
 # stdlib script inside each company's server container (`python -I`, no backend import) that opens the database file
-# by path: moving flight_sql to its own file must change that path there too.
-ELSEWHERE = {"setup/cell_stats.py": 1}
+# by path: moving flight_sql to its own file must change that path there too. Its two lines: the query, and the check
+# that the table is there (a server on this code that has not made its flight file yet has it in neither database).
+ELSEWHERE = {"setup/cell_stats.py": 2}
 
 
 def raw_flight_sql():

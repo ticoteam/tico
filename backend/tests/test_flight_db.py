@@ -13,7 +13,7 @@ from contextlib import closing
 from datetime import datetime, timezone
 
 import pytest
-from backend import backup, flight, invariants, maintenance_health, performance
+from backend import backup, flight, invariants, maintenance_health, migrations, performance
 from backend.config import Settings
 from backend.maintenance_steps import clean_up
 from backend.store import H, Store
@@ -30,9 +30,22 @@ def store(tmp_path):
     return s
 
 
+def hub_flight_tables(db_path):
+    """The flight_* tables (and their indexes) in the server's own database: none since the drop migration."""
+    with closing(sqlite3.connect(db_path)) as c:
+        return {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE name LIKE 'flight%'")}
+
+
 def hub_flight_rows(store):
+    """Rows in the server database's old copies of the recorder's tables, which a test made as an older server had."""
     with closing(sqlite3.connect(store.settings.db_path)) as c:
         return {t: c.execute(f"SELECT count(*) FROM {t}").fetchone()[0] for t in flight.TABLES}
+
+
+def make_old_hub_tables(c):
+    """What a server before the flight file (and before the drop migration) had in its own database."""
+    for statement in flight.SCHEMA:
+        c.execute(statement)
 
 
 def flight_rows(db_path):
@@ -61,7 +74,7 @@ def test_a_server_database_named_like_a_flight_file_gets_a_flight_file_of_its_ow
             c.execute("PRAGMA user_version").fetchone()[0],
             c.execute("SELECT count(*) FROM tasks").fetchone()[0],
         ) == before
-        assert c.execute("SELECT count(*) FROM flight_events").fetchone()[0] == 0
+    assert hub_flight_tables(hub) == set()  # no recorder table made in it
     with s.read() as c:
         assert [e for e in flight.view(c, minutes=5)["events"]["recent"] if e["kind"] == "note"]
 
@@ -98,7 +111,7 @@ def test_every_recorder_write_goes_to_its_own_file_and_none_to_the_servers_datab
     flight.sweep(store)
     sampler.file.close()
 
-    assert hub_flight_rows(store) == dict.fromkeys(flight.TABLES, 0)
+    assert hub_flight_tables(store.settings.db_path) == set()
     got = flight_rows(store.settings.db_path)
     assert got["flight_requests"] and got["flight_slow"] and got["flight_process"] and got["flight_web"]
     assert got["flight_db"] == 1 and got["flight_events"] >= 3  # start, the request's event, the note
@@ -158,7 +171,7 @@ def test_another_schema_version_drops_and_remakes_the_tables_in_place(store, mon
     with flight.tables(store) as c:
         assert c.execute("PRAGMA user_version").fetchone()[0] == flight.SCHEMA_VERSION
         assert c.execute("SELECT count(*) FROM flight_events").fetchone()[0] == 0
-    assert hub_flight_rows(store) == dict.fromkeys(flight.TABLES, 0)  # the reset never touches the server's file
+    assert hub_flight_tables(store.settings.db_path) == set()  # the reset never makes a table in the server's file
 
 
 def test_a_file_that_is_not_a_database_is_replaced_by_the_next_write(store, tmp_path):
@@ -461,6 +474,7 @@ def test_health_invariants_and_metrics_read_empty_without_a_flight_file(store, t
 def test_a_new_file_takes_the_servers_recent_recorder_rows_once(store, monkeypatch):
     monkeypatch.setattr(flight, "_now", lambda: NOW)
     with store.transaction() as c:  # what an older server left in its own database
+        make_old_hub_tables(c)
         for at in (NOW - 600, NOW - flight.SEED_SECONDS - 60):
             c.execute(
                 "INSERT INTO flight_requests VALUES(?,60,'GET /api/v2/tasks','human',3,0,30,30.0,10,10,10,'{}')", (at,)
@@ -491,6 +505,127 @@ def test_a_new_file_takes_the_servers_recent_recorder_rows_once(store, monkeypat
     flight.record_event(store, "note", {})
     with flight.tables(store) as c:
         assert c.execute("SELECT count(*) FROM flight_requests").fetchone()[0] == 1
+
+
+def test_a_new_server_database_has_no_flight_tables_and_the_flight_file_still_works(store, monkeypatch):
+    """The drop migration: hub.sqlite holds none of the seven tables (nor their index), the runner perf tables stay,
+    and the first write still makes hub.flight.db, seeds nothing from a server database that has no tables, and reads."""
+    assert hub_flight_tables(store.settings.db_path) == set()
+    with closing(sqlite3.connect(store.settings.db_path)) as c:
+        names = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert {"perf_points", "perf_usage", "perf_overloads"} <= names
+    warned, seeded, seed = [], [], flight._seed
+    monkeypatch.setattr(flight.LOG, "warning", lambda *a, **k: warned.append(a))
+    monkeypatch.setattr(flight, "_seed", lambda *a, **k: seeded.append(seed(*a, **k)) or seeded[-1])
+
+    flight.record_event(store, "note", {"x": 1})
+
+    assert seeded == [{}]  # the one-time seed ran on the new file, found no tables to read and copied nothing
+
+    with flight.tables(store) as c:
+        assert [r[0] for r in c.execute("SELECT kind FROM flight_events")] == ["note"]  # no "seeded" event
+    with store.read() as c:
+        assert flight.state(c) == "ok"
+        assert [e["kind"] for e in flight.view(c, minutes=5, now=time.time() + 60)["events"]["recent"]] == ["note"]
+    assert warned == [] and hub_flight_tables(store.settings.db_path) == set()
+
+
+def test_an_upgraded_server_database_drops_its_old_flight_tables_and_keeps_the_perf_rows(store):
+    """A company that ran the releases with the flight file still has the old copies: the migration takes them out,
+    with their rows and index, and leaves the runner perf rows."""
+    version = next(m for m in migrations.files() if m.version.endswith("_drop_hub_flight_tables")).version
+    with closing(sqlite3.connect(store.settings.db_path, isolation_level=None)) as c:
+        make_old_hub_tables(c)
+        c.execute("INSERT INTO flight_events(created_at,kind,detail) VALUES(1,'start','{}')")
+        c.execute("INSERT INTO perf_points(runner_id,span,created_at,n,cpu,cpu_max) VALUES('r1',60,1,1,0.5,0.5)")
+        c.execute("DELETE FROM schema_migrations WHERE version=?", (version,))
+        assert len(hub_flight_tables(store.settings.db_path)) == len(flight.TABLES) + 1  # and flight_events_kind
+        migrations.apply(c)
+        assert c.execute("SELECT count(*) FROM perf_points").fetchone()[0] == 1
+        assert c.execute("SELECT 1 FROM schema_migrations WHERE version=?", (version,)).fetchone()
+    assert hub_flight_tables(store.settings.db_path) == set()
+
+
+def old_server_database(store, monkeypatch):
+    """The store's database as a release before the flight file left it: the drop migration not run, the seven tables
+    in it with recent rows, and no hub.flight.db beside it."""
+    monkeypatch.setattr(flight, "_now", lambda: NOW)
+    version = next(m for m in migrations.files() if m.version.endswith("_drop_hub_flight_tables")).version
+    with closing(sqlite3.connect(store.settings.db_path, isolation_level=None)) as c:
+        make_old_hub_tables(c)
+        c.execute(
+            "INSERT INTO flight_requests VALUES(?,60,'GET /api/v2/tasks','human',3,0,30,30.0,10,10,10,'{}')",
+            (NOW - 600,),
+        )
+        c.execute(
+            "INSERT INTO flight_events(created_at,kind,detail) VALUES(?,'start','{\"version\":\"0.6.0\"}')",
+            (NOW - 86400,),
+        )
+        c.execute("DELETE FROM schema_migrations WHERE version=?", (version,))
+    flight._READY.clear()
+    return flight.path(store.settings.db_path)
+
+
+def test_an_upgrade_from_before_the_flight_file_moves_the_history_into_it_before_the_drop(store, monkeypatch):
+    """A company updating straight from a release before hub.flight.db: the boot's drop migration first makes the file
+    from the old tables (the release comparison's last hour, every start), then takes them out of hub.sqlite."""
+    target = old_server_database(store, monkeypatch)
+    assert not target.exists()
+
+    Store(Settings(db_path=store.settings.db_path, registry_dir=store.settings.registry_dir)).initialize(
+        seed_market=False
+    )
+
+    assert hub_flight_tables(store.settings.db_path) == set()
+    with flight.tables(store) as c:
+        assert [r[0] for r in c.execute("SELECT created_at FROM flight_requests")] == [NOW - 600]
+        assert [r[0] for r in c.execute("SELECT kind FROM flight_events ORDER BY id")] == ["start", "seeded"]
+    assert stat.S_IMODE(os.stat(target).st_mode) == 0o600
+
+
+def test_an_existing_flight_file_is_left_as_it_is_by_the_drop(store, monkeypatch):
+    target = old_server_database(store, monkeypatch)
+    flight.record_event(store, "note", {})  # this server already writes its own file (seeded once, when it made it)
+    with flight.tables(store) as c:
+        before = c.execute("SELECT * FROM flight_events ORDER BY id").fetchall()
+    flight._READY.clear()
+
+    with closing(sqlite3.connect(store.settings.db_path, isolation_level=None)) as c:
+        migrations.apply(c)
+
+    with flight.tables(store) as c:
+        assert c.execute("SELECT * FROM flight_events ORDER BY id").fetchall() == before  # not seeded a second time
+    assert hub_flight_tables(store.settings.db_path) == set() and target.exists()
+
+
+def test_a_flight_file_left_empty_by_a_crash_before_its_seed_is_seeded_by_the_drop(store, monkeypatch):
+    """A boot that made the file and stopped before seeding it (the drop rolled back with it): the next boot's drop
+    still copies the history in, instead of taking an empty file as seeded."""
+    target = old_server_database(store, monkeypatch)
+    assert flight._create(target)
+    flight._schema(target)  # made, with its tables, and never seeded
+
+    with closing(sqlite3.connect(store.settings.db_path, isolation_level=None)) as c:
+        migrations.apply(c)
+
+    assert hub_flight_tables(store.settings.db_path) == set()
+    with flight.tables(store) as c:
+        assert [r[0] for r in c.execute("SELECT created_at FROM flight_requests")] == [NOW - 600]
+        assert [r[0] for r in c.execute("SELECT kind FROM flight_events ORDER BY id")] == ["start", "seeded"]
+
+
+def test_a_flight_file_that_cannot_be_made_never_stops_the_drop(store, monkeypatch):
+    """The file is disposable: a folder that cannot take it loses the old history, logged, and the server still boots."""
+    old_server_database(store, monkeypatch)
+    warned = []
+    monkeypatch.setattr(flight.LOG, "warning", lambda *a, **k: warned.append(a))
+    monkeypatch.setattr(flight, "_create", lambda target: (_ for _ in ()).throw(PermissionError("read-only folder")))
+
+    with closing(sqlite3.connect(store.settings.db_path, isolation_level=None)) as c:
+        migrations.apply(c)
+
+    assert hub_flight_tables(store.settings.db_path) == set()
+    assert [w[0] for w in warned] == ["Flight database not seeded before the drop, its history is lost: %s"]
 
 
 def test_the_release_comparison_names_an_empty_baseline(api, monkeypatch):

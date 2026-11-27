@@ -10,8 +10,9 @@ from pathlib import Path
 
 CREATE = re.compile(r"\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?\"?(\w+)\"?\s*\(", re.I)
 ALTER = re.compile(r"\bALTER\s+TABLE\s+\"?(\w+)\"?\s+ADD\s+COLUMN\s+\"?(\w+)\"?\s*([^;\"]*)", re.I)
-# Files under backend/ whose SQL is about another database, or about the old shape of one.
-NOT_THE_HUB = ("backend/tests/", "backend/migrations/")
+# Files under backend/ whose SQL is about another database, or about the old shape of one. flight.py makes the flight
+# recorder's tables in hub.flight.db, beside the hub.
+NOT_THE_HUB = ("backend/tests/", "backend/migrations/", "backend/flight.py")
 
 
 def _texts(tree):
