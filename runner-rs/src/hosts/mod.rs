@@ -5,6 +5,7 @@
 //! status {state}, tokens {input, output, total, usage{input, cached, output}}, rate_limits, error, diagnostic.
 
 mod acp;
+pub mod acp_host;
 pub mod antigravity;
 pub mod claude;
 pub mod codex;
@@ -1156,7 +1157,8 @@ pub enum Host {
     MuseCode(musecode::MuseCodeHost),
     Pi(pi::PiHost),
     Cursor(cursor::CursorHost),
-    Grok(grok::GrokHost),
+    /// A CLI whose manifest says `protocol = "acp"` (Grok Build), on the generic ACP host.
+    Acp(acp_host::AcpHost),
 }
 
 impl Host {
@@ -1193,7 +1195,7 @@ impl Host {
             Host::MuseCode(h) => h.track_allocation(turn),
             Host::Pi(h) => h.track_allocation(turn),
             Host::Cursor(h) => h.track_allocation(turn),
-            Host::Grok(h) => h.track_allocation(turn),
+            Host::Acp(h) => h.track_allocation(turn),
         }
     }
 
@@ -1243,7 +1245,7 @@ impl Host {
                 h.start();
                 Ok(())
             }
-            Host::Grok(h) => {
+            Host::Acp(h) => {
                 h.start();
                 Ok(())
             }
@@ -1259,7 +1261,7 @@ impl Host {
             Host::MuseCode(h) => h.stop().await,
             Host::Pi(h) => h.stop().await,
             Host::Cursor(h) => h.stop().await,
-            Host::Grok(h) => h.stop().await,
+            Host::Acp(h) => h.stop().await,
         }
     }
 
@@ -1272,12 +1274,12 @@ impl Host {
             Host::MuseCode(h) => h.alive(),
             Host::Pi(h) => h.alive(),
             Host::Cursor(h) => h.alive(),
-            Host::Grok(h) => h.alive(),
+            Host::Acp(h) => h.alive(),
         }
     }
 
     /// The manifest runtime this host runs, for its declared capabilities.
-    fn runtime(&self) -> &'static str {
+    fn runtime(&self) -> &str {
         match self {
             Host::Claude(_) => "claude",
             Host::Codex(_) => "codex",
@@ -1286,7 +1288,7 @@ impl Host {
             Host::MuseCode(_) => "musecode",
             Host::Pi(_) => "pi",
             Host::Cursor(_) => "cursor",
-            Host::Grok(_) => "grok",
+            Host::Acp(h) => h.runtime(),
         }
     }
 
@@ -1309,7 +1311,7 @@ impl Host {
             Host::MuseCode(h) => Ok(h.start_thread(settings)),
             Host::Pi(h) => Ok(h.start_thread(settings)),
             Host::Cursor(h) => h.start_thread(settings).await,
-            Host::Grok(h) => h.start_thread(bot, settings).await,
+            Host::Acp(h) => h.start_thread(bot, settings).await,
         }
     }
 
@@ -1340,7 +1342,7 @@ impl Host {
             Host::MuseCode(h) => Ok(h.resume_thread(thread_id, settings)),
             Host::Pi(h) => Ok(h.resume_thread(thread_id, settings)),
             Host::Cursor(h) => Ok(h.resume_thread(thread_id, settings)),
-            Host::Grok(h) => h.resume_thread(thread_id, settings).await,
+            Host::Acp(h) => h.resume_thread(thread_id, settings).await,
         }
     }
 
@@ -1361,7 +1363,7 @@ impl Host {
             Host::MuseCode(h) => h.start_turn(thread_id, text, effort),
             Host::Pi(h) => h.start_turn(thread_id, text, effort).await,
             Host::Cursor(h) => h.start_turn(thread_id, text, effort),
-            Host::Grok(h) => h.start_turn(thread_id, text).await,
+            Host::Acp(h) => h.start_turn(thread_id, text).await,
         }
     }
 
@@ -1376,7 +1378,7 @@ impl Host {
             )),
             Host::Pi(h) => h.steer(thread_id, turn_id, text).await,
             Host::Cursor(_) => Err(failed("Cursor runtime cannot steer a running turn")),
-            Host::Grok(_) => Err(failed("grok agent cannot steer a running turn")),
+            Host::Acp(h) => h.steer(),
         }
     }
 
@@ -1407,7 +1409,7 @@ impl Host {
                 h.interrupt(turn_id);
                 Ok(())
             }
-            Host::Grok(h) => h.interrupt(thread_id).await,
+            Host::Acp(h) => h.interrupt(thread_id).await,
         }
     }
 

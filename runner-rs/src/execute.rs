@@ -2314,6 +2314,16 @@ impl Runner {
             }
             return Ok(Host::Codex(CodexHost::on_home(own, tx, None)));
         }
+        // A CLI whose manifest says `protocol = "acp"` needs no host of its own.
+        if let Some(spec) = crate::harness_tools::acp_spec(runtime) {
+            return Ok(Host::Acp(crate::hosts::acp_host::AcpHost::new(
+                bot,
+                runtime,
+                &crate::harness_tools::executable_for(runtime),
+                spec,
+                tx,
+            )));
+        }
         Ok(match runtime {
             "claude" => Host::Claude(ClaudeHost::with_keeper(
                 bot,
@@ -2362,11 +2372,6 @@ impl Runner {
             "cursor" => Host::Cursor(crate::hosts::cursor::CursorHost::new(
                 bot,
                 vec![crate::harness_tools::executable_for("cursor")],
-                tx,
-            )),
-            "grok" => Host::Grok(crate::hosts::grok::GrokHost::new(
-                bot,
-                &crate::harness_tools::executable_for("grok"),
                 tx,
             )),
             "" => return Err(Fail::runtime(crate::readiness::NO_RUNTIME)),

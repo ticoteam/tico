@@ -272,7 +272,7 @@ fn servers(settings: &Settings, init: &Value) -> Value {
         .filter(|s| caps[text_of(&s["transport"]).as_str()] == true)
         .cloned()
         .collect();
-    json!(crate::mcp::grok_config(&taken, &settings.env))
+    json!(crate::mcp::acp_config(&taken, &settings.env))
 }
 
 /// A sign-in agy has not got (T3 Code's isAntigravitySignInRequiredError): `Authentication required` (-32000), or the
