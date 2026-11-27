@@ -390,6 +390,19 @@ class Bindings(ast.NodeVisitor):
         self.calls.append((node, self.stack[-1]))
         self.generic_visit(node)
 
+    def visit_ListComp(self, node):
+        """A comprehension is a scope of its own: its targets never rebind the enclosing scope's names, and only its
+        first iterable is read outside it."""
+        first, *rest = node.generators
+        self.visit(first.iter)
+        inner = [first.target, *first.ifs]
+        for more in rest:
+            inner += [more.target, more.iter, *more.ifs]
+        inner += [node.key, node.value] if isinstance(node, ast.DictComp) else [node.elt]
+        self.enter(node, [], inner)
+
+    visit_SetComp = visit_GeneratorExp = visit_DictComp = visit_ListComp
+
     def visit_AsyncWith(self, node):
         """`async with asyncio.TaskGroup() as g` (or a TaskGroup imported under any name) binds g, in this scope only,
         to a group that waits for its tasks when it exits."""
@@ -415,7 +428,12 @@ class Bindings(ast.NodeVisitor):
         return None
 
 
-ASYNCIO = {("asyncio", "create_task"), ("asyncio", "ensure_future"), ("asyncio.tasks", "create_task")}
+ASYNCIO = {
+    ("asyncio", "create_task"),
+    ("asyncio", "ensure_future"),
+    ("asyncio.tasks", "create_task"),
+    ("asyncio.tasks", "ensure_future"),
+}
 TASK_GROUPS = {("asyncio", "TaskGroup"), ("asyncio.taskgroups", "TaskGroup")}
 
 
@@ -469,9 +487,10 @@ def _includes_on_app(node):
 
 
 def _adds_routes(func):
-    """Whether `func`'s body (nested defs and their decorators included) calls a route method on `app`, or hands `app`
-    to the routing helper's include."""
-    for node in ast.walk(func):
+    """Whether `func`'s body (nested defs and their decorators included, its own decorators not) calls a route method on
+    `app`, or hands `app` to the routing helper's include."""
+    body = (node for statement in func.body for node in ast.walk(statement))  # not its own decorators
+    for node in body:
         if isinstance(node, ast.Call) and _includes_on_app(node):
             return True
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in ROUTE_CALLS:

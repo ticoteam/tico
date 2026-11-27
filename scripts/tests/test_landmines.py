@@ -382,6 +382,17 @@ def test_no_tauri_leaves_history_tests_of_its_removal_and_customer_repositories_
         ),
         (
             APP,
+            "from asyncio import create_task as spawn\n\n\nasync def start(items):\n    [spawn for spawn in items]\n"
+            "    spawn(work())\n",
+            "async def start(items):\n    [create_task for create_task in items]\n    create_task(request)\n",
+        ),
+        (
+            APP,
+            "from asyncio.tasks import ensure_future as launch\nlaunch(work())\n",
+            "from asyncio.tasks import gather\ngather(work())\n",
+        ),
+        (
+            APP,
             "if on: from asyncio import create_task as ct; ct(work())\n",
             "def a():\n    from asyncio import create_task\n\n\ndef b(create_task):\n    create_task(request)\n",
         ),
@@ -449,6 +460,10 @@ DEEP = ROUTE.replace("    ", "        ")
         (
             "class Mount:\n    @staticmethod\n    def install(app):\n        app.websocket('/w')(w)\n",
             "def install(self, app):\n" + ROUTE,
+        ),
+        (
+            "def register(app):\n    @app.post('/register')\n    def handle(body):\n        pass\n",
+            "app = api_routing.router()\n\n\n@app.post('/register')\ndef register(app: Payload):\n    return app\n",
         ),
         (
             "def install(app, store):\n    api_routing.include(app, router(store))\n",
