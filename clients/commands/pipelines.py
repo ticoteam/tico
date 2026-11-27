@@ -22,7 +22,7 @@ from urllib.parse import quote
 from clients import cli_plumbing
 from clients.cli_spec import Arg, Command, Group
 from clients.commands._registry import tool
-from clients.commands._requester import PEOPLE
+from clients.commands._requester import PEOPLE, _as_person
 from clients.commands._schemas import TASK_ID, _key, _s
 from clients.commands.tasks import task_create
 from clients.tico import APIError
@@ -385,7 +385,9 @@ ANSWER_FIELDS = {
     writes=True,
 )
 def task_approve(api, args):
-    return _answer(api, args, "ok", args.get("note"))
+    # Agent Ops approves as the person whose own chat asked it (the run's turn): an OK is a person's, so its own rights
+    # would find nothing waiting on it (backend/assistant_oks.py says when the person's word lends one).
+    return _answer(_as_person(api), args, "ok", args.get("note"))
 
 
 @tool(

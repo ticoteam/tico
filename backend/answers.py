@@ -361,13 +361,16 @@ def _write(
                 pages = P.current_pages(conn, str(page["visit_id"]), requirement_id)
         data["pages"] = [{"file_id": p["file_id"], "version": p["version"]} for p in pages]
     # Through the task's history writer: an answer the Assistant or Agent Ops gave with the person's rights says so (via),
-    # and one their Assistant gave on their word quotes it, with the message it cites (backend/assistant_oks.py).
+    # and an OK they gave on the person's word quotes it, with the message it cites (backend/assistant_oks.py). Only an
+    # OK: its words were checked (`refusal`) before this write; a send back or an undo runs no such check, so it keeps
+    # the person's private chat out of the history.
     from . import assistant_oks
 
-    if lent := assistant_oks.delegation(conn):
+    lent = assistant_oks.delegation(conn) if value == OK else None
+    if lent:
         data["delegation"] = lent
     H._task_event(conn, row["id"], by, "answer", None, value, notes, data=data)
-    if lent and value == OK:
+    if lent:
         assistant_oks.use(conn, lent, row, requirement_id, answer_id)
         assistant_oks.receipt(conn, row, answer_id, lent)
     return answer_id

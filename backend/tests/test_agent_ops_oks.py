@@ -153,6 +153,26 @@ def test_one_message_lends_one_ok_even_after_her_undo(api, agent_ops):
     assert not answers(api, rid)
 
 
+def test_a_send_back_on_her_word_keeps_her_chat_words_out_of_the_history(api, agent_ops):
+    """Only a checked OK quotes her words: a send back Agent Ops makes for her (no OK check runs for it) records it as
+    hers via Agent Ops, with its reason, and no line from her private chat, for her or anyone who reads the task."""
+    tid, rid = plain_ok(api)
+    gives_oks(api)
+    attempt, _ = ops_turn(api, agent_ops, "Send the suggestion cards task back: the copy is wrong")
+    r = act(api, attempt, "POST", f"tasks/{tid}/asks/{rid}/answer", {"value": "no", "note": "The copy is wrong"})
+    assert r.status_code == 200, r.text
+    with api.app.state.store.read() as c:
+        line = c.execute(
+            "SELECT * FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='answer'", (tid,)
+        ).fetchone()
+        assert not c.execute("SELECT 1 FROM assistant_ok_uses").fetchone()
+    assert (line["actor_id"], line["via"]) == ("human:ana", "botops")
+    assert "delegation" not in H._json(line["data"], {})
+    for reader in ("ana-test", "ben-test"):
+        (seen,) = [e for e in call(api, "GET", f"tasks/{tid}", reader)[1]["events"] if e.get("field") == "answer"]
+        assert seen.get("delegation") is None, reader
+
+
 # ----------------------------------------------------------------------------- where the words come from
 def _engine_ok(api, tid, rid, cited, *, via="botops", run="live"):
     """The engine's answer with the request state an Agent Ops turn for Ana sets: None when it counts, else the refusal."""

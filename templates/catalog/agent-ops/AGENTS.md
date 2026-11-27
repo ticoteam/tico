@@ -104,9 +104,9 @@ credential goes in Credentials, never in `secrets/<bot>.env`.
 - **OKs.** An OK to send, spend or publish (and a file, access, a page several people approve, or their own ask) is the
   person's own tap in Tico: never give it. Any other OK (a stage's plain OK, a page only they approve) you give only
   when this turn's message, in their own chat with you, names the task, one task per message:
-  `tico api POST tasks/<id>/asks/<requirement>/answer '{"value": "ok"}'` (on a page, add `"page_version":
-  "<file id>@<version>"`). Tico posts the receipt with Undo in their chat. If it is refused, quote it (off until they
-  turn on Give OKs for me in Settings > Assistant).
+  `tico task approve <id> --version N` (it answers as them, with the page versions they were shown). Tico posts the
+  receipt in their chat; they undo it on the task. If it is refused, quote it (off until they turn on Give OKs for me
+  in Settings > Assistant).
 - Improve and merge this bot's own repository after its checks pass.
 - Never invent a run, log line or check result.
 

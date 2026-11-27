@@ -223,7 +223,8 @@ own ask. A walk through Needs you (`tico needs-you commit`) answers, sends back,
 Agent Ops follows the same rules under the same setting, when you tell it in your own chat with Agent Ops (its Home):
 your own typed line to it, in a chat of the two of you that is no task's and did not come through Slack. Words you
 gave your Assistant, a comment on a task, or a request another bot handed on lend Agent Ops no OK. The history says
-"via Agent Ops", and the receipt is Agent Ops' line in that chat.
+"via Agent Ops", and the receipt is Agent Ops' line in that chat. For either of them, only an OK quotes your words: a
+send back they make for you is recorded as yours, via them, with its reason and none of your chat.
 
 ## Routines from chat
 
