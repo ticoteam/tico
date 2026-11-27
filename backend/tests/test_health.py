@@ -302,6 +302,97 @@ def test_a_low_disk_check_names_the_computers_own_clean_up(environment):
     assert body["computers"][0]["disk"]["cleanup"]["freed_bytes"] == 2 * gb
 
 
+def test_health_counts_each_bots_session_worktrees_and_their_size_per_computer(environment):
+    """A QA bot's disk filled with 68 session worktrees (102 GB) and nothing said so. The runner reports each bot's
+    session worktrees and their size (runner-rs/src/session_sizes.rs); Health shows them on the computer's disk row,
+    warns when one bot holds more than the documented 30 or a quarter of the disk, and the disk warning names it."""
+    from backend.models import StructuredReadiness
+
+    api = environment()
+    runner = enrolled(api)
+    gb = 1024**3
+    add_bot(api, "acme-qa")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET display_name='Acme QA' WHERE slug='acme-qa'")
+        qa = c.execute("SELECT id FROM bots WHERE slug='acme-qa'").fetchone()["id"]
+    sessions = {
+        "at": "2026-11-27T06:00:00+00:00",
+        "bots": {qa: {"count": 68, "bytes": 102 * gb}, "ghost": {"count": 2, "bytes": gb}},
+    }
+    report = StructuredReadiness.model_validate(
+        {
+            "schema_version": 1,
+            "runtimes": {},
+            "bots": {},
+            "disk": {"total_bytes": 157 * gb, "free_bytes": 3 * gb},
+            "session_worktrees": sessions,
+        }
+    ).model_dump()
+    assert report["session_worktrees"]["bots"][qa] == {"count": 68, "bytes": 102 * gb}
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE runner_states SET last_seen_at=?, readiness=? WHERE runner_id=?",
+            (H.now(), json.dumps(report), runner),
+        )
+    body, checks = health_of(api)
+    rows = body["computers"][0]["disk"]["session_worktrees"]
+    assert rows[0] == {"bot": qa, "name": "Acme QA", "count": 68, "bytes": 102 * gb}
+    assert [row["bot"] for row in rows] == [qa, "ghost"]  # largest first
+    pile = checks["session_worktrees:" + runner + ":" + qa]
+    assert pile["status"] == "warn"
+    assert "Acme QA has 68 session worktrees" in pile["summary"] and "102.0 GB" in pile["summary"]
+    assert "session_worktrees:" + runner + ":ghost" not in checks  # 2 worktrees, 1 GB: no pile-up
+    assert "Acme QA's 68 session worktrees take 102.0 GB" in checks["disk:" + runner]["summary"]
+
+    # A bot reading Health sees the computer's disk, not what each other bot keeps on it.
+    add_bot(api, "reader")
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES('reader','hermes','x',?,'human:ana')",
+            (H.now(),),
+        )
+    api.app.state.store.settings.test_identities["reader-bot"] = Identity("bot:reader", "bot", agent="hermes")
+    as_bot, _ = health_of(api, signed_in("reader-bot"))
+    assert as_bot["audience"] == "bot"
+    assert as_bot["computers"][0]["disk"]["total_bytes"] == 157 * gb
+    assert "session_worktrees" not in as_bot["computers"][0]["disk"]
+
+    # A size no computer has is refused at the door, and one stored by an older server is left out of Health
+    # instead of breaking its arithmetic.
+    from pydantic import ValidationError
+
+    huge = 10**320
+    with pytest.raises(ValidationError):
+        StructuredReadiness.model_validate(
+            {**report, "session_worktrees": {"at": "x", "bots": {qa: {"count": 1, "bytes": huge}}}}
+        )
+    with pytest.raises(ValidationError):
+        StructuredReadiness.model_validate(
+            {**report, "session_worktrees": {"at": "x", "bots": {"b" * 101: {"count": 1, "bytes": 1}}}}
+        )
+    stored = {
+        **report,
+        "session_worktrees": {
+            "at": "x",
+            "bots": {qa: {"count": 1, "bytes": 2**64 - 1}, "ghost": {"count": 40, "bytes": gb}},
+        },
+    }
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id=?", (json.dumps(stored), runner))
+    body, checks = health_of(api)
+    assert [row["bot"] for row in body["computers"][0]["disk"]["session_worktrees"]] == ["ghost"]
+    assert "session_worktrees:" + runner + ":ghost" in checks
+
+    # Under both marks: shown on the disk row, no warning.
+    small = {**report, "disk": {"total_bytes": 157 * gb, "free_bytes": 100 * gb}}
+    small["session_worktrees"] = {"at": sessions["at"], "bots": {qa: {"count": 30, "bytes": 30 * gb}}}
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id=?", (json.dumps(small), runner))
+    body, checks = health_of(api)
+    assert body["computers"][0]["disk"]["session_worktrees"][0]["count"] == 30
+    assert not [key for key in checks if key.startswith("session_worktrees:")]
+
+
 def test_a_local_credential_key_that_is_not_backed_up_is_a_warning_or_a_note():
     from types import SimpleNamespace
 

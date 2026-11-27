@@ -53,7 +53,7 @@ thread_local! {
     pub(crate) static WORKTREE_WAIT: std::cell::Cell<Option<(Duration, Duration)>> = const { std::cell::Cell::new(None) };
 }
 
-fn slug_ok(name: &str) -> bool {
+pub(crate) fn slug_ok(name: &str) -> bool {
     static SLUG: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     SLUG.get_or_init(|| Regex::new(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$").unwrap())
         .is_match(name)

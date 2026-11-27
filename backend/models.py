@@ -1578,6 +1578,33 @@ class DiskCleanupReadiness(Contract):
     still_low: StrictBool = False
 
 
+# Bounds that keep Health's arithmetic finite: a count and a size no real computer reaches (8 EiB).
+SESSION_WORKTREES_MOST = 1_000_000
+SESSION_WORKTREE_BYTES_MOST = 2**63 - 1
+
+
+class SessionWorktreesBot(Contract):
+    """One bot's session worktrees on the computer: how many and their size on disk."""
+
+    count: int = Field(ge=0, le=SESSION_WORKTREES_MOST)
+    bytes: int = Field(ge=0, le=SESSION_WORKTREE_BYTES_MOST)
+
+
+SESSION_WORKTREE_BOTS = 200
+
+
+class SessionWorktreesReadiness(Contract):
+    """Each bot's session worktrees (sessions/bot-<bot>/<task>) and their size, measured at `at`
+    (runner-rs/src/session_sizes.rs), so Health shows a pile-up before the disk fills."""
+
+    at: str = Field(max_length=40)
+    bots: Annotated[
+        # A bot id as the runner's session folders take it (runner-rs/src/sessions.rs slug_ok).
+        dict[Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")], SessionWorktreesBot],
+        BeforeValidator(lambda v: dict(list(v.items())[:SESSION_WORKTREE_BOTS]) if isinstance(v, dict) else v),
+    ] = Field(default_factory=dict)
+
+
 class ContainerExecReadiness(Contract):
     """A throwaway container start on the computer (runner-rs/src/readiness_extra.rs)."""
 
@@ -1662,6 +1689,8 @@ class StructuredReadiness(Contract):
     disk: DiskReadiness | None = None
     # Sent once the computer has cleaned up a low disk by itself; an older server's 422 drops it for ten minutes.
     disk_cleanup: DiskCleanupReadiness | None = None
+    # Each bot's session worktrees and their size; an older server's 422 drops it for ten minutes.
+    session_worktrees: SessionWorktreesReadiness | None = None
     # Bots run as their own user here (runner-rs/src/isolation.rs), so a Tico model may run (backend/models_preset.py).
     isolated: bool | None = None
     relationship_lanes: bool | None = None
@@ -1695,6 +1724,7 @@ class StructuredReadiness(Contract):
             data.pop("disk", None)
         for field in (
             "disk_cleanup",
+            "session_worktrees",
             "container_exec",
             "github_auth",
             "browser_launch",

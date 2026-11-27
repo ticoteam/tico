@@ -425,7 +425,7 @@ export const healthQuery = queryOptions({
   queryKey: ['settings', 'health'],
   queryFn: async ({ signal }) => {
     const h = await api.get<Health>('/api/v2/health', { signal });
-    return { checked: h.checked, attention: h.attention, checks: h.checks as HealthCheck[], stuck: stuckOf(h) };
+    return { checked: h.checked, attention: h.attention, checks: h.checks as HealthCheck[], stuck: stuckOf(h), sessions: sessionWorktreesOf(h) };
   },
 });
 
@@ -1547,6 +1547,26 @@ export interface StuckAgent {
   why: string;
   oldest?: string | null;
 }
+
+/** One bot's session worktrees on one computer (backend/health.py `_session_worktrees`, on the computer's disk row). */
+export interface SessionWorktrees {
+  computer: string;
+  label: string;
+  bot: string;
+  name: string;
+  count: number;
+  bytes: number;
+}
+
+type HealthComputer = { id: string; label: string; disk?: { session_worktrees?: unknown } | null };
+
+/** Every computer's session worktrees, each bot on it largest first, as Health reports them to an administrator. */
+export const sessionWorktreesOf = (h: { computers?: unknown } | undefined): SessionWorktrees[] =>
+  (Array.isArray(h?.computers) ? (h.computers as HealthComputer[]) : []).flatMap((c) =>
+    (Array.isArray(c.disk?.session_worktrees) ? (c.disk.session_worktrees as Omit<SessionWorktrees, 'computer' | 'label'>[]) : []).map(
+      (row) => ({ ...row, computer: c.id, label: c.label }),
+    ),
+  );
 
 export const stuckOf = (h: { stuck?: unknown } | undefined): StuckAgent[] => (Array.isArray(h?.stuck) ? (h.stuck as StuckAgent[]) : []);
 
