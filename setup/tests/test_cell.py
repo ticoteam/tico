@@ -2764,15 +2764,27 @@ def test_add_with_a_page_host_makes_its_folder_and_names_it_to_the_server(ready)
     assert (str(folder), cell.SERVER_UID, cell.SERVER_UID) in ready.system.chowns
     assert record(ready, "acme")["page_host"] == "acme.tico.page"
     env = (ready.root / "companies" / "acme" / ".env").read_text()
-    assert (
-        "TICO_READER_ORIGIN=https://acme.tico.page\n" in env and "TICO_COMPANY_PAGE_DIR=/company-page-public\n" in env
-    )
+    assert "TICO_READER_ORIGIN=https://acme.tico.page\n" in env and "/company-page-public" not in env
     override = (ready.root / "companies" / "acme" / "compose.cell.yaml").read_text()
-    assert (
-        f"      - {folder}:/company-page-public\n" in override
-        and "TICO_READER_ORIGIN: https://acme.tico.page" in override
-    )
+    # The server gets no page folder: the Company page is retired, so nothing on it writes one.
+    assert str(folder) not in override and "/company-page-public" not in override
+    assert "TICO_READER_ORIGIN: https://acme.tico.page" in override
     assert f'respond "{cell.PAGE_GONE}" 404' in site_of(caddyfile(ready), "acme.tico.page")
+
+
+@pytest.mark.parametrize("version", ["v1.2.3", "v1.3.0"])
+def test_an_update_retires_a_page_host_that_an_older_core_still_serves(ready, version):
+    """An older core's router serves the page folder. A routine update (the same release or a new one) rewrites and
+    reloads the router, so the saved pages stop being served without any other command."""
+    ready(*add_args(ready, "acme", "--page-host", "acme.tico.page"))
+    path = ready.root / "router" / "Caddyfile"
+    legacy = "http://acme.tico.page:8080 {\n\troot * /pages/acme\n\tfile_server\n}\n"
+    path.write_text(legacy)
+    before = ready.system.argv_text()
+    assert ready("update", "--company", "acme", "--version", version)["ok"]
+    site = site_of(path.read_text(), "acme.tico.page")
+    assert f'respond "{cell.PAGE_GONE}" 404' in site and "file_server" not in site and "/pages/" not in site
+    assert "caddy reload" in ready.system.argv_text()[len(before) :]
 
 
 def test_a_company_without_a_page_host_has_no_folder_no_page_settings_and_no_page_route(ready):
@@ -2798,14 +2810,12 @@ def test_set_page_host_turns_the_page_on_for_a_running_company_and_keeps_its_oth
     assert answer["ok"] and answer["changed"] and answer["page_host"] == "acme.tico.page"
     assert record(ready, "acme")["page_host"] == "acme.tico.page"
     env = (env_dir / ".env").read_text()
-    assert (
-        "TICO_READER_ORIGIN=https://acme.tico.page\n" in env and "TICO_COMPANY_PAGE_DIR=/company-page-public\n" in env
-    )
+    assert "TICO_READER_ORIGIN=https://acme.tico.page\n" in env and "/company-page-public" not in env
     kept = [line for line in before.splitlines() if not line.startswith("#")]
     assert all(line in env.splitlines() for line in kept)  # sign-in, backups and the rest are untouched
     folder = ready.root / "pages" / "acme"
     assert stat.S_IMODE(folder.stat().st_mode) == 0o755
-    assert f"      - {folder}:/company-page-public\n" in (env_dir / "compose.cell.yaml").read_text()
+    assert str(folder) not in (env_dir / "compose.cell.yaml").read_text()
     assert f'respond "{cell.PAGE_GONE}" 404' in site_of(caddyfile(ready), "acme.tico.page")
 
 

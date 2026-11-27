@@ -430,8 +430,7 @@ python3 -m setup cell add --company ticoteam --own-domain --domain hub.tico.team
   invite, owner link, backup, company file), its sign-in, network, preset and support keys, and the ones that belong
   to a single-company install: `CLOUDFLARE_TUNNEL_TOKEN`, `COMPOSE_PROFILES`, `COMPOSE_PROJECT_NAME`,
   `TICO_UPDATER_URL`, `TICO_UPDATES`, `TICO_CELL`, `TICO_TAG`, `TICO_PORT`, `TICO_EXPECTED_AWS_ACCOUNT`,
-  `TICO_EXPECTED_AWS_ROLE`, `TICO_CADDY*`, `TICO_TUNNEL*`, the page's `TICO_READER_ORIGIN` and
-  `TICO_COMPANY_PAGE_DIR`, and the KMS settings (`TICO_CREDENTIAL_KMS_KEY`, `_CONTEXT`, `_ACCESS_KEY_ID`,
+  `TICO_EXPECTED_AWS_ROLE`, `TICO_CADDY*`, `TICO_TUNNEL*`, the page's `TICO_READER_ORIGIN`, and the KMS settings (`TICO_CREDENTIAL_KMS_KEY`, `_CONTEXT`, `_ACCESS_KEY_ID`,
   `_SECRET_ACCESS_KEY`, `_REGION`: only `--kms-key` and `--kms-credentials-file` set them). So pass the team name and sign-in button as `--company-name` and `--signin-label`,
   not in the file. The values are secrets: never printed, masked in every detail. Passing `--env-file` again replaces
   `extra.env`; leaving it out keeps it.

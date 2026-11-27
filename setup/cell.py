@@ -198,7 +198,6 @@ MAX_ALIASES = 5
 # A company's page host, from the retired Company page: a folder of the cell's own was mounted into the company's server
 # and read by the router. The router now answers 404 on the host (page_site); the folder stays until the host is retired.
 PAGES = "pages"  # under the cell root: one folder per company with a page host
-PAGE_MOUNT = "/company-page-public"  # where the retired Company page wrote its release folders
 PAGE_MOUNT_ROUTER = "/pages"  # where the router reads every company's folder, read-only
 PAGE_GONE = "The Company page is no longer served."  # what a page host answers to everything (page_site)
 
@@ -283,7 +282,6 @@ CELL_ENV_KEYS = frozenset(
         "TICO_EXPECTED_AWS_ACCOUNT",
         "TICO_EXPECTED_AWS_ROLE",
         "TICO_READER_ORIGIN",
-        "TICO_COMPANY_PAGE_DIR",
         *MEET_ENV_KEYS,
         *KMS_ENV,
     }
@@ -1429,17 +1427,12 @@ def docker_time(value: str) -> float | None:
     return t.timestamp() + float(m.group(2) or 0)
 
 
-def company_override(c: dict, data_dir: Path, pages: Path | None = None) -> str:
+def company_override(c: dict, data_dir: Path) -> str:
     """The control folder replaces the stock tico-control volume (Compose merges volumes by their target), so the cell
-    updater reads the token where the server reads it, and no other company's server mounts it. A page host adds its
-    folder of public files, read-write, and the two settings that name it (the company's server writes them there)."""
+    updater reads the token where the server reads it, and no other company's server mounts it. A page host adds the
+    setting that names it; the server gets no page folder (the Company page is retired: nothing writes one)."""
     n = networks(c["index"])
-    page = (
-        [f"      TICO_COMPANY_PAGE_DIR: {PAGE_MOUNT}", f"      TICO_READER_ORIGIN: https://{c['page_host']}"]
-        if c.get("page_host")
-        else []
-    )
-    mount = [f"      - {pages}:{PAGE_MOUNT}"] if c.get("page_host") and pages else []
+    page = [f"      TICO_READER_ORIGIN: https://{c['page_host']}"] if c.get("page_host") else []
     # The Slack gateway, when it is on: the server's limits with a memory limit of its own, and the data folder only
     # (no control/: the updater token is the server's alone). It stays on the company's default network.
     slack = (
@@ -1462,7 +1455,7 @@ def company_override(c: dict, data_dir: Path, pages: Path | None = None) -> str:
             [
                 "# Written by `python3 -m setup cell`: what makes the stock compose.yaml beside it one company of many on a",
                 "# shared host. Its own data and control folders, a memory limit, its own two networks (so none collide), the",
-                "# cell marker, a label for `list`, and its page folder when it has a page host; the same for its Slack",
+                "# cell marker, a label for `list`, and its page host's origin when it has one; the same for its Slack",
                 "# gateway when it is on.",
                 "services:",
                 "  server:",
@@ -1476,7 +1469,6 @@ def company_override(c: dict, data_dir: Path, pages: Path | None = None) -> str:
                 "    volumes:",
                 f"      - {data_dir}:/data",
                 f"      - {data_dir.parent / 'control'}:/control",
-                *mount,
                 *slack,
                 "networks:",
                 "  default:",
@@ -2650,7 +2642,7 @@ class Cell:
                     TICO_COMPANY_FILE_DIR=str(d / contract.COMPANY_FILE_DIR),
                 )
                 if host:
-                    env.update(TICO_READER_ORIGIN=f"https://{host}", TICO_COMPANY_PAGE_DIR=PAGE_MOUNT)
+                    env.update(TICO_READER_ORIGIN=f"https://{host}")
                 env.update(self.kms_values(slug, old_env, kms_arn, kms_keys, cell.get("kms_key")))
                 env = cell_env(env, c, meet)
                 # Carried settings fill only what the cell leaves unset: a key it writes with a value is its own.
@@ -2818,7 +2810,7 @@ class Cell:
             self.system.chown(p, SERVER_UID, SERVER_UID)
         changed = _write_atomic(d / "compose.yaml", compose)
         changed = (
-            _write_atomic(d / "compose.cell.yaml", company_override(c, data, self.pages_dir(c["slug"]))) or changed
+            _write_atomic(d / "compose.cell.yaml", company_override(c, data)) or changed
         )
         return self.updater_token(d) or changed
 
@@ -3057,11 +3049,10 @@ class Cell:
                     os.chmod(pages, 0o755)
                     self.system.chown(pages, SERVER_UID, SERVER_UID)
                     c["page_host"] = host
-                    env.update(TICO_READER_ORIGIN=f"https://{host}", TICO_COMPANY_PAGE_DIR=PAGE_MOUNT)
+                    env.update(TICO_READER_ORIGIN=f"https://{host}")
                 else:
                     c.pop("page_host", None)
                     env.pop("TICO_READER_ORIGIN", None)
-                    env.pop("TICO_COMPANY_PAGE_DIR", None)
                 c["page_pending"] = True
                 self.write_company(c, envfile.render(env), "")
                 self.save(c)
@@ -3141,6 +3132,9 @@ class Cell:
         release and database come back. `pending` is saved, so a command that dies half-way is still rolled back by the
         next start. A stop or snapshot that fails changes nothing and the old release is started again.
 
+        The router is rewritten from this core's config afterwards (`routed`), so a company keeps no route an older core
+        made and this one retired.
+
         With the new release come this core's compose files, token and updater keys in .env (`write_compose`,
         `cell_env`). On the release the company already runs they are rewritten alone, and a running server is
         recreated only when one changed (`changed`): a company made by an older core picks up its updater that way.
@@ -3148,6 +3142,9 @@ class Cell:
         --kms-key and --kms-credentials-file put the company's stored secrets on KMS (`kms_values`); left out, the
         saved ones stay. The answer says whether KMS is set (`kms_answer`)."""
         answer = self._update(args)
+        # The router as this core writes it: one an older core left keeps serving whatever that core served (a page
+        # host's saved files) until something rewrites it, and an update is the one command every company gets.
+        self.routed()
         self.prune_quietly()  # every release leaves an image and a core folder behind; outside the company's lock
         return {**answer, **kms_answer(envfile.parse(_read(self.dir(answer["company"]) / ".env")))}
 
