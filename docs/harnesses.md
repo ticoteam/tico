@@ -581,7 +581,8 @@ is a few lines in `runner-rs/src/hosts/<host>.rs` reached from `prepare_login_ho
 A new built-in ACP harness needs no Rust host module of its own: add its manifest, its entry in `BUILT_IN`
 (`runner-rs/src/harness_tools.rs`) and its provider in the backend catalog (`backend/providers.py`). The generic host
 assumes sign-in happens outside ACP, through an API key in the environment or the CLI's own login store; it never
-sends ACP's `authenticate`.
+sends ACP's `authenticate`. Its agent runs as the bot user, so an ACP manifest cannot set `capabilities.isolated_user`
+yet.
 
 The host keeps a process only once it has answered `initialize`; one that refuses is stopped and reaped, never reused.
 A restart waits for the old process to be reaped, not just for its output to close, so two never run side by side.

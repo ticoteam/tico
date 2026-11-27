@@ -699,6 +699,12 @@ pub fn parse(data: &toml::Table, source: &str) -> Result<Manifest, String> {
         _ => None,
     };
     let capabilities = parse_capabilities(data.get("capabilities"), &at)?;
+    // The generic ACP host starts its agent as the bot user, not a leased per-turn user: it cannot keep that promise.
+    if acp.is_some() && capabilities.isolated_user {
+        return Err(format!(
+            "{at}: an ACP harness runs as the bot user; capabilities.isolated_user is not supported"
+        ));
+    }
     Ok(Manifest {
         id: ident.into(),
         name: name.into(),
@@ -2644,6 +2650,10 @@ default_model = "acme-1"
             (ACP_CLI.replace("host = \"acme\"", "host = \"acme\"\nruntime = \"acme-cli\""), "an ACP harness's runtime is its host (acme)"),
             (ACP_CLI.replace("default_model = \"acme-1\"\n", ""), "acp.default_model is needed"),
             (ACP_CLI.replace("host = \"acme\"", "host = \"Acme\""), "host 'Acme' is not an adapter"),
+            (
+                format!("{ACP_CLI}\n[capabilities]\nisolated_user = true\n"),
+                "an ACP harness runs as the bot user; capabilities.isolated_user is not supported",
+            ),
         ];
         for (text, error) in cases {
             let got = acp_manifest(&text).unwrap_err();
