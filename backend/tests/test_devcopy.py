@@ -248,7 +248,7 @@ def test_server_env_sources_whole_with_spaces(tmp_path, booted):
     assert out.stdout == str(dest)
 
 
-def test_a_dev_copy_drops_deleted_tasks_requesters_and_gets_its_own_roadmap_secret(tmp_path, booted):
+def test_a_dev_copy_drops_deleted_tasks_requesters(tmp_path, booted):
     import json
     from backend import roadmaps
     from backend.task_delete import delete_tasks
@@ -261,7 +261,6 @@ def test_a_dev_copy_drops_deleted_tasks_requesters_and_gets_its_own_roadmap_secr
             c, task["id"], {"email": "jane@customer.example", "phone": "555-0100", "source": "public_form"}
         )
         assert delete_tasks(c, [task["id"]], apply=True)["applied"]
-        secret = c.execute("SELECT value FROM registry_metadata WHERE key='roadmap_ip_secret'").fetchone()[0]
         assert "jane@customer.example" in c.execute("SELECT rows FROM task_trash").fetchone()[0]
     for c in store.pool:
         c.close()
@@ -272,8 +271,6 @@ def test_a_dev_copy_drops_deleted_tasks_requesters_and_gets_its_own_roadmap_secr
         rows = json.loads(c.execute("SELECT rows FROM task_trash").fetchone()[0])["rows"]
         assert "task_requesters" not in rows and rows["tasks"][0]["title"] == "Faster exports"
         assert "jane@customer.example" not in json.dumps(rows) and "555-0100" not in json.dumps(rows)
-        copied = c.execute("SELECT value FROM registry_metadata WHERE key='roadmap_ip_secret'").fetchone()[0]
-        assert copied != secret and len(json.loads(copied)) == 64
 
 
 def test_keep_automations_keeps_definitions_and_empties_their_queues_and_secrets(tmp_path, booted):

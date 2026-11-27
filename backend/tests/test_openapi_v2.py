@@ -460,8 +460,6 @@ def test_the_declared_answers_match_the_live_ones(api):
     ranked = call("listRoadmapTasks", "get", "/api/v2/roadmap-tasks", params={"sort": "organization", "limit": "1"})
     assert ranked["tasks"][0]["organization"] == "Globex"
     call("deleteTaskRequester", "post", "%s/%s/delete" % (requesters, added["id"]), json={})
-    call("getRoadmapSettings", "get", "/api/v2/roadmaps/settings")
-    call("setRoadmapSettings", "post", "/api/v2/roadmaps/settings", json={"action_limit": 20})
     call("listPipelines", "get", "/api/v2/pipelines")
     call("getPipeline", "get", "/api/v2/pipelines/general")
     said = call("commentOnTask", "post", "/api/v2/tasks/" + task["id"] + "/comments", json={"text": "looks good"})

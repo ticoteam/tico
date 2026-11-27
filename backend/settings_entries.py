@@ -1451,18 +1451,6 @@ ENTRIES = TEAM_RULES + [
     ),
     # Tasks
     S(
-        "roadmap.public",
-        "Public roadmap",
-        TASKS + " > Public roadmap",
-        "admin",
-        "confirm",
-        "POST",
-        "roadmaps/settings",
-        value="json",
-        card=_card("tasks", "settings-roadmaps"),
-        words="publish public",
-    ),
-    S(
         "tasks.tag.create",
         "New task tag",
         TASKS + " > Task tags",
@@ -1742,8 +1730,8 @@ NOT_SETTINGS = {
     ("POST", "screening/test"): "runs screening's built-in samples; nothing is kept",
     ("POST", "{x}/deliveries/{x}/replay"): "replays one delivery",
     ("POST", "{x}/sends/{x}/retry"): "retries one send",
-    ("POST", "tasks/{x}/comments/{x}/moderate"): "moderates one comment on a public roadmap task",
-    ("POST", "tasks/{x}/requesters/{x}/delete"): "removes one requester from a public roadmap task",
-    ("POST", "tasks/{x}/requesters{x}"): "adds one requester to a public roadmap task",
+    ("POST", "tasks/{x}/comments/{x}/moderate"): "moderates one comment on a public task",
+    ("POST", "tasks/{x}/requesters/{x}/delete"): "removes one requester from a task",
+    ("POST", "tasks/{x}/requesters{x}"): "adds one requester to a task",
     ("POST", "postal/items/{x}/retry"): "tries one failed letter again",
 }

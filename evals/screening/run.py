@@ -27,7 +27,7 @@ NO_CREDENTIALS = (
 
 
 def fresh_org():
-    org = X.Org(extra_bots=X.BOTS).__enter__()
+    org = X.Org().__enter__()
     org.store.settings.decisions_monthly_usd = 1_000_000.0  # the eval checks the doors, not the company's cap
     return org
 

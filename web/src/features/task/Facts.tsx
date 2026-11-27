@@ -298,9 +298,9 @@ function PeopleFact({ t }: { t: TaskData }) {
   );
 }
 
-const VISIBLE: Record<Visible, string> = { team: 'Team', public: 'Public roadmap', private: 'Private' };
+const VISIBLE: Record<Visible, string> = { team: 'Team', public: 'Public', private: 'Private' };
 
-/** Team, Public roadmap (a roadmap task) or Private; a private task's people: who asked, who has it and a person
+/** Team, Public (a roadmap task whose public title and summary may go outside the team) or Private; a private task's people: who asked, who has it and a person
     assignee (each reads it by being that, hubdb.task_private_readable), then readers. */
 function VisibleFact({ t }: { t: TaskData }) {
   const nameOf = useNames();

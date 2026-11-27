@@ -1352,14 +1352,13 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None, private=No
         # count(*) from the base table, which the authorizer rightly refuses.
         "listening_sources": "id IS NOT NULL" if admin and not bot else "id IS NULL",
         "listening_items": "id IS NOT NULL" if admin and not bot else "id IS NULL",
-        # The roster, the sign-in lists and roles, onboarding: for the owner and the Admins. Never the key that
-        # hashes roadmap visitors' addresses: with it the small IPv4 space turns every stored hash back into an address.
+        # The roster, the sign-in lists and roles, onboarding: for the owner and the Admins.
         # The setup research job (backend/strategy_setup.py) holds the owner's words and an unpublished draft, and the
         # imported company file (backend/company_import.py) its unpublished strategy: the owner's.
         # Nor the never-stuck reading's tasks and break sentences (health.NEVER_STUCK_TASKS_KEY): they name tasks an
         # Admin may not read. Its numbers (health:never_stuck) are readable.
         "registry_metadata": (
-            "key NOT IN ('roadmap_ip_secret','health:never_stuck:tasks')"
+            "key NOT IN ('health:never_stuck:tasks')"
             + ("" if owner else " AND key NOT IN ('strategy.draft_from','onboarding.company_file')")
         )
         if admin and not bot

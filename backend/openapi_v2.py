@@ -67,7 +67,7 @@ TAGS = {
     # Automations (backend/automations.py).
     'Automations': "A trigger and a tree of steps (filter, decide, llm, find, bot_turn, paths, action), saved as versions; "
     "one permission rule for UI, CLI and MCP.",
-    'Roadmaps': "The Roadmap's ranked Product tasks, company roadmap settings and internal requesters (docs/roadmaps.md).",
+    'Roadmaps': "The Roadmap's ranked Product tasks and internal requesters (docs/roadmaps.md).",
     'Support': 'Reports to Tico support (docs/support.md).',
     'Rules': "Org rules: what teammates follow (internal) and what someone outside requires (external), with their "
     "due dates and sources.",
@@ -161,7 +161,6 @@ WRITE_METHODS = ("post", "put", "patch", "delete")
 DESCRIPTION = (
     "The stable API for building your own frontend on Tico. Everything here keeps its shape within v2: fields are added, "
     "never removed or renamed, and a breaking change is a new /api/v3. Routes not listed are internal. "
-    "Public roadmap writes require an allowlisted Origin; reads permit server-side requests. No sign-in or idempotency key (docs/roadmaps.md). "
     "Granola connection and sync writes do not require an idempotency key, nor does POST /api/v2/inbound/tasks, whose "
     "own `key` is its idempotency. Inbox company connection actions reconcile the same short-lived code under current grant checks. "
     "Other writes need an `Idempotency-Key` header (1-200 characters; a retry with the same "

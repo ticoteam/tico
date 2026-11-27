@@ -34,7 +34,6 @@ import {
   setMyNotice,
   setPageOwner,
   setPlanExit,
-  setRoadmap,
   addContactField,
   addProductUpdate,
   changeOwnerEmail,
@@ -95,7 +94,6 @@ import {
   healthQuery,
   markChangelogRead,
   resetAsk,
-  roadmapQuery,
   saveAsk,
 } from './queries';
 import { renameCompany } from './queries';
@@ -854,30 +852,6 @@ export const settleRun = defineAction({
 });
 
 // ---------------------------------------------------------------- tasks and contacts
-
-export const roadmapLabels = defineAction({
-  id: 'settings.roadmapLabels',
-  title: 'Change the labels on the public roadmap',
-  kind: 'change',
-  input: z.strictObject({ labels: z.array(z.string().check(z.minLength(1), z.maxLength(200))).check(z.maxLength(50)) }),
-  // What the public sees: Tico may only take a label off (shows less); putting one on is the person's own press.
-  can: (ctx, { labels }) => ctx.via !== 'tico' || labels.every((l) => ctx.queryClient.getQueryData(roadmapQuery.queryKey)?.labels.includes(l)),
-  run: (_ctx, { labels }) => setRoadmap({ labels }),
-  did: () => 'Roadmap changed',
-  target: () => setting('roadmap'),
-});
-
-export const roadmapApproval = defineAction({
-  id: 'settings.roadmapApproval',
-  title: "Ask a person before an agent's words go public",
-  kind: 'change',
-  input: z.strictObject({ on: z.boolean() }),
-  // Asking first is Tico's; dropping the ask lets an agent's words leave the company unread.
-  can: (ctx, { on }) => !(!on && ctx.via === 'tico'),
-  run: (_ctx, { on }) => setRoadmap({ bot_public_approval: on }),
-  did: ({ on }) => (on ? 'Turned on' : 'Turned off'),
-  target: () => setting('roadmap-approval'),
-});
 
 export const addField = defineAction({
   id: 'settings.addField',

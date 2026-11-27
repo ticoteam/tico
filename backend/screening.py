@@ -5,7 +5,7 @@ Six doors, each with its own mode (off, warn or hold; Settings > Security > Scre
 
   webhook  a call whose automation opens a task or starts a bot's turn, and a `create_task` rule on `webhook.received`
   mail     an inbound message (backend/inbound.py) a bot reads
-  idea     the public roadmap's suggestion form (backend/public_roadmaps.py)
+  idea     a company page reader's message to the company (backend/company_page/readers.py)
   watcher  a watcher's new task (backend/watchers.py), except the Support Agent's HQ tickets, which support triage
            checks (backend/support_triage.py)
   document a document's text as the Rules Owner reads it (backend/counsel.py)

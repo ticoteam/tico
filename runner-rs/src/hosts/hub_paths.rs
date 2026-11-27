@@ -777,7 +777,6 @@ pub(super) const HUB_PATHS: &[&str] = &[
     "risks unlink",
     "risks update",
     "roadmap",
-    "roadmap settings",
     "roadmap tasks",
     "rule",
     "rule accept",

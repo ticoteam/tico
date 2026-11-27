@@ -1,23 +1,14 @@
 """Who changes a task's labels: a mover any label; a bot a classification label on a task it manages (its own, one
-it asked for, or one in a pipeline it manages or owns); a label on a public roadmap or one Tico acts on keeps its gate.
-The publish approval that once let a bot add a public label went with the old engine: the refusal says a person adds it
-and names no removed command, and the publication preview answers 404 until it returns (backend/roadmaps.py NOT_YET)."""
+it asked for, or one in a pipeline it manages or owns); a label Tico acts on keeps its gate. A label that was on the
+removed public roadmap (task #4095) is a classification label like any other."""
 
 import json
 
 from backend import hubdb as H, pipeline_settings
 from backend.task_calls import SYSTEM
-from backend.tests.helpers.roadmaps import public_setup as roadmap_public_setup  # noqa: F401
 from backend.tests.helpers.tasks_board import api, get, headers, post  # noqa: F401
 from backend.tests.helpers.tasks_board import bot_token as board_bot_token  # noqa: F401
 from backend.tests.helpers.task_quarantine import OPEN_SQL
-
-
-def public_setup(api):
-    """The public roadmap, set up once on the shared hub (`test_roadmaps.public_setup` creates its tags)."""
-    if getattr(api, "public_item", None) is None:
-        api.public_item = roadmap_public_setup(api)
-    return api.public_item
 
 
 def bot_token(api, slug="ops"):
@@ -88,25 +79,27 @@ def _a_bot_adds_and_removes_a_classification_label_on_its_own_roadmap_item(api):
     assert label(api, other["id"], ["area-imports"], token)["labels"] == ["area-imports"]
 
 
-def _a_public_roadmap_label_is_refused_both_ways_and_never_applied_silently(api):
-    public_setup(api)
+def old_roadmap_settings(api, labels=("roadmap",)):
+    """A company that had set up the removed public roadmap: its settings row, as it was saved, naming `labels`."""
+    for key in labels:
+        if not any(t["key"] == key for t in get(api, "tags")["tags"]):
+            post(api, "tags", {"key": key})
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO registry_metadata(key,value) VALUES('roadmaps',?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (json.dumps({"labels": list(labels), "bot_public_approval": True}),),
+        )
+
+
+def _a_label_once_on_the_old_roadmap_is_a_classification_label_now(api):
+    """Task #4095: the public roadmap and its label gate are gone, so even a company whose old settings still named a
+    label lets a bot add and remove it on a task it manages, as any classification label."""
+    old_roadmap_settings(api)
     token = bot_token(api, "cpo")
     item = post(api, "tasks", {"owner": "cpo", "title": "Research search", "body": "x", "pipeline": "product"})
-    refused = label(api, item["id"], ["roadmap", "area-search"], token, expected=403)["error"]
-    assert refused["code"] == "label"
-    assert "roadmap is a public roadmap label" in refused["detail"] and "publication-preview" not in refused["detail"]
-    assert "a person on the leadership, product, engineering teams changes it" in refused["detail"]
-    assert "area-search you may change on its own" in refused["detail"]
-    assert get(api, "tasks/" + item["id"])["task"]["labels"] == []
-    # Taking it off the roadmap is checked the same way.
-    assert label(api, item["id"], ["roadmap"], "ben-test")["labels"] == ["roadmap"]
-    label(api, item["id"], [], token, expected=403)
-    assert get(api, "tasks/" + item["id"])["task"]["labels"] == ["roadmap"]
-    # A team that does not ask bots for approvals leaves the public labels to a person.
-    post(api, "roadmaps/settings", {"bot_public_approval": False})
-    refused = label(api, item["id"], [], token, expected=403)["error"]
-    assert "a person on the leadership, product, engineering teams changes it" in refused["detail"]
-    assert label(api, item["id"], [], "ben-test")["labels"] == []  # a person who is a mover, as before
+    assert label(api, item["id"], ["roadmap", "area-search"], token)["labels"] == ["roadmap", "area-search"]
+    assert label(api, item["id"], [], token)["labels"] == []
 
 
 def _a_label_tico_acts_on_stays_a_movers_even_on_the_bots_own_task(api):
@@ -147,7 +140,6 @@ def _a_bot_labels_no_private_task_it_cannot_see_nor_a_ticket_it_does_not_manage(
 
 
 def _a_pipelines_owner_bot_labels_its_tasks_as_its_manager_does_and_gains_no_more(api):
-    public_setup(api)
     token = bot_token(api, "cpo")
     ticket = post(api, "tasks", {"owner": "cmo", "title": "Ship the release", "body": "x", "pipeline": "engineering"})
     # Neither manager nor owner of the pipeline: not its to change at all.
@@ -171,16 +163,13 @@ def _a_pipelines_owner_bot_labels_its_tasks_as_its_manager_does_and_gains_no_mor
         headers=headers(token),
     )
     assert r.status_code == 403 and r.json()["error"]["code"] == "identity", r.text
-    # Labels Tico acts on and public roadmap labels keep their gate, both ways.
-    refused = label(api, ticket["id"], ["goal:on"], token, expected=403)["error"]
+    # Labels Tico acts on keep their gate, both ways.
+    refused = label(api, ticket["id"], ["goal:on", "release:next"], token, expected=403)["error"]
     assert refused["code"] == "label" and "how Tico runs the task" in refused["detail"]
-    refused = label(api, ticket["id"], ["roadmap", "release:next"], token, expected=403)["error"]
-    assert refused["code"] == "label" and "roadmap is a public roadmap label" in refused["detail"]
     assert get(api, "tasks/" + ticket["id"])["task"]["labels"] == []
-    assert label(api, ticket["id"], ["goal:on", "roadmap"], "ben-test")["labels"] == ["goal:on", "roadmap"]
-    for wanted in (["roadmap"], ["goal:on"]):
-        assert label(api, ticket["id"], wanted, token, expected=403)["error"]["code"] == "label"
-    assert get(api, "tasks/" + ticket["id"])["task"]["labels"] == ["goal:on", "roadmap"]
+    assert label(api, ticket["id"], ["goal:on"], "ben-test")["labels"] == ["goal:on"]
+    assert label(api, ticket["id"], [], token, expected=403)["error"]["code"] == "label"
+    assert get(api, "tasks/" + ticket["id"])["task"]["labels"] == ["goal:on"]
 
 
 def _a_bot_still_changes_no_lane_or_number_and_a_mover_is_unchanged(api):
@@ -342,8 +331,9 @@ def test_a_bot_creates_a_task_with_a_classification_label_but_not_one_tico_acts_
     assert [rule for rule, _ in refusals(api, "cpo")] == ["label", "label"] and state(api, "cpo") == "active"
 
 
-def test_a_bot_creates_no_task_with_a_public_roadmap_label_and_is_told_the_way_through(api):
-    public_setup(api)
+def test_a_bot_creates_a_task_with_a_label_the_removed_roadmap_settings_named(api):
+    """Task #4095: creating a task with a label the old public roadmap settings named is no longer refused."""
+    old_roadmap_settings(api)
     pipelines(api)
     token = bot_token(api, "cpo")
     body = {
@@ -353,26 +343,11 @@ def test_a_bot_creates_no_task_with_a_public_roadmap_label_and_is_told_the_way_t
         "pipeline": "product",
         "labels": ["roadmap", "area-search"],
     }
-    before = written(api)
-    refused = post(api, "tasks", body, token=token, expected=403)["error"]
-    assert refused["code"] == "label" and "roadmap is a public roadmap label" in refused["detail"]
-    assert (
-        "create the task without it, and a person on the leadership, product, engineering teams adds it"
-        in refused["detail"]
-    )
-    assert "--approval-id" not in refused["detail"] and "area-search you may set on its own" in refused["detail"]
-    assert created(api, "cpo", "Research search") == 0
-    post(api, "roadmaps/settings", {"bot_public_approval": False})
-    refused = post(api, "tasks", body, token=token, expected=403)["error"]
-    assert "a person on the leadership, product, engineering teams adds it" in refused["detail"]
-    assert created(api, "cpo", "Research search") == 0 and written(api) == before
-    # No way through yet: the publication preview answers as the public roadmap does (backend/roadmaps.py NOT_YET).
-    r = api.post("/api/v2/tasks/x/publication-preview", json={"labels": ["roadmap"]}, headers=headers(token))
-    assert r.status_code == 404, r.text
+    made = post(api, "tasks", body, token=token)
+    assert made["labels"] == ["roadmap", "area-search"] and created(api, "cpo", "Research search") == 1
 
 
 def _a_mover_and_the_tico_create_a_task_with_any_label_as_before(api):
-    public_setup(api)
     made = post(
         api,
         "tasks",
@@ -387,8 +362,7 @@ def _a_mover_and_the_tico_create_a_task_with_any_label_as_before(api):
 
 def _fresh(api):
     """A check's starting point on the shared hub, as on a new one: no refusal recorded and no hold open, every bot
-    active, no task open (a title may be asked for again), the two pipelines with no manager or owner, and bots asked
-    for approvals on the public labels once the roadmap is set up."""
+    active, no task open (a title may be asked for again), and the two pipelines with no manager or owner."""
     pipelines(api)
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM refusals")
@@ -397,8 +371,6 @@ def _fresh(api):
         for (tid,) in c.execute("SELECT id FROM tasks WHERE status='open'").fetchall():
             H.task_close(c, SYSTEM, tid, "A fresh start for the next check.")
         c.execute("UPDATE pipelines SET manager_id=NULL, owner_id=NULL WHERE id IN (?, ?)", tuple(PIPELINES))
-    if getattr(api, "public_item", None) is not None:
-        post(api, "roadmaps/settings", {"bot_public_approval": True})
 
 
 def test_who_changes_a_tasks_labels(subtests, api):
@@ -407,7 +379,7 @@ def test_who_changes_a_tasks_labels(subtests, api):
     hub a tag leaked by a refused create (or a successful create of an unknown tag) would go unseen (3d7336456)."""
     checks = (
         _a_bot_adds_and_removes_a_classification_label_on_its_own_roadmap_item,
-        _a_public_roadmap_label_is_refused_both_ways_and_never_applied_silently,
+        _a_label_once_on_the_old_roadmap_is_a_classification_label_now,
         _a_label_tico_acts_on_stays_a_movers_even_on_the_bots_own_task,
         _a_bot_labels_no_private_task_it_cannot_see_nor_a_ticket_it_does_not_manage,
         _a_pipelines_owner_bot_labels_its_tasks_as_its_manager_does_and_gains_no_more,

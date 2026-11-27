@@ -415,7 +415,7 @@ export const setPublic = defineAction({
   target: (i) => ({ kind: 'task-public', id: i.task }),
 });
 
-/* Showing a task to the whole team or on the public roadmap is the person's own press; making it private is open. */
+/* Showing a task to the whole team or marking it public is the person's own press; making it private is open. */
 export const setVisible = defineAction({
   id: 'task.setVisible',
   title: 'Change who can see a task',
@@ -423,7 +423,7 @@ export const setVisible = defineAction({
   input: z.strictObject({ task, to: z.enum(['team', 'public', 'private'] as const) }),
   can: ({ via }, { to }) => !(via === 'tico' && to !== 'private'),
   run: (_ctx, i) => said(setTaskVisible(i.task, i.to)),
-  did: (i) => (i.to === 'private' ? 'Made it private' : i.to === 'public' ? 'Put it on the public roadmap' : 'Shared it with the team'),
+  did: (i) => (i.to === 'private' ? 'Made it private' : i.to === 'public' ? 'Marked it public' : 'Shared it with the team'),
   target: (i) => ({ kind: 'task-visible', id: i.task }),
 });
 

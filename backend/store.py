@@ -985,9 +985,6 @@ class Store:
 
                 plan_exits.initialize(c)
                 self.seed_goals(c)
-                from .public_roadmaps import seed_secret as seed_roadmap_secret
-
-                seed_roadmap_secret(c)
                 # Notes a completed run carried are settled (hubdb.notes_settle): one pass settles the ones from before the
                 # column, in one UPDATE. Unversioned and idempotent; it reads only the small unsettled-carried index.
                 H.notes_settle_catch_up(c, None)

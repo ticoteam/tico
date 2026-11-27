@@ -82,7 +82,6 @@ div.row{cursor:default}
 .lim-cols{display:grid;grid-template-columns:60px 60px 48px;column-gap:var(--s-3);padding-right:var(--s-2);font-size:var(--t-xs);font-weight:var(--w-text);color:var(--muted)}
 .lim-cols>span:not(:last-child){text-align:right}
 .g-utask{--g:minmax(0,1fr) 40px 56px 44px 56px 44px}
-.g-road{--g:minmax(0,1fr) minmax(0,1.6fr) 28px}
 .g-ctype{--g:minmax(0,1fr) 96px}
 .g-cfield{--g:minmax(0,1fr) 120px 150px}
 .g-line{--g:minmax(0,1fr) var(--ctl-sm)}
