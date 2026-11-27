@@ -76,7 +76,7 @@ function Receipt({ ok }: { ok: AssistantOk }) {
       note={`${ok.stage} · via assistant`}
       label="OK'd for you"
       target={`assistant-ok:${ok.answer_id}`}
-      actions={holds?.may.includes('undo') ? <Button onClick={() => void undo()}>Undo</Button> : undefined}
+      actions={holds?.may.includes('undo') ? <Button onClick={undo}>Undo</Button> : undefined}
     />
   );
 }

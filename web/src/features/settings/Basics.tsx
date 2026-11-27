@@ -15,7 +15,7 @@ import { Segmented } from '@/kit/Segmented';
 import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
 import type { MotionChoice } from '@/motion';
-import { Section } from '@/pagekinds';
+import { ReadFault, Section } from '@/pagekinds';
 import { THEME_KEY, usePref, type Theme } from '@/prefs';
 import { Repositories, TeamIcon } from './Company';
 import { CompanyName } from './CompanyName';
@@ -94,15 +94,27 @@ export function General() {
     on. Anyone acting for you (your Assistant, Agent Ops, a personal token) sees it and cannot change it (may_change). */
 function AssistantOks() {
   const oks = useQuery(assistantOksQuery);
-  if (!oks.data) return null;
+  // One write at a time: the switch waits for the server's answer, so a quick on and off is sent in that order.
+  const [saving, setSaving] = useState(false);
+  if (!oks.data) {
+    return oks.isError ? (
+      <Section name="Assistant" target="setting:assistant">
+        <ReadFault what="Assistant" reads={[oks]} inline />
+      </Section>
+    ) : null;
+  }
+  const change = (on: boolean) => {
+    setSaving(true);
+    void act('settings.assistantGivesOks', { on }).finally(() => setSaving(false));
+  };
   return (
     <Section name="Assistant" target="setting:assistant">
       <Facts label="Assistant">
         <SwitchLine
           label="Give OKs for me when I tell you to"
           checked={oks.data.gives_oks}
-          disabled={!oks.data.may_change}
-          onChange={(on) => void act('settings.assistantGivesOks', { on })}
+          disabled={!oks.data.may_change || saving}
+          onChange={change}
         />
         <div className="fact set-sw">
           <p className="set-cmd-note">Stage OKs and approval pages only. Sends, money, files and access always need your own click.</p>

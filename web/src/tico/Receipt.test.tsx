@@ -46,14 +46,18 @@ const taskWith = (answer: string | null, may: string[]) => ({
 let sent: string[] = [];
 let task: unknown;
 let undo: { status: number; body: unknown };
+/** While set, the Undo's answer waits for it. */
+let held: Promise<void> | null = null;
 
 beforeEach(() => {
   sent = [];
+  held = null;
   task = taskWith('a1', ['undo']);
   undo = { status: 200, body: { task: taskWith(null, ['ok', 'no']).task } };
   vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET';
     if (method !== 'GET') sent.push(`${method} ${String(url)}`);
+    if (held && String(url).startsWith('/api/v2/answers/')) await held;
     const r = String(url).startsWith('/api/v2/answers/') ? undo : String(url).startsWith('/api/v2/tasks/t1') ? { status: 200, body: task } : { status: 200, body: {} };
     return new Response(JSON.stringify(r.body), { status: r.status, headers: { 'Content-Type': 'application/json' } });
   });
@@ -91,6 +95,19 @@ describe("the receipt of an OK the Assistant gave for the person", () => {
     await waitFor(() => expect(sent).toEqual(['POST /api/v2/answers/a1/undo']));
     // taken back: the OK no longer stands, so the card offers no Undo
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull());
+  });
+
+  it('sends one Undo however many times it is pressed while it is sent', async () => {
+    let answer!: () => void;
+    held = new Promise<void>((r) => (answer = r));
+    show(RECEIPT);
+    const b = await screen.findByRole('button', { name: 'Undo' });
+    fireEvent.click(b);
+    fireEvent.click(b);
+    await waitFor(() => expect(sent).toEqual(['POST /api/v2/answers/a1/undo']));
+    answer();
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull());
+    expect(sent).toEqual(['POST /api/v2/answers/a1/undo']);
   });
 
   it('offers no Undo once that OK no longer stands (the stage moved on, or it was taken back)', async () => {

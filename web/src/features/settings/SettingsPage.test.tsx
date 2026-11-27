@@ -281,6 +281,33 @@ describe('Settings › General › Assistant', () => {
     expect(sent.filter((x) => x.url === '/api/v2/assistant/settings')).toEqual([]);
   });
 
+  it('sends one change at a time: the switch waits for the server before it takes another', async () => {
+    let answer!: () => void;
+    serve((url, method) => {
+      if (method === 'POST' && url === '/api/v2/assistant/settings') return new Promise<Reply>((r) => (answer = () => r(ok({ gives_oks: true, may_change: true }))));
+      if (url === '/api/v2/assistant/settings') return ok({ gives_oks: false, may_change: true });
+      if (url.startsWith('/api/v2/access')) return ok(ACCESS);
+      return ok({ pages: {} });
+    });
+    show(<SettingsPage section="general" />, '/settings/general');
+    fireEvent.click(await theSwitch());
+    await waitFor(() => expect(sent.filter((x) => x.url === '/api/v2/assistant/settings')).toHaveLength(1));
+    fireEvent.click(await theSwitch());
+    expect(sent.filter((x) => x.url === '/api/v2/assistant/settings')).toHaveLength(1);
+    await act(async () => answer());
+    await waitFor(async () => expect((await theSwitch()).hasAttribute('disabled') || (await theSwitch()).hasAttribute('data-disabled')).toBe(false));
+  });
+
+  it('says so when the setting does not load', async () => {
+    serve((url) => {
+      if (url === '/api/v2/assistant/settings') return { status: 403, body: { error: { code: 'forbidden', detail: 'Not yours' } } };
+      if (url.startsWith('/api/v2/access')) return ok(ACCESS);
+      return ok({ pages: {} });
+    });
+    show(<SettingsPage section="general" />, '/settings/general');
+    expect(await screen.findByText(/Assistant didn.t load/)).toBeTruthy();
+  });
+
   it('Tico cannot turn it on or off: the action is the person’s own press only', async () => {
     serveOks({ gives_oks: false, may_change: true });
     show(<SettingsPage section="general" />, '/settings/general');

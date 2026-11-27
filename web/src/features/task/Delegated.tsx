@@ -35,7 +35,7 @@ export function DelegatedOks({ events }: { events: readonly HistoryEvent[] }) {
           <div key={e.id ?? i} className="dt-line" data-target={`assistant-ok-line:${e.id ?? i}`}>
             <span className="dt-text">
               <span>
-                <NameOf id={e.actor} /> OK'd · via assistant
+                <NameOf id={e.actor} /> OK'd{' · '}via assistant
               </span>
               {lent.words && <span>{` · “${lent.words}”`}</span>}
               {e.created_at && <small> · {clock(e.created_at)}</small>}
