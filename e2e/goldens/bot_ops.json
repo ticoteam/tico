@@ -109,6 +109,7 @@
     "turns_at_once": null,
     "update_subscriptions": [],
     "verbosity": null,
+    "wait": null,
     "wake": {
       "digest_hour": null,
       "immediate": [
