@@ -299,7 +299,7 @@ export interface BoundRule {
   rule: string;
   version: number;
   text: string;
-  who: { everyone?: boolean; all_bots?: boolean; outside_editions?: boolean; groups?: Named[]; bots?: Named[]; people?: Named[] };
+  who: { everyone?: boolean; all_bots?: boolean; groups?: Named[]; bots?: Named[]; people?: Named[] };
   with: { groups?: Named[]; bots?: Named[]; people?: Named[] };
   where: string[];
   if_broken: 'block' | 'escalate' | 'warn';

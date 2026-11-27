@@ -2013,3 +2013,44 @@ def test_the_cli_makes_a_rule_asks_its_ok_reads_its_history_and_sends_a_typed_ch
     # Filed as the caller through the normal task route: people and agents on their own runs, not the Assistant or Agent Ops.
     for kind, offered in (("member", True), ("bot", True), ("assistant", False), ("botops", False)):
         assert ("tico_rules_make" in {t["name"] for t in hubtools.listing(kind=kind)}) is offered, kind
+
+
+def test_a_clerk_draft_for_outside_editions_alone_is_retired_and_its_ok_withdrawn_the_normal_way(api):
+    """The migration that retires the Outside editions Who: a clerk's draft whose only Who was Outside editions, with
+    its OK the last thing its task waits for, has that OK withdrawn as a normal withdrawal does (the task's history
+    says so and its wait is gone), and the rule's history gains the retirement by Tico."""
+    import importlib
+
+    migration = importlib.import_module("backend.migrations.20261127102111_retire_outside_editions_who")
+    org(api)
+    counsel_on(api)
+    made = _make(api, "Editions quote no refund over $100.")
+    run = counsel_run(api)[1]["token"]
+    draft = _suggest(api, run, "Editions quote no refund over $100.")
+    asked = _ask(api, run, draft["id"], made["task_id"])
+    assert asked.status_code == 200, asked.text
+    rid = asked.json()["requirement_id"]
+    outside_only = {
+        "everyone": False,
+        "all_bots": False,
+        "groups": [],
+        "bots": [],
+        "people": [],
+        "outside_editions": True,
+    }
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE org_rules SET who=? WHERE id=?", (json.dumps(outside_only), draft["id"]))
+        assert task_asks.standing(c, rid) == task_asks.WAITING
+        migration.up(c)
+    with api.app.state.store.read() as c:
+        assert task_asks.standing(c, rid) == task_asks.WITHDRAWN
+        withdrawn = c.execute(
+            "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='requirement_withdrawn' AND old=?",
+            (made["task_id"], rid),
+        ).fetchone()
+        assert withdrawn, "the withdrawal is recorded on the task, as a normal one is"
+    assert not get(api, f"tasks/{made['task_id']}")["task"].get("waiting_on")
+    shown = get(api, f"rules/{draft['id']}")
+    assert (shown["status"], shown["decided_by"]) == ("retired", H.TICO_ACTOR)
+    versions = get(api, f"rules/{draft['id']}/history")["versions"]
+    assert versions[0]["actor"] == H.TICO_ACTOR and versions[0]["after"]["status"] == "retired"

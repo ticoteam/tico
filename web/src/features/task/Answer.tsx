@@ -359,11 +359,10 @@ const BROKEN_WORDS = { block: 'Stop', escalate: 'Ask first', warn: 'Warn' } as c
 
 /** The rule a rule's OK adds, exactly as it was asked: its words and every field that decides what it stops. */
 function RuleShown({ rule }: { rule: BoundRule }) {
-  // each part of Who on its own: Everyone does not hide Outside editions
+  // each part of Who on its own: Everyone does not hide the names
   const who = [
     ...(rule.who.everyone ? ['Everyone'] : []),
     ...(rule.who.all_bots ? ['Every agent'] : []),
-    ...(rule.who.outside_editions ? ['Outside editions'] : []),
     ...names(rule.who),
   ];
   const withWho = names(rule.with);
