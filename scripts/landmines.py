@@ -28,6 +28,11 @@ Three more hold the lifespan and the routes, read from the syntax tree with each
 no raw asyncio task (its loops are lifespan workers), backend/ adds no install(app, ...) / register*(app, ...) closure
 that adds routes (a ratchet: modules move to api_routing.router()), and only backend/api_routing.py builds an
 APIRouter, subclasses it or calls include_router.
+
+One keeps backend/hubdb.py from growing back: its top-level functions are a ratchet (no-new-hubdb-def), so a new
+database helper goes into a domain module (backend/hubdb_<domain>.py) that hubdb re-exports, and each domain moved out
+lowers the count. With --base, a function whose name the base's hubdb.py does not have fails too, so deleting one
+function cannot pay for a new one.
 """
 
 import argparse
@@ -559,6 +564,58 @@ def bare_routers(path, text):
     return sorted(lines)
 
 
+HUBDB = "backend/hubdb.py"
+# Module-level statements whose bodies are still module scope: a def under `if`, `try` or `with` at the top is top-level.
+MODULE_BLOCKS = (ast.If, ast.Try, ast.TryStar, ast.With, ast.AsyncWith, ast.For, ast.AsyncFor, ast.While, ast.Match)
+
+
+def _hubdb_def_nodes(text):
+    """Each module-level `def` / `async def` node in `text`, under a top-level `if`/`try`/`with` too."""
+    tree = parsed(text)
+    if tree is None:
+        return []
+    nodes, todo = [], list(tree.body)
+    while todo:
+        node = todo.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            nodes.append(node)
+        elif isinstance(node, MODULE_BLOCKS):
+            for name in ("body", "orelse", "finalbody", "handlers", "cases"):
+                todo.extend(getattr(node, name, ()))
+        elif isinstance(node, (ast.ExceptHandler, ast.match_case)):
+            todo.extend(node.body)
+    return sorted(nodes, key=lambda node: node.lineno)
+
+
+def hubdb_defs(path, text):
+    """The def line of each module-level `def` / `async def` in hubdb.py, under a top-level `if`/`try`/`with` too. A
+    method, a nested function and a re-exported name (`from .hubdb_x import f`, `f = mod.f`) are not one."""
+    return [node.lineno for node in _hubdb_def_nodes(text)]
+
+
+def new_hubdb_defs(root, base):
+    """One problem per module-level function in hubdb.py whose name the tree at the merge base of HEAD and `base` does
+    not have (or `base` itself when there is none), so deleting one function cannot pay for a new one under the count.
+    A function kept, moved within the file or deleted is not new; nor is one main added after the branch point."""
+    file = root / HUBDB
+    if not file.is_file():
+        return []
+    fork = baseline_files.git(root, "merge-base", "HEAD", base)
+    tree = fork.stdout.strip() if fork.returncode == 0 and fork.stdout.strip() else base
+    before = baseline_files.show_at(root, tree, HUBDB)
+    if before is None:
+        return []
+    old = {node.name for node in _hubdb_def_nodes(before)}
+    text = file.read_text(encoding="utf-8")
+    raw = text.splitlines()
+    rule = BY_ID["no-new-hubdb-def"]
+    return [
+        f"no-new-hubdb-def: {HUBDB}:{node.lineno}: {raw[node.lineno - 1].strip()} is new (not in {base}). {rule.text()}"
+        for node in _hubdb_def_nodes(text)
+        if node.name not in old
+    ]
+
+
 @dataclass
 class Rule:
     id: str
@@ -759,6 +816,18 @@ RULES = [
         "adds one lazy entry that hides its routes from app.routes.",
         "L42",
         find=bare_routers,
+    ),
+    Rule(
+        "no-new-hubdb-def",
+        "ratchet",
+        lambda path: path == HUBDB,
+        [],
+        "backend/hubdb.py gets no new top-level function: put a new database helper in its domain module "
+        "(backend/hubdb_history.py, hubdb_task_rooms.py, hubdb_quiet_notes.py, or a new backend/hubdb_<domain>.py that "
+        "imports nothing from hubdb at load and reaches it through _H()), and re-export it from hubdb.py only when "
+        "callers read it as H.<name>. Moving a function out lowers the count: run --write in the same commit.",
+        "L43",
+        find=hubdb_defs,
     ),
 ]
 BY_ID = {rule.id: rule for rule in RULES}
@@ -1062,6 +1131,7 @@ def check(base):
     problems = compare(found, baseline)
     if base:
         problems += growth(baseline, baseline_at(base), rules_at(base))
+        problems += new_hubdb_defs(ROOT, base)
     problems += check_lessons()
     return problems
 

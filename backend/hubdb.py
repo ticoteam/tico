@@ -143,6 +143,39 @@ from .hubdb_text import (
     librarian_text,
 )
 
+# Domains split out of this file. Every name is re-exported, so `H.<name>` and `from .hubdb import <name>` callers
+# are unchanged; a new helper goes in its domain module, not here (landmines no-new-hubdb-def).
+from .hubdb_history import (
+    HISTORY_SUBJECTS as HISTORY_SUBJECTS,
+    MARKET_SUBJECTS_SQL as MARKET_SUBJECTS_SQL,
+    TASK_EVENT_COLUMNS as TASK_EVENT_COLUMNS,
+    history_event as history_event,
+    _task_event as _task_event,
+    _strategy_changed as _strategy_changed,
+    task_history as task_history,
+)
+from .hubdb_task_rooms import (
+    _room_person as _room_person,
+    _room_reads as _room_reads,
+    _task_started as _task_started,
+    task_from_chat as task_from_chat,
+    _task_room as _task_room,
+    give_task_room as give_task_room,
+)
+from .hubdb_quiet_notes import (
+    NOTE_MAX as NOTE_MAX,
+    NOTE_WAITING_SQL as NOTE_WAITING_SQL,
+    NOTE_CARRIER_SQL as NOTE_CARRIER_SQL,
+    note_create as note_create,
+    note as note,
+    note_waiting as note_waiting,
+    note_cancel as note_cancel,
+    notes_waiting as notes_waiting,
+    notes_settle as notes_settle,
+    notes_settle_catch_up as notes_settle_catch_up,
+    notes_waiting_counts as notes_waiting_counts,
+)
+
 HUB_DIR = Path(__file__).resolve().parent.parent
 ROOT = HUB_DIR.parent  # employees are siblings of the hub
 DEFAULT_DB = ROOT / "runtime" / "hub.db"
@@ -5931,101 +5964,7 @@ def stop_ended_work(conn, actor, task_id, status):
     return stopped, canceled
 
 
-# ----------------------------------------------------------------------------- history
-# What happened to each thing, one row per change, in `history_events` (backend/migrations/baseline.sql):
-# a task's, a goal's, the company profile's, the strategy's and the market graph's. `kind` is the field that changed
-# (or what happened), `old`/`new` its values, `data` a JSON object of the type's own extras. A task's rows read the
-# way its old `task_events` rows did through TASK_EVENT_COLUMNS, so its history keeps its shape in every answer.
-HISTORY_SUBJECTS = (
-    "task",
-    "goal",
-    "company",
-    "strategy",
-    "market_entity",
-    "market_edge",
-    "market_evidence",
-    "market_document",
-)
-MARKET_SUBJECTS_SQL = "('market_entity','market_edge','market_evidence','market_document')"
-TASK_EVENT_COLUMNS = (
-    "id, subject_id AS task_id, created_at, actor_id AS actor, kind AS field, old, new, note, action_id, via"
-)
-
-
-def history_event(
-    conn,
-    subject_type,
-    subject_id,
-    actor,
-    kind,
-    old=None,
-    new=None,
-    note=None,
-    data=None,
-    *,
-    action_id=None,
-    via=None,
-    created_at=None,
-    event_id=None,
-):
-    """Append one change to `history_events`; returns its id. Values are stored as text, `data` as JSON. `event_id` is
-    for a caller whose id is deterministic."""
-    if subject_type not in HISTORY_SUBJECTS:
-        raise ValueError(f"unknown history subject type {subject_type!r}")
-    data = SRC.stamp_data(data, actor)
-    event_id = event_id or new_id()
-    conn.execute(
-        "INSERT INTO history_events (id, subject_type, subject_id, actor_id, kind, old, new, note, action_id, "
-        "via, data, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-        (
-            event_id,
-            subject_type,
-            subject_id,
-            actor,
-            kind,
-            None if old is None else str(old),
-            None if new is None else str(new),
-            note,
-            action_id,
-            via,
-            None if data is None else json.dumps(data, sort_keys=True, ensure_ascii=False),
-            created_at or now(),
-        ),
-    )
-    return event_id
-
-
-def _task_event(conn, task_id, actor, field, old, new, note="", *, event_id=None, data=None):
-    """One row of a task's history; returns its id."""
-    # A Strategy Owner decision (or its Undo) stamps each change it makes with its action id (backend/strategy_acts.py).
-    from .strategy_acts import ACTION
-
-    return history_event(
-        conn,
-        "task",
-        task_id,
-        actor,
-        field,
-        old,
-        new,
-        note,
-        action_id=ACTION.get() or None,
-        via=VIA.get() or None,
-        data=data,
-        event_id=event_id,
-    )
-
-
-def _strategy_changed(conn, task_id):
-    """Whether a Strategy Owner decision (or its Undo) is writing this task now or has changed it before."""
-    from .strategy_acts import ACTION
-
-    return bool(ACTION.get()) or bool(
-        conn.execute(
-            "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND action_id IS NOT NULL LIMIT 1",
-            (task_id,),
-        ).fetchone()
-    )
+# ----------------------------------------------------------------------------- message refs
 
 
 def _task_ref(value):
@@ -6125,97 +6064,7 @@ def _mirror_task_note(conn, actor, task_row, note):
         return
 
 
-# ----------------------------------------------------------------------------- task rooms
-# A bot's task has a room of its own (kind "task"), so its traffic stays out of the chat its main
-# session reads. The main chat gets a quiet Tico line about it, `refs.task_started`, when the task is filed from
-# that chat. It is written with `quiet`, so it queues no run; the main session reads it in its history the next time
-# something real wakes it (execution.lane_history).
-
-
-def _room_person(conn, room, row):
-    """The person a main-chat line about `row` is addressed to: the room's owner, else a person in it."""
-    people = [p for p in room.get("participants") or [] if is_human(p)]
-    if room.get("owner_id"):
-        return room["owner_id"]
-    return row["requester_id"] if row.get("requester_id") in people else people[0] if people else row["owner_id"]
-
-
-def _room_reads(conn, room, row):
-    """Whether everyone in the room may read the task, so a line naming it says nothing new to anyone."""
-    readers = set(room.get("participants") or []) | {room.get("owner_id")} - {None}
-    return all(task_private_readable(conn, who, row) for who in readers)
-
-
-def _task_started(conn, row, room):
-    """The quiet "Started task" line in the chat a bot's task was filed from. A private task is named
-    only in a room whose every reader may read it."""
-    if not room or room["id"] == row["conversation_id"]:
-        return None
-    if task_private(conn, row) and not _room_reads(conn, room, row):
-        return None
-    msg = _write_message(
-        conn,
-        TICO_ACTOR,
-        _room_person(conn, room, row),
-        f"Started task: {row['title']}",
-        room,
-        "notice",
-        {"task": row["id"], "task_started": True, "quiet": True},
-        None,
-        None,
-    )
-    event(conn, TICO_ACTOR, "task.started_in", row["id"], {"conversation": room["id"], "message": msg["id"]})
-    return msg
-
-
-def task_from_chat(conn, task_id):
-    """Whether a bot's task came from a chat (filed there, or moved out of one): its turns' replies reach
-    the person in its room as they would have in the chat, not only once it is done (execution.complete)."""
-    return bool(
-        _one(
-            conn,
-            "SELECT 1 FROM events WHERE actor=? AND action IN ('task.started_in','task.room') AND target=? LIMIT 1",
-            (TICO_ACTOR, task_id),
-        )
-    )
-
-
-def _task_room(conn, row, parties):
-    """A new room of row's own (kind "task"), with `parties` in it; the task points at it."""
-    room = new_id()
-    conn.execute(
-        "INSERT INTO conversations(id,kind,subject,participants,created_at,scope,task_id) VALUES(?,?,?,?,?,?,?)",
-        (room, "task", row["title"], _dump(parties), now(), "task", row["id"]),
-    )
-    conn.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (room, row["id"]))
-    return conversation(conn, room)
-
-
-def give_task_room(conn, row):
-    """A bot's live task that still lives in a chat room (filed before task rooms) moves to a room of its
-    own, as execution.claim hands out a turn on it. Its earlier messages stay in the chat; the new room
-    opens with a line pointing there. Returns the task as it now is."""
-    if not row or not is_bot(row["owner_id"]) or row["status"] not in ACTIVE_STATUSES:
-        return row
-    old = conversation(conn, row["conversation_id"])
-    if not old or old.get("kind") != "chat":
-        return row
-    person = _room_person(conn, old, row) if not task_private(conn, row) else None
-    room = _task_room(conn, row, list(dict.fromkeys(p for p in (row["requester_id"], row["owner_id"], person) if p)))
-    name = (bot(conn, row["owner_id"]) or {}).get("display_name") or actor_id(row["owner_id"])
-    _write_message(
-        conn,
-        TICO_ACTOR,
-        row["owner_id"],
-        f"Earlier messages are in {name} chat.",
-        room,
-        "notice",
-        {"task": row["id"], "quiet": True, "moved_from": old["id"]},
-        None,
-        None,
-    )
-    event(conn, TICO_ACTOR, "task.room", row["id"], {"from": old["id"], "to": room["id"]})
-    return task(conn, row["id"])
+# ----------------------------------------------------------------------------- task contact, setup holds, Run now
 
 
 def tasks_only(conn, actor):
@@ -6230,10 +6079,6 @@ def tasks_only(conn, actor):
     if not row or not row.get("config"):
         return False
     return (_json(row["config"], {}) or {}).get("bot_contact") == "tasks"
-
-
-# A run in one of these states still holds the note it carried (note_waiting); a failed or interrupted one gives it back.
-NOTE_CARRIER_SQL = "SELECT 1 FROM attempts WHERE id=? AND state IN ('leased','running','completed')"
 
 
 def chunks[T](values: Iterable[T], size: int = 500) -> list[list[T]]:
@@ -6402,131 +6247,7 @@ def task_run_now(conn, actor, task_id):
     return after, not waiting
 
 
-# ----------------------------------------------------------------------------- quiet notes
-# A quiet note is something for a bot to know, not to do. It starts nothing; the next run the bot has for any reason
-# carries every note waiting for it, in the same prompt, each with the time it was sent. For example, monitor bots leave a
-# manager bot a note after each check, and its daily report reads them.
-NOTE_MAX = 8000
-NOTE_WAITING_SQL = (
-    "n.canceled_at IS NULL AND n.settled_at IS NULL AND (n.carried_by IS NULL OR NOT EXISTS("
-    "SELECT 1 FROM attempts a WHERE a.id=n.carried_by AND a.state IN ('leased','running','completed')))"
-)
-
-
-def note_create(conn, actor, to, body):
-    """Leave a note for a bot's next run. A person has no runs, so only a bot receives one. A paused or
-    quarantined bot's note waits for its next run when a person or its manager bot leaves it (held_for)."""
-    _writer(conn, actor)
-    target = _reach(conn, actor, to, allow_held=held_for(conn, actor, to))
-    if not is_bot(target):
-        refuse(conn, actor, "note", "a note waits for a bot's next run; a person has none, so tell them another way")
-    if target == actor:
-        refuse(conn, actor, "note", "a note to yourself belongs in your own repository")
-    body = str(body or "").strip()
-    if not body:
-        refuse(conn, actor, "note", "the note is empty")
-    if len(body) > NOTE_MAX:
-        refuse(conn, actor, "note", f"a note is at most {NOTE_MAX} characters; put the detail in a file or a task")
-    path_mentioned(conn, actor, "note", body)
-    row = {"id": new_id(), "from_actor": actor, "to_actor": target, "body": body, "created_at": now()}
-    conn.execute(
-        "INSERT INTO notes(id,from_actor,to_actor,body,created_at) VALUES "
-        "(:id,:from_actor,:to_actor,:body,:created_at)",
-        row,
-    )
-    event(conn, actor, "note.create", row["id"], {"to": target})
-    return note(conn, row["id"])
-
-
-def note(conn, note_id):
-    return _one(conn, "SELECT * FROM notes WHERE id=?", (note_id,))
-
-
-def note_waiting(conn, row):
-    """Whether this note (a row) is still waiting for its bot's next run."""
-    if not row or row.get("canceled_at") or row.get("settled_at"):
-        return False
-    if not row.get("carried_by"):
-        return True
-    try:
-        return not _one(conn, NOTE_CARRIER_SQL, (row["carried_by"],))
-    except sqlite3.OperationalError:  # a local hub has no attempts table and no runs
-        return True
-
-
-def note_cancel(conn, actor, note_id, human=False):
-    """Take a note back before a run carries it: its sender, or a person."""
-    _writer(conn, actor)
-    row = note(conn, note_id)
-    if not row:
-        refuse(conn, actor, "not-found", f"no note {note_id}")
-    if actor != row["from_actor"] and not human and not is_human(actor):
-        refuse(
-            conn,
-            actor,
-            "note",
-            f"{actor_name(conn, row['from_actor'])} left this note; only they or a person take it back",
-        )
-    if row.get("message_id"):
-        msg = message(conn, row["message_id"])
-        if msg:
-            _message_writer(conn, actor, msg, conversation(conn, msg["conversation_id"]))
-    if row["canceled_at"]:
-        return row
-    if not note_waiting(conn, row):
-        refuse(conn, actor, "note", "a run already carried this note; it cannot be taken back")
-    conn.execute("UPDATE notes SET canceled_at=?, canceled_by=? WHERE id=?", (now(), actor, note_id))
-    event(conn, actor, "note.cancel", note_id, {})
-    return note(conn, note_id)
-
-
-def notes_waiting(conn, bot, limit=50, *, unheld=False):
-    """The notes waiting for `bot` (a slug), oldest first after Tico's own: the one a lifted quarantine leaves
-    (quarantine_lifted_note) must reach the next run even behind a full backlog. A note that stands for a held
-    message (`message_id`) is the message, in the order messages arrived, whoever sent it, Tico too.
-    `unheld` selects notes deliverable now; the full pending list and its counts keep quarantined sources."""
-    from . import task_quarantine
-
-    available = " AND " + task_quarantine.notes_free_sql() if unheld else ""
-    return _rows(
-        conn.execute(
-            f"SELECT n.* FROM notes n WHERE n.to_actor=? AND {NOTE_WAITING_SQL}{available} "
-            f"ORDER BY NOT (n.from_actor=? AND n.message_id IS NULL),n.created_at,n.id LIMIT ?",
-            ("bot:" + bot, TICO_ACTOR, limit),
-        )
-    )
-
-
-def notes_settle(conn, attempt_id):
-    """Mark the notes a completed run carried as read for good (`settled_at`), where its result is recorded."""
-    conn.execute("UPDATE notes SET settled_at=? WHERE carried_by=? AND settled_at IS NULL", (now(), attempt_id))
-
-
-def notes_settle_catch_up(conn, limit: int | None = 500):
-    """Settle up to `limit` notes whose carrier completed but no path marked them (None settles them all: the
-    migration's one pass). Reads the small unsettled-carried index, so it is cheap on every scheduler tick, and
-    a note it leaves for the next pass stays correct, since waiting is still decided by the carrier. Returns the count."""
-    if not _has_table(conn, "attempts"):
-        return 0
-    stamp = now()
-    return conn.execute(
-        "UPDATE notes SET settled_at=? WHERE id IN (SELECT n.id FROM notes n JOIN attempts a ON a.id=n.carried_by "
-        "WHERE n.carried_by IS NOT NULL AND n.settled_at IS NULL AND a.state='completed' LIMIT ?)",
-        (stamp, -1 if limit is None else limit),
-    ).rowcount
-
-
-def notes_waiting_counts(conn, bots, limit=500):
-    """`len(notes_waiting(conn, bot, limit))` for many bots in one query per 500: {slug: count}."""
-    out = dict.fromkeys(bots, 0)
-    for part in chunks(out):
-        for row in conn.execute(
-            f"SELECT n.to_actor,count(*) FROM notes n WHERE n.to_actor IN "
-            f"({','.join('?' * len(part))}) AND {NOTE_WAITING_SQL} GROUP BY n.to_actor",
-            ["bot:" + bot for bot in part],
-        ):
-            out[actor_id(row[0])] = min(row[1], limit)
-    return out
+# ----------------------------------------------------------------------------- task wakes
 
 
 def _wake(
@@ -7750,16 +7471,6 @@ def task_flow(
             key=lambda row: (-sum(v for k, v in row.items() if k != "actor"), row["actor"]),
         ),
     }
-
-
-def task_history(conn, task_id, *, provenance=False):
-    columns = TASK_EVENT_COLUMNS + (", data" if provenance else "")
-    return _rows(
-        conn.execute(
-            f"SELECT {columns} FROM history_events WHERE subject_type='task' AND subject_id=? ORDER BY created_at, rowid",
-            (task_id,),
-        )
-    )
 
 
 def status(conn, bot_slug):
