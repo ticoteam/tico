@@ -1201,7 +1201,14 @@ pub async fn burst_checkout_ready(path: &Path, repository: &str) -> bool {
             .is_some_and(|(ok, out)| ok && out.trim().is_empty())
         && git(
             path,
-            &["rev-list", "--count", "HEAD", "--not", "--remotes=origin"],
+            &[
+                "rev-list",
+                "--count",
+                "HEAD",
+                "--not",
+                crate::worktrees::NOT_A_BACKUP,
+                "--remotes=origin",
+            ],
         )
         .await
         .is_some_and(|(ok, out)| ok && out.trim() == "0")

@@ -306,6 +306,12 @@ pub fn refused_field(detail: &str, body: &Value) -> Option<String> {
     {
         return Some("worktrees.record_updated".into()); // every worktree report still goes, unstamped
     }
+    // A server before task #3448 refuses a report of a checkout's wip/ copy: the reports still go, without it.
+    for key in ["backed_up", "backup_error"] {
+        if extra && detail.contains(key) && rows(body, "worktrees").any(|r| r.get(key).is_some()) {
+            return Some(format!("worktrees.{key}"));
+        }
+    }
     let caps: Vec<String> = rows(body, "capabilities").map(text_of).collect();
     if let Some(index) = capability_refusals(detail).next() {
         // Pydantic names the rejected element: drop that one, whatever it is, and keep every other negotiated one.
@@ -349,6 +355,8 @@ pub fn drop_held(body: &mut Value) {
         ("profiles.account", "profiles", "runtimes"),
         ("profiles.five_hour", "profiles", "runtimes"),
         ("worktrees.record_updated", "worktrees", ""),
+        ("worktrees.backed_up", "worktrees", ""),
+        ("worktrees.backup_error", "worktrees", ""),
     ] {
         if !held_back(hold) {
             continue;
@@ -944,6 +952,14 @@ mod tests {
             refused_field("body.worktrees.0.record_updated: Extra inputs", &body).as_deref(),
             Some("worktrees.record_updated")
         );
+        let copied =
+            json!({"worktrees": [{"link_id": "l", "backed_up": "a", "backup_error": "b"}]});
+        for key in ["backed_up", "backup_error"] {
+            assert_eq!(
+                refused_field(&format!("body.worktrees.0.{key}: Extra inputs"), &copied).as_deref(),
+                Some(format!("worktrees.{key}").as_str())
+            );
+        }
         assert_eq!(
             refused_field("body.repositories: Extra inputs are not permitted", &body).as_deref(),
             Some("repositories")
