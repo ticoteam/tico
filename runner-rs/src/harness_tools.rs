@@ -1148,6 +1148,8 @@ pub struct Harnesses {
     quiet: Box<dyn Fn(&str) -> f64 + Send>,
     /// Compatibility notes already logged (`note`), so a poll every few seconds logs each once.
     noted: HashSet<String>,
+    /// Harnesses whose left-over copies this process has cleared (`prune`).
+    pruned: HashSet<String>,
 }
 
 fn mtime(p: &Path) -> Option<i128> {
@@ -1205,6 +1207,7 @@ impl Harnesses {
             state: Map::new(),
             quiet: Box::new(quiet_for),
             noted: HashSet::new(),
+            pruned: HashSet::new(),
         };
         h.state = h.load();
         h
@@ -1534,6 +1537,17 @@ impl Harnesses {
             self.commit(&m, job, why.unwrap_or_default());
         }
         for (id, m) in self.manifests.clone() {
+            // Once per process, at a moment nothing is staged or installing for it and no turn uses it.
+            if !self.pruned.contains(&id)
+                && !self.staged.contains_key(&id)
+                && self.job.as_ref().is_none_or(|(j, _)| j.harness != id)
+                && !busy().contains(&m.host)
+            {
+                self.pruned.insert(id.clone());
+                self.prune(&m);
+            }
+        }
+        for (id, m) in self.manifests.clone() {
             // Turned off: removed at a moment no turn uses it and nothing is being installed for it.
             if self.turned_off(&id)
                 && !busy().contains(&m.host)
@@ -1748,6 +1762,38 @@ impl Harnesses {
             "Tico runner: removed {}; it is turned off on this computer",
             m.name
         ));
+    }
+
+    /// Remove copies of `m` other than the one in use. A staged copy lives only in this process's memory, so one left
+    /// by a runner that stopped before switching it in (or mid-install) is never switched in or removed otherwise.
+    fn prune(&mut self, m: &Manifest) {
+        let root = self.tools.join(&m.id);
+        // No `current` at all: no copy is in use (a first install stopped midway). Any other doubt keeps everything.
+        let current = match std::fs::read_link(root.join("current")) {
+            Ok(target) => match target.file_name() {
+                Some(name) => Some(name.to_owned()),
+                None => return,
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(_) => return,
+        };
+        let mut gone = 0;
+        for old in std::fs::read_dir(&root).into_iter().flatten().flatten() {
+            let p = old.path();
+            let dir = std::fs::symlink_metadata(&p).is_ok_and(|md| md.file_type().is_dir());
+            if dir
+                && current.as_deref() != Some(old.file_name().as_os_str())
+                && std::fs::remove_dir_all(&p).is_ok()
+            {
+                gone += 1;
+            }
+        }
+        if gone > 0 {
+            log(&format!(
+                "Tico runner: removed {gone} left-over {} copies not in use",
+                m.name
+            ));
+        }
     }
 
     /// Make the staged install the one in use. Called only with no running turn on this host.
@@ -3130,6 +3176,42 @@ mod tests {
             m.h.read("cold_wait", "claude-code").is_null(),
             "the wait is over"
         );
+    }
+
+    #[test]
+    fn left_over_copies_go_once_no_turn_uses_the_harness_and_the_one_in_use_stays() {
+        let mut m = Machine::new(true);
+        m.h.check_every = f64::INFINITY; // no check job holds the harness
+        m.stage("2.1.300");
+        m.h.step(HashSet::new);
+        assert!(m.managed().exists());
+        // What runners that stopped before switching an update in (or mid-install) left behind.
+        let root = m.h.tools.join("claude-code");
+        for left in ["2.1.301", "a1b2c3d4e5"] {
+            fake_cli(&root.join(left).join("node_modules/.bin/claude"), left);
+        }
+        m.h.pruned.clear(); // a new runner process
+        m.h.step(|| HashSet::from(["claude".to_string()]));
+        assert!(
+            root.join("2.1.301").exists(),
+            "a turn uses the harness: nothing goes"
+        );
+        m.h.step(HashSet::new);
+        assert!(!root.join("2.1.301").exists() && !root.join("a1b2c3d4e5").exists());
+        assert!(root.join("2.1.300").exists());
+        assert_eq!(m.turn_runs(), m.managed());
+        assert_eq!(
+            m.h.detect(&m.h.manifests["claude-code"].clone(), &m.managed(), 15),
+            "2.1.300"
+        );
+        // A first install that stopped midway: no copy is in use, so its folder goes too.
+        let mut fresh = Machine::new(true);
+        fresh.h.check_every = f64::INFINITY;
+        let half = fresh.h.tools.join("claude-code").join("f00dfeed00");
+        fake_cli(&half.join("node_modules/.bin/claude"), "2.1.299");
+        fresh.h.wanted.clear(); // no install job starts in its place
+        fresh.h.step(HashSet::new);
+        assert!(!half.exists());
     }
 
     #[test]

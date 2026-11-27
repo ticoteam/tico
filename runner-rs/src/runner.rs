@@ -817,6 +817,12 @@ impl Runner {
                 &self.client,
                 self.lanes.clone(),
                 self.worktrees.clone(),
+                {
+                    let state = self.state.clone();
+                    Arc::new(move |p: &std::path::Path| {
+                        crate::files_publish::pending_under(&state, p)
+                    })
+                },
             );
         }
         if let Some(cleanup) = self.disk_clean.report() {

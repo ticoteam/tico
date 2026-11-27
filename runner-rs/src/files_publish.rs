@@ -620,7 +620,8 @@ pub fn prepare(
     Ok((queued, refused))
 }
 
-/// Whether a file under `root` still waits to be uploaded.
+/// Whether a file under `root` still waits to be uploaded. A failed read counts as waiting: every caller removes the
+/// folder only on a no.
 #[allow(dead_code)] // the task worktrees keep a folder until its files have gone
 pub fn pending_under(state: &State, root: &Path) -> bool {
     let resolved = root
@@ -628,17 +629,16 @@ pub fn pending_under(state: &State, root: &Path) -> bool {
         .unwrap_or_else(|_| root.to_path_buf())
         .display()
         .to_string();
-    state
-        .with(|c| {
-            c.execute_batch(TABLES)?;
-            c.query_row(
-                "SELECT 1 FROM file_outbox WHERE phase='pending' AND root=?1 LIMIT 1",
-                [resolved],
-                |_| Ok(()),
-            )
-            .optional()
-        })
-        .is_ok_and(|r| r.is_some())
+    let found = state.with(|c| {
+        c.execute_batch(TABLES)?;
+        c.query_row(
+            "SELECT 1 FROM file_outbox WHERE phase='pending' AND root=?1 LIMIT 1",
+            [resolved],
+            |_| Ok(()),
+        )
+        .optional()
+    });
+    !matches!(found, Ok(None))
 }
 
 struct Row {

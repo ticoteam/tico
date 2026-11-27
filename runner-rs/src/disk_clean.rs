@@ -11,14 +11,19 @@
 //!    no Git checkout;
 //! 4. `git worktree prune` in Tico's base clones, one at a time under the lock fetches take. Never `git gc`: a
 //!    repack of a large clone outlives the runner's Git time limit, leaves partial packs when stopped, and holds
-//!    the clone's lock while other bots' worktree steps wait.
+//!    the clone's lock while other bots' worktree steps wait;
+//! 5. last, idle task checkouts of a bot's own repository (`sessions/bot-<bot>/<task>`, sessions.rs), oldest first: one
+//!    nothing touched for SESSION_IDLE_S, with no turn in its bot's main checkout or on its task, no file waiting to upload from it
+//!    and no other checkout inside it, goes through sessions.rs `remove_tree` (its branch kept), which keeps any tree holding uncommitted
+//!    work or a commit no remote has on it or its task branch. Its task may still be open (a ticket waiting in a later stage): its next turn
+//!    checks the tree out again. What goes with it is what its repository ignores (test videos, traces, builds).
 //!
-//! Never touched: an open task's folder, a folder the server lists nothing for, package caches in the home folder,
-//! a git checkout itself, bot repositories, the runner's state and configuration, credentials, Docker, and
+//! Never touched: an open task's folder under `tasks/`, a folder the server lists nothing for, package caches in the home folder,
+//! a git checkout itself (but an idle task checkout above), a bot's main checkout and its memory, the runner's state and configuration, credentials, Docker, and
 //! anything on another volume or under a mount point. Nothing is followed through a symlink, and every path is
 //! checked again just before it goes. Each removal is logged with its class and size, and the last run rides on
 //! the readiness report (`disk_cleanup`). What is left is for the machine's disk to grow (cloud machines do it on
-//! their own) or for a person.
+//! their own, up to Large: backend/cloud_machines.py `grow_plan`) or for a person.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
@@ -38,6 +43,9 @@ use crate::worktrees::{self, Host, Worktrees};
 pub const CLEAN_EVERY: Duration = Duration::from_secs(30 * 60);
 /// A temp entry this long untouched is no longer any running tool's.
 const OLD_S: f64 = 24.0 * 3600.0;
+/// A task checkout of a bot's repository untouched this long is between turns, not inside one: a turn that waits on
+/// a run snoozes for minutes, not hours.
+pub const SESSION_IDLE_S: f64 = 2.0 * 3600.0;
 /// Free space the clean-up aims for above the low mark, so it does not run again an hour later.
 const HEADROOM: u64 = 5 * (GB as u64);
 /// How long the clean-up waits for a worktree pass, before and after asking for finished trees to go.
@@ -57,6 +65,7 @@ pub fn low_mark(total: u64) -> u64 {
 pub enum Class {
     Tmp,
     FinishedTaskCache,
+    IdleTaskWorktree,
     Git,
 }
 
@@ -65,6 +74,7 @@ impl Class {
         match self {
             Class::Tmp => "tmp",
             Class::FinishedTaskCache => "finished_task_cache",
+            Class::IdleTaskWorktree => "idle_task_worktree",
             Class::Git => "git",
         }
     }
@@ -191,14 +201,16 @@ struct Tree {
     foreign: bool,
     /// It is on another volume, or a folder in it is (a mount point): not descended into, never removed.
     mount: bool,
-    /// A `.git` in it: a checkout, never a leftover.
+    /// A `.git` below its top: another checkout inside it.
     git: bool,
+    /// A `.git` at its top: it is a checkout itself.
+    top_git: bool,
 }
 
 impl Tree {
     /// Nothing in it rules the removal out (`foreign` only matters for the temp folder).
     fn plain(&self) -> bool {
-        !self.special && !self.mount && !self.git
+        !self.special && !self.mount && !self.git && !self.top_git
     }
 }
 
@@ -224,7 +236,13 @@ fn walk(root: &Path, dev: u64) -> Tree {
         let kind = meta.file_type();
         tree.newest = tree.newest.max(mtime(&meta));
         tree.foreign |= meta.uid() != uid;
-        tree.git |= path != root && path.file_name().is_some_and(|n| n == ".git");
+        if path != root && path.file_name().is_some_and(|n| n == ".git") {
+            if path.parent() == Some(root) {
+                tree.top_git = true;
+            } else {
+                tree.git = true;
+            }
+        }
         if meta.dev() != dev {
             tree.mount = true;
             continue;
@@ -395,6 +413,144 @@ pub fn plan(scope: &Scope) -> Vec<Candidate> {
         }
     }
     out
+}
+
+/// A task checkout of a bot's own repository the clean-up may take away (`idle_sessions`).
+#[derive(Debug, Clone)]
+pub struct IdleSession {
+    pub bot: String,
+    pub task: String,
+    pub path: PathBuf,
+    pub newest: f64,
+    dev: u64,
+    cutoff: f64,
+}
+
+/// The tree of a task checkout while it is still idle: a checkout at its top, nothing touched since `cutoff`, and no
+/// other checkout, live file or mount point inside it.
+fn idle_tree(path: &Path, dev: u64, cutoff: f64) -> Option<Tree> {
+    let tree = walk(path, dev);
+    (tree.top_git && !tree.git && !tree.special && !tree.mount && tree.newest < cutoff)
+        .then_some(tree)
+}
+
+/// Task checkouts of bots' repositories (`sessions/bot-<bot>/<task>`) nothing touched for SESSION_IDLE_S, holding no
+/// other checkout, live file or mount point and no file a process holds, oldest first. A private meeting's copy is
+/// left to its own sweep. Read-only.
+pub fn idle_sessions(scope: &Scope) -> Vec<IdleSession> {
+    let mut out = vec![];
+    let Some((ws, dev)) = workspace_device(scope) else {
+        return out;
+    };
+    let Some(sessions) = under(&ws, "sessions") else {
+        return out;
+    };
+    let cutoff = scope.now - SESSION_IDLE_S;
+    let folders = |dir: &Path| -> Vec<(String, PathBuf)> {
+        let mut found: Vec<(String, PathBuf)> = std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| (e.file_name().to_string_lossy().into_owned(), e.path()))
+            .filter(|(_, p)| !is_symlink(p) && p.is_dir() && device(p) == Some(dev))
+            .collect();
+        found.sort();
+        found
+    };
+    for (name, bot_dir) in folders(&sessions) {
+        let Some(bot) = name.strip_prefix("bot-").filter(|b| !b.is_empty()) else {
+            continue;
+        };
+        for (task, path) in folders(&bot_dir) {
+            if crate::sessions::task_of(&format!("task:{task}")) != task
+                || task.starts_with(crate::sessions::PRIVATE)
+                || kept(&path, &scope.keep)
+                || scope.held.as_ref().is_some_and(|h| held_under(&path, h))
+            {
+                continue;
+            }
+            let Some(tree) = idle_tree(&path, dev, cutoff) else {
+                continue;
+            };
+            out.push(IdleSession {
+                bot: bot.to_string(),
+                task,
+                path,
+                newest: tree.newest,
+                dev,
+                cutoff,
+            });
+        }
+    }
+    out.sort_by(|a, b| a.newest.total_cmp(&b.newest));
+    out
+}
+
+/// Take one idle task checkout away (`idle_sessions`) under its bot's checkout and task-lane locks and its repository's
+/// git lock, none of them waited for, once no turn in its bot's main checkout or on its task runs and no file waits to upload from it
+/// (`pending`); sessions.rs `remove` then keeps it when it holds uncommitted work or a commit no remote has. The bytes
+/// freed.
+pub async fn remove_session(
+    s: &IdleSession,
+    host: &Arc<dyn Host>,
+    pending: &(dyn Fn(&Path) -> bool + Sync),
+    env: &Env,
+) -> u64 {
+    let Some(_locks) = host.try_locks(&s.bot, &format!("task:{}", s.task)) else {
+        return 0;
+    };
+    let owner = [(s.bot.clone(), s.task.clone())];
+    if !owners_free(&owner, host.as_ref()) || pending(&s.path) {
+        return 0;
+    }
+    // Walked again under the locks: a turn may have run in it since the list was made.
+    let (path, dev, cutoff) = (s.path.clone(), s.dev, s.cutoff);
+    let Ok(Some(tree)) = tokio::task::spawn_blocking(move || idle_tree(&path, dev, cutoff)).await
+    else {
+        return 0;
+    };
+    // The checkout it is a worktree of, read from Git: `<main>/.git`, never metadata kept elsewhere.
+    let Ok(common) = worktrees::git(
+        &s.path,
+        env,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        true,
+    )
+    .await
+    else {
+        return 0;
+    };
+    let common = PathBuf::from(common.stdout.trim());
+    let Some(main) = common
+        .parent()
+        .filter(|_| common.file_name().is_some_and(|n| n == ".git"))
+        .map(Path::to_path_buf)
+    else {
+        return 0;
+    };
+    if main.join(".git").canonicalize().ok() != common.canonicalize().ok()
+        || s.path.starts_with(&main)
+    {
+        return 0;
+    }
+    // Only a tree on its task's own branch: never a checkout that merely sits in the folder.
+    let branch = format!("refs/heads/{}{}", crate::sessions::BRANCH, s.task);
+    if !worktrees::git(&main, env, &["rev-parse", "--verify", "-q", &branch], true)
+        .await
+        .is_ok_and(|r| r.ok())
+    {
+        return 0;
+    }
+    let Some(_git) = host.try_git_lock(&main) else {
+        return 0;
+    };
+    // A turn that started while Git ran keeps it.
+    if !owners_free(&owner, host.as_ref())
+        || !crate::sessions::remove_tree(&main, &s.path, &s.task, env, true).await
+    {
+        return 0;
+    }
+    tree.bytes
 }
 
 /// Whether Git shows a planned candidate as safe to go: nothing under it tracked or shown as changed, and its
@@ -625,6 +781,7 @@ impl DiskClean {
         client: &Client,
         host: Arc<dyn Host>,
         trees: Arc<Worktrees>,
+        pending: Pending,
     ) {
         let Some((total, free_now)) = crate::readiness::disk_usage(workspace) else {
             return;
@@ -646,7 +803,10 @@ impl DiskClean {
         *self.last.lock().unwrap() = Some(Instant::now());
         let (me, workspace, client) = (self.clone(), workspace.to_path_buf(), client.clone());
         *task = Some(tokio::spawn(async move {
-            let report = run(&workspace, keep, &client, host, trees, low, free_now).await;
+            let report = run(
+                &workspace, keep, &client, host, trees, pending, low, free_now,
+            )
+            .await;
             *me.report.lock().unwrap() = Some(report);
         }));
     }
@@ -700,13 +860,18 @@ pub fn owners_free(owners: &[(String, String)], host: &dyn Host) -> bool {
         .all(|(bot, task)| host.idle(bot, task) && !host.task_busy(task))
 }
 
+/// Whether a file under a path still waits to upload from it (files_publish.rs `pending_under`).
+pub type Pending = Arc<dyn Fn(&Path) -> bool + Send + Sync>;
+
 /// One clean-up; its report.
+#[allow(clippy::too_many_arguments)] // each is a separate handle the background clean-up owns
 async fn run(
     workspace: &Path,
     keep: Vec<PathBuf>,
     client: &Client,
     host: Arc<dyn Host>,
     trees: Arc<Worktrees>,
+    pending: Pending,
     low: u64,
     before: u64,
 ) -> Value {
@@ -811,6 +976,29 @@ async fn run(
     }
     if free(workspace) < target {
         git_maintenance(workspace, host.repositories(), &env, &mut tally).await;
+    }
+    // Task evidence goes last, once nothing cheaper is left.
+    if workspace_ok && free(workspace) < target {
+        let idle = {
+            let s = scope.clone();
+            tokio::task::spawn_blocking(move || idle_sessions(&s))
+                .await
+                .unwrap_or_default()
+        };
+        for s in idle {
+            if free(workspace) >= target {
+                break;
+            }
+            let freed = remove_session(&s, &host, pending.as_ref(), &env).await;
+            if freed > 0 {
+                log(&format!(
+                    "Tico runner: disk clean-up removed idle_task_worktree {} ({:.1} MB)",
+                    label(&s.path, &scope),
+                    freed as f64 / 1e6
+                ));
+                tally.add(Class::IdleTaskWorktree, freed);
+            }
+        }
     }
     let after = free(workspace);
     let freed: u64 = tally.classes.values().map(|v| v.1).sum();
@@ -1499,6 +1687,150 @@ mod tests {
         assert_eq!(got[0]["action"], "remove");
         assert_eq!(got[0]["path"], "tasks/done/acme__app");
         assert_eq!(got[0]["owner"], "bot:dev");
+    }
+
+    #[test]
+    fn idle_task_checkouts_go_oldest_first_and_fresh_private_nested_or_held_ones_stay() {
+        let (_g, root) = temp("sessions");
+        let mut s = scope(&root);
+        let bot = root.join("ws/sessions/bot-qa");
+        let checkout = |name: &str, hours: f64| {
+            let dir = bot.join(name);
+            file(&dir.join(".git"), 10);
+            file(&dir.join("qa/1/evidence/run.webm"), 4096);
+            age_tree(&dir, hours * 3600.0);
+            dir
+        };
+        checkout("t-old", 3.0);
+        checkout("t-older", 8.0);
+        checkout("t-fresh", 0.0);
+        checkout("t-held", 5.0);
+        checkout("private-m1", 9.0); // a private meeting's copy: its own sweep's
+        let nested = checkout("t-nested", 9.0);
+        file(&nested.join("repo/.git/HEAD"), 10); // another checkout inside it
+        age_tree(&nested, 9.0 * 3600.0);
+        file(&bot.join("t-plain/notes.txt"), 10); // not a checkout at all
+        age_tree(&bot.join("t-plain"), 9.0 * 3600.0);
+        file(&root.join("ws/sessions/other/t-x/.git"), 10); // not a bot's folder
+        age_tree(&root.join("ws/sessions/other"), 9.0 * 3600.0);
+        s.held = Some(HashSet::from([bot.join("t-held/qa/1/evidence/run.webm")]));
+        let got: Vec<(String, String)> = idle_sessions(&s)
+            .into_iter()
+            .map(|i| (i.bot, i.task))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("qa".to_string(), "t-older".to_string()),
+                ("qa".to_string(), "t-old".to_string())
+            ]
+        );
+        // Nothing here is a cache or temp entry the other steps take.
+        assert!(plan(&s).iter().all(|c| !c.path.starts_with(&bot)));
+    }
+
+    #[tokio::test]
+    async fn an_idle_task_checkout_goes_only_when_clean_pushed_and_nothing_holds_it() {
+        let (_g, root) = temp("session-rm");
+        let s = scope(&root);
+        let ws = root.join("ws");
+        let main = ws.join("bot-qa");
+        pushed_checkout(&root, &main);
+        std::fs::write(main.join(".gitignore"), "*.webm\n").unwrap();
+        git(&main, &["commit", "-q", "-am", "ignore videos"]);
+        git(&main, &["push", "-q", "origin", "main"]);
+        git(&main, &["fetch", "-q", "origin"]);
+        let add = |task: &str| {
+            let path = crate::sessions::path_for(&ws, "qa", task);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let branch = format!("tico-session/{task}");
+            let p = path.display().to_string();
+            git(
+                &main,
+                &["worktree", "add", "-q", "-b", &branch, &p, "origin/main"],
+            );
+            file(&path.join("qa/1/evidence/run.webm"), 8192); // ignored: a test video
+            path
+        };
+        let (done, unpushed, untracked, live) = (add("t1"), add("t2"), add("t3"), add("t4"));
+        let (detached, touched) = (add("t5"), add("t6"));
+        git(&detached, &["commit", "-q", "--allow-empty", "-m", "work"]);
+        git(&detached, &["checkout", "-q", "--detach", "origin/main"]);
+        file(&unpushed.join("memory/lesson.md"), 10);
+        git(&unpushed, &["add", "memory/lesson.md"]);
+        git(&unpushed, &["commit", "-q", "-m", "lesson not pushed"]);
+        file(&untracked.join("qa/1/plan.json"), 10);
+        age_tree(&ws.join("sessions"), 3.0 * 3600.0);
+        let idle = idle_sessions(&s);
+        assert_eq!(idle.len(), 6);
+        let of = |p: &Path| idle.iter().find(|i| i.path == p).unwrap().clone();
+        let client = Client::new("http://127.0.0.1:9", "t", 1, 0).unwrap();
+        let lanes = Arc::new(crate::sessions::Lanes::new(Arc::new(
+            crate::repositories::Repositories::new(&root, &root, client),
+        )));
+        let host: Arc<dyn Host> = lanes.clone();
+        let none = |_: &Path| false;
+        // A file still waiting to upload from it keeps it.
+        let uploading = |p: &Path| p == done.as_path();
+        assert_eq!(
+            remove_session(&of(&done), &host, &uploading, &env()).await,
+            0
+        );
+        assert!(done.exists());
+        // Clean and pushed: it goes with its ignored video. Its task may be open, so its branch stays for the next turn.
+        assert!(remove_session(&of(&done), &host, &none, &env()).await >= 8192);
+        assert!(!done.exists());
+        let branches = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&main)
+            .args(["branch", "--list", "tico-session/*"])
+            .output()
+            .unwrap();
+        let branches = String::from_utf8_lossy(&branches.stdout).to_string();
+        assert!(branches.contains("tico-session/t1"), "{branches}");
+        // A commit no remote has, or a file Git would show, keeps it.
+        assert_eq!(
+            remove_session(&of(&unpushed), &host, &none, &env()).await,
+            0
+        );
+        assert_eq!(
+            remove_session(&of(&untracked), &host, &none, &env()).await,
+            0
+        );
+        assert!(unpushed.join("memory/lesson.md").exists());
+        assert!(untracked.join("qa/1/plan.json").exists());
+        // A tree left detached at a pushed commit stays while its task branch holds one no remote has.
+        assert_eq!(
+            remove_session(&of(&detached), &host, &none, &env()).await,
+            0
+        );
+        assert!(detached.exists());
+        // A tree a turn wrote to since the list was made stays.
+        file(&touched.join("qa/2/evidence/run.webm"), 10);
+        assert_eq!(remove_session(&of(&touched), &host, &none, &env()).await, 0);
+        assert!(touched.exists());
+        // A turn on its task, its lane taken, or a Git step on the checkout keeps it.
+        lanes.attempts.lock().unwrap().insert(
+            "a1".into(),
+            crate::sessions::LiveTurn::of(
+                &json!({"bot": "bot:qa", "lane": "task:t9", "task": {"id": "t4"}}),
+            ),
+        );
+        assert_eq!(remove_session(&of(&live), &host, &none, &env()).await, 0);
+        lanes.attempts.lock().unwrap().clear();
+        let lane = lanes.lane("qa", "task:t4").try_lock_owned().unwrap();
+        assert_eq!(remove_session(&of(&live), &host, &none, &env()).await, 0);
+        drop(lane);
+        // The lock is the one the runner takes by the checkout's configured path, whatever path Git reports.
+        let step = lanes
+            .git_lock(&ws.join("./bot-qa"))
+            .try_lock_owned()
+            .unwrap();
+        assert_eq!(remove_session(&of(&live), &host, &none, &env()).await, 0);
+        drop(step);
+        assert!(live.exists());
+        assert!(remove_session(&of(&live), &host, &none, &env()).await > 0);
+        assert!(!live.exists() && main.join(".git").is_dir() && main.join(".gitignore").exists());
     }
 
     #[test]

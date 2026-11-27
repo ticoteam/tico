@@ -93,14 +93,21 @@ anyone. It removes only what nothing can still need, in this order, and stops on
 4. `git worktree prune` in Tico's own base clones under `repos/`, one at a time and only while no fetch holds that
    clone. It never runs `git gc`: repacking a large clone takes longer than the computer's Git time limit, leaves
    partial packs when stopped, and holds the clone while other bots' worktree steps wait.
+5. Last, idle task checkouts of a bot's own repository (`sessions/bot-<bot>/<task>`, where a bot's turns on a task work),
+   oldest first: one nothing has touched for 2 hours, with no turn in its bot's main checkout or on its task running and no file
+   waiting to upload from it, and no other checkout inside it. It goes only when Git shows nothing uncommitted or
+   untracked in it and every commit on it and on its task branch is on a remote. Its branch stays, since its task may still be open (a
+   ticket waiting in a later stage); the next turn on it checks the tree out again on that branch. What its repository ignores
+   (test videos and traces, build output) goes with it.
 
-It never touches an open task's folder, package caches in the home folder, a git checkout itself, a bot's repository,
+It never touches an open task's folder under `tasks/`, a bot's main checkout or its memory, package caches in the home folder, any other git checkout,
 credentials, the runner's state or configuration, or Docker images and volumes. It never follows a symlink, never
 removes anything on another volume or under a mount point, and never cleans a folder inside the Tico install. Each
 removal is logged with its kind and size; only space freed on the workspace volume is counted. The computer's
 readiness report carries the last clean-up (`disk_cleanup`: when, free space before and after, bytes per kind, and
 whether the disk is still low), and Health's disk warning names what it freed. What is left is for the disk to grow
-(a cloud machine Tico hosts grows its own) or for a person. Agent Ops never deletes files by hand: it reads Health and
+(a cloud machine Tico hosts grows its own, up to Large; see
+[Cloud machines](cloud-machines.md)) or for a person. Agent Ops never deletes files by hand: it reads Health and
 asks a person only about what is outside this list.
 
 ## Without a GitHub App

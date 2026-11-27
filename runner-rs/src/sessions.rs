@@ -945,6 +945,17 @@ pub async fn discard_pass(path: &Path, turn: &Env) -> Result<Vec<String>, String
 
 /// Take a closed task's worktree and branch away once nothing in it is unsaved. True when gone.
 pub async fn remove(main: &Path, path: &Path, task: &str, turn: &Env) -> bool {
+    remove_tree(main, path, task, turn, false).await
+}
+
+/// As `remove`; `keep_branch` leaves the task branch for an open task, whose next turn checks it out again (`ensure`).
+pub async fn remove_tree(
+    main: &Path,
+    path: &Path,
+    task: &str,
+    turn: &Env,
+    keep_branch: bool,
+) -> bool {
     if crate::repo_safety::outside_installation(main).is_err()
         || crate::repo_safety::outside_installation(path).is_err()
     {
@@ -963,14 +974,18 @@ pub async fn remove(main: &Path, path: &Path, task: &str, turn: &Env) -> bool {
         {
             return Ok(false);
         }
-        // Reachable from a remote-tracking ref, not just the upstream: a commit only this branch has stays.
-        let ahead = g(
-            path,
-            &env,
-            &["rev-list", "--count", "HEAD", "--not", "--remotes"],
-            15,
-        )
-        .await?;
+        // Reachable from a remote-tracking ref, not just the upstream: a commit only this branch has stays. The task
+        // branch is checked as well as HEAD, since a turn may leave the tree detached at an older commit.
+        let branch = format!("refs/heads/{BRANCH}{task}");
+        let mut count = vec!["rev-list", "--count", "HEAD"];
+        if g(path, &env, &["rev-parse", "--verify", "-q", &branch], 15)
+            .await?
+            .ok()
+        {
+            count.push(&branch);
+        }
+        count.extend(["--not", "--remotes"]);
+        let ahead = g(path, &env, &count, 15).await?;
         if !ahead.ok() || ahead.stdout.trim() != "0" {
             return Ok(false);
         }
@@ -985,13 +1000,15 @@ pub async fn remove(main: &Path, path: &Path, task: &str, turn: &Env) -> bool {
         {
             return Ok(false);
         }
-        g(
-            main,
-            &env,
-            &["branch", "-D", &format!("{BRANCH}{task}")],
-            15,
-        )
-        .await?;
+        if !keep_branch {
+            g(
+                main,
+                &env,
+                &["branch", "-D", &format!("{BRANCH}{task}")],
+                15,
+            )
+            .await?;
+        }
         Ok(true)
     }
     .await;
@@ -1527,12 +1544,14 @@ impl Lanes {
             .clone()
     }
 
-    /// One git step at a time on a checkout's task worktrees: they all write the repository they share.
+    /// One git step at a time on a checkout's task worktrees: they all write the repository they share. Keyed by the
+    /// checkout's resolved path, so a path read back from Git and one from the runner's configuration share it.
     pub fn git_lock(&self, main: &Path) -> Lock {
+        let key = main.canonicalize().unwrap_or_else(|_| main.to_path_buf());
         self.git_locks
             .lock()
             .unwrap()
-            .entry(main.display().to_string())
+            .entry(key.display().to_string())
             .or_default()
             .clone()
     }
@@ -1603,6 +1622,11 @@ impl crate::worktrees::Host for Lanes {
 
     fn task_busy(&self, task: &str) -> bool {
         self.attempts.lock().unwrap().values().any(|t| t.on(task))
+    }
+
+    fn try_git_lock(&self, main: &Path) -> Option<Box<dyn Send>> {
+        let held = self.git_lock(main).try_lock_owned().ok()?;
+        Some(Box::new(held))
     }
 }
 
