@@ -113,9 +113,8 @@ SCHEMAS.update(
                     "description": "open: working; frozen: out of credit, no new turn on a Tico model; locked: pay to "
                     "continue, people's calls answer 402 `locked` but for sign-in, this read, billing and the download",
                 },
-                "reason": {"type": ["string", "null"], "enum": [None, "out_of_credit", "trial_over", "unpaid"]},
+                "reason": {"type": ["string", "null"], "enum": [None, "out_of_credit", "unpaid"]},
                 "plan": "s",
-                "trial_days_left": {"type": ["integer", "null"]},
                 "billing_url": {
                     "type": ["string", "null"],
                     "description": "Where to pay or add credit: an https page at Tico HQ, or null",

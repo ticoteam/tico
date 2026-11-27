@@ -4,7 +4,8 @@ import { ApiError, api } from '@/api/client';
 import type { Problem } from '@/api/schema';
 import { queryClient } from '@/data';
 
-/* A locked Tico Cloud company (backend/cloud_access.py): the trial ended without a card, or the month is unpaid. The
+/* A locked Tico Cloud company (backend/cloud_access.py): the month is unpaid (a company out of credit is frozen, not
+   locked). The
    server then refuses every person's call 402 `locked`, with HQ's word under `cloud` (reason, billing page), except who
    is signed in, billing and the files download. So the lock is read from the refusals already in the cache: the first
    page's reads (the directory, at least) meet it, and no other read is needed. */
@@ -17,7 +18,7 @@ export const SUPPORT_URL = 'https://app.tico.dev/support';
 export const EXPORT_PATH = '/api/v2/system/storage/export';
 
 export interface PlanLockState {
-  /** HQ's reason: `trial_over`, `unpaid`, or another word; null when it gave none. */
+  /** HQ's reason: `unpaid`, or another word; null when it gave none. */
   reason: string | null;
   /** Where to pay: HQ's https page. */
   billingUrl: string;

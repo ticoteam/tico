@@ -55,8 +55,7 @@ def test_billing_passes_cloud_through_and_keeps_it(api, hq):  # noqa: F811
     assert status["cloud_access"] == {
         "access": "frozen",
         "reason": "out_of_credit",
-        "plan": "trial",
-        "trial_days_left": 14,
+        "plan": "starter",
         "billing_url": BILLING_URL,
         "days_left": None,
     }
@@ -99,7 +98,7 @@ def test_locked_refuses_people_except_billing_and_the_download_and_opens_again_b
     assign(api, r, "ops")
     ready(api, r, ["ops"])
     post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
-    say(api, hq, "locked", "trial_over")
+    say(api, hq, "locked", "unpaid")
     refused = api.get("/api/v2/tasks", headers=headers())
     assert refused.status_code == 402, refused.text
     error = refused.json()["error"]
@@ -134,12 +133,43 @@ def test_the_access_and_the_locked_refusal_answer_their_declared_shapes_and_a_bo
     assert conforms(get(api, "cloud-access"), schema, document) is None  # off cloud: null
     refused = api.get("/api/v2/cloud-access", headers=headers(bot(api, "ops")))
     assert (refused.status_code, refused.json()["error"]["code"]) == (403, "identity")
-    say(api, hq, "locked", "trial_over")
+    say(api, hq, "locked", "unpaid")
     assert conforms(get(api, "cloud-access", "cara-test"), schema, document) is None
     locked = api.get("/api/v2/tasks", headers=headers())
     assert locked.status_code == 402
     assert conforms(locked.json(), document["components"]["schemas"]["Problem"], document) is None
     assert conforms(locked.json()["error"]["cloud"], document["components"]["schemas"]["CloudAccess"], document) is None
+
+
+def test_no_answer_locks_a_company_for_a_trial(api, hq):  # noqa: F811
+    # Tico Cloud has no trial (Nov 27): a company runs on its credit and freezes at $0. An HQ still saying "locked,
+    # trial over" is an unusable answer: the last word (open) is kept, people work and bots run.
+    r = runner(api)
+    assign(api, r, "ops")
+    ready(api, r, ["ops"])
+    post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
+    say(api, hq, "open")
+    assert say(api, hq, "locked", "trial_over")["access"] == "open"
+    hq.answers["/billing"] = (200, {**ANSWER, "cloud": signals("locked", "trial_over")}, "application/json")
+    get(api, "billing")
+    assert api.get("/api/v2/tasks", headers=headers()).status_code == 200
+    assert claim(api, r, "ops") is not None
+    with api.app.state.store.read() as c:
+        assert not cloud_access.frozen(c) and cloud_access.routines_paused(c) is None
+
+
+def test_a_trial_lock_kept_from_before_locks_nothing(api, hq):  # noqa: F811
+    # A company locked for its trial before the trial went away opens at once, before HQ answers again.
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO registry_metadata VALUES(?,?)",
+            (cloud_access.KEY, json.dumps({"access": "locked", "reason": "trial_over", "plan": "trial"})),
+        )
+        assert cloud_access.state(c) is None and not cloud_access.locked(c) and not cloud_access.frozen(c)
+    store = api.app.state.store
+    store.__dict__.pop("_cloud_access", None)
+    assert cloud_access.current(store) is None
+    assert api.get("/api/v2/tasks", headers=headers()).status_code == 200
 
 
 def test_a_restart_keeps_the_lock_until_hq_answers(api, hq):  # noqa: F811

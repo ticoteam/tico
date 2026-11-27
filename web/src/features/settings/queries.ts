@@ -354,7 +354,7 @@ export interface BillingView {
   month: string;
   balance_micros: number;
   min_balance_micros: number;
-  cloud?: { access?: string; plan?: string; trial_days_left?: number | null; billing_url?: string | null } | null;
+  cloud?: { access?: string; plan?: string; billing_url?: string | null } | null;
   credits: { label: string; amount_micros: number; left_micros: number; expires?: string | null; current: boolean }[];
   usage: { period: string; total_micros: number }[];
   statement: { opening_micros: number; closing_micros: number; debits_by_product: Record<string, number> };
