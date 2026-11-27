@@ -3525,16 +3525,17 @@ def waiting(c, bot):
         return f"its cloud machine didn't start ({machine['problem'][3:]}); trying again"
     if machine["problem"].startswith("error:"):
         return f"its cloud machine couldn't be made or started ({machine['problem'][6:]}); trying again"
+    spent = machine["state"] in GOING and _wake_spent(c, bot, machine)
+    if spent:
+        # Woken for this work once and nothing ran, stuck or not: it is not woken for the same work again
+        # (`wake_for`), so the words say so rather than promise a start, and the chat offers Wake now (#3967).
+        when = datetime.fromtimestamp(machine["woke_at"], timezone.utc).strftime("%H:%M UTC")
+        return f"{WAKE_SPENT} {when} and ran nothing; it is not woken again for this work"
     if machine["problem"] == "stuck":
         return "its cloud machine started, but this did not run there"
     if machine["problem"] == "no_enroll":
         return "its cloud machine never connected to this server"
     if machine["state"] in GOING:
-        if _wake_spent(c, bot, machine):
-            # Woken for this work once and nothing ran: it is not woken for the same work again (`wake_for`), so the
-            # words say so rather than promise a start (#3967).
-            when = datetime.fromtimestamp(machine["woke_at"], timezone.utc).strftime("%H:%M UTC")
-            return f"{WAKE_SPENT} {when} and ran nothing; it is not woken again for this work"
         return "its cloud machine is " + ASLEEP
     return "starting its cloud machine"
 

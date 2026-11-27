@@ -221,6 +221,13 @@ def test_work_waiting_over_15_minutes_names_its_checkout_below_the_turns_warning
     assert turns['status'] == 'warn' and 'checkout is on Shared cloud machine' in turns['summary']
     assert turns['fixes'][0]['label'] == 'Open Shared cloud machine'
     assert turns['fixes'][0]['href'] == f"#/computers/{shared['runner_id']}/performance"
+    # Review 2: at the warning level the claim's bot-level check names no job's hold, so a bot with no Paid by kept
+    # its late checkout wait as plain queued. The recorded refusal names it there too.
+    with store.read_transaction() as c:
+        warned = start_places.summary(c, computer['runner_id'], store.settings, classify=True)
+    assert [(w['reason'], w['code']) for w in warned['waits']] == [
+        ('checkout is on Shared cloud machine', 'worktree_home')
+    ]
 
 
 def test_parked_logins_take_no_start_place_so_another_login_starts_and_claims_go_on(api):

@@ -56,8 +56,8 @@ def _codes(node, fn, at, seen=frozenset()):
         if name not in CONSTANTS:
             raise Unchecked(f"line {node.lineno}: {name} is returned as a refusal: add it to CONSTANTS")
         yield CONSTANTS[name]
-    elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in _nested(fn) and node.args:
-        yield from _codes(node.args[0], fn, 0, seen)  # a local helper that answers with its first argument
+    elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in _nested(fn):
+        yield from _helper(node, fn, _nested(fn)[node.func.id], seen)
     elif isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name) and isinstance(node.slice, ast.Constant):
         if isinstance(node.slice.value, int):  # an item of a local tuple: that item of its every assignment
             for value, _ in _assignments(fn, node.value.id):
@@ -88,7 +88,44 @@ def _codes(node, fn, at, seen=frozenset()):
 
 
 def _nested(fn):
-    return {node.name for node in ast.walk(fn) if isinstance(node, ast.FunctionDef) and node is not fn}
+    return {node.name: node for node in ast.walk(fn) if isinstance(node, ast.FunctionDef) and node is not fn}
+
+
+def _helper(call, fn, helper, seen):
+    """The codes a local helper's call answers with: each of the helper's own answers, where one that is its first
+    parameter (alone or first in a tuple) is the call's first argument. Any other parameter answered raises."""
+    params = [a.arg for a in helper.args.args]
+
+    def first(expr, depth=0):
+        # The code's own expression: a tuple's first item, through a local name or a leading slice (`values[:3]`).
+        if isinstance(expr, ast.Tuple) and expr.elts:
+            return first(expr.elts[0], depth)
+        if isinstance(expr, ast.Subscript) and isinstance(expr.slice, ast.Slice) and expr.slice.lower is None:
+            return first(expr.value, depth)
+        if isinstance(expr, ast.Name) and expr.id not in params and depth < 5:
+            assigned = list(_assignments(helper, expr.id))
+            if len(assigned) == 1 and assigned[0][1] is None:
+                return first(assigned[0][0], depth + 1)
+        return expr
+
+    def branches(expr):
+        if isinstance(expr, ast.IfExp):
+            yield from branches(expr.body)
+            yield from branches(expr.orelse)
+        else:
+            yield expr
+
+    for code in (first(branch) for value in answers(helper) for branch in branches(value)):
+        if isinstance(code, ast.Name) and params and code.id == params[0]:
+            if not call.args:
+                raise Unchecked(f"line {call.lineno}: {helper.name}() answers its first argument and got none")
+            yield from _codes(call.args[0], fn, 0, seen)
+        elif isinstance(code, ast.Name) and code.id in params:
+            raise Unchecked(
+                f"line {code.lineno}: {helper.name} answers its parameter {code.id}: a shape the refusal test can't read"
+            )
+        else:
+            yield from _codes(code, helper, 0, seen)
 
 
 def _assignments(fn, name):
@@ -180,6 +217,8 @@ def test_the_collector_finds_a_new_code_in_every_shape_a_refuser_answers_with():
         "yield": "def refuse(c):\n    for job in c:\n        why = 'brand_new' if job else None\n        yield job, why\n",
         "helper": "def refuse(c):\n    def result(reason):\n        return reason, None\n    return result('brand_new')\n",
         "walrus": "def refuse(c):\n    if (why := 'brand_new'):\n        return why\n",
+        # A helper that answers with its own code, not its argument (#3967 review 2).
+        "own_helper": "def refuse(c):\n    def result(reason):\n        return 'brand_new', None\n    return result(None)\n",
     }
     for shape, source in shapes.items():
         place = 1 if shape == "yield" else 0

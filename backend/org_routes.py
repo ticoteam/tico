@@ -354,9 +354,15 @@ def register(app, auth, settings, settings_admin, store):
             if level["read"]:
                 value["cant_run"] = cant_run(c, bot, who)
                 # What stops its queued work, in the chat's words with the claim's code and fix (#3967 AC-9).
-                from .thread_bot_status import own_wait
+                from .thread_bot_status import _manages, own_wait
+                from . import threads as wait_threads
 
-                value["wait"] = own_wait(c, bot, detailed=bool(level.get("write")))
+                value["wait"] = own_wait(
+                    c,
+                    bot,
+                    detailed=bool(level.get("write")),
+                    manages=_manages(c, wait_threads.viewer(None, who), bot),
+                )
                 value["routines"] = routines.of_bot(c, bot)
             reports = value.get("reports_to") or ""
             if reports.startswith("human:"):

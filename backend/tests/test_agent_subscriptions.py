@@ -516,7 +516,7 @@ def test_a_refusal_from_work_the_viewer_cannot_read_says_only_its_code_in_their_
     store = api.app.state.store
     with store.transaction() as c:
         jobs = c.execute(
-            "SELECT j.id, m.sender_id, coalesce(t.root_id,t.id) AS root FROM jobs j JOIN messages m "
+            "SELECT j.id, j.message_id, m.sender_id, coalesce(t.root_id,t.id) AS root FROM jobs j JOIN messages m "
             "ON m.id=j.message_id JOIN conversations t ON t.id=m.conversation_id WHERE j.bot_id='ops'"
         ).fetchall()
     ben = next(j for j in jobs if j["sender_id"] == "human:ben")
@@ -529,6 +529,20 @@ def test_a_refusal_from_work_the_viewer_cannot_read_says_only_its_code_in_their_
     assert his["code"] == "payer_wait" and "Ana's own plan" not in his["detail"]
     [hers] = get(api, f"threads/{ana['root']}/bot-status")["bots"]
     assert "Ana's own plan" in hers["detail"]
+    # Review 2: inside a root its reader reads, the refused message itself can still be restricted (a sub-thread or a
+    # message about work the reader may not see). The plan follows that message's own check, not the root's.
+    from backend import task_privacy
+
+    readable = task_privacy.message_readable
+    monkeypatch.setattr(
+        task_privacy,
+        "message_readable",
+        lambda c, actor, message, current=False: (
+            message.get("id") != ana["message_id"] and readable(c, actor, message, current)
+        ),
+    )
+    [hidden] = get(api, f"threads/{ana['root']}/bot-status")["bots"]
+    assert hidden["code"] == "payer_wait" and "Ana's own plan" not in hidden["detail"]
 
 
 def test_pool_wait_is_visible_in_health_and_rechecks_without_a_gateway_fallback(api):

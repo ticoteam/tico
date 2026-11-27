@@ -693,11 +693,18 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
             count = len(sample) - counted
         else:
             count = row['n']
-            if not why and runner and not classify and row['oldest'] < late:
-                # Below warning the claim is not asked per bot (it costs a claim's reads a bot on each Health poll),
-                # but work this old has its real cause: the refusal the scheduler last recorded for the bot
-                # (queue_refusals), read once for every bot here. Only a checkout or saved session held on another
-                # computer asks the claim about that one job, to name the computer.
+            if not why and runner and classify:
+                refused, _ = claim_refusal(
+                    c, settings, runner, row['bot_id'], row['config'], False, ready, default=default
+                )
+                why = phrase(refused) if refused else ''
+                code = refused or ''
+            if not why and runner and row['oldest'] < late:
+                # The claim's bot-level check above names no job's hold, and below warning it is not asked at all
+                # (it costs a claim's reads a bot on each Health poll). Work this old still has its real cause: the
+                # refusal the scheduler last recorded for the bot (queue_refusals), read once for every bot here.
+                # Only a checkout or saved session held on another computer asks the claim about that one job, to
+                # name the computer.
                 if recorded is None:
                     recorded = recent_refusals(queued_rows)
                 seen = recorded.get(row['bot_id'])
@@ -724,12 +731,6 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
                             report('computer queue check', row['bot_id'], exc, logger='tico.health')
                     why = phrase(code, seen.get('job'), homes)
                     home = home_of(code, seen.get('job'), homes)
-            elif not why and runner and classify:
-                refused, _ = claim_refusal(
-                    c, settings, runner, row['bot_id'], row['config'], False, ready, default=default
-                )
-                why = phrase(refused) if refused else ''
-                code = refused or ''
         if not count:
             continue
         if not why:

@@ -434,12 +434,25 @@ def test_a_machine_woken_for_work_that_ran_nothing_says_so_not_asleep(cloud):
     when = time.strftime('%H:%M', time.gmtime(woke))
     assert CM.ASLEEP not in status['detail']
     assert f'woken at {when} UTC and ran nothing' in status['detail']
+    with cloud.store.transaction() as c:  # review 2: a stopped machine marked stuck still says its wake was spent
+        c.execute("UPDATE cloud_machines SET problem='stuck' WHERE bot='ops'")
+    stuck = bot_status(cloud.api, thread['id'])[0]
+    assert f'woken at {when} UTC and ran nothing' in stuck['detail'] and stuck['code'] == 'wake_spent'
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE cloud_machines SET problem='' WHERE bot='ops'")
     with cloud.store.read() as c:  # Health's Turns line says it too, never "asleep; starts when work can run"
         line = start_places.describe(start_places.summary(c, cloud.row()['runner_id'], cloud.store.settings))
     assert f'waiting: its cloud machine was woken at {when} UTC and ran nothing' in line and CM.ASLEEP not in line
     # Wake now, for those who manage the bot: it forgets the spent wake, so the next look wakes the machine.
     assert status['fix']['label'] == 'Wake now' and status['code'] == 'wake_spent'
     assert cloud.api.post(status['fix']['post'], headers=headers('cara-test')).status_code == 403
+    # Bot show offers Wake now by the same check, never to one who may change the bot but not manage it (review 2).
+    from backend.thread_bot_status import own_wait
+
+    with cloud.store.read() as c:
+        assert own_wait(c, 'ops', detailed=True, manages=False)['fix'] is None
+        assert own_wait(c, 'ops', detailed=True, manages=True)['fix']['label'] == 'Wake now'
+    assert cloud.api.get('/api/v2/bots/ops', headers=headers()).json()['wait']['fix']['label'] == 'Wake now'
     response = cloud.api.post(status['fix']['post'], headers=headers())
     assert response.status_code == 200 and response.json() == {'woken': True}
     assert 'ran nothing' not in bot_status(cloud.api, thread['id'])[0]['detail']

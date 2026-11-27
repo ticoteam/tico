@@ -417,29 +417,23 @@ def _elsewhere(c, v, bot_id, root_id):
 def _refusal_seen(c, v, refusal, root_id):
     """The bot's recorded refusal as far as viewer `v` may read it. The refusal is the bot's oldest queued job, which
     can be other, restricted work: where its checkout or saved session is and what its Paid by waits for are said only
-    when that job is in this root or is work the viewer reads. Otherwise only the code and its computer remain."""
+    when the viewer reads that job's own message, in its own thread (a message inside a readable root can still be
+    restricted, and a sub-thread narrower than its root). Otherwise only the code and its computer remain."""
     from . import task_privacy, threads
 
     if not refusal or not refusal.get("job"):
         return refusal
     row = c.execute(
-        "SELECT m.*, t.task_id AS thread_task, COALESCE(t.root_id, t.id) AS thread_root FROM jobs j "
-        "JOIN messages m ON m.id=j.message_id LEFT JOIN conversations t ON t.id=m.conversation_id WHERE j.id=?",
+        "SELECT m.id, m.conversation_id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.id=?",
         (refusal["job"],),
     ).fetchone()
     bare = {"reason": refusal.get("reason"), "runner_id": refusal.get("runner_id")}
-    if not row:
+    if not row or not row["conversation_id"]:
         return bare
-    row = dict(row)
-    if row.get("thread_root") == root_id:
-        return refusal
-    message = {**row, "refs": H._json(row.get("refs"), {}) or {}}
-    task_id = H.message_task_id(message, {"task_id": row.get("thread_task")})
     try:
-        if task_id:
-            seen = task_privacy.readable(c, task_privacy.actor(v.who), [task_id])
-        else:
-            seen = bool(row.get("thread_root")) and threads.thread_readable(c, v, row["thread_root"])
+        seen = threads.thread_readable(c, v, row["conversation_id"]) and task_privacy.message_readable(
+            c, task_privacy.actor(v.who), {"id": row["id"]}
+        )
     except Exception:  # noqa: BLE001 - work the viewer can't be shown to read is not theirs to see
         seen = False
     return refusal if seen else bare
@@ -493,8 +487,8 @@ def _blocked(c, bot, location, refusal):
             # Not "starting for this turn": nothing starts until credit lands, so the chat says so.
             return OUT_OF_CREDIT, _fix(BILLING), "out_of_credit"
         if computer and cloud:
-            if not asleep:
-                return None  # its cloud machine is starting for this turn
+            if not asleep and not cloud.startswith(WAKE_SPENT):
+                return None  # its cloud machine is starting for this turn (a stuck one whose wake ran nothing is not)
             if not reason or reason in STALE or reason in BUSY_REASONS:
                 # Woken for this work: a stale report's refusal is what a wake clears.
                 if cloud.startswith(WAKE_SPENT):
@@ -594,11 +588,12 @@ def _location(c, bot):
     }
 
 
-def own_wait(c, bot, detailed):
+def own_wait(c, bot, detailed, manages=False):
     """What stops the bot's queued work, as its chat line says it: {'detail', 'fix', 'code', 'until'}, or None when it
     has no queued work or nothing stops it. For `tico bot show` and the bot page (#3967 AC-9). `detailed`: the reader
-    may change the bot, so the plan, the computer holding its work and Wake now are said; else the code and plain
-    words only, as status() says them to one who doesn't read the refused work."""
+    may change the bot, so the plan and the computer holding its work are said; else the code and plain words only, as
+    status() says them to one who doesn't read the refused work. `manages`: the reader passes Wake now's own check
+    (cloud_machines.manage, as _manages asks), so only then is Wake now offered."""
     from . import queue_refusals
 
     if not c.execute("SELECT 1 FROM jobs WHERE bot_id=? AND state='queued' LIMIT 1", (bot,)).fetchone():
@@ -611,7 +606,12 @@ def own_wait(c, bot, detailed):
         return None
     detail, fix, code = blocked
     until = ((refusal or {}).get("payer") or {}).get("until") if code in ("payer_wait", "cooling_off") else None
-    return {"detail": detail, "fix": fix if detailed or code != "wake_spent" else None, "code": code, "until": until}
+    return {
+        "detail": detail,
+        "fix": None if code == "wake_spent" and not manages else fix,
+        "code": code,
+        "until": until,
+    }
 
 
 def status(c, v, root):
