@@ -1588,6 +1588,7 @@ def promote(gh, env):
         status = read_status(canary)
     except Fail as exc:
         raise Fail("promote: holding, %s" % exc) from exc
+    issue = find_approval(gh, want)  # a fresh read: a hold added, or the record closed, during the check counts
     approval, held, why = approval_state(gh, issue, env) if issue else ("", False, "")
     waits, faults = promotion_gate(
         version=want,

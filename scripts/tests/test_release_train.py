@@ -1,6 +1,7 @@
 """The release train: which candidate ships and when, when stable may take the canary's approved release (by a person, or
 automatically when no person is needed), and that a failure reaches the release-train issue (scripts/release_train.py)."""
 
+import copy
 from datetime import datetime, timedelta, timezone
 import io
 import re
@@ -1358,6 +1359,28 @@ def test_the_hold_label_release_hold_and_blockers_still_stop_an_automatic_approv
     with pytest.raises(rt.Fail, match="rolled_back"):
         rt.promote(gh, AUTO)
     assert installs["updated"] == []
+
+
+@pytest.mark.parametrize("late", ["hold", "closed"])
+def test_a_hold_or_close_during_the_speed_check_stops_an_automatic_approval(installs, monkeypatch, late):
+    # GitHub answers each read with a fresh copy: the record read before the wait does not see a later hold.
+    gh = FakeGitHub()
+    record = approval_for(gh, "v0.6.200", body=HIGH_RISK_NOTES)
+
+    def speed_check(target, version, base):
+        fresh = copy.deepcopy(record)
+        if late == "hold":
+            fresh["labels"].append({"name": rt.HOLD})
+        else:
+            fresh["state"] = "closed"
+        gh.issue_list[gh.issue_list.index(record)] = fresh
+        return [], []
+
+    monkeypatch.setattr(rt, "speed_check", speed_check)
+    rt.promote(gh, AUTO)
+    assert installs["updated"] == []
+    want = "on hold" if late == "hold" else "no open approval for this release"
+    assert any("Promote: holding v0.6.200" in line and want in line for line in rt.LOG)
 
 
 def test_with_no_person_needed_releases_flow_canary_then_stable_with_no_one_in_the_loop(installs):
