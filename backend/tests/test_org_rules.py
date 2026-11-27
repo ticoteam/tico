@@ -615,3 +615,8 @@ def test_a_stored_outside_editions_who_is_retired_alone_and_dropped_beside_teamm
         assert after[plain["id"]] == before[plain["id"]]
         assert [r["id"] for r in O.matching(c, "bot:ops") if r["id"] in (alone["id"], beside["id"])] == [beside["id"]]
         assert K.standing(c, asked["requirement_id"]) == K.WITHDRAWN
+    # History keeps the old Who and gains the retirement, by Tico, as its newest version.
+    seen = get(api, f"rules/{alone['id']}/history")["versions"]
+    assert [v["after"]["version"] for v in seen] == [2, 1]
+    assert (seen[0]["actor"], seen[0]["after"]["status"]) == (H.TICO_ACTOR, "retired")
+    assert seen[0]["before"]["who"]["outside_editions"] is True and "outside_editions" not in seen[0]["after"]["who"]

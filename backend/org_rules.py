@@ -1833,6 +1833,38 @@ def _replaced(c, old_id, by_id):
     _event(c, H.TICO_ACTOR, "replaced", old_id, {"by": by_id})
 
 
+def retire_for_tico(c, rule_id, why, who=None):
+    """Tico retires a rule that can no longer apply (a migration does, when what its Who named is gone), as a person's
+    Retire or Skip would: its history gains a version by Tico, an OK still waiting on it is withdrawn the normal way (its
+    task moves on if that was all it waited for), and an active rule's retirement reaches the webhooks. `who`, when
+    given, is the Who it is stored with from then on. A rule already retired is left as it is."""
+    old = _get(c, rule_id)
+    if old["status"] == "retired":
+        return
+    _withdraw_ok(c, rule_id, why)
+    extra = {"decided_by": H.TICO_ACTOR, "decided_at": H.now()}
+    if who is not None:
+        extra["who"] = _json(who)
+    _save(c, rule_id, status="retired", extra=extra)
+    stored = _get(c, rule_id)
+    _audit(c, H.TICO_ACTOR, rule_id, _core(old), _core(stored), SimpleNamespace(via="", actor=H.TICO_ACTOR))
+    _event(c, H.TICO_ACTOR, "retired" if old["status"] == "active" else "skipped", rule_id, {"why": why})
+    if old["status"] == "active":
+        H.hook(
+            c,
+            "org_rule.retired",
+            rule_id,
+            lambda: {
+                "id": rule_id,
+                "kind": stored["kind"],
+                "text": stored["text"],
+                "source_id": stored["source_id"],
+                "retired_by": H.TICO_ACTOR,
+            },
+            H.TICO_ACTOR,
+        )
+
+
 def ok_given(c, grant, ctx):
     """The person OK'd a suggestion from its preview (task_asks.ON_OK), in that transaction: it is accepted as them, with
     their own rights, only on the clerk task it is bound to and while it is still the version they were shown. The OK is
