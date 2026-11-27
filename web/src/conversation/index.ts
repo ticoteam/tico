@@ -9,7 +9,7 @@ export { MessageBones } from './Bones';
 export { SessionLine, type Session } from './Session';
 export { clock, dayKey, dayLabel, stamp } from './dates';
 export { DidLine, type DidLineProps } from '@/kit/DidLine';
-export { Outline, jumpTo, type OutlineProps } from './Outline';
+export { Outline, jumpTo, onJump, type OutlineProps } from './Outline';
 export { activityQuery, dropRun, liveQuery, waitsQuery, rowsOf, seedRun, timelineQuery, timelineKey, ticoRoomQuery, readTicoInfo, sendMessage, sendToDm, markRead, type TicoInfo, type TaskSend, type ThreadActivity } from './queries';
 export { tasksIn } from './links';
 export { PageCard } from './Rich';

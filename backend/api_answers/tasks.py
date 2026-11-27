@@ -594,6 +594,10 @@ class AssistantOkDelegation(TypedDict):
     """Their words, as they were when the OK was written"""
     cited: AssistantOkCited | None
     """Their message, for a reader who may open that chat; null for anyone else"""
+    answer_id: str
+    """The answer this OK is (POST /api/v2/answers/{answer_id}/undo takes it back)"""
+    undone: bool
+    """Taken back since: the line stays, marked undone"""
 
 
 @answer

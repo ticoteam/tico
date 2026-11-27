@@ -318,7 +318,14 @@ def shown_delegation(conn: "sqlite3.Connection", auth: Any, who: "Identity", eve
             link = {"message_id": str(cast(Row, cited).get("message_id") or ""), "conversation_id": room}
         except Problem:
             link = None
-    return {"words": str(record.get("words") or ""), "cited": link}
+    # The answer the line is about (the answer's own data names it), and whether it was taken back since: the read
+    # leaves `data` out, so a screen matches the line to its Undo by this.
+    answer_id = str(cast(Row, data).get("answer_id") or "")
+    undone = bool(
+        answer_id
+        and conn.execute("SELECT 1 FROM answers WHERE id=? AND undone_at IS NOT NULL", (answer_id,)).fetchone()
+    )
+    return {"words": str(record.get("words") or ""), "cited": link, "answer_id": answer_id, "undone": undone}
 
 
 RECEIPT = "assistant_ok"  # the receipt's refs key: {answer_id, task_id, title, stage}

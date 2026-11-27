@@ -110,7 +110,12 @@ def test_on_her_word_in_her_agent_ops_chat_the_ok_is_hers_via_agent_ops_with_her
     # The history shows her words and links her chat to her.
     shown = call(api, "GET", f"tasks/{tid}", "ana-test")[1]
     (seen,) = [e for e in shown["events"] if e.get("field") == "answer"]
-    assert seen["delegation"] == {"words": WORDS, "cited": {"message_id": cited, "conversation_id": room}}
+    assert seen["delegation"] == {
+        "words": WORDS,
+        "cited": {"message_id": cited, "conversation_id": room},
+        "answer_id": given["id"],
+        "undone": False,
+    }
     # Her own Undo takes it back.
     assert call(api, "POST", f"answers/{given['id']}/undo", "ana-test", {})[0] == 200
     assert not answers(api, rid)

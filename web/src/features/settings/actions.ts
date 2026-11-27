@@ -9,6 +9,7 @@ import { setMotionChoice } from '@/motion';
 import { setThemeChoice, type Theme } from '@/prefs';
 import {
   addPerson,
+  setAssistantOks,
   addSubscription,
   cancelSignIn,
   createToken,
@@ -394,6 +395,18 @@ export const reportsDirect = defineAction({
   run: (_ctx, { on }) => setRule('bot_reports_direct', on),
   did: ({ on }) => (on ? 'Turned on' : 'Turned off'),
   target: () => setting('reports'),
+});
+
+export const assistantGivesOks = defineAction({
+  id: 'settings.assistantGivesOks',
+  title: 'Give OKs for me when I tell you to',
+  kind: 'change',
+  input: z.strictObject({ on: z.boolean() }),
+  // Whether the Assistant gives OKs for the person is theirs alone to choose: their own press, never Tico's.
+  tico: false,
+  run: (_ctx, { on }) => setAssistantOks(on),
+  did: ({ on }) => (on ? 'Turned on' : 'Turned off'),
+  target: () => setting('assistant'),
 });
 
 // ---------------------------------------------------------------- security

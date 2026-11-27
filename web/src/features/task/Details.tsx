@@ -17,6 +17,7 @@ import { PageBody, Section } from '@/pagekinds';
 import { ActorItems, OwnerMenu, tagsOf } from './Head';
 import { EditKv, Inline, Kv, saved } from './Fact';
 import { Meetings, MoreFacts, PublicFacts, repeatsOwner, SizeFact, WaitFact, WaitOn } from './Facts';
+import { DelegatedOks } from './Delegated';
 import { DETAILS, failedToast, mediaOf, tabAddress } from './model';
 import { NewPage } from './NewPage';
 import { Face, Mark, NameOf, Go, isActor } from './parts';
@@ -435,6 +436,7 @@ export function Details({ t, adding = null, onAdding = () => undefined }: Detail
         </Section>
       )}
 
+      <DelegatedOks events={t.events ?? []} />
       <Sessions t={t} />
       <Meetings t={t} />
       {adding === 'page' && (

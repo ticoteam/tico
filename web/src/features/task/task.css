@@ -115,6 +115,8 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
 /* a text button inside a row: Clear, Cancel */
 .dt-act{height:24px;flex:none;padding:0 var(--s-2);border:0;border-radius:var(--r-chip);background:none;color:var(--ink);font-family:inherit;font-size:var(--t-sm);font-weight:var(--w-strong)}
 .dt-act:hover{background:var(--well-2)}
+/* a button inside a line's words (Given via assistant's Open message) keeps its label and icon together */
+.dt-text .dt-act{display:inline-flex;align-items:center;gap:var(--s-1);white-space:nowrap;vertical-align:middle}
 /* a new line at a section's end: a task's number, a subtask, a link, an ask */
 .dt-line.is-new{grid-template-columns:24px minmax(0,1fr);align-items:center;padding-right:var(--s-1)}
 .dt-line.is-new.is-ask{grid-template-columns:24px minmax(0,1fr) auto;gap:var(--s-1)}

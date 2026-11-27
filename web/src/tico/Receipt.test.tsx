@@ -1,0 +1,160 @@
+import { QueryClientProvider } from '@tanstack/react-query';
+import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ActionsRoot } from '@/actions';
+import { Message, type ChatMessage } from '@/conversation';
+import { queryClient } from '@/data';
+import { taskDetailQuery } from '@/features/task/exports';
+import { Toasts } from '@/kit/Toast';
+import { okCard } from './OkCard';
+
+vi.mock('@/live/follow', () => ({ useFollow: vi.fn() }));
+vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
+
+/* The receipt of an OK the person's Assistant gave on their word (backend/assistant_oks.py receipt): the Assistant's
+   message names the task and stage back, and its card has Undo while that OK still stands, which takes it back as the
+   person's own Undo does (POST /api/v2/answers/{id}/undo). Made-up rows; every answer is stubbed. */
+
+const ME = 'human:ana';
+const RECEIPT: ChatMessage = {
+  id: 'm2',
+  seq: 2,
+  sender_id: 'bot:assistant',
+  sender_name: 'Tico',
+  body: "OK'd: Hide suggestion cards when typing, Approval",
+  created_at: '2026-11-26T14:02:00Z',
+  refs: { assistant_ok: { answer_id: 'a1', task_id: 't1', title: 'Hide suggestion cards when typing', stage: 'Approval' }, task: 't1' },
+};
+
+/** The task as GET /api/v2/tasks/t1 reads it after the Assistant's OK: still in Approval with the OK on it ('given'),
+    moved on by that OK to the next stage, whose requirements are new ('moved'), or with the OK taken back ('undone').
+    Its history's line names the answer and says whether it was undone (backend/assistant_oks.py shown_delegation). */
+const taskWith = (state: 'given' | 'moved' | 'undone') => ({
+  task: {
+    id: 't1',
+    number: 12,
+    title: 'Hide suggestion cards when typing',
+    labels: [],
+    links: [],
+    to_leave:
+      state === 'given'
+        ? [{ requirement_id: 'r1', kind: 'ok', met: true, may: ['undo'], answer: { id: 'a1', by: ME, at: '2026-11-26T14:02:00Z', value: 'ok', note: null } }]
+        : [{ requirement_id: state === 'moved' ? 'r2' : 'r1', kind: 'ok', met: false, may: ['ok', 'no'], answer: null }],
+  },
+  children: [],
+  comments: [],
+  events: [
+    {
+      id: 'e1',
+      field: 'answer',
+      new: 'ok',
+      actor: ME,
+      via: 'assistant',
+      source: { kind: 'person', name: 'Ana', link: null },
+      delegation: { words: 'OK the spec', cited: null, answer_id: 'a1', undone: state === 'undone' },
+    },
+  ],
+  messages: [],
+  has_more: false,
+});
+
+let sent: string[] = [];
+let task: unknown;
+let undo: { status: number; body: unknown };
+/** While set, the Undo's answer waits for it. */
+let held: Promise<void> | null = null;
+
+beforeEach(() => {
+  sent = [];
+  held = null;
+  task = taskWith('given');
+  undo = { status: 200, body: { task: taskWith('undone').task } };
+  vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+    const method = init?.method ?? 'GET';
+    if (method !== 'GET') sent.push(`${method} ${String(url)}`);
+    if (held && String(url).startsWith('/api/v2/answers/')) await held;
+    // the server took it back: the task reads undone from now on
+    if (String(url).startsWith('/api/v2/answers/') && undo.status === 200) task = taskWith('undone');
+    const r = String(url).startsWith('/api/v2/answers/') ? undo : String(url).startsWith('/api/v2/tasks/t1') ? { status: 200, body: task } : { status: 200, body: {} };
+    return new Response(JSON.stringify(r.body), { status: r.status, headers: { 'Content-Type': 'application/json' } });
+  });
+  queryClient.setQueryData(['me'], { id: ME, email: '', role: 'person', slug: null });
+});
+afterEach(() => {
+  queryClient.clear();
+  vi.unstubAllGlobals();
+});
+
+function show(m: ChatMessage) {
+  const root = createRootRoute({
+    component: () => (
+      <>
+        <ActionsRoot dot={() => null} fold={() => {}} />
+        <Message m={m} variant="tico" me={ME} below={okCard} />
+      </>
+    ),
+  });
+  const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: ['/'] }) });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
+      <Toasts />
+    </QueryClientProvider>,
+  );
+}
+
+describe("the receipt of an OK the Assistant gave for the person", () => {
+  it('names the task and stage, and Undo takes that answer back', async () => {
+    show(RECEIPT);
+    const undoButton = await screen.findByRole('button', { name: 'Undo' });
+    expect(screen.getAllByText(/Hide suggestion cards when typing/).length).toBeGreaterThan(0);
+    fireEvent.click(undoButton);
+    await waitFor(() => expect(sent).toEqual(['POST /api/v2/answers/a1/undo']));
+    // taken back: the OK no longer stands, so the card offers no Undo
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull());
+  });
+
+  it('sends one Undo however many times it is pressed while it is sent', async () => {
+    let answer!: () => void;
+    held = new Promise<void>((r) => (answer = r));
+    show(RECEIPT);
+    const b = await screen.findByRole('button', { name: 'Undo' });
+    fireEvent.click(b);
+    fireEvent.click(b);
+    await waitFor(() => expect(sent).toEqual(['POST /api/v2/answers/a1/undo']));
+    answer();
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull());
+    expect(sent).toEqual(['POST /api/v2/answers/a1/undo']);
+  });
+
+  it('still offers Undo when that OK moved the task on to its next stage', async () => {
+    task = taskWith('moved');
+    show(RECEIPT);
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo' }));
+    await waitFor(() => expect(sent).toEqual(['POST /api/v2/answers/a1/undo']));
+  });
+
+  it('offers no Undo once that OK was taken back', async () => {
+    task = taskWith('undone');
+    show(RECEIPT);
+    expect(await screen.findByText('Approval · via assistant')).toBeTruthy();
+    // once the task is read, which is what says so
+    await waitFor(() => expect(queryClient.getQueryData(taskDetailQuery('t1').queryKey)).toBeTruthy());
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
+  });
+
+  it('says why when the server refuses the Undo', async () => {
+    undo = { status: 409, body: { error: { code: 'task_changed', detail: 'The stage moved on' } } };
+    show(RECEIPT);
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo' }));
+    expect(await screen.findByText(/The stage moved on/)).toBeTruthy();
+  });
+
+  it('a message without the receipt draws no receipt card', async () => {
+    show({ ...RECEIPT, refs: { task: 't1' } });
+    await screen.findByText(/OK'd: Hide suggestion cards/);
+    expect(screen.queryByText('Approval · via assistant')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
+  });
+});

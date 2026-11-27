@@ -100,6 +100,7 @@ const CARD: Record<string, [SectionId, string]> = {
   'settings-team': ['general', 'setting:reports'],
   'set-repos': ['general', 'setting:repositories'],
   'tico-version': ['general', 'setting:version'],
+  'settings-assistant-pane': ['general', 'setting:assistant'],
 };
 
 const hashOf = (card = '') => card.slice(Math.max(0, card.indexOf('#')));

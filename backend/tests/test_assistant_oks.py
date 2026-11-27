@@ -292,12 +292,40 @@ def test_the_history_line_shows_her_words_and_links_her_message_to_whoever_may_r
     shown = call(api, "GET", f"tasks/{tid}", "ana-test")[3]
     (line,) = [e for e in shown["events"] if e.get("field") == "answer"]
     assert "data" not in line
-    assert line["delegation"] == {"words": WORDS, "cited": {"message_id": cited, "conversation_id": room}}
+    assert line["delegation"] == {
+        "words": WORDS,
+        "cited": {"message_id": cited, "conversation_id": room},
+        "answer_id": answers(api, rid)[0]["id"],
+        "undone": False,
+    }
     # Someone who may read the task but not her Assistant chat reads her words without the link.
     status, _, _, other = call(api, "GET", f"tasks/{tid}", "ben-test")
     assert status == 200
     (seen,) = [e for e in other["events"] if e.get("field") == "answer"]
-    assert seen["delegation"] == {"words": WORDS, "cited": None}
+    assert seen["delegation"] == {
+        "words": WORDS,
+        "cited": None,
+        "answer_id": line["delegation"]["answer_id"],
+        "undone": False,
+    }
+
+
+def test_the_history_line_names_its_answer_and_says_when_she_took_it_back(api):
+    """The task read's line names the answer it is about and says once it was undone, so a screen can mark it taken
+    back (and stop offering Undo), though the read leaves the events' data out."""
+    tid, rid = plain_ok(api)
+    gives_oks(api)
+    token, _ = turn(api)
+    assert ok(api, token, tid, rid)[0] == 200
+    (given,) = answers(api, rid)
+
+    def line():
+        (found,) = [e for e in call(api, "GET", f"tasks/{tid}", "ana-test")[3]["events"] if e.get("field") == "answer"]
+        return found["delegation"]
+
+    assert (line()["answer_id"], line()["undone"]) == (given["id"], False)
+    assert call(api, "POST", f"answers/{given['id']}/undo", "ana-test", {})[0] == 200
+    assert (line()["answer_id"], line()["undone"]) == (given["id"], True)
 
 
 def test_an_ok_bound_to_exact_content_stays_her_own_click(api):
