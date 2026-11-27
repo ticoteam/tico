@@ -40,9 +40,13 @@ pub async fn write<W: AsyncWrite + Unpin>(
     let Some(w) = input.as_mut() else {
         return Err(None);
     };
+    write_line(w, msg).await.map_err(Some)
+}
+
+async fn write_line<W: AsyncWrite + Unpin>(w: &mut W, msg: &Value) -> std::io::Result<()> {
     let line = msg.to_string() + "\n";
-    w.write_all(line.as_bytes()).await.map_err(Some)?;
-    w.flush().await.map_err(Some)
+    w.write_all(line.as_bytes()).await?;
+    w.flush().await
 }
 
 /// `session/cancel` for `session`, given up at `by`: true once written, false when the input is closed, broke, or was
@@ -286,20 +290,31 @@ impl<W: AsyncWrite + Unpin, T> Client<W, T> {
         drop(self.input.lock().await.take());
     }
 
-    /// One message, written by `by`. One not written in time may be half a line, so the input is closed then.
+    /// One message, written by `by`, waiting for the input within it too. One not written in time may be half a
+    /// line, so the input is closed then, before anything queued behind it can write; one still waiting for another
+    /// write at `by` gives up without writing, and that write closes the input if it never ends.
     async fn write_by(
         &self,
         msg: &Value,
         by: tokio::time::Instant,
     ) -> Result<(), Option<std::io::Error>> {
-        match tokio::time::timeout_at(by, write(&self.input, msg)).await {
-            Ok(written) => written,
+        let late = || {
+            Err(Some(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "the agent did not read its input in time",
+            )))
+        };
+        let Ok(mut input) = tokio::time::timeout_at(by, self.input.lock()).await else {
+            return late();
+        };
+        let Some(w) = input.as_mut() else {
+            return Err(None);
+        };
+        match tokio::time::timeout_at(by, write_line(w, msg)).await {
+            Ok(written) => written.map_err(Some),
             Err(_) => {
-                self.disconnect().await;
-                Err(Some(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "the agent did not read its input in time",
-                )))
+                drop(input.take());
+                late()
             }
         }
     }
@@ -326,7 +341,8 @@ impl<W: AsyncWrite + Unpin, T> Client<W, T> {
         Ok(id)
     }
 
-    /// Send `method`, its answer going to `slot`; nothing is left waiting when it cannot be sent.
+    /// Send `method`, its answer going to `slot`; nothing is left waiting when it cannot be sent, or when the send is
+    /// dropped before it was.
     pub async fn send(
         &self,
         method: &str,
@@ -334,10 +350,15 @@ impl<W: AsyncWrite + Unpin, T> Client<W, T> {
         slot: Slot<T>,
     ) -> Result<i64, RequestError> {
         let id = self.register(slot)?;
-        if let Err(e) = self.write(&request(id, method, params)).await {
-            self.pending().slots.remove(&id);
-            return Err(RequestError::Write(e));
-        }
+        let forget = Forget {
+            pending: &self.pending,
+            id,
+        };
+        self.write(&request(id, method, params))
+            .await
+            .map_err(RequestError::Write)?;
+        // Written: the slot waits for its answer.
+        std::mem::forget(forget);
         Ok(id)
     }
 
@@ -615,6 +636,72 @@ mod tests {
                 .cancel_by("s-1", tokio::time::Instant::now() + Duration::from_secs(5))
                 .await
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_cancel_behind_a_blocked_write_gives_up_by_its_own_deadline() {
+        // The agent stops reading while a prompt is half written: that write may hold the input for two minutes.
+        let (ours, _theirs) = duplex(8);
+        let client: Arc<Client<DuplexStream, &'static str>> =
+            Arc::new(Client::new(Some(ours), Duration::from_secs(120)));
+        let prompt = tokio::spawn({
+            let c = client.clone();
+            async move { c.write(&request(1, "session/prompt", json!({}))).await }
+        });
+        tokio::task::yield_now().await;
+        let started = tokio::time::Instant::now();
+        let by = started + Duration::from_secs(15);
+        assert!(!client.cancel_by("s-1", by).await);
+        assert!(
+            tokio::time::Instant::now() <= by,
+            "the cancel waited {:?}, past its 15 s",
+            started.elapsed()
+        );
+        // The prompt's own write still ends at its own deadline, and closes the input it left half a line on.
+        assert!(matches!(prompt.await.unwrap(), Err(Some(_))));
+        assert!(matches!(client.write(&cancel("s-1")).await, Err(None)));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn nothing_queued_behind_a_half_written_line_reaches_the_agent() {
+        let (ours, _theirs) = duplex(8);
+        let client: Arc<Client<DuplexStream, &'static str>> =
+            Arc::new(Client::new(Some(ours), Duration::from_millis(100)));
+        let first = tokio::spawn({
+            let c = client.clone();
+            async move { c.write(&request(1, "session/prompt", json!({}))).await }
+        });
+        tokio::task::yield_now().await;
+        let queued = tokio::spawn({
+            let c = client.clone();
+            async move { c.write(&cancel("s-1")).await }
+        });
+        assert!(matches!(first.await.unwrap(), Err(Some(_))));
+        // The timed-out write closed the input before letting go of it: the queued one finds it closed.
+        assert!(matches!(queued.await.unwrap(), Err(None)));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_dropped_send_leaves_nothing_waiting() {
+        let (ours, _theirs) = duplex(8);
+        let client: Arc<Client<DuplexStream, &'static str>> =
+            Arc::new(Client::new(Some(ours), Duration::from_secs(120)));
+        let sending = tokio::spawn({
+            let c = client.clone();
+            async move {
+                c.send(
+                    "session/prompt",
+                    json!({"text": "long"}),
+                    Slot::Hold("turn-1"),
+                )
+                .await
+            }
+        });
+        tokio::task::yield_now().await;
+        assert_eq!(in_flight(&client), 1);
+        sending.abort();
+        assert!(sending.await.unwrap_err().is_cancelled());
+        assert_eq!(in_flight(&client), 0, "the dropped send's slot is gone");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
