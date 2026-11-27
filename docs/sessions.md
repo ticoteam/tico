@@ -158,7 +158,10 @@ up to 30 worktrees, or fewer when the computer gets under 5 GB free. Nothing is 
 the bot ends its turn and Tico wakes the task when its worktree is ready ([Task worktrees](worktrees.md)), or the bot,
 or a person, cleans one up first. A task's worktree goes when the task is finished: at the end of
 that bot's turn, or within about 10 minutes for another bot's copy or one whose files were still uploading. A worktree
-with unsaved changes, or commits that are on no remote, stays until someone saves or discards them.
+with unsaved changes, or commits that are on no remote, stays until someone saves or discards them. A worktree whose
+checkout was stopped before it finished (Git's "initializing" lock) is removed at once; one left that way earlier is
+made again for the task's next turn, or removed when the task is finished, as long as it holds nothing beyond the
+files of its commit. One holding anything else is left as it is and the turn names it.
 Before making or reusing a session folder, the Computer checks its full path against the Tico install. A link
 such as `sessions` pointing into the install stops the turn with the path named in the error, before any folder
 or Git work. See [Task worktrees](worktrees.md) for code worktrees and cleanup.
