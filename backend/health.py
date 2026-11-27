@@ -276,12 +276,37 @@ def runner_route_latency(c, now=None):
     return None
 
 
-def _disk_row(fresh, document):
+# A bot's session worktrees on one computer that Health warns about: more than docs/sessions.md allows a bot, or more
+# than this share of the computer's disk (TIDY QA filled its disk with 68 of them, 102 GB).
+SESSION_WORKTREES_MAX = 30
+SESSION_WORKTREES_DISK_SHARE = 0.25
+
+
+def _session_worktrees(document, names):
+    """Each bot's session worktrees on a computer (readiness `session_worktrees`, runner-rs/src/session_sizes.rs),
+    largest first, each with its bot's name; [] when the computer does not report them."""
+    report = document.get("session_worktrees")
+    bots = report.get("bots") if isinstance(report, dict) else None
+    if not isinstance(bots, dict):
+        return []
+    rows = [
+        {"bot": bot, "name": names.get(bot, bot), "count": row["count"], "bytes": row["bytes"]}
+        for bot, row in bots.items()
+        if isinstance(row, dict) and isinstance(row.get("count"), int) and isinstance(row.get("bytes"), int)
+    ]
+    return sorted(rows, key=lambda row: (-row["bytes"], -row["count"], row["bot"]))
+
+
+def _disk_row(fresh, document, names=None):
     """A computer's disk for Health: its newest one-minute sample (`fresh`) when there is one, else its readiness disk,
-    with the last clean-up the computer ran by itself (readiness `disk_cleanup`) on it."""
+    with the last clean-up the computer ran by itself (readiness `disk_cleanup`) and each bot's session worktrees on
+    it."""
     disk = {k: fresh[k] for k in ("total_bytes", "free_bytes")} if fresh else document.get("disk")
     if isinstance(disk, dict) and isinstance(document.get("disk_cleanup"), dict):
         disk = {**disk, "cleanup": document["disk_cleanup"]}
+    sessions = _session_worktrees(document, names or {})
+    if sessions:
+        disk = {**(disk if isinstance(disk, dict) else {}), "session_worktrees": sessions}
     return disk
 
 
@@ -309,6 +334,17 @@ def _computers(c, runners_online, settings, limits=None):
     disks = latest_disks(c, [r["id"] for r in found])
     # Runtimes whose bots the Gateway runs meanwhile, since their subscription is not signed in (models_preset).
     covered = _gateway_covered(c, settings, {r["id"]: read_cache.readiness(c, r["id"], r["readiness"]) for r in found})
+    # Each bot with session worktrees on a computer, named in one read.
+    names = _bot_names(
+        c,
+        [
+            bot
+            for r in found
+            for bot in (
+                (read_cache.readiness(c, r["id"], r["readiness"]).get("session_worktrees") or {}).get("bots") or {}
+            )
+        ],
+    )
     for r in found:
         document = read_cache.readiness(c, r["id"], r["readiness"])
         runtimes = document.get("runtimes") or {}
@@ -323,7 +359,7 @@ def _computers(c, runners_online, settings, limits=None):
                 "update": runner_versions.view(fleet.get(r["id"])),
                 # The disk as of its last minute's sample, else its readiness. The last clean-up the computer
                 # ran by itself rides on its disk row (runner-rs/src/disk_clean.rs).
-                "disk": _disk_row(disks.get(r["id"]), document),
+                "disk": _disk_row(disks.get(r["id"]), document, names),
                 "owner_id": r["owner_id"],
                 "container_exec": document.get("container_exec"),
                 "github_auth": document.get("github_auth"),
@@ -3685,6 +3721,24 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
                 # A cloud machine's own reading since it last started; none when it rests or has not read since.
                 disk = {**disk, **cloud["disk"]} if cloud["disk"] and computer["id"] not in resting_ids else {}
             total, free = disk.get("total_bytes"), disk.get("free_bytes")
+            sessions = (computer.get("disk") or {}).get("session_worktrees") or []
+            for row in sessions:
+                share = row["bytes"] / total if isinstance(total, int) and total > 0 else 0
+                if row["count"] <= SESSION_WORKTREES_MAX and share <= SESSION_WORKTREES_DISK_SHARE:
+                    continue
+                of_disk = f", {100 * share:.0f}% of its disk" if share else ""
+                checks.append(
+                    _check(
+                        f"session_worktrees:{computer['id']}:{row['bot']}",
+                        "Session worktrees",
+                        "warn",
+                        f"{computer['label']}: {row['name']} has {row['count']} session worktrees taking "
+                        f"{row['bytes'] / 1024**3:.1f} GB{of_disk}. A bot is meant to hold at most "
+                        f"{SESSION_WORKTREES_MAX}; each is a full checkout of its repository. Finished tasks' worktrees "
+                        "go by themselves; if the count keeps growing, the bot's open tasks are piling up there.",
+                        [_fix("Open Computers", "#/settings", "devices")],
+                    )
+                )
             if isinstance(total, int) and total > 0 and isinstance(free, int) and 1 - free / total > 0.85:
                 cleanup = disk.get("cleanup") or {}
                 done = (
@@ -3693,6 +3747,11 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
                     if cleanup.get("still_low")
                     else ""
                 )
+                if sessions:
+                    top = sessions[0]
+                    done += (
+                        f" {top['name']}'s {top['count']} session worktrees take {top['bytes'] / 1024**3:.1f} GB of it."
+                    )
                 advice = (cloud or {}).get("advice") or (
                     "Free space on this computer; for Docker, run `docker image prune -a` to remove unused images. "
                     "The update retries when space frees."

@@ -2473,6 +2473,55 @@
    "title": "ScreenReadiness",
    "type": "object"
   },
+  "SessionWorktreesBot": {
+   "additionalProperties": false,
+   "description": "One bot's session worktrees on the computer: how many and their size on disk.",
+   "properties": {
+    "bytes": {
+     "minimum": 0,
+     "title": "Bytes",
+     "type": "integer"
+    },
+    "count": {
+     "maximum": 1000000,
+     "minimum": 0,
+     "title": "Count",
+     "type": "integer"
+    }
+   },
+   "required": [
+    "count",
+    "bytes"
+   ],
+   "title": "SessionWorktreesBot",
+   "type": "object"
+  },
+  "SessionWorktreesReadiness": {
+   "additionalProperties": false,
+   "description": "Each bot's session worktrees (sessions/bot-<bot>/<task>) and their size, measured at `at`\n(runner-rs/src/session_sizes.rs), so Health shows a pile-up before the disk fills.",
+   "properties": {
+    "at": {
+     "maxLength": 40,
+     "title": "At",
+     "type": "string"
+    },
+    "bots": {
+     "additionalProperties": {
+      "$ref": "#/$defs/SessionWorktreesBot"
+     },
+     "propertyNames": {
+      "maxLength": 100
+     },
+     "title": "Bots",
+     "type": "object"
+    }
+   },
+   "required": [
+    "at"
+   ],
+   "title": "SessionWorktreesReadiness",
+   "type": "object"
+  },
   "SlashCommand": {
    "additionalProperties": false,
    "properties": {
@@ -2827,6 +2876,17 @@
      "anyOf": [
       {
        "$ref": "#/$defs/ScreenReadiness"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "session_worktrees": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/SessionWorktreesReadiness"
       },
       {
        "type": "null"

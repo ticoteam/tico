@@ -249,6 +249,11 @@ fn walk(root: &Path, dev: u64) -> Tree {
     tree
 }
 
+/// What `root` takes on its own volume, by the same walk the clean-up uses (crate::session_sizes); 0 when it is gone.
+pub(crate) fn size_of(root: &Path) -> u64 {
+    device(root).map_or(0, |dev| walk(root, dev).bytes)
+}
+
 fn is_symlink(p: &Path) -> bool {
     p.symlink_metadata()
         .is_ok_and(|m| m.file_type().is_symlink())
