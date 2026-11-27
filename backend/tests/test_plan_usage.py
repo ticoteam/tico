@@ -82,6 +82,41 @@ def test_an_admin_reads_a_claude_plans_week_on_its_computer_and_it_becomes_the_p
     assert get(api, "runner-subscription-refreshes", m["token"])["refreshes"] == []
 
 
+@pytest.mark.parametrize(
+    ("notice", "used", "lifted"),
+    [
+        ("You've hit your weekly limit · resets Dec 1, 5am (UTC)", 4, True),
+        ("You've hit your weekly limit · resets Dec 1, 5am (UTC)", 100, False),
+        ("You've hit your session limit · resets 2:40am (UTC)", 4, False),  # a week says nothing of the 5 hours
+    ],
+    ids=["week-with-room", "week-still-full", "five-hour-hold"],
+)
+def test_a_week_read_after_a_weekly_limit_ends_the_hold_for_one_probe(api, notice, used, lifted):
+    """TIDY, Nov 27: a plan held until Dec 1 had its week reset early; ↻ read it, and the hold stayed. A week read since
+    the limit with room ends a weekly hold as Try now does: one probe turn, its window kept (`cut`)."""
+    from backend import login_holds
+    from backend.store import H
+
+    sid = add(api)["id"]
+    m = computer(api)
+    pick(api, "ops", "claude", person="human:ana")
+    login = login_holds.subscription_login(sid)
+    with api.app.state.store.transaction() as c:
+        login_holds.record(c, "", login, "claude", H.shift(H.now(), seconds=-60), error=notice)
+        held = login_holds.get(c, "", login, "claude")["until"]
+    post(api, f"model-subscriptions/{sid}/usage-refresh", {})
+    [read] = get(api, "runner-subscription-refreshes", m["token"])["refreshes"]
+    plan = {"used_percent": used, "resets_at": reset_in(6)}
+    body = {"profile": "", "runtime": "claude", "state": "succeeded", "subscription": sid, "plan": plan}
+    post(api, f"runner-subscription-refreshes/{read['id']}/report", body, token=m["token"])
+    with api.app.state.store.read() as c:
+        hold = login_holds.get(c, "", login, "claude")
+    if lifted:
+        assert hold["until"] <= H.now() and hold["cut"] == held
+    else:
+        assert hold["until"] == held and not hold.get("cut")
+
+
 def test_only_an_admin_asks_one_read_at_a_time_and_another_request_is_refused(api):
     sid = add(api)["id"]
     m = computer(api)

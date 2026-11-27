@@ -415,6 +415,32 @@ def try_now(c, runner_id, profile, runtime, now=None):
     )
 
 
+FULL_PCT = 99.5  # a window at or over this is at its limit (agent_subscriptions._usage blocks a plan there)
+
+
+def after_reading(c, subscription_id, runtime, asked_at, top, weekly_only=False, now=None):
+    """A plan's usage was read without a turn (claude_login.usage_result, subscription_refresh.plan_report), from a read
+    asked at `asked_at`; `top` is its most-used window's percent. A read asked after the hold began says where the plan
+    stands now: a plan refused for its billing that answers again was paid, and a plan held on its usage limit whose
+    windows are all below FULL_PCT has room again (its window reset early, or it was upgraded). Either way the hold ends
+    as Try now ends it (`try_now`): one probe turn, and the cut-short window back if that turn meets the limit again.
+    `weekly_only`: the read has the week alone, so it ends only a weekly hold. Returns whether it ended the hold."""
+    login = subscription_login(subscription_id)
+    hold = get(c, "", login, runtime)
+    if not hold or asked_at < (hold.get("since") or ""):
+        return False  # one asked before the limit was met says nothing of the plan since
+    error = hold.get("error") or ""
+    if not payment(error):
+        kind = window(error)
+        if hold.get("capacity") or not kind.startswith("plan usage limit") or top is None or top >= FULL_PCT:
+            return False
+        if weekly_only and "weekly" not in kind:
+            return False
+    before = hold.get("until") or ""
+    try_now(c, "", login, runtime, now)
+    return before > (now or H.now())
+
+
 def probing(c, hold, now=None):
     """Whether a probe turn is out on the login now, so Try now has nothing more to start."""
     return bool(hold) and _probe_live(c, hold, now or H.now())
