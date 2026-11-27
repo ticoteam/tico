@@ -70,15 +70,6 @@ def redirect_uri(domain: str) -> str:
     return f"https://{domain}{contract.REDIRECT_PATH}"
 
 
-# A reader signs in on the Company page's own origin (retired: nothing serves it), so the provider needs this second redirect
-# URI as well. The same path as the app's, on the reader's host, as the retired reader app used.
-READER_REDIRECT_PATH = "/auth/callback"
-
-
-def reader_redirect_uri(host: str) -> str:
-    return f"https://{host}{READER_REDIRECT_PATH}"
-
-
 def provider(auth: str) -> Provider:
     return GENERIC if auth == "oidc" else PROVIDERS[auth]
 

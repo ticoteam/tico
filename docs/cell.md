@@ -69,9 +69,9 @@ python3 -m setup cell init --tunnel-token-file /root/tunnel-token --domain tico.
    hottest stacks. All the stacks are kept in `/srv/tico-cell/profiles/` (the newest 20). This is the `profile` debug
    tool ([cell stats](cell-stats.md)).
 
-`--page-domain DOMAIN` (for example `tico.page`, not the cell's domain) sets the domain the companies' page hosts sit under.
-`init` then adds one tunnel route, `*.<page-domain>`, beside the cell's own. `--page-domain ""` removes it. In Cloudflare,
-the page domain needs the same wildcard record as the cell's, a CNAME to the tunnel, in its own zone.
+The retired Company page's `--page-domain` is gone. A cell an older core set it on keeps it in `cell.json` until the
+next `init`, which drops it and the tunnel's `*.<page domain>` route. Delete that domain's wildcard DNS record in
+Cloudflare afterwards; until then its requests get the router's 404 for an unknown host.
 
 `--meet-domain HOST` turns on Tico Meet calls for every company on the host ([Tico Meet](#tico-meet)).
 
@@ -88,13 +88,12 @@ python3 -m setup cell add --company boatyard --domain boatyard.tico.team --owner
   [--gateway-invite-file F] [--backup-url s3://bucket/prefix --backup-region us-west-2 --backup-credentials-file F] \
   [--company-file tico.company.yaml] [--company-name "Boatyard"] [--memory 2g] [--version vX.Y.Z] \
   [--hosted own|invited] [--signin-label "Tico account"] [--timeout 300] \
-  [--own-domain] [--alias HOST]... [--page-host HOST] [--env-file F] [--import-data FILE] [--sleep-minutes N] --json
+  [--own-domain] [--alias HOST]... [--env-file F] [--import-data FILE] [--sleep-minutes N] --json
 python3 -m setup cell list --json
 python3 -m setup cell status --company boatyard --json
 python3 -m setup cell stop|start --company boatyard --json
 python3 -m setup cell sleep --company boatyard [--wake-at 2026-10-30T18:00:00Z] --json
 python3 -m setup cell set-sleep --company boatyard --minutes N|default --json
-python3 -m setup cell set-page-host --company boatyard --host boatyard.tico.page|"" --json
 python3 -m setup cell set-slack --company boatyard on|off --json
 python3 -m setup cell wake --company boatyard [--timeout 300] --json
 python3 -m setup cell update --company boatyard --version vX.Y.Z [--kms-key ARN] [--kms-credentials-file F] --json
@@ -113,7 +112,7 @@ Each command prints exactly one JSON object on stdout and exits 0 or 1. An error
 | `bad_args` | A flag is missing or a value is invalid |
 | `bad_slug` | The slug is not 1 to 40 lowercase letters, digits and single hyphens |
 | `reserved_name` | The name is one of Tico's own (the list below) |
-| `bad_domain` | `--domain` is not `<slug>.<the cell's domain>` (without `--own-domain`), or `--domain`/`--alias` is not a plain hostname, is the cell's domain, or repeats a host, or `--domain`/`--page-host` is the company's visuals host |
+| `bad_domain` | `--domain` is not `<slug>.<the cell's domain>` (without `--own-domain`), or `--domain`/`--alias` is not a plain hostname, is the cell's domain, or repeats a host, or `--domain` is the company's visuals host |
 | `domain_taken` | Another company has this host as its domain, an alias or its visuals host |
 | `secret_file` | A secret file is missing, empty, readable by others or has the wrong content |
 | `company_file` | The company file is not a valid company YAML |
@@ -399,7 +398,7 @@ python3 -m setup cell add --company ticoteam --own-domain --domain hub.tico.team
   `ticoteam` and the domain can still be `hub.tico.team`. Pass the flag on every `add` for that company.
 - **`--alias HOST`** (up to 5): more hostnames for the same server, such as the runner address (`TICO_RUNNER_URL`'s
   host) and a visual address of its own (`TICO_VISUAL_ORIGIN`'s host, carried with `--env-file`). The same rules as
-  an own domain; not the domain itself and not twice. No host (domain, alias, visuals host or page host) belongs to two
+  an own domain; not the domain itself and not twice. No host (domain, alias or visuals host) belongs to two
   companies that are not removed. Passing `--alias` replaces the saved list; `--alias ""` alone clears it; leaving it
   out keeps it. The router sends the domain, every alias and the visuals host to the server's port.
 - **The tunnel and DNS.** Cloudflare's `*.<domain>` matches exactly one label: `hub.tico.team` and `runner.tico.team`
@@ -410,17 +409,12 @@ python3 -m setup cell add --company ticoteam --own-domain --domain hub.tico.team
   in its own zone if it has one (`hub.ticofiles.com`). A host under the wildcard that has a DNS record of its own
   (`hub.tico.team` and `runner.tico.team` point at the old instance today) must be changed to that CNAME or deleted.
   Cloudflare's universal certificate covers one label below the zone, so a deeper name needs a certificate of its own.
-- **`--page-host HOST`** (for example `acme.tico.page`): the host of the company's Company page, which is retired. The
-  router answers 404 to every request on it and serves nothing from the company's `pages/<slug>` folder. The host is
-  refused with
-  `bad_domain` when it is the company's own domain, an alias or its visuals host, and with `domain_taken` when another
-  company has it.
-  Leaving the flag
-  out keeps the host; `--page-host ""` clears it and keeps the folder. `remove` deletes the folder unless
-  `--keep-data` is given. `list` and `status` show `page_host` and `page_url` when one is set.
-  A host under the page domain needs no route of its own; any other host gets one, as an alias does.
-  For a company that already runs, `set-page-host --host HOST` sets the same host without add's sign-in settings:
-  the server restarts with it. `--host ""` clears it; the same host again changes nothing.
+- **Retired page hosts.** The Company page is retired, and with it `--page-host` and `set-page-host`. `add` still
+  takes `--page-host` from an older caller and ignores it. A record an older core gave a page host still loads: the
+  router and the tunnel route nothing for the host (its requests get the router's 404 for an unknown host), and the
+  next `add` or `update` drops `page_host` from the record and `TICO_READER_ORIGIN` from `.env`. An older core's
+  `pages/<slug>` folder is read by nothing; `remove` deletes it unless `--keep-data` is given. A page host that had a
+  tunnel route of its own loses it at the next `add`, `remove` or `init`; delete its DNS record in Cloudflare.
 - **`--env-file F`** (0600, `KEY=VALUE` lines, keys `[A-Z][A-Z0-9_]*`, values on one line): settings the cell does not
   write, such as `TICO_RUNNER_URL`, `TICO_VISUAL_ORIGIN` (which the cell writes for the visuals host unless the file
   sets it: see Live chat pages), `TICO_BLOB_BUCKET`, `TICO_BLOB_REGION`, `TICO_INBOUND_KEY`,
@@ -430,7 +424,7 @@ python3 -m setup cell add --company ticoteam --own-domain --domain hub.tico.team
   invite, owner link, backup, company file), its sign-in, network, preset and support keys, and the ones that belong
   to a single-company install: `CLOUDFLARE_TUNNEL_TOKEN`, `COMPOSE_PROFILES`, `COMPOSE_PROJECT_NAME`,
   `TICO_UPDATER_URL`, `TICO_UPDATES`, `TICO_CELL`, `TICO_TAG`, `TICO_PORT`, `TICO_EXPECTED_AWS_ACCOUNT`,
-  `TICO_EXPECTED_AWS_ROLE`, `TICO_CADDY*`, `TICO_TUNNEL*`, the page's `TICO_READER_ORIGIN`, and the KMS settings (`TICO_CREDENTIAL_KMS_KEY`, `_CONTEXT`, `_ACCESS_KEY_ID`,
+  `TICO_EXPECTED_AWS_ROLE`, `TICO_CADDY*`, `TICO_TUNNEL*`, the retired `TICO_READER_ORIGIN`, and the KMS settings (`TICO_CREDENTIAL_KMS_KEY`, `_CONTEXT`, `_ACCESS_KEY_ID`,
   `_SECRET_ACCESS_KEY`, `_REGION`: only `--kms-key` and `--kms-credentials-file` set them). So pass the team name and sign-in button as `--company-name` and `--signin-label`,
   not in the file. The values are secrets: never printed, masked in every detail. Passing `--env-file` again replaces
   `extra.env`; leaving it out keeps it.
@@ -632,7 +626,7 @@ No database migration or company data is involved.
 
 | Path | What it is |
 |---|---|
-| `/srv/tico-cell/cell.json` | The cell's domain, the router's address, the page and Tico Meet domains when set, and the cell's KMS key (`init --kms-key`) |
+| `/srv/tico-cell/cell.json` | The cell's domain, the router's address, the Tico Meet domain when set, and the cell's KMS key (`init --kms-key`) |
 | `/srv/tico-cell/routes/<name>.json` | A route ([Routes](#routes)): its hosts, ports and noindex |
 | `/srv/tico-cell/edge.yaml`, `router/Caddyfile` | The router and tunnel. The Caddyfile is regenerated and swapped in one step on every change, then reloaded. A config the router refuses is replaced by the previous one |
 | `/etc/systemd/system/tico-cell-updater.service` | The cell updater, run from the checkout `init` last ran from |
