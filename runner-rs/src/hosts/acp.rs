@@ -255,6 +255,21 @@ pub struct Client<W, T> {
     write_wait: Duration,
 }
 
+/// The input while a line is written to it: unless finished, the line may be half written (timed out, failed, or its
+/// future dropped), so the input is closed before anything queued behind it can append to that line.
+struct Unfinished<'a, W> {
+    input: tokio::sync::MutexGuard<'a, Option<W>>,
+    whole: bool,
+}
+
+impl<W> Drop for Unfinished<'_, W> {
+    fn drop(&mut self) {
+        if !self.whole {
+            drop(self.input.take());
+        }
+    }
+}
+
 /// Removes a request's waiter when its `Client::request` ends however it ends, a dropped future included.
 struct Forget<'a, T> {
     pending: &'a Mutex<Pending<T>>,
@@ -290,9 +305,10 @@ impl<W: AsyncWrite + Unpin, T> Client<W, T> {
         drop(self.input.lock().await.take());
     }
 
-    /// One message, written by `by`, waiting for the input within it too. One not written in time may be half a
-    /// line, so the input is closed then, before anything queued behind it can write; one still waiting for another
-    /// write at `by` gives up without writing, and that write closes the input if it never ends.
+    /// One message, written by `by`, waiting for the input within it too. One not written whole (in time, without
+    /// error, or before its future was dropped) may be half a line, so the input is closed then, before anything
+    /// queued behind it can write; one still waiting for another write at `by` gives up without writing, and that
+    /// write closes the input if it never ends.
     async fn write_by(
         &self,
         msg: &Value,
@@ -304,18 +320,23 @@ impl<W: AsyncWrite + Unpin, T> Client<W, T> {
                 "the agent did not read its input in time",
             )))
         };
-        let Ok(mut input) = tokio::time::timeout_at(by, self.input.lock()).await else {
+        let Ok(input) = tokio::time::timeout_at(by, self.input.lock()).await else {
             return late();
         };
-        let Some(w) = input.as_mut() else {
+        let mut line = Unfinished {
+            input,
+            whole: false,
+        };
+        let Some(w) = line.input.as_mut() else {
             return Err(None);
         };
         match tokio::time::timeout_at(by, write_line(w, msg)).await {
-            Ok(written) => written.map_err(Some),
-            Err(_) => {
-                drop(input.take());
-                late()
+            Ok(Ok(())) => {
+                line.whole = true;
+                Ok(())
             }
+            Ok(Err(e)) => Err(Some(e)),
+            Err(_) => late(),
         }
     }
 
@@ -702,6 +723,8 @@ mod tests {
         sending.abort();
         assert!(sending.await.unwrap_err().is_cancelled());
         assert_eq!(in_flight(&client), 0, "the dropped send's slot is gone");
+        // It may have left half a line: the input is closed, so nothing is appended to it.
+        assert!(matches!(client.write(&cancel("s-1")).await, Err(None)));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
