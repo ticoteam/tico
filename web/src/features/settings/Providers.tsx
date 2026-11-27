@@ -261,6 +261,9 @@ function ProviderRow({
           {(manage || mayRemove) && (
             <Menu trigger={<IconButton icon="more" label={`More for ${primary}`} size="sm" quiet />}>
               {manage && <MenuItem label={plan ? 'Reconnect' : 'Replace key'} onSelect={() => setChanging(plan ? 'reconnect' : 'replace')} />}
+              {manage && plan && s.usage?.quota_hold_until && (
+                <MenuItem label="Try now" onSelect={() => void act('settings.tryPlanNow', { subscription: s.id })} />
+              )}
               {canRefreshUsage && (
                 <MenuItem label="Refresh usage" onSelect={() => void act('settings.refreshUsage', { subscription: s.id })} />
               )}

@@ -1684,6 +1684,76 @@ def test_a_reading_taken_on_the_computers_own_login_is_not_the_plans_when_its_ho
     assert usage_of(api, sid)["reason"] == NOT_SINCE
 
 
+WEEKLY_LIMIT = "You've hit your weekly limit · resets Dec 1, 5am (UTC)"
+
+
+def hold_week(api, sid, since):
+    """A plan held on its weekly limit until days away, met at `since` (TIDY's Nov 26 hold)."""
+    with api.app.state.store.transaction() as c:
+        login_holds._save(
+            c,
+            {
+                "runner_id": "",
+                "profile": login_holds.subscription_login(sid),
+                "runtime": "claude",
+                "until": H.shift(H.now(), seconds=4 * 86400),
+                "since": since,
+                "streak": 1,
+                "error": WEEKLY_LIMIT,
+            },
+        )
+
+
+def plan_read(api, sid, used, reported_at):
+    from backend import subscription_refresh as SR
+    from backend.repositories import metadata, save_metadata
+
+    with api.app.state.store.transaction() as c:
+        value = metadata(c, SR.plan_key(sid)) or {}
+        value["reading"] = {
+            "used_percent": used,
+            "resets_at": (datetime.now(timezone.utc) + timedelta(days=6)).isoformat(),
+            "reported_at": reported_at,
+            "status": None,
+            "origin": "subscription",
+            "subscription_id": sid,
+        }
+        save_metadata(c, SR.plan_key(sid), value)
+
+
+def test_a_held_plan_shows_a_reading_taken_after_its_limit_not_a_made_up_100(api):
+    """TIDY, Nov 27: a plan held on its weekly limit until Dec 1 had its week reset early ("Fresh week. 4% used"), but
+    its row kept saying 100%. A reading from before the limit still says nothing; one taken since it does."""
+    setup(api)
+    company(api)
+    sid = add(api)["id"]
+    hold_week(api, sid, since=H.shift(H.now(), seconds=-3600))
+    plan_read(api, sid, 4, H.shift(H.now(), seconds=-7200))  # before the limit was met
+    assert usage_of(api, sid)["used_pct"] == 100
+    plan_read(api, sid, 99.6, H.now())  # since, but at the limit
+    assert usage_of(api, sid)["used_pct"] == 100
+    plan_read(api, sid, 4, H.now())
+    usage = usage_of(api, sid)
+    assert (usage["window"], usage["used_pct"], usage["weekly_used_pct"]) == ("week", 4, 4)
+    assert usage["quota_hold_until"]  # the hold itself stands until a probe turn or a read lifts it
+
+
+def test_try_now_on_a_held_plan_ends_its_hold_for_one_probe_and_keeps_the_window(api):
+    setup(api)
+    company(api)
+    sid = add(api)["id"]
+    hold_week(api, sid, since=H.now())
+    post(api, f"model-subscriptions/{sid}/try-now", {}, "cara-test", expected=403)
+    with api.app.state.store.read() as c:
+        before = login_holds.get(c, "", login_holds.subscription_login(sid), "claude")["until"]
+    post(api, f"model-subscriptions/{sid}/try-now", {})
+    with api.app.state.store.read() as c:
+        hold = login_holds.get(c, "", login_holds.subscription_login(sid), "claude")
+    assert hold["until"] <= H.now() and hold["cut"] == before
+    assert "quota_hold_until" not in usage_of(api, sid)
+    post(api, f"model-subscriptions/{sid}/try-now", {})  # nothing held: left as it is
+
+
 def listing_statements(api, monkeypatch):
     """GET /api/v2/model-subscriptions after one warm-up read, and the SQL statements that request ran."""
     import contextlib

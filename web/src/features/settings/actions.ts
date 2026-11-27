@@ -16,6 +16,7 @@ import {
   enrollComputer,
   labelComputer,
   refreshSubscription,
+  tryPlanNow,
   replaceSubscriptionSecret,
   removeComputer,
   removePerson,
@@ -541,6 +542,16 @@ export const refreshSub = defineAction({
   input: z.strictObject({ subscription: id('a subscription id') }),
   run: (_ctx, { subscription }) => refreshSubscription(subscription),
   did: () => 'Checked',
+  target: ({ subscription }) => sub(subscription),
+});
+
+export const trySubNow = defineAction({
+  id: 'settings.tryPlanNow',
+  title: 'Try a plan at its usage limit now',
+  kind: 'change',
+  input: z.strictObject({ subscription: id('a subscription id') }),
+  run: (_ctx, { subscription }) => tryPlanNow(subscription),
+  did: () => 'Trying now',
   target: ({ subscription }) => sub(subscription),
 });
 

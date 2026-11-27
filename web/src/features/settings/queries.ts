@@ -492,6 +492,13 @@ export const removeSubscription = (id: string) =>
 
 export const refreshSubscription = (id: string) => api.post(`/api/v2/model-subscriptions/${enc(id)}/usage-refresh`, {});
 
+// Ends a held plan's usage-limit hold now: one probe turn decides (backend model_subscriptions.try_now).
+export const tryPlanNow = (id: string) =>
+  api.post(`/api/v2/model-subscriptions/${enc(id)}/try-now`, {}).then((result) => {
+    void queryClient.invalidateQueries({ queryKey: subscriptionsQuery.queryKey });
+    return result;
+  });
+
 export const editSubscription = (id: string, change: { name?: string; owner_id?: string; max_live_turns?: number }) =>
   write({
     key: subscriptionsQuery.queryKey,
