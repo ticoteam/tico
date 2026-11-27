@@ -80,6 +80,11 @@ describe("the history line of an OK the person's Assistant gave", () => {
     expect(router.state.location.pathname).toBe('/');
   });
 
+  it('says via Agent Ops when Agent Ops gave the OK on his word', async () => {
+    show([{ ...okVia(null), via: 'botops' }]);
+    expect(await screen.findByText("Chris OK'd · via Agent Ops")).toBeTruthy();
+  });
+
   it('marks an OK he took back', async () => {
     show([okVia({ message_id: 'm9', conversation_id: 'room-chris' }, true)]);
     expect(await screen.findByText('Taken back')).toBeTruthy();

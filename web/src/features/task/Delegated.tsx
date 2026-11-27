@@ -14,7 +14,8 @@ import { NameOf } from './parts';
    them, the time, and Open message, which opens the chat they said them in at that message (their own Assistant room
    in its sheet, any other chat as its thread). The task read's events carry `delegation` on those answers alone; its
    `cited` is null for a reader who may not open that chat, who reads the words with no way in. An OK taken back since
-   stays, marked Taken back (`undone`). A task with no such answer draws nothing. */
+   stays, marked Taken back (`undone`). Agent Ops gives them too, on the person's word in their chat with it (via
+   "botops"), and its line says so. A task with no such answer draws nothing. */
 
 /** A row of the task read's `events` (backend/task_history.py): the contract names `source` and `delegation`; the
     row's other fields come as the history writes them. */
@@ -56,7 +57,8 @@ export function DelegatedOks({ events }: { events: readonly HistoryEvent[] }) {
           <div key={e.id ?? i} className="dt-line" data-target={`assistant-ok-line:${e.id ?? i}`}>
             <span className="dt-text">
               <span>
-                <NameOf id={e.actor} /> OK'd{' · '}via assistant
+                <NameOf id={e.actor} /> OK'd{' · '}
+                {e.via === 'botops' ? 'via Agent Ops' : 'via assistant'}
               </span>
               {lent.words && <span>{` · “${lent.words}”`}</span>}
               {e.created_at && <small> · {clock(e.created_at)}</small>}
