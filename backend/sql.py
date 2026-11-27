@@ -43,21 +43,6 @@ OPEN = {"rate_limits", "service_health", "learnings", "sqlite_master"}
 # A message's own read rule (guarded), as a view of the unfiltered messages that no caller reads by name: the views of
 # the tables read it, `messages` among them with the timeline's cut (a person's timeline shows only messages with a seq).
 READABLE_MESSAGES = "readable_messages"
-# The retired Company page's tables (dormant until a migration drops them) the owner may still read; the readers' own
-# tables are not here at all, so nobody reads them.
-RETIRED_PAGE_OWNER_TABLES = (
-    "company_page_settings",
-    "audiences",
-    "audience_sources",
-    "disclosure_revisions",
-    "disclosure_rules",
-    "editions",
-    "edition_sources",
-    "edition_checks",
-    "page_stats",
-    "stat_board_approvals",
-    "page_releases",
-)
 # Table-valued functions SQLite reports like tables of the main schema.
 TABLE_FUNCTIONS = {"json_each", "json_tree"}
 SAFE_COLUMNS = {
@@ -717,7 +702,6 @@ GUARDED_TABLES = frozenset(
         "slack_posts",
         "read_index",
         "task_file_reviews",
-        *RETIRED_PAGE_OWNER_TABLES,
     }
 )
 # Tables whose predicates or teammate masks consult TA.hidden(..., ("human", "group")).
@@ -1406,10 +1390,6 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None, private=No
         "OR id IN (SELECT blob_id FROM media_assets))",
         "archives": "1" if owner else "0" if bot else f"owner={me}",
         "service_jobs": "1" if owner else "0" if bot else f"requested_by={me}",
-        # The retired Company page's own rules, drafts, stats and approvals: the owner's. The
-        # readers' tables (who they are, their sessions and invites, what they wrote, what they read) are not listed, so
-        # they are denied to everyone, the owner included.
-        **{table: "1" if owner else "0" for table in RETIRED_PAGE_OWNER_TABLES},
         "outbound_actions": f"channel='slack' AND id IN (SELECT id FROM {inner(READABLE_MESSAGES)})" if owner else "0",
         "slack_posts": by_message if owner else "0",
         # Which history rows are settled (backend/read_deps.py): read by the message and run gates, by no caller.

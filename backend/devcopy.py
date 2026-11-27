@@ -297,27 +297,6 @@ EMPTY = (
     "slack_link_members",
     "slack_message_links",
     "slack_inbound_events",
-    # The retired Company page's tables, dormant until a migration drops them: the readers (their addresses, sessions and
-    # invite hashes, the messages they wrote, what they read, what was mailed to them), and the company's published
-    # statements and rules. A copy is rehearsal data, so none of it.
-    "readers",
-    "audience_readers",
-    "reader_sessions",
-    "reader_invites",
-    "reader_messages",
-    "reader_notices",
-    "edition_views",
-    "company_page_settings",
-    "audiences",
-    "audience_sources",
-    "disclosure_revisions",
-    "disclosure_rules",
-    "editions",
-    "edition_sources",
-    "edition_checks",
-    "page_stats",
-    "stat_board_approvals",
-    "page_releases",
     # The Heartbeat's step stats, beat log and counts (backend/heartbeat.py): the copy's own beats start them again.
     "heartbeat_steps",
     "heartbeat_beats",

@@ -188,31 +188,6 @@ def test_the_message_refs_view_is_denied_to_everyone(api, world):
         assert "message_refs" in column(api, "SELECT name FROM sqlite_master WHERE type='view'", token)
 
 
-def test_the_retired_page_s_readers_stay_denied_to_everyone_and_its_rules_stay_the_owner_s(api, world):
-    """The retired Company page's tables are dormant until a migration drops them. Who the readers were, their sessions
-    and invites, what they wrote and read: nobody reads these through SQL, the owner included. The company's own rules,
-    drafts and stats stay the owner's."""
-    with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT INTO audiences (id, name, kind, created_at, updated_at) VALUES ('board','Board','board',?,?)",
-            (H.now(), H.now()),
-        )
-    for token in ("ana-test", "ben-test", world["attempt"]["token"]):
-        for table in (
-            "readers",
-            "audience_readers",
-            "reader_sessions",
-            "reader_invites",
-            "reader_messages",
-            "reader_notices",
-            "edition_views",
-        ):
-            assert error(api, f"SELECT count(*) FROM {table}", token) == "not authorized", (table, token)
-    assert query(api, "SELECT name FROM audiences", "ana-test")["rows"] == [["Board"]]
-    assert query(api, "SELECT name FROM audiences", "ben-test")["rows"] == []
-    assert query(api, "SELECT name FROM audiences", world["attempt"]["token"])["rows"] == []
-
-
 def test_recruiting_seats_are_readable_by_everyone_like_the_org_chart(api, world):
     seat = post(api, "seats", {"title": "Bookkeeper", "description": "Keeps the ledgers.", "reports_to": "finance"})
     for token in ("ana-test", "cara-test", world["attempt"]["token"]):
