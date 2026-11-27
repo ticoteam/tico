@@ -4,6 +4,7 @@
 //! delta {text}, message {text, final}, turn_completed {status}, turn_failed {error, limit, auth_retry},
 //! status {state}, tokens {input, output, total, usage{input, cached, output}}, rate_limits, error, diagnostic.
 
+mod acp;
 pub mod antigravity;
 pub mod claude;
 pub mod codex;
