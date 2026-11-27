@@ -605,19 +605,31 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
                 names.append(labels[home])
         return wait_reasons.turns(refused, home=', '.join(names[:3]))
 
-    for row in c.execute(
+    recorded = None  # {bot: the refusal the scheduler last recorded}, read once on the first late bot
+
+    def recent_refusals(queued):
+        """The scheduler's recorded refusals (queue_refusals) still current, for the late bots among these rows."""
+        from .queue_refusals import MAX_GAP_SECONDS, states
+
+        fresh = H.shift(now, seconds=-MAX_GAP_SECONDS)
+        bots = [row['bot_id'] for row in queued if row['oldest'] < late]
+        return {bot: seen for bot, seen in states(c, bots).items() if seen.get('observed_at', '') >= fresh}
+
+    queued_rows = c.execute(
         f"SELECT a.runner_id,j.bot_id,j.held,count(*) n,min(j.created_at) oldest,{BS.CONFIG} AS config,"
         "b.state bot_state,EXISTS (SELECT 1 FROM agent_subscriptions p WHERE p.bot=j.bot_id) has_payer "
         "FROM jobs j JOIN assignments a ON a.bot=j.bot_id JOIN bots b ON b.id=j.bot_id "
         f"JOIN bot_config bc ON bc.bot=j.bot_id {BS.JOIN} WHERE a.runner_id IN (" + marks + ") AND j.state='queued' "
         "GROUP BY a.runner_id,j.bot_id,j.held",
         runner_ids,
-    ):
+    ).fetchall()
+    for row in queued_rows:
         rid = row['runner_id']
         runner = runners.get(rid)
         ready = read_cache.readiness(c, rid, runner['readiness']) if runner else {}
         why = 'bot paused' if row['bot_state'] != 'active' else ''
         code = 'paused' if why else ''
+        home = ''
         if not why and row['held']:
             # A notice batch, digest or routine run its release policy holds (backend/wake_presets.py): no claim takes
             # it before its release, so it is not queued work the computer leaves waiting.
@@ -682,37 +694,36 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
         else:
             count = row['n']
             if not why and runner and not classify and row['oldest'] < late:
-                # Below warning the claim is not asked per bot, but work this old is: each of its oldest jobs (up to
-                # PRIME_QUEUED) with its own reason, so a checkout on another computer is named, not just queued.
-                try:
-                    worktree_waits = {}
-                    sample = [
-                        job['id']
-                        for job in c.execute(
-                            "SELECT id FROM jobs WHERE bot_id=? AND state='queued' AND held=0 "
-                            "ORDER BY created_at,id LIMIT ?",
-                            (row['bot_id'], PRIME_QUEUED),
-                        )
-                    ]
-                    for job, refused in queued_reasons(
-                        c, settings, rid, row['bot_id'], default, sample=sample, worktree_waits=worktree_waits
-                    ):
-                        if refused:
-                            job_id = job['id'] if 'id' in job.keys() else None
-                            homes = worktree_waits.get(job_id)
-                            add(
+                # Below warning the claim is not asked per bot (it costs a claim's reads a bot on each Health poll),
+                # but work this old has its real cause: the refusal the scheduler last recorded for the bot
+                # (queue_refusals), read once for every bot here. Only a checkout or saved session held on another
+                # computer asks the claim about that one job, to name the computer.
+                if recorded is None:
+                    recorded = recent_refusals(queued_rows)
+                seen = recorded.get(row['bot_id'])
+                if seen and seen.get('runner_id') == rid and seen.get('reason'):
+                    code = seen['reason']
+                    homes = None
+                    if code in wait_reasons.HOME_CODES and seen.get('job'):
+                        try:
+                            worktree_waits = {}
+                            for job, refused in queued_reasons(
+                                c,
+                                settings,
                                 rid,
-                                phrase(refused, job_id, homes),
-                                1,
-                                job['created_at'],
-                                refused,
-                                home_of(refused, job_id, homes),
-                            )
-                            count -= 1
-                except Exception as exc:
-                    if storage_error(exc):
-                        raise
-                    report('computer queue check', row['bot_id'], exc, logger='tico.health')
+                                row['bot_id'],
+                                default,
+                                sample=[seen['job']],
+                                worktree_waits=worktree_waits,
+                            ):
+                                if refused == code:
+                                    homes = worktree_waits.get(job['id'])
+                        except Exception as exc:
+                            if storage_error(exc):
+                                raise
+                            report('computer queue check', row['bot_id'], exc, logger='tico.health')
+                    why = phrase(code, seen.get('job'), homes)
+                    home = home_of(code, seen.get('job'), homes)
             elif not why and runner and classify:
                 refused, _ = claim_refusal(
                     c, settings, runner, row['bot_id'], row['config'], False, ready, default=default
@@ -726,7 +737,7 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
                 holds[rid] = computer_hold(c, rid, status=statuses[rid], row=runners.get(rid))
             why = holds[rid][0] if holds[rid] else ''
         if why:
-            add(rid, why, count, row['oldest'], code)
+            add(rid, why, count, row['oldest'], code, home)
         else:
             out[rid]['queued'] += count
     for rid, count in overflow.items():

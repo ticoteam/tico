@@ -8,20 +8,20 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend import check_models, diagnostics, execution, health, maintenance_health, runner_online
+from backend import check_models, diagnostics, execution, health, maintenance_health, queue_refusals, runner_online
 from backend.store import H
 from backend.tests.helpers.api import claim, get, headers, post  # noqa: F401  (api is a fixture)
 from backend.tests.helpers.task_lanes import new_task, task_bot
 from backend.tests.helpers.claim_refusals import forget_claims, health_admin, held  # noqa: F401
 
 
-def says(api, machine, reason, **busy):
+def says(api, machine, reason, why=None, **busy):
     rows, found = held(api, machine, **busy)
     assert [r["reason"] for r in rows] == [reason]
     assert "queue_idle" not in found
     with api.app.state.store.read() as c:
         [row] = health._stuck(c, rows, set(), health_admin(api), True)
-    assert row["why"] == health.HELD[reason][0].format(computer="Test Mac")
+    assert row["why"] == (why or health.HELD[reason][0].format(computer="Test Mac"))
 
 
 def test_unexplained_queued_work_is_still_queue_idle(api):
@@ -178,7 +178,9 @@ def test_a_bot_cooling_off_after_a_usage_limit(api):
     with api.app.state.store.transaction() as c:
         # The login's hold decides, not the bot's status: a usage limit met on the login it signs in with.
         login_holds.record(c, machine["runner_id"], "", "fake", H.now(), error="Usage limit")
-    says(api, machine, "cooling_off")
+        until = login_holds.get(c, machine["runner_id"], "", "fake")["until"]
+    # #3967: the row names the login's plan and when its limit resets, not a generic "waiting out a usage limit".
+    says(api, machine, "cooling_off", why=queue_refusals.limit_words({"plan": "fake", "until": until}))
 
 
 def test_operations_names_a_limited_bots_runtime_when_config_was_primed_slug_first(api):

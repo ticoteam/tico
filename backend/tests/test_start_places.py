@@ -167,7 +167,7 @@ def test_work_waiting_over_15_minutes_names_its_checkout_below_the_turns_warning
     """#3967 review: below the turns warning level the Turns line asked no claim why, so a checkout on another
     computer stayed plain "queued" and Fine however long it waited. Work over 15 minutes old is asked: the line names
     the computer, is a look under Needs a look, and its fix opens that computer, for an agent reading Health too."""
-    from backend import execution, start_places
+    from backend import execution, queue_refusals, start_places
     from backend.tests.helpers.credentials import setup
     from backend.tests.helpers.model_subscriptions import company, machine, on
 
@@ -190,6 +190,27 @@ def test_work_waiting_over_15_minutes_names_its_checkout_below_the_turns_warning
     store = api.app.state.store
     with store.transaction() as c:
         c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops'", (H.shift(H.now(), minutes=-20),))
+    with store.read_transaction() as c:
+        # Not yet seen by the scheduler: the line reads the recorded refusal, never a claim per bot.
+        result = start_places.summary(c, computer['runner_id'], store.settings, classify=False)
+    assert result['waits'] == []
+    with store.transaction() as c:  # the scheduler's pass records the claim's refusal (queue_refusals.apply)
+        [job] = c.execute("SELECT id FROM jobs WHERE bot_id='ops' AND state='queued'").fetchall()
+        queue_refusals.apply(
+            c,
+            (
+                'ops',
+                {},
+                {
+                    'bot': 'ops',
+                    'runner_id': computer['runner_id'],
+                    'job': job['id'],
+                    'reason': 'worktree_home',
+                    'since': H.now(),
+                    'observed_at': H.now(),
+                },
+            ),
+        )
     with store.read_transaction() as c:
         result = start_places.summary(c, computer['runner_id'], store.settings, classify=False)
     assert [(w['reason'], w['code'], w['home']) for w in result['waits']] == [
