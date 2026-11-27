@@ -195,18 +195,12 @@ CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,200}$")
 SECRET_MAX = 64 * 1024
 HOSTED_DEFAULT, SIGNIN_LABEL = "invited", "Tico account"
 MAX_ALIASES = 5
-# A company's page host (docs/company-page.md): its public files come from a folder of the cell's own, mounted into the
-# company's server and read by the router. Only these three paths are served from the folder; the rest is the server's.
+# A company's page host, from the retired Company page: a folder of the cell's own was mounted into the company's server
+# and read by the router. The router now answers 404 on the host (page_site); the folder stays until the host is retired.
 PAGES = "pages"  # under the cell root: one folder per company with a page host
-PAGE_MOUNT = "/company-page-public"  # where the company's server writes its release folders (backend/company_page)
+PAGE_MOUNT = "/company-page-public"  # where the retired Company page wrote its release folders
 PAGE_MOUNT_ROUTER = "/pages"  # where the router reads every company's folder, read-only
-PAGE_CACHE = "public, max-age=60"
-PAGE_PATHS = ("/", "/data.json", "/feed.xml", "/assets/*")  # the public files a page host serves from its folder
-# Requests with a reader's cookie or any query string go to the server: they are signed-in or paged reads.
-READER_COOKIE_GLOB = "*tico_reader=*"
-# The app's own cookies, removed from what a page host sends to the server (the reader's cookie stays): the bare or
-# __Host- names of the session and sign-in cookies, and this install's local session.
-APP_COOKIES_RE = "(?:^|;)[ ]*(?:__Host-)?tico_(?:session|login|local_session)[^=;]*=[^;]*"
+PAGE_GONE = "The Company page is no longer served."  # what a page host answers to everything (page_site)
 
 # What `cell_env` writes for Tico Meet while the cell has it on, and removes while it is off.
 MEET_ENV_KEYS = (
@@ -647,7 +641,7 @@ def check_host(value: str, flag: str, cell_domain: str) -> str:
 
 def refuse_server_host(host: str, env: dict[str, str], flag: str) -> None:
     """bad_domain when a page host is the app's, visuals' or runners' host in the company's settings: its server refuses
-    to start with that reader origin (backend/company_page/reader_app.py)."""
+    refused to start with that reader origin, and the same host on two routes sends one's requests to the other."""
     for key in ("TICO_PUBLIC_URL", "TICO_VISUAL_ORIGIN", "TICO_RUNNER_URL"):
         value = (env.get(key) or "").strip()
         try:
@@ -807,7 +801,7 @@ def parser() -> Parser:
     i.add_argument(
         "--page-domain",
         metavar="DOMAIN",
-        help="the domain of the companies' page hosts (docs/company-page.md), "
+        help="the domain of the companies' page hosts (the retired Company page), "
         "one wildcard route for all of them; kept when left out, \"\" clears it",
     )
     i.add_argument(
@@ -908,7 +902,7 @@ def parser() -> Parser:
         metavar="N|default",
         help=f"idle minutes before it sleeps, 0 to {SLEEP_MINUTES_MAX} (0 = never); default removes the policy",
     )
-    h = cmd("set-page-host", "a running company's page host (docs/company-page.md), without add's sign-in settings")
+    h = cmd("set-page-host", "a running company's page host (the retired Company page), without add's sign-in settings")
     h.add_argument("--company", required=True, metavar="SLUG")
     h.add_argument("--host", required=True, help="such as acme.tico.page; \"\" clears it (the folder is kept)")
     h.add_argument("--timeout", type=int, default=HEALTH_TIMEOUT, help="seconds to wait for /healthz")
@@ -1030,7 +1024,7 @@ def router_config(companies: list[dict], routes: list[dict] = (), meet: bool = F
     A sleeping company's hosts go to the wake service instead, with the company named in WAKE_HEADER by the route
     itself (header_up replaces any copy the visitor sent). A stopped one is answered 503 at once.
 
-    A page host (page_site) serves its three public paths from disk first, and only those; see page_site. Routes
+    A page host (page_site) answers 404 to everything: the Company page is retired. Routes
     (`cell route`, route_site) come after every company, before the catch-all. With Tico Meet on (`meet`), a running
     company's /rtc goes to the cell's LiveKit (company_site)."""
     lines = [
@@ -1110,50 +1104,11 @@ def company_site(c: dict, sites: str, meet: bool = False) -> list[str]:
 
 
 def page_site(c: dict) -> list[str]:
-    """A page host: GET or HEAD of exactly `/`, `/data.json` or `/feed.xml`, or of a file under `/assets/`, with no reader
-    cookie and no query string, is a file from the company's `current` release (`index.html` for `/`). A missing file
-    falls through to the company's
-    server, so an old or empty folder costs nothing. Everything else on the host goes to the server, or to the wake
-    service while it sleeps: those are the same proxies as the company's own host, with the same hold. The router
-    removes the Authorization header and the app's cookies from every request it sends on, so a visitor's bearer token
-    or app session never reaches the company's server through its page host. A stopped company answers 503 as its
-    other hosts do; its files stay in place for when it starts again.
-
-    The folder is the company's own (`<root>/pages/<slug>`, mounted read-only here at /pages): a route names only this
-    company's folder, and the slug was validated when the record was made."""
-    root = f"{PAGE_MOUNT_ROUTER}/{c['slug']}/current"
-    site = f"http://{c['page_host']}:{ROUTER_PORT}"
-    if c.get("state") == "stopped":
-        return [f"{site} {{", "\trespond \"This Tico company is stopped.\" 503", "}", ""]
-    guard = [
-        "\t\tmethod GET HEAD",
-        f"\t\tnot header Cookie {READER_COOKIE_GLOB}",
-        "\t\texpression \"{http.request.uri.query} == ''\"",
-    ]
-    lines = [f"{site} {{", "\trequest_header -Authorization", f"\trequest_header Cookie \"{APP_COOKIES_RE}\" \"\""]
-    for name, paths, file in (
-        ("page_index", "/", "index.html"),
-        ("page_files", "/data.json /feed.xml", "{path}"),
-        ("page_assets", "/assets/*", "{path}"),
-    ):
-        lines += [
-            f"\t@{name} {{",
-            *guard,
-            f"\t\tpath {paths}",
-            "\t\tfile {",
-            f"\t\t\troot {root}",
-            f"\t\t\ttry_files {file}",
-            "\t\t}",
-            "\t}",
-            f"\thandle @{name} {{",
-            f"\t\troot * {root}",
-            f"\t\theader Cache-Control \"{PAGE_CACHE}\"",
-            "\t\theader X-Content-Type-Options nosniff",
-            "\t\tfile_server",
-            "\t}",
-        ]
-    lines += ["\thandle {", *("\t" + line for line in proxy_lines(c)), "\t}", *HELD_ERRORS, "}", ""]
-    return lines
+    """A page host. The Company page is retired, so the host answers 404 to everything, whatever state the company is
+    in: no file from its folder (a release the server can no longer retract) and nothing of the company's server (a
+    request that fell through would reach ordinary app routes). The folder and the record stay until the page host's
+    settings are retired, so a removal still cleans them up."""
+    return [f"http://{c['page_host']}:{ROUTER_PORT} {{", f'\trespond "{PAGE_GONE}" 404', "}", ""]
 
 
 def proxy_lines(c: dict) -> list[str]:
@@ -3071,7 +3026,7 @@ class Cell:
                 raise CellError("domain_taken", f"{clash[0]} belongs to the route {r['name']}")
 
     def set_page_host(self, args) -> dict:
-        """A running company's page host (docs/company-page.md), or "" to clear it: what `add --page-host` sets, without
+        """A running company's page host (the retired Company page), or "" to clear it: what `add --page-host` sets, without
         add's sign-in settings, so staff can turn on the page for a company that already runs. Its settings are
         rewritten, its server restarts and the host is routed; a cleared host keeps the folder. The record carries
         `page_pending` until the restarted server answers, so a run that failed is redone in full when given again; a

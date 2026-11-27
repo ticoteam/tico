@@ -73,7 +73,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--reader-origin",
         help="the Company page's own HTTPS origin, such as https://page.acme.example, served by "
-        "the Caddy front door (docs/company-page.md); empty clears it",
+        "the Caddy front door (retired: nothing serves it); empty clears it",
     )
     p.add_argument(
         "--runner-hostname",

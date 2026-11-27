@@ -70,8 +70,8 @@ def redirect_uri(domain: str) -> str:
     return f"https://{domain}{contract.REDIRECT_PATH}"
 
 
-# A reader signs in on the Company page's own origin (docs/company-page.md), so the provider needs this second redirect
-# URI as well. The same path as the app's, on the reader's host: backend/company_page/reader_app.py's CALLBACK_PATH.
+# A reader signs in on the Company page's own origin (retired: nothing serves it), so the provider needs this second redirect
+# URI as well. The same path as the app's, on the reader's host, as the retired reader app used.
 READER_REDIRECT_PATH = "/auth/callback"
 
 

@@ -2686,7 +2686,7 @@ def test_the_cores_release_is_its_folders_name_when_it_has_no_installer_file():
     assert U.host_core(Path("/opt/tico-cell/core")) == ""  # the pre-versioned folder: every newer release gets its own
 
 
-# --- company page hosts (docs/company-page.md) -------------------------------------------------------------------
+# --- retired company page hosts -------------------------------------------------------------------
 
 
 def page_company(state="running", slug="acme", page="acme.tico.page", port=20000):
@@ -2700,41 +2700,15 @@ def site_of(text, host):
     return text[start : end if end != -1 else len(text)]
 
 
-def test_a_page_host_serves_the_public_paths_from_its_own_folder_and_nothing_else():
-    site = site_of(cell.router_config([page_company()]), "acme.tico.page")
-    assert "request_header -Authorization" in site
-    assert f'request_header Cookie "{cell.APP_COOKIES_RE}" ""' in site
-    assert "\t\tpath /\n" in site and "\t\tpath /data.json /feed.xml\n" in site and "\t\tpath /assets/*\n" in site
-    assert "try_files index.html" in site and "try_files {path}" in site
-    assert "root * /pages/acme/current" in site and "file_server" in site
-    assert 'header Cache-Control "public, max-age=60"' in site and "header X-Content-Type-Options nosniff" in site
-    # the file matchers (/, the two files, the assets): GET and HEAD only, no reader cookie, no query string
-    assert site.count("\t\tmethod GET HEAD\n") == 3 and site.count(f"not header Cookie {cell.READER_COOKIE_GLOB}") == 3
-    assert site.count("expression \"{http.request.uri.query} == ''\"") == 3
-    # everything else is the company's own proxy, with the same hold and close delay as its domain
-    assert site.rindex("handle {") > site.index("@page_files")
-    assert "reverse_proxy 127.0.0.1:20000 {" in site and "stream_close_delay 5m" in site
-    assert site.count("lb_try_duration 30s") == 1 and "handle_errors" in site
-
-
-def test_a_sleeping_page_host_serves_files_and_wakes_the_company_for_the_rest():
-    site = site_of(cell.router_config([page_company("sleeping")]), "acme.tico.page")
-    assert "file_server" in site and "root * /pages/acme/current" in site
-    assert f"reverse_proxy {cell.WAKE_ADDRESS}:{cell.WAKE_PORT} {{" in site
-    assert f"header_up {cell.WAKE_HEADER} acme" in site and "flush_interval -1" in site
-    assert "127.0.0.1:20000" not in site
-
-
-def test_a_stopped_page_host_is_a_503_at_once_and_its_folder_is_not_served():
-    site = site_of(cell.router_config([page_company("stopped")]), "acme.tico.page")
-    assert site.count("respond \"This Tico company is stopped.\" 503") == 1
-    assert "file_server" not in site and "reverse_proxy" not in site and "root" not in site
-
-
-def test_no_page_host_can_read_another_companys_folder():
-    text = cell.router_config([page_company(), page_company(slug="beta", page="beta.tico.page", port=20001)])
-    for slug in ("acme", "beta"):
-        assert set(re.findall(r"/pages/[^/\s]+", site_of(text, f"{slug}.tico.page"))) == {f"/pages/{slug}"}
+@pytest.mark.parametrize("state", ["running", "sleeping", "stopped"])
+def test_a_page_host_answers_404_to_everything_and_serves_no_file_or_company_route(state):
+    """The Company page is retired: a page host serves nothing from its folder and sends nothing on to the company's
+    server or the wake service, whatever the company's state, so a request on it never reaches an app route."""
+    text = cell.router_config([page_company(state), page_company(state, "beta", "beta.tico.page", 20001)])
+    for host in ("acme.tico.page", "beta.tico.page"):
+        site = site_of(text, host)
+        assert site.splitlines()[1:3] == [f'\trespond "{cell.PAGE_GONE}" 404', "}"], site
+        assert "file_server" not in site and "/pages/" not in site and "reverse_proxy" not in site
 
 
 def test_a_page_host_is_one_of_the_companys_hosts_for_the_wake_service_and_the_tunnel():
@@ -2798,7 +2772,7 @@ def test_add_with_a_page_host_makes_its_folder_and_names_it_to_the_server(ready)
         f"      - {folder}:/company-page-public\n" in override
         and "TICO_READER_ORIGIN: https://acme.tico.page" in override
     )
-    assert "acme.tico.page" in caddyfile(ready) and "/pages/acme/current" in caddyfile(ready)
+    assert f'respond "{cell.PAGE_GONE}" 404' in site_of(caddyfile(ready), "acme.tico.page")
 
 
 def test_a_company_without_a_page_host_has_no_folder_no_page_settings_and_no_page_route(ready):
@@ -2832,7 +2806,7 @@ def test_set_page_host_turns_the_page_on_for_a_running_company_and_keeps_its_oth
     folder = ready.root / "pages" / "acme"
     assert stat.S_IMODE(folder.stat().st_mode) == 0o755
     assert f"      - {folder}:/company-page-public\n" in (env_dir / "compose.cell.yaml").read_text()
-    assert "acme.tico.page" in caddyfile(ready) and "/pages/acme/current" in caddyfile(ready)
+    assert f'respond "{cell.PAGE_GONE}" 404' in site_of(caddyfile(ready), "acme.tico.page")
 
 
 def test_set_page_host_again_is_a_no_op_and_an_empty_host_clears_it(ready):
@@ -2900,7 +2874,7 @@ def test_a_page_host_in_a_sleeping_or_stopped_company_keeps_its_folder_and_route
     ready("sleep", "--company", "acme")
     assert "header_up X-Tico-Cell-Wake acme" in caddyfile(ready)
     ready("stop", "--company", "acme")
-    assert 'respond "This Tico company is stopped." 503' in site_of(caddyfile(ready), "acme.tico.page")
+    assert f'respond "{cell.PAGE_GONE}" 404' in site_of(caddyfile(ready), "acme.tico.page")
     assert (ready.root / "pages" / "acme").is_dir()
 
 

@@ -410,10 +410,9 @@ python3 -m setup cell add --company ticoteam --own-domain --domain hub.tico.team
   in its own zone if it has one (`hub.ticofiles.com`). A host under the wildcard that has a DNS record of its own
   (`hub.tico.team` and `runner.tico.team` point at the old instance today) must be changed to that CNAME or deleted.
   Cloudflare's universal certificate covers one label below the zone, so a deeper name needs a certificate of its own.
-- **`--page-host HOST`** (for example `acme.tico.page`): the company's [Company page](company-page.md) host. The cell
-  serves its files from `pages/<slug>/current` in the company's folder, without waking the company: the home page,
-  `data.json`, `feed.xml` and `/assets/*`, for GET and HEAD only, and never with a reader's cookie or a query string.
-  Every other request on that host goes to the company's server, as for its domain. The host is refused with
+- **`--page-host HOST`** (for example `acme.tico.page`): the host of the company's Company page, which is retired. The
+  router answers 404 to every request on it and serves nothing from the company's `pages/<slug>` folder. The host is
+  refused with
   `bad_domain` when it is the company's own domain, an alias or its visuals host, and with `domain_taken` when another
   company has it.
   Leaving the flag
