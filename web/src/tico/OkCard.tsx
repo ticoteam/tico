@@ -1,6 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
+import { refusal, run } from '@/actions';
 import { tasksIn, type ChatMessage } from '@/conversation';
-import { AskCard, taskAddress } from '@/features/task/exports';
+import { AskCard, taskAddress, taskDetailQuery } from '@/features/task/exports';
+import { Button } from '@/kit/Button';
+import { toast } from '@/kit/Toast';
 import { flowQuery, type FlowItem } from '@/features/tasks/routing';
 
 /* Tico's approval card (plan: the assistant as a delegator): a Tico message that links one task, whose OK waits on the
@@ -37,5 +40,50 @@ export function OkCard({ m }: { m: ChatMessage }) {
   );
 }
 
-/** What Tico's chat draws under a message: its approval card, when it links one. */
-export const okCard = (m: ChatMessage) => <OkCard m={m} />;
+/** An OK the person's Assistant gave on their word, as its receipt's refs carry it (backend/assistant_oks.py receipt). */
+export interface AssistantOk {
+  answer_id: string;
+  task_id: string;
+  title: string;
+  stage: string;
+}
+
+/** The receipt a message carries (`refs.assistant_ok`), when it is whole; else null. Message refs are free-form. */
+export function receiptOf(m: ChatMessage): AssistantOk | null {
+  const r = m.refs?.assistant_ok as Partial<AssistantOk> | undefined;
+  if (!r || typeof r !== 'object') return null;
+  const { answer_id, task_id, title, stage } = r;
+  return [answer_id, task_id, title, stage].every((x) => typeof x === 'string' && x) ? (r as AssistantOk) : null;
+}
+
+/* The receipt's card: the task and stage named back, and Undo while that OK still stands, which is the person's own
+   Undo of an answer (task.undoAnswer). Whether it stands changes after the receipt is written, so the card reads the
+   task: Undo shows while one of its requirements holds this answer and may take it back. A refusal (the stage moved
+   on in the meantime) is said, and the task is read again. */
+function Receipt({ ok }: { ok: AssistantOk }) {
+  const task = useQuery(taskDetailQuery(ok.task_id));
+  const holds = task.data?.to_leave?.find((r) => r.answer?.id === ok.answer_id);
+  const undo = async () => {
+    const r = await run('task.undoAnswer', { task: ok.task_id, answer: ok.answer_id }, { via: 'click' });
+    if (!r.ok) {
+      toast(refusal(r, "Couldn't undo"));
+      void task.refetch();
+    }
+  };
+  return (
+    <AskCard
+      name={ok.title}
+      note={`${ok.stage} · via assistant`}
+      label="OK'd for you"
+      target={`assistant-ok:${ok.answer_id}`}
+      actions={holds?.may.includes('undo') ? <Button onClick={() => void undo()}>Undo</Button> : undefined}
+    />
+  );
+}
+
+/** What Tico's chat draws under a message: the receipt of an OK it gave for the person, else its approval card when
+    it links one. */
+export const okCard = (m: ChatMessage) => {
+  const ok = receiptOf(m);
+  return ok ? <Receipt ok={ok} /> : <OkCard m={m} />;
+};

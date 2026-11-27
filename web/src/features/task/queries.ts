@@ -1,5 +1,6 @@
 import { keepPreviousData, queryOptions, type QueryKey } from '@tanstack/react-query';
 import { answered, ApiError, api, toError } from '@/api/client';
+import type { HistoryEvent } from './Delegated';
 import type { OkPreview, PagePublished, PageShown, PipelineSettingsResult, PublishPageBody, TaskDetail, TaskDetailChild, TaskFileList, TaskLinkView, TaskRequirement, TaskResult } from '@/api/schema';
 import { asksGone, keys, meQuery, queryClient, quietRoot, write } from '@/data';
 import { newId } from '@/lib/ids';
@@ -35,6 +36,8 @@ export type TaskData = TaskDetail['task'] & {
   stopped_agent: NonNullable<TaskDetail['stopped_agent']> | null;
   /** The task's note (a legal matter's case in brief): the task read carries it, the schema does not name it yet. */
   note?: string | null;
+  /** Its history as the task read gives it (Details draws the OKs given via the person's Assistant from it). */
+  events?: HistoryEvent[];
 };
 
 /** An agent on the task with its session view; `last_seq`, the newest message that view shows (null before one). */
@@ -55,6 +58,7 @@ function flat(d: TaskDetail): TaskData {
     mover: d.mover ?? false,
     can_close: d.can_close ?? false,
     stopped_agent: d.stopped_agent ?? null,
+    events: d.events ?? [],
   };
 }
 

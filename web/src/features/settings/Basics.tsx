@@ -27,6 +27,7 @@ import { ScreeningMore, SupportAccess } from './SecurityMore';
 import { Foot, Line, SwitchLine, Verb, act, useAgentFaces, useFaces } from './parts';
 import {
   accessQuery,
+  assistantOksQuery,
   supportAccessQuery,
   type AccessFull,
   type ScreeningFull,
@@ -81,10 +82,33 @@ export function General() {
           </Facts>
         </Section>
       )}
+      <AssistantOks />
       {pages.length > 0 && <PageOwners pages={pages} canChange={owners.data?.canChange === true} />}
       {access.data && <Repositories admin={access.data.you === 'owner' || access.data.you === 'admin'} owner={access.data.you === 'owner'} />}
       <TicoSection version={c?.version} update={c?.update} owner={me.data?.role === 'owner'} />
     </>
+  );
+}
+
+/** Your Assistant gives OKs for you when you tell it to (backend/assistant_oks.py): off until your own click turns it
+    on. Anyone acting for you (your Assistant, Agent Ops, a personal token) sees it and cannot change it (may_change). */
+function AssistantOks() {
+  const oks = useQuery(assistantOksQuery);
+  if (!oks.data) return null;
+  return (
+    <Section name="Assistant" target="setting:assistant">
+      <Facts label="Assistant">
+        <SwitchLine
+          label="Give OKs for me when I tell you to"
+          checked={oks.data.gives_oks}
+          disabled={!oks.data.may_change}
+          onChange={(on) => void act('settings.assistantGivesOks', { on })}
+        />
+        <div className="fact set-sw">
+          <p className="set-cmd-note">Stage OKs and approval pages only. Sends, money, files and access always need your own click.</p>
+        </div>
+      </Facts>
+    </Section>
   );
 }
 

@@ -1,6 +1,7 @@
 import { infiniteQueryOptions, queryOptions } from '@tanstack/react-query';
 import { ApiError, api } from '@/api/client';
 import type {
+  AssistantOkSettingsResult,
   BotTaskChoice,
   BotTaskModel,
   BotTaskModelSaved,
@@ -345,6 +346,22 @@ export const setSupport = (on: boolean) =>
     key: supportQuery.queryKey,
     optimistic: (v: CloudSupportView | undefined) => v && { ...v, on },
     send: (idempotencyKey) => api.put('/api/v2/cloud-machines/support', { on }, { idempotencyKey }),
+  });
+
+// ---------------------------------------------------------------- your Assistant gives OKs for you (/api/v2/assistant/settings)
+
+/** Whether your Assistant gives OKs for you when you tell it to, and whether this caller may change it: only the
+    person's own click (false for their Assistant, Agent Ops or a personal token; backend/assistant_oks.py). */
+export const assistantOksQuery = queryOptions({
+  queryKey: ['settings', 'assistant-oks'],
+  queryFn: ({ signal }) => api.get<AssistantOkSettingsResult>('/api/v2/assistant/settings', { signal }),
+});
+
+export const setAssistantOks = (on: boolean) =>
+  write({
+    key: assistantOksQuery.queryKey,
+    optimistic: (v: AssistantOkSettingsResult | undefined) => v && { ...v, gives_oks: on },
+    send: (idempotencyKey) => api.post<AssistantOkSettingsResult>('/api/v2/assistant/settings', { gives_oks: on }, { idempotencyKey }),
   });
 
 // ---------------------------------------------------------------- billing (owners and admins; money in micro-dollars)

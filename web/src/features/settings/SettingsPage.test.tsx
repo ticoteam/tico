@@ -250,6 +250,46 @@ describe('Settings', () => {
   });
 });
 
+describe('Settings › General › Assistant', () => {
+  /** The server: the setting as GET /api/v2/assistant/settings answers it, and POST takes {gives_oks}. */
+  const serveOks = (view: { gives_oks: boolean; may_change: boolean }) =>
+    serve((url, method) => {
+      if (method === 'POST' && url === '/api/v2/assistant/settings') view = { ...view, ...(sent.at(-1)?.body as object) };
+      if (url === '/api/v2/assistant/settings') return ok(view);
+      if (url.startsWith('/api/v2/access')) return ok(ACCESS);
+      return ok({ pages: {} });
+    });
+  const theSwitch = () => screen.findByRole('switch', { name: 'Give OKs for me when I tell you to' });
+
+  it('turns on Give OKs for me with the person’s own click', async () => {
+    serveOks({ gives_oks: false, may_change: true });
+    show(<SettingsPage section="general" />, '/settings/general');
+    const sw = await theSwitch();
+    expect(sw.getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(sw);
+    await waitFor(() => expect(sent).toContainEqual({ url: '/api/v2/assistant/settings', method: 'POST', body: { gives_oks: true } }));
+    await waitFor(async () => expect((await theSwitch()).getAttribute('aria-checked')).toBe('true'));
+  });
+
+  it('is shown but cannot be changed by anyone acting for the person', async () => {
+    serveOks({ gives_oks: true, may_change: false });
+    show(<SettingsPage section="general" />, '/settings/general');
+    const sw = await theSwitch();
+    expect(sw.getAttribute('aria-checked')).toBe('true');
+    expect(sw.hasAttribute('disabled') || sw.getAttribute('aria-disabled') === 'true' || sw.hasAttribute('data-disabled')).toBe(true);
+    fireEvent.click(sw);
+    expect(sent.filter((x) => x.url === '/api/v2/assistant/settings')).toEqual([]);
+  });
+
+  it('Tico cannot turn it on or off: the action is the person’s own press only', async () => {
+    serveOks({ gives_oks: false, may_change: true });
+    show(<SettingsPage section="general" />, '/settings/general');
+    await theSwitch();
+    expect(await run('settings.assistantGivesOks', { on: true }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
+    expect(sent.filter((x) => x.url === '/api/v2/assistant/settings')).toEqual([]);
+  });
+});
+
 describe('A model sign-in @s746', () => {
   const CODE = 'WDJB-MJHT';
   const PAGE = `https://auth.example/device?user_code=${CODE}`;
