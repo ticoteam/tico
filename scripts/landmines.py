@@ -390,6 +390,22 @@ class Bindings(ast.NodeVisitor):
         self.calls.append((node, self.stack[-1]))
         self.generic_visit(node)
 
+    def visit_AsyncWith(self, node):
+        """`async with asyncio.TaskGroup() as g` (or a TaskGroup imported under any name) binds g, in this scope only,
+        to a group that waits for its tasks when it exits."""
+        for item in node.items:
+            self.visit(item.context_expr)
+            func = item.context_expr.func if isinstance(item.context_expr, ast.Call) else None
+            group = (isinstance(func, ast.Attribute) and func.attr == "TaskGroup") or (
+                isinstance(func, ast.Name) and self.meaning(self.stack[-1], func.id) == "TaskGroup"
+            )
+            if group and isinstance(item.optional_vars, ast.Name):
+                self.scopes[self.stack[-1]][item.optional_vars.id] = "TaskGroup"
+            elif item.optional_vars is not None:
+                self.visit(item.optional_vars)
+        for statement in node.body:
+            self.visit(statement)
+
     def meaning(self, scope, name):
         """What `name` means where `scope` reads it: the innermost scope that binds it decides."""
         while scope is not None:
@@ -400,20 +416,7 @@ class Bindings(ast.NodeVisitor):
 
 
 ASYNCIO = {("asyncio", "create_task"), ("asyncio", "ensure_future"), ("asyncio.tasks", "create_task")}
-
-
-def task_groups(tree):
-    """The names an `async with asyncio.TaskGroup() as g` binds: a TaskGroup waits for its tasks when it exits."""
-    names = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.AsyncWith):
-            for item in node.items:
-                made = item.context_expr
-                func = made.func if isinstance(made, ast.Call) else None
-                named = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
-                if named == "TaskGroup" and isinstance(item.optional_vars, ast.Name):
-                    names.add(item.optional_vars.id)
-    return names
+TASK_GROUPS = {("asyncio", "TaskGroup"), ("asyncio.taskgroups", "TaskGroup")}
 
 
 def lifespan_tasks(path, text):
@@ -423,13 +426,13 @@ def lifespan_tasks(path, text):
     tree = parsed(text)
     if tree is None:
         return []
-    names = Bindings(tree, dict.fromkeys(ASYNCIO, "asyncio"))
-    groups = task_groups(tree)
+    names = Bindings(tree, {**dict.fromkeys(ASYNCIO, "asyncio"), **dict.fromkeys(TASK_GROUPS, "TaskGroup")})
     lines = []
     for node, scope in names.calls:
         func = node.func
         if isinstance(func, ast.Attribute) and func.attr in ("create_task", "ensure_future"):
-            if not (isinstance(func.value, ast.Name) and func.value.id in groups):
+            receiver = func.value.id if isinstance(func.value, ast.Name) else None
+            if receiver is None or names.meaning(scope, receiver) != "TaskGroup":
                 lines.append(node.lineno)
         elif isinstance(func, ast.Name) and names.meaning(scope, func.id) == "asyncio":
             lines.append(node.lineno)
@@ -456,9 +459,21 @@ def _first_parameter(func, method):
     return args.kwonlyargs[0].arg if args.kwonlyargs else None
 
 
+def _includes_on_app(node):
+    """`api_routing.include(app, router)` or an imported `include(app, router)`: the routing helper adding routes."""
+    func = node.func
+    named = (
+        isinstance(func, ast.Attribute) and func.attr == "include" and getattr(func.value, "id", None) == "api_routing"
+    ) or (isinstance(func, ast.Name) and func.id == "include")
+    return named and bool(node.args) and isinstance(node.args[0], ast.Name) and node.args[0].id == "app"
+
+
 def _adds_routes(func):
-    """Whether `func`'s body (nested defs and their decorators included) calls a route method on `app`."""
+    """Whether `func`'s body (nested defs and their decorators included) calls a route method on `app`, or hands `app`
+    to the routing helper's include."""
     for node in ast.walk(func):
+        if isinstance(node, ast.Call) and _includes_on_app(node):
+            return True
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in ROUTE_CALLS:
             root = node.func.value
             while isinstance(root, ast.Attribute):

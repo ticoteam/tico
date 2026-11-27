@@ -376,6 +376,12 @@ def test_no_tauri_leaves_history_tests_of_its_removal_and_customer_repositories_
         (APP, "asyncio.ensure_future(loop())\n", "await asyncio.wait_for(stop.wait(), timeout=60)\n"),
         (
             APP,
+            "async def a():\n    async with asyncio.TaskGroup() as aio:\n        aio.create_task(x())\n\n\n"
+            "def b():\n    import asyncio as aio\n\n    aio.create_task(loop())\n",
+            "from asyncio import TaskGroup as TG\n\n\nasync def run():\n    async with TG() as g:\n        g.create_task(work())\n",
+        ),
+        (
+            APP,
             "if on: from asyncio import create_task as ct; ct(work())\n",
             "def a():\n    from asyncio import create_task\n\n\ndef b(create_task):\n    create_task(request)\n",
         ),
@@ -443,6 +449,14 @@ DEEP = ROUTE.replace("    ", "        ")
         (
             "class Mount:\n    @staticmethod\n    def install(app):\n        app.websocket('/w')(w)\n",
             "def install(self, app):\n" + ROUTE,
+        ),
+        (
+            "def install(app, store):\n    api_routing.include(app, router(store))\n",
+            "def install(app, store):\n    api_routing.include(other, router(store))\n",
+        ),
+        (
+            "from .api_routing import include\n\n\ndef _register_x(app):\n    include(app, r)\n",
+            "def _register_x(app):\n    seal(app, r)\n",
         ),
         (
             "def install(app):\n    app.add_api_websocket_route('/w', w)\n",
