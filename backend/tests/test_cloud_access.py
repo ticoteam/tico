@@ -68,11 +68,19 @@ def test_billing_passes_cloud_through_and_keeps_it(api, hq):  # noqa: F811
 
 def test_an_odd_cloud_answer_is_refused_and_the_last_word_kept(api, hq):  # noqa: F811
     say(api, hq, "frozen", "out_of_credit")
-    for odd in ({**signals("open"), "access": "closed"}, {**signals("open"), "balance_micros": 1.5}, ["open"]):
+    trial_text_balance = {**signals("locked", "trial_over"), "balance_micros": "5000000"}
+    for odd in (
+        {**signals("open"), "access": "closed"},
+        {**signals("open"), "balance_micros": 1.5},
+        ["open"],
+        trial_text_balance,
+    ):
         hq.answers["/cloud"] = (200, odd, "application/json")
         assert sync(api)["access"] == "frozen"
     hq.answers["/billing"] = (200, {**ANSWER, "cloud": {"access": "open", "reason": "gift"}}, "application/json")
     assert get(api, "billing")["state"] == "unreachable"
+    with pytest.raises(ValueError):  # a retired trial lock with a balance that is not a whole number: refused, no crash
+        cloud_access.parse(trial_text_balance)
     hq.answers["/cloud"] = (503, {"error": "down"}, "")
     assert sync(api)["access"] == "frozen"  # HQ down keeps the last word
     # A billing page that is not https is dropped, never linked.

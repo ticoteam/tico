@@ -91,10 +91,13 @@ def _int(value):
 
 def untrial(value):
     """A lock for TRIAL_OVER read as its balance says: frozen (out of credit) at $0 or less, else open. Any other
-    answer as it is."""
+    answer as it is, and so is a balance that is not a whole number (`parse` then refuses the retired reason)."""
     if not isinstance(value, dict) or value.get("access") != "locked" or value.get("reason") != TRIAL_OVER:
         return value
-    if (value.get("balance_micros") or 0) <= 0:
+    balance = value.get("balance_micros")
+    if balance is not None and type(balance) is not int:
+        return value
+    if (balance or 0) <= 0:
         return {**value, "access": "frozen", "reason": "out_of_credit"}
     return {**value, "access": "open", "reason": None}
 
