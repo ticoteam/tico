@@ -188,9 +188,10 @@ def test_the_message_refs_view_is_denied_to_everyone(api, world):
         assert "message_refs" in column(api, "SELECT name FROM sqlite_master WHERE type='view'", token)
 
 
-def test_the_company_page_s_readers_are_denied_to_everyone_and_its_rules_are_the_owner_s(api, world):
-    """Who the readers are, their sessions and invites, what they wrote and read: nobody reads these through SQL, the owner
-    included. The company's own rules, drafts and stats are the owner's, as its page's API shows them."""
+def test_the_retired_page_s_readers_stay_denied_to_everyone_and_its_rules_stay_the_owner_s(api, world):
+    """The retired Company page's tables are dormant until a migration drops them. Who the readers were, their sessions
+    and invites, what they wrote and read: nobody reads these through SQL, the owner included. The company's own rules,
+    drafts and stats stay the owner's."""
     with api.app.state.store.transaction() as c:
         c.execute(
             "INSERT INTO audiences (id, name, kind, created_at, updated_at) VALUES ('board','Board','board',?,?)",

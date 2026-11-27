@@ -45,7 +45,7 @@ def message_facts(message, thread):
 
 
 def _silenced():
-    """A write under `H.NO_TRIGGERS` promises no webhook or automation hears of it (a Company page reader's message)."""
+    """A write under `H.NO_TRIGGERS` promises no webhook or automation hears of it (a message moved between bot homes)."""
     from . import hubdb as H
 
     return H.NO_TRIGGERS.get()

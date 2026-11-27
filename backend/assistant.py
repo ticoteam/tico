@@ -284,9 +284,8 @@ NEVER = [
         ("PATCH", r"/api/v2/messages/[^/]+"),
         ("DELETE", r"/api/v2/messages/[^/]+"),
         ("POST", r"/api/v2/messages/[^/]+/redact"),
-        # A person's password and a reader's invite link: each carries a credential the chat would hold.
+        # A person's password and an invite link: each carries a credential the chat would hold.
         ("POST", r"/api/v2/access/(people|humans)/[^/]+/password"),
-        (None, r"/api/v2/audiences/[^/]+/invites(/.*)?"),
         (None, r"/api/v2/setup/company/people/[^/]+/invite"),
         (None, r"/api/v2/access/(humans|people)/[^/]+/invite"),
         # A computer's adoption and removal (its enrolment is the person's own tap, and a removal ends its sign-ins).

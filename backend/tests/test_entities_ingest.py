@@ -12,7 +12,6 @@ import pytest
 
 from backend import hubdb as H
 from backend import mailbox_access as MA
-from backend.company_page import readers as R
 from backend.entities import ingest as ING
 from backend.entities import store as ES
 from backend.entities import visible as V
@@ -169,29 +168,6 @@ def test_a_team_meeting_makes_its_outside_attendees_and_a_private_one_makes_noth
         assert V.visible(c, CARA, lee[0])
         ben = ES.matching(c, "person", {"email": "ben@acme.example"})
         assert ben == []  # a roster teammate is not an outside attendee
-
-
-def test_a_company_page_board_member_advises_self_and_an_investor_invests(api):
-    with tx(api) as c:
-        ES.ensure_self(c, company_name="Acme Lights", domain="acme.example")
-        board = H.new_id()
-        c.execute(
-            "INSERT INTO audiences(id,name,kind,enabled,created_at,updated_at) VALUES(?,?,?,1,?,?)",
-            (board, "Board", "board", H.now(), H.now()),
-        )
-        investors = H.new_id()
-        c.execute(
-            "INSERT INTO audiences(id,name,kind,enabled,created_at,updated_at) VALUES(?,?,?,1,?,?)",
-            (investors, "Investors", "investors", H.now(), H.now()),
-        )
-        R.add(c, ANA, "dana@example.test", [board], "Dana Board")
-        R.add(c, ANA, "ivy@fund.example.test", [investors], "Ivy Fund")
-        me = ES.self_id(c)
-        dana = ES.matching(c, "person", {"email": "dana@example.test"})[0]
-        ivy = ES.matching(c, "person", {"email": "ivy@fund.example.test"})[0]
-        assert _links(c, dana, "advises") == [me]
-        assert _links(c, ivy, "invests_in") == [me]
-        assert V.visible(c, CARA, dana)
 
 
 def test_a_failing_step_is_undone_and_the_action_goes_on(api):

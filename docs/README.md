@@ -34,7 +34,6 @@ Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server,
 - [Use Tico](using-tico.md): your team's address, tasks, threads, results and Needs you.
 - [Threads](threads.md): where people and bots talk: the Home, DMs, sub-threads and calls.
 - [Sessions](sessions.md): each task a bot owns is its own session, apart from its Home thread.
-- [Company page](company-page.md): what outside people see of the company (investors, the board, the public), and who approves it.
 - [Desktop app](desktop.md), [Your Assistant](assistant.md), [External agents](connect-an-agent.md) and [Work from a terminal](terminal.md).
 - Knowledge and results: [Docs](docs.md), [Librarian](librarian.md), [Market watch](market-watch.md), [Weekly briefing](market-briefing.md), [Files](files.md), [Pages](pages.md), [Meetings](meetings.md), [Listening](listening.md), [Physical mail](physical-mail.md).
 - [General Manager](general-manager.md): the built-in helper that tidies tasks once an hour on weekdays.

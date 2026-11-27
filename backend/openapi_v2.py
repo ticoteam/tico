@@ -110,10 +110,6 @@ TAGS = {
     'Feedback': "A person's 👍 or 👎 on a message, task or approval a bot or another person made, with an optional reason: "
     "a 👎 on a bot's work can tell the bot (a note for its next run in that conversation) or become an org rule. "
     "Every answer leaves out feedback on what the caller cannot read.",
-    # The Company page (backend/company_page): what an owner or an admin writes, and the page's own settings. Readers never
-    # reach these routes; the reader origin serves the page and its data without a key.
-    'Company page': "The public page for the company's updates: its audiences, the editions each one reads, the stats "
-    "the page shows, the readers who sign in to it, and the logo (docs/company-page.md).",
     # Tools (backend/mailboxes.py): which inboxes Tico uses and who may use each.
     'Mailboxes': "Which mailboxes Tico uses and who may use each: Read, or Read and write (organize, draft and send, as far as the company allows).",
     'Email': "Live Gmail organizing; Gmail holds the mail and Tico records only action details and ids.",

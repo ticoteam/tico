@@ -1,6 +1,6 @@
 {
   "backend/sleep_idle.py": {
-    "core-imports-app": 2,
+    "core-imports-app": 1,
     "no-install-closure": 1
   }
 }

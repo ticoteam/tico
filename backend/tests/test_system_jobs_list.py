@@ -259,9 +259,6 @@ def test_scheduler_jobs_and_background_passes_record_their_runs(api, monkeypatch
     assert steps["run_housekeeping"]["runs_count"] == 4 and steps["stall_marks"]["runs_count"] == 1, (
         "every beat; a minute"
     )
-    # The Company page is closed on a new install: a beat with nothing due is quiet, on its step row only.
-    assert steps["company_page"]["last_result"] == "Nothing due" and steps["company_page"]["last_did_at"] is None
-    assert runs_of(api, "company_page") == []
     with db(api).read() as c:
         kept = [r["steps"] for r in c.execute("SELECT steps FROM heartbeat_beats")]
     assert kept == [], kept

@@ -694,8 +694,8 @@ REFUSAL_TASK = contextvars.ContextVar("hub_refusal_task", default=None)
 # The bulk change (backend/app.py task_bulk) a refusal came from: each task it skipped keeps its own refusal on record,
 # but one call counts once toward rule 8's quarantine, however many tasks it skipped (_escalate).
 BULK_CALL = contextvars.ContextVar("hub_bulk_call", default="")
-# A task filed from an outside reader's words (backend/company_page/readers.py) reaches a person and nothing else: no
-# webhook, automation or task rule hears the write, so no bot runs on it until a person passes it on.
+# A write no webhook, automation or task rule hears (a message moved between bot homes is not news), so no bot runs on
+# it until a person passes it on.
 NO_TRIGGERS = contextvars.ContextVar("hub_no_triggers", default=False)
 
 

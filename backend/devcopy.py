@@ -297,8 +297,9 @@ EMPTY = (
     "slack_link_members",
     "slack_message_links",
     "slack_inbound_events",
-    # The Company page: the readers (their addresses, sessions and invite hashes, the messages they wrote, what they read,
-    # what was mailed to them), and the company's published statements and rules. A copy is rehearsal data, so none of it.
+    # The retired Company page's tables, dormant until a migration drops them: the readers (their addresses, sessions and
+    # invite hashes, the messages they wrote, what they read, what was mailed to them), and the company's published
+    # statements and rules. A copy is rehearsal data, so none of it.
     "readers",
     "audience_readers",
     "reader_sessions",

@@ -1,6 +1,6 @@
 # pyright: strict
 """Directory ingest (track 6a): the people and organizations the sources a team already uses name, and the links between
-them. Mail, meetings and Company page readers each call one function here. Every write goes through the
+them. Mail and meetings each call one function here. Every write goes through the
 store (backend/entities/store.py), as the system's own actor, so the writer gate and the read rule hold.
 
 What each source makes (spec §7):
@@ -10,20 +10,19 @@ What each source makes (spec §7):
 - Meetings: a person for each outside attendee of a live team meeting, with their organization. A private or
   participants-only meeting makes nothing.
 - The Rules Owner: none here. A rule's source is an organization entity itself (track 5, org_rules.source_entity_id).
-- Company page: a reader on the board or investors list is a person who advises self or invests in it.
 
 Each step is safe inside the action that caused it: safely() runs it in a savepoint, logs a failure, and returns None,
 so the action goes on. Running a step again adds nothing: an entity found by its identifier is not written again, and a
 link that is already current is not repeated.
 
 Sources and who sees them: a mailbox source is restricted to that mailbox, so only its readers see the entity. Meeting
-and Company page sources are company-wide. An entity with no source shows to everyone, and an entity known only
+sources are company-wide. An entity with no source shows to everyone, and an entity known only
 from a restricted source hides from everyone else, so _record never adds a source that would change who sees an entity.
 """
 
 import logging
 import sqlite3
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from email.utils import parseaddr
 from typing import TypeVar, cast
 
@@ -36,12 +35,11 @@ log = logging.getLogger("tico.entities.ingest")
 
 T = TypeVar("T")
 ACTOR = H.TICO_ACTOR  # the system writes these rows; they are not any person's edit
-HARD_CONFIDENCE = 0.9  # a sender's domain, a meeting's invite, an owner's list: evidence the link can carry rules on
+HARD_CONFIDENCE = 0.9  # a sender's domain, a meeting's invite: evidence the link can carry rules on
 NO_REPLY = ("noreply", "no-reply", "donotreply", "do-not-reply")
 MACHINE_LOCAL = ("mailer-daemon", "postmaster")
 BULK = ("bulk", "list", "junk")
 SECOND_LEVEL = ("co", "com", "org", "net", "gov", "ac", "edu")  # acme.co.uk names Acme, not Co
-ROLE_LINKS = {"board": "advises", "investors": "invests_in"}  # a Company page list to the link it makes toward self
 
 
 # The access and mailbox modules predate the strict check, so their functions are untyped here. These wrappers make the same
@@ -235,40 +233,3 @@ def from_meeting(
             if org[1]:
                 made.append(org[0])
     return {"people": people, "created": made}
-
-
-def from_company_page(
-    c: sqlite3.Connection, *, email: str, name: str | None, kinds: Iterable[str]
-) -> dict[str, object]:
-    """A reader on the Company page's list. A board member advises self, and an investor invests in it: a person each,
-    linked to self, with the organization their domain names. A reader on no such list (public, custom) makes nothing."""
-    roles = sorted({ROLE_LINKS[kind] for kind in kinds if kind in ROLE_LINKS})
-    address = _address(email)
-    me = ES.self_id(c)
-    if not address or not roles or me is None:
-        return {}
-    domain = _domain(address)
-    internal = domain in _company_domains(c)
-    org: tuple[str, bool] | None = (me, False) if internal else _organization(c, domain)
-    person = _entity(c, "person", {"email": address}, name)
-    if person is None:
-        return {}
-    _record(c, person[0], "company_page", address, created=person[1], visibility="company")
-    made = [person[0]] if person[1] else []
-    if org:
-        _record(c, org[0], "company_page", domain, created=org[1], visibility="company")
-        _works_at(c, person[0], org[0], "company_page", address)
-        if org[1]:
-            made.append(org[0])
-    for role in roles:
-        ES.link(
-            c,
-            ACTOR,
-            person[0],
-            role,
-            me,
-            confidence=HARD_CONFIDENCE,
-            source_type="company_page",
-            source_id=address,
-        )
-    return {"person": person[0], "created": made}

@@ -363,14 +363,6 @@ def step_updates(ctx):
     return ("1 asked" if sent else "Nobody due"), not sent
 
 
-def step_company_page(ctx):
-    # The Company page's editions that came due (backend/company_page/schedule.py); the model call is off this loop.
-    from .company_page import schedule as company_page_schedule
-
-    begun = company_page_schedule.start(ctx.store, ctx.at)
-    return ("Editions started" if begun else "Nothing due"), not begun
-
-
 def step_thread_digest(ctx):
     return run_thread_digest(ctx.store, ctx.auth, ctx.at)
 
@@ -602,14 +594,6 @@ class Scheduler:
         except Exception as exc:
             cfgs = None
             failures.append({"system_routines": type(exc).__name__})
-        # Reader notices a restart or the issuer's limit left waiting; the mail goes on a thread of its own. Its own
-        # guard, so a failed edition start (the Heartbeat's Company page editions step) never holds the notices back.
-        try:
-            from .company_page import readers as company_page_readers
-
-            company_page_readers.tick(self.store)
-        except Exception as exc:
-            failures.append({"company_page_readers": type(exc).__name__})
         # Maintenance (backend/maintenance.py): the run starts when its schedule says it is due; its steps run on a thread.
         from . import maintenance
 

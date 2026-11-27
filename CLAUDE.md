@@ -140,7 +140,7 @@ flight file, not the database.
 - `runner_support/` is frozen: no new file in it outside its tests, and no new import of it from `backend/` or
   `clients/`. Prefer `runner-rs`.
 - Core never imports a Non-Core module (Finance, Growth, Market, Calendar, Calls, Meetings, Mail, Letters, Slack,
-  Granola, the company page, lenses); `finance.actions` is the one bridge.
+  Granola, lenses); `finance.actions` is the one bridge.
 - Never add `flight_*` tables to `hub.db`.
 
 `scripts/landmines.py` enforces the `runner_support/`, Core, `flight_*` and desktop rules (`skills/honest-code/LESSONS.md`

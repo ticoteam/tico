@@ -486,7 +486,7 @@ def parser():
     from clients.commands import mail as mail_commands, rules as rule_commands, strategy as strategy_commands
     from clients.commands import risk as risk_commands
     from clients.commands import market as market_commands
-    from clients.commands import company_page, finance, listening as listening_commands, threads as thread_commands
+    from clients.commands import finance, listening as listening_commands, threads as thread_commands
     from clients.commands import calls, outbound, webhooks
     from clients.commands import contacts as contacts_commands
     from clients.commands import products as products_commands
@@ -518,8 +518,6 @@ def parser():
     cli_spec.add(sub, mail_commands.LETTER)  # tico letter and tico mail: clients/commands/mail.py
     cli_spec.add(sub, mail_commands.MAIL)
     cli_spec.add(sub, mail_commands.CLI)  # tico email: clients/commands/mail.py
-
-    cli_spec.add(sub, company_page.CLI)  # tico company-page, audiences, editions, readers
 
     cli_spec.add(sub, calls.MEETING)  # tico meeting: clients/commands/calls.py (all but `import`)
     meeting = _group_subparsers(sub, "meeting")  # hand-built: it reads the transcript and notes files on this computer

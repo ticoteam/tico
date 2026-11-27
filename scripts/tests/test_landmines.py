@@ -536,7 +536,7 @@ def test_core_imports_app_counts_each_non_core_module_of_a_multi_line_import():
 
 def test_core_imports_app_names_every_non_core_family():
     families = (
-        "finance bookkeeper bills_address growth growth_sync market marketing_tasks market_sources company_page lenses "
+        "finance bookkeeper bills_address growth growth_sync market marketing_tasks market_sources lenses "
         "calendar_api call_notes calls live_meetings meetings meeting_items mail mail_lib mailboxes mailbox_access "
         "email_sending letters postal_mail slack_app granola_mcp finance_routes finance_ads_routes call_ring callbacks"
     ).split()
