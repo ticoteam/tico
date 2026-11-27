@@ -901,6 +901,106 @@ async fn a_task_lane_commits_its_memory_stamps_its_run_and_lands_beside_the_othe
     assert_eq!(sh(&main, &["branch", "--list", "tico-session/t1"]), "");
 }
 
+fn bot_checkout(tmp: &Path) -> (PathBuf, PathBuf) {
+    let (bare, _) = remote(tmp, "bot-ops");
+    let projects = tmp.join("projects");
+    std::fs::create_dir_all(&projects).unwrap();
+    let main = projects.join("bot-ops");
+    sh(
+        &projects,
+        &[
+            "clone",
+            "-q",
+            bare.to_str().unwrap(),
+            main.to_str().unwrap(),
+        ],
+    );
+    (projects, main)
+}
+
+#[tokio::test]
+async fn a_bot_at_its_session_worktree_cap_gets_no_new_one_and_keeps_using_its_own() {
+    let tmp = Tmp::new();
+    let (projects, main) = bot_checkout(&tmp.0);
+    let env = turn_env(&tmp.0, &[]);
+    for n in 0..sessions::SESSION_CAP {
+        let task = format!("t{n}");
+        let session = sessions::path_for(&projects, "ops", &task);
+        assert_eq!(
+            sessions::ensure(&main, &session, &task, &env)
+                .await
+                .unwrap()
+                .1,
+            ""
+        );
+    }
+
+    // One more task: no folder, no branch, and the reason names the cap.
+    let extra = sessions::path_for(&projects, "ops", "extra");
+    let (tracked, problem) = sessions::ensure(&main, &extra, "extra", &env)
+        .await
+        .unwrap();
+    assert_eq!(tracked, "");
+    assert!(
+        problem.contains(&format!("{} session worktrees", sessions::SESSION_CAP)),
+        "{problem}"
+    );
+    assert!(!extra.exists());
+    assert_eq!(sh(&main, &["branch", "--list", "tico-session/extra"]), "");
+
+    // A task that has one keeps it at the cap.
+    let first = sessions::path_for(&projects, "ops", "t0");
+    assert_eq!(
+        sessions::ensure(&main, &first, "t0", &env).await.unwrap(),
+        ("origin/main".into(), "".into())
+    );
+
+    // Once one goes, the next task gets its own.
+    let last = sessions::path_for(&projects, "ops", "t1");
+    sh(&main, &["worktree", "remove", last.to_str().unwrap()]);
+    assert_eq!(
+        sessions::ensure(&main, &extra, "extra", &env)
+            .await
+            .unwrap(),
+        ("origin/main".into(), "".into())
+    );
+}
+
+#[tokio::test]
+async fn no_session_worktree_is_made_under_5_gb_free_but_one_already_made_is_used() {
+    let tmp = Tmp::new();
+    let (projects, main) = bot_checkout(&tmp.0);
+    let env = turn_env(&tmp.0, &[]);
+    let kept = sessions::path_for(&projects, "ops", "kept");
+    assert_eq!(
+        sessions::ensure(&main, &kept, "kept", &env)
+            .await
+            .unwrap()
+            .1,
+        ""
+    );
+
+    sessions::FREE_BYTES.with(|v| v.set(Some(4 * 1024 * 1024 * 1024)));
+    let new = sessions::path_for(&projects, "ops", "new");
+    let (tracked, problem) = sessions::ensure(&main, &new, "new", &env).await.unwrap();
+    assert_eq!(tracked, "");
+    assert!(problem.contains("4.0 GB free"), "{problem}");
+    assert!(problem.contains("needs 5 GB"), "{problem}");
+    assert!(!new.exists());
+    assert_eq!(sh(&main, &["branch", "--list", "tico-session/new"]), "");
+    assert_eq!(
+        sessions::ensure(&main, &kept, "kept", &env).await.unwrap(),
+        ("origin/main".into(), "".into())
+    );
+
+    sessions::FREE_BYTES.with(|v| v.set(Some(5 * 1024 * 1024 * 1024)));
+    assert_eq!(
+        sessions::ensure(&main, &new, "new", &env).await.unwrap(),
+        ("origin/main".into(), "".into())
+    );
+    sessions::FREE_BYTES.with(|v| v.set(None));
+}
+
 #[tokio::test]
 async fn an_existing_task_worktree_survives_a_base_checkout_without_an_upstream() {
     let tmp = Tmp::new();
