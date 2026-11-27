@@ -67,7 +67,7 @@ TAGS = {
     # Automations (backend/automations.py).
     'Automations': "A trigger and a tree of steps (filter, decide, llm, find, bot_turn, paths, action), saved as versions; "
     "one permission rule for UI, CLI and MCP.",
-    'Roadmaps': "The Roadmap's ranked Product tasks and internal requesters.",
+    'Roadmaps': "The Roadmap's ranked Product tasks and internal requesters (docs/roadmaps.md).",
     'Support': 'Reports to Tico support (docs/support.md).',
     'Rules': "Org rules: what teammates follow (internal) and what someone outside requires (external), with their "
     "due dates and sources.",
