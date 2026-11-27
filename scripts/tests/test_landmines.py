@@ -836,3 +836,48 @@ def test_the_real_hubdb_count_equals_its_baseline():
     text = (landmines.ROOT / HUBDB).read_text(encoding="utf-8")
     count = len(landmines.hits_in(HUBDB, text, [landmines.BY_ID["no-new-hubdb-def"]])["no-new-hubdb-def"])
     assert count == landmines.read_baseline()[HUBDB]["no-new-hubdb-def"]
+
+
+def hubdb_repo(tmp_path, text):
+    git(tmp_path, "init", "-q", "-b", "base")
+    git(tmp_path, "config", "user.email", "t@example.com")
+    git(tmp_path, "config", "user.name", "t")
+    (tmp_path / "backend").mkdir()
+    (tmp_path / HUBDB).write_text(text)
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "commit", "-qm", "branch point")
+    git(tmp_path, "checkout", "-qb", "work")
+
+
+def test_deleting_one_hubdb_def_does_not_pay_for_a_new_one(tmp_path):
+    hubdb_repo(tmp_path, "def old(conn):\n    pass\n\n\ndef kept(conn):\n    pass\n")
+    (tmp_path / HUBDB).write_text("def kept(conn):\n    pass\n\n\nasync def brand_new(conn):\n    pass\n")
+    text = (tmp_path / HUBDB).read_text()
+    found = {HUBDB: landmines.hits_in(HUBDB, text, [landmines.BY_ID["no-new-hubdb-def"]])}
+    assert landmines.compare(found, {HUBDB: {"no-new-hubdb-def": 2}}) == []  # the count alone lets the swap through
+    problems = landmines.new_hubdb_defs(tmp_path, "base")
+    assert len(problems) == 1
+    assert f"{HUBDB}:5: async def brand_new(conn):" in problems[0] and "not in base" in problems[0]
+    assert "L43" in problems[0]
+
+
+def test_a_moved_or_kept_hubdb_def_is_not_new_and_a_def_main_added_after_the_branch_point_is_not_either(tmp_path):
+    hubdb_repo(tmp_path, "def a(conn):\n    pass\n\n\ndef b(conn):\n    pass\n")
+    git(tmp_path, "checkout", "-q", "base")
+    (tmp_path / HUBDB).write_text("def a(conn):\n    pass\n\n\ndef b(conn):\n    pass\n\n\ndef c(conn):\n    pass\n")
+    git(tmp_path, "commit", "-qam", "main adds c")
+    git(tmp_path, "checkout", "-q", "work")
+    (tmp_path / HUBDB).write_text("def b(conn):\n    pass\n\n\ndef a(conn):\n    return 1\n")
+    assert landmines.new_hubdb_defs(tmp_path, "base") == []
+
+
+def test_no_hubdb_at_the_base_means_nothing_is_new(tmp_path):
+    git(tmp_path, "init", "-q", "-b", "base")
+    git(tmp_path, "config", "user.email", "t@example.com")
+    git(tmp_path, "config", "user.name", "t")
+    (tmp_path / "x.py").write_text("x = 1\n")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "commit", "-qm", "base")
+    (tmp_path / "backend").mkdir()
+    (tmp_path / HUBDB).write_text("def a(conn):\n    pass\n")
+    assert landmines.new_hubdb_defs(tmp_path, "base") == []
