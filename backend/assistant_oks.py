@@ -10,9 +10,12 @@ answer is refused before anything is written (`refusal`, read by the answer rout
 - the OK is delegable: a plain OK (no content bound to it: a send, money, a file or access stays their own click), not
   on their own ask, or a page only they approve (a page several people approve stays their own click);
 - the turn cites their own message in their own Assistant room (backend/assistant.py `instruction`, held for the
-  request in H.DELEGATION; a call turn they spoke counts), at most WORDS_TTL_S old, that names the task (`names`);
-- that message lent no OK on another task: one message, one task;
-- on a page, every version it OKs was attached before they spoke.
+  request in H.DELEGATION; a call turn they spoke counts), unedited when the answer is written, at most WORDS_TTL_S
+  old, that says yes (`says_yes`) to this task and no other (`names`);
+- that message lent no OK before, here or anywhere, even one since undone: one message, one OK
+  (`assistant_ok_uses`, written in the answer's own transaction);
+- on a page, every version it OKs was attached before they spoke, and the decision model passed it (a page Jev was
+  unsure of stays their own look in Tico).
 Everything else an OK checks still applies (backend/answers.py): asked of them, the decision model passed the page,
 the version they were shown. The task's history records the answer via assistant with their words (answers._write).
 """
@@ -40,6 +43,7 @@ WORDS_TTL_S = 15 * 60
 OFF = "Turn on Give OKs for me in Settings → Assistant"
 NEEDS_WORDS = "Tell me in your own words which task to OK"
 PAGE_CHANGED = "The page changed after you said OK: look at it again"
+NOT_PASSED = "The decision model has not passed this page: it needs your own look in Tico"
 OWN_ONLY = "Only you turn Give OKs for me on or off, in Settings → Assistant"
 WORDS_KEPT = 500  # of the person's words, on the history line
 
@@ -49,6 +53,16 @@ _GENERIC = frozenset(
     "so spec page task that the this to up we when with yes you your".split()
 )
 _WORD = re.compile(r"[a-z0-9]+")
+# A yes: "OK", "approve", "go ahead", "sign off", "LGTM". Words that unsay it: a no, a wait, a send back. A question
+# ("Should I OK it?") asks; it says nothing yet.
+_YES = frozenset("ok okay approve approved yes yep lgtm accept accepted agree".split())
+_YES_PAIRS = (("go", "ahead"), ("sign", "off"), ("signed", "off"), ("ship", "it"))
+_NOT = frozenset(
+    "no not nope never don didn doesn isn wasn won shouldn wouldn wait hold stop reject rejected later cancel undo "
+    "back".split()
+)
+# `#3555`, or `E-3555`: an explicit task number in the words.
+_NUMBER = re.compile(r"(?<![\w-])(?:#|([a-z]{1,8})-)(\d+)\b", re.IGNORECASE)
 
 
 def on(conn: "sqlite3.Connection", person: str) -> bool:
@@ -81,24 +95,47 @@ def _words(text: object) -> list[str]:
     return out
 
 
-def names(text: object, task: Row) -> bool:
-    """Whether the person's words name this task: its number (`#3555`, `E-3555`), its id, or at least two of its title's
-    own words and half of them ("the suggestion cards task" for "Hide suggestion cards when typing"); a title of one own
-    word, that word. A bare number or one word of a longer title names nothing for sure."""
+def says_yes(text: object, task: Row) -> bool:
+    """Whether the person's words say yes: a yes word ("OK", "approve", "go ahead"), no word that unsays it ("don't",
+    "wait", "send it back"), and no question. The task's own title words do not count either way ("OK the stop-loss
+    task" is a yes)."""
     said = str(text or "")
-    number = task.get("number")
-    if number:
-        prefix = re.escape(str(task.get("prefix") or ""))
-        pattern = rf"(?<![\w-])(#|{prefix}-){number}\b" if prefix else rf"(?<![\w-])#{number}\b"
-        if re.search(pattern, said, re.IGNORECASE):
-            return True
-    if task.get("id") and str(task["id"]) in said:
-        return True
-    own = {w for w in _words(task.get("title")) if w not in _GENERIC}
+    if "?" in said:
+        return False
+    own = set(_words(task.get("title")))
+    words = [w for w in re.findall(r"[a-z0-9]+", said.casefold()) if w not in own]
+    if any(w in _NOT for w in words):
+        return False
+    pairs = set(zip(words, words[1:], strict=False))
+    return any(w in _YES for w in words) or any(p in pairs for p in _YES_PAIRS)
+
+
+def _title_names(said: str, title: object) -> bool:
+    own = {w for w in _words(title) if w not in _GENERIC}
     if not own:
         return False
     found = own & set(_words(said))
     return len(found) >= min(2, len(own)) and 2 * len(found) >= len(own)
+
+
+def names(text: object, task: Row, others: "list[str] | None" = None) -> bool:
+    """Whether the person's words name this task and no other. A task number in them (`#3555`, `E-3555`) decides:
+    exactly one, and it is this task's. Else its id, or at least two of its title's own words and half of them ("the
+    suggestion cards task" for "Hide suggestion cards when typing"; a title of one own word, that word), when no other
+    open task's title (`others`) fits the same words. A bare number or one word of a longer title names nothing."""
+    said = str(text or "")
+    number, prefix = str(task.get("number") or ""), str(task.get("prefix") or "").casefold()
+    numbers = {(str(p or "").casefold(), n) for p, n in _NUMBER.findall(said)}
+    if numbers:
+        return len({n for _, n in numbers}) == 1 and all(n == number and p in ("", prefix) for p, n in numbers)
+    if task.get("id") and str(task["id"]) in said:
+        return True
+    return _title_names(said, task.get("title")) and not any(_title_names(said, t) for t in others or [])
+
+
+def _other_titles(conn: "sqlite3.Connection", task_id: str) -> list[str]:
+    """The titles of the team's other open tasks: words that fit one of them as well name neither."""
+    return [str(r[0] or "") for r in conn.execute("SELECT title FROM tasks WHERE status='open' AND id<>?", (task_id,))]
 
 
 def _delegable(conn: "sqlite3.Connection", by: str, requirement: Row) -> bool:
@@ -112,17 +149,22 @@ def _delegable(conn: "sqlite3.Connection", by: str, requirement: Row) -> bool:
     return requirement["kind"] == "page" and not R.shared(requirement)
 
 
-def _lent_elsewhere(conn: "sqlite3.Connection", cited: str, task_id: str) -> bool:
-    found = conn.execute(
-        "SELECT 1 FROM history_events WHERE subject_type='task' AND kind='answer' AND new='ok' AND via='assistant' "
-        "AND subject_id<>? AND json_extract(data,'$.delegation.cited.message_id')=? LIMIT 1",
-        (task_id, cited),
-    ).fetchone()
-    return found is not None
+def _used(conn: "sqlite3.Connection", cited: str) -> bool:
+    """Whether these words already lent an OK, anywhere, even one since undone."""
+    return conn.execute("SELECT 1 FROM assistant_ok_uses WHERE message_id=?", (cited,)).fetchone() is not None
 
 
-def _page_since(conn: "sqlite3.Connection", row: Row, requirement: Row, spoken_at: str) -> bool:
-    """Whether a page this OK would approve was attached after the person spoke."""
+def use(conn: "sqlite3.Connection", lent: Row, row: Row, requirement_id: str, answer_id: str) -> None:
+    """The words lent their one OK: written with the answer, in its transaction (the key refuses a second)."""
+    conn.execute(
+        "INSERT INTO assistant_ok_uses (message_id, answer_id, task_id, visit_id, requirement_id, created_at) "
+        "VALUES (?,?,?,?,?,?)",
+        (lent["cited"]["message_id"], answer_id, row["id"], row["visit"]["id"], requirement_id, H.now()),
+    )
+
+
+def _pages(conn: "sqlite3.Connection", row: Row, requirement: Row) -> list[Row]:
+    """The pages an OK of this requirement would approve, as the answer reads them (answers._write)."""
     from . import task_pages as P
     from . import task_requirements as R
 
@@ -131,7 +173,18 @@ def _page_since(conn: "sqlite3.Connection", row: Row, requirement: Row, spoken_a
         page, _ = R.page_for(conn, row, requirement)
         if page:
             pages = P.current_pages(conn, str(page["visit_id"]), str(requirement["id"]))
-    return any(str(p.get("created_at") or "") > spoken_at for p in pages)
+    return pages
+
+
+def _passed(conn: "sqlite3.Connection", page: Row) -> bool:
+    """Whether the decision model passed this exact version against the rubric it was attached with."""
+    if not page.get("rubric_hash"):
+        return False
+    found = conn.execute(
+        "SELECT 1 FROM page_verdicts WHERE file_id=? AND version=? AND rubric_hash=? AND verdict='met' LIMIT 1",
+        (page["file_id"], page["version"], page["rubric_hash"]),
+    ).fetchone()
+    return found is not None
 
 
 def _record() -> Row | None:
@@ -143,12 +196,20 @@ def _record() -> Row | None:
 
 
 def _said(conn: "sqlite3.Connection", cited: str) -> Row | None:
-    """The person's words a delegation cites: their message, or the call turn they spoke (assistant.cited_message)."""
+    """The person's words a delegation cites, read in this transaction: their message as posted (None once edited or
+    deleted, assistant.edited), or the call turn they spoke (assistant.cited_message), which nobody edits."""
     from . import assistant
 
     module: Any = assistant  # its functions are typed loosely
     found: Any = module.cited_message(conn, cited) if cited else None
-    return cast(Row, dict(found)) if found else None
+    if not found:
+        return None
+    said = cast(Row, dict(found))
+    refs: Any = said.get("refs")
+    spoken = isinstance(refs, dict) and bool(cast(Row, refs).get("spoken"))
+    if not spoken and (said.get("deleted_at") or module.edited(conn, said)):
+        return None
+    return said
 
 
 def refusal(conn: "sqlite3.Connection", by: str, row: Row, requirement: Row) -> str | None:
@@ -167,12 +228,17 @@ def refusal(conn: "sqlite3.Connection", by: str, row: Row, requirement: Row) -> 
         not said
         or said.get("sender_id") != by
         or str(said.get("created_at") or "") < H.shift(H.now(), seconds=-WORDS_TTL_S)
-        or not names(said.get("body"), row)
-        or _lent_elsewhere(conn, cited, str(row["id"]))
+        or not says_yes(said.get("body"), row)
+        or not names(said.get("body"), row, _other_titles(conn, str(row["id"])))
+        or _used(conn, cited)
     ):
         return NEEDS_WORDS
-    if requirement["kind"] == "page" and _page_since(conn, row, requirement, str(said["created_at"])):
-        return PAGE_CHANGED
+    if requirement["kind"] == "page":
+        pages = _pages(conn, row, requirement)
+        if any(str(p.get("created_at") or "") > str(said["created_at"]) for p in pages):
+            return PAGE_CHANGED
+        if not pages or not all(_passed(conn, p) for p in pages):
+            return NOT_PASSED
     return None
 
 
@@ -187,6 +253,29 @@ def delegation(conn: "sqlite3.Connection") -> Row | None:
     words = re.sub(r"\s+", " ", str(said.get("body") or "")).strip()[:WORDS_KEPT]
     room = str(said.get("conversation_id") or "") or None
     return {"cited": {"message_id": cited, "conversation_id": room}, "words": words}
+
+
+def shown_delegation(conn: "sqlite3.Connection", auth: Any, who: "Identity", event: Row) -> Row | None:
+    """A history line's delegation as a reader sees it: the person's words (kept on the line, as validated when the
+    answer was written), and `cited` (the message and its chat) only for a reader who may open that chat (auth's
+    conversation check), else null. None on a line their Assistant did not give on their word."""
+    if event.get("via") != "assistant":
+        return None
+    data: Any = H._json(event.get("data"), {})
+    lent: Any = cast(Row, data).get("delegation") if isinstance(data, dict) else None
+    if not isinstance(lent, dict):
+        return None
+    record = cast(Row, lent)
+    cited: Any = record.get("cited")
+    room = str(cast(Row, cited).get("conversation_id") or "") if isinstance(cited, dict) else ""
+    link: Row | None = None
+    if room:
+        try:
+            auth.conversation(conn, who, room)
+            link = {"message_id": str(cast(Row, cited).get("message_id") or ""), "conversation_id": room}
+        except Problem:
+            link = None
+    return {"words": str(record.get("words") or ""), "cited": link}
 
 
 RECEIPT = "assistant_ok"  # the receipt's refs key: {answer_id, task_id, title, stage}

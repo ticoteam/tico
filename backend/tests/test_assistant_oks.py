@@ -189,16 +189,115 @@ def test_a_bots_message_lends_no_ok(api):
     assert not answers(api, rid)
 
 
-def test_one_message_oks_one_task(api):
-    """ "OK both" is not one OK: the message that OK'd one task lends nothing on another, even one it names."""
+@pytest.mark.parametrize("words", ["OK both suggestion cards tasks", "OK #{a} and #{b}"])
+def test_one_message_oks_one_task(api, words):
+    """ "OK both" is not an OK: words that fit two tasks, by number or by title, name neither."""
     first, first_rid = plain_ok(api)
     second, second_rid = plain_ok(api, title="Show suggestion cards on phones")
     gives_oks(api)
-    token, _ = turn(api, "OK both suggestion cards tasks")
-    assert ok(api, token, first, first_rid)[0] == 200
-    status, code, detail, _ = ok(api, token, second, second_rid)
-    assert (status, code, detail) == (403, "ok_not_yours", AO.NEEDS_WORDS)
-    assert not answers(api, second_rid)
+    with api.app.state.store.read() as c:
+        a, b = H.task(c, first)["number"], H.task(c, second)["number"]
+    token, _ = turn(api, words.format(a=a, b=b))
+    for tid, rid in ((first, first_rid), (second, second_rid)):
+        assert ok(api, token, tid, rid)[:3] == (403, "ok_not_yours", AO.NEEDS_WORDS), tid
+    assert not answers(api, first_rid) and not answers(api, second_rid)
+
+
+@pytest.mark.parametrize(
+    "words",
+    [
+        "Don't OK the suggestion cards task yet",
+        "Should I OK the suggestion cards task?",
+        "Send the suggestion cards task back",
+        "What does the suggestion cards task say",
+    ],
+)
+def test_words_that_do_not_say_yes_lend_no_ok(api, words):
+    """Naming the task is not saying yes to it: a no, a question, a send back or no yes at all lends nothing."""
+    tid, rid = plain_ok(api)
+    gives_oks(api)
+    token, _ = turn(api, words)
+    assert ok(api, token, tid, rid)[:3] == (403, "ok_not_yours", AO.NEEDS_WORDS)
+    assert not answers(api, rid)
+
+
+def test_another_tasks_number_wins_over_title_words(api):
+    """ "OK #<other>, the suggestion cards follow-up" points at the other task, whatever this title shares with it."""
+    tid, rid = plain_ok(api)
+    other, _ = plain_ok(api, title="Price the follow-up")
+    gives_oks(api)
+    with api.app.state.store.read() as c:
+        number = H.task(c, other)["number"]
+    token, _ = turn(api, f"OK #{number}, the suggestion cards follow-up")
+    assert ok(api, token, tid, rid)[:3] == (403, "ok_not_yours", AO.NEEDS_WORDS)
+    assert not answers(api, rid)
+
+
+def test_title_words_that_fit_two_open_tasks_name_neither(api):
+    first, first_rid = plain_ok(api)
+    plain_ok(api, title="Hide suggestion cards on phones")
+    gives_oks(api)
+    token, _ = turn(api, "OK the hide suggestion cards task")
+    assert ok(api, token, first, first_rid)[:3] == (403, "ok_not_yours", AO.NEEDS_WORDS)
+    assert not answers(api, first_rid)
+
+
+def test_an_ok_she_undid_is_not_given_again_on_the_same_words(api):
+    """One message lends one OK: after her Undo, the same words lend nothing, on this task or any other."""
+    tid, rid = plain_ok(api)
+    gives_oks(api)
+    token, _ = turn(api)
+    assert ok(api, token, tid, rid)[0] == 200
+    (given,) = answers(api, rid)
+    assert call(api, "POST", f"answers/{given['id']}/undo", "ana-test", {})[0] == 200
+    assert ok(api, token, tid, rid)[:3] == (403, "ok_not_yours", AO.NEEDS_WORDS)
+    assert not answers(api, rid)
+
+
+def test_a_message_edited_before_the_ok_is_written_lends_nothing(api):
+    """The words are read again in the answer's own transaction: an edit since the run was told lends nothing."""
+    tid, rid = plain_ok(api)
+    gives_oks(api)
+    _, cited = turn(api)
+    via = H.VIA.set("assistant")
+    lent = H.DELEGATION.set({"for": "human:ana", "cited": cited, "run": "asked"})
+    try:
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE messages SET edited_at=? WHERE id=?", (H.now(), cited))
+            row = E.task(c, tid)
+            with pytest.raises(H.Refused) as refused:
+                A.answer(c, tid, rid, "human:ana", "ok")
+        assert AO.NEEDS_WORDS in str(refused.value)
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE messages SET edited_at=NULL WHERE id=?", (cited,))
+            assert AO.refusal(c, "human:ana", row, _req(c, rid)) is None
+    finally:
+        H.DELEGATION.reset(lent)
+        H.VIA.reset(via)
+
+
+def _req(c, rid):
+    from backend import task_requirements as R
+
+    return R.get(c, rid)
+
+
+def test_the_history_line_shows_her_words_and_links_her_message_to_whoever_may_read_it(api):
+    tid, rid = plain_ok(api)
+    gives_oks(api)
+    token, cited = turn(api)
+    assert ok(api, token, tid, rid)[0] == 200
+    with api.app.state.store.read() as c:
+        room = c.execute("SELECT conversation_id FROM messages WHERE id=?", (cited,)).fetchone()[0]
+    shown = call(api, "GET", f"tasks/{tid}", "ana-test")[3]
+    (line,) = [e for e in shown["events"] if e.get("field") == "answer"]
+    assert "data" not in line
+    assert line["delegation"] == {"words": WORDS, "cited": {"message_id": cited, "conversation_id": room}}
+    # Someone who may read the task but not her Assistant chat reads her words without the link.
+    status, _, _, other = call(api, "GET", f"tasks/{tid}", "ben-test")
+    assert status == 200
+    (seen,) = [e for e in other["events"] if e.get("field") == "answer"]
+    assert seen["delegation"] == {"words": WORDS, "cited": None}
 
 
 def test_an_ok_bound_to_exact_content_stays_her_own_click(api):
@@ -291,6 +390,16 @@ def test_a_page_jev_has_not_passed_is_refused_as_for_her_own_click(page_case, co
         P.attach(c, row["id"], "Spec page", "page:" + fid, "bot:writer", seen_version=H.task(c, row["id"])["version"])
     with store.transaction() as c, pytest.raises(H.Refused):
         A.answer(c, row["id"], rid, X.ANA, "ok", page_version=f"{fid}@2")
+
+
+def test_a_page_the_decision_model_did_not_pass_stays_her_own_click(page_case):
+    """Attached before she spoke, but Jev was unsure: a person may still OK it in Tico, her Assistant may not."""
+    store, row, rid, fid, _ = page_case
+    with store.transaction() as c:
+        c.execute("UPDATE page_verdicts SET verdict='unsure' WHERE file_id=?", (fid,))
+    with store.transaction() as c, pytest.raises(H.Refused) as refused:
+        A.answer(c, row["id"], rid, X.ANA, "ok", "It meets the check", page_version=f"{fid}@1")
+    assert AO.NOT_PASSED in str(refused.value)
 
 
 def test_without_her_setting_a_page_stays_refused(page_case):

@@ -579,8 +579,28 @@ class TaskDetailTask(TaskFields):
 
 
 @answer
+class AssistantOkCited(TypedDict):
+    """The person's message an Assistant's OK was given on: open its chat at that message."""
+
+    message_id: str
+    conversation_id: str
+
+
+@answer
+class AssistantOkDelegation(TypedDict):
+    """An OK the person's own Assistant gave on their word (backend/assistant_oks.py): the line says "via assistant"."""
+
+    words: str
+    """Their words, as they were when the OK was written"""
+    cited: AssistantOkCited | None
+    """Their message, for a reader who may open that chat; null for anyone else"""
+
+
+@answer
 class TaskDetailEvent(TypedDict):
     source: MessageSource
+    delegation: NotRequired[AssistantOkDelegation]
+    """On an OK the person's Assistant gave on their word: their words and the message they came from"""
 
 
 @answer

@@ -205,12 +205,15 @@ Turn on **Give OKs for me when I tell you to** with `POST /api/v2/assistant/sett
 signed-in session (its switch in Settings > General > Assistant is coming; only your own click changes it, never the
 Assistant, Agent Ops or a personal token) and it gives a
 plain OK on a stage, or a page only you approve, when you tell it to in your own words (backend/assistant_oks.py). The
-server checks your words, not the Assistant: your own message in your own Assistant chat (spoken in a call counts), no
-more than 15 minutes old, naming the task (its number, such as `#3555`, or at least two of its title's own words and
-half of them), and one task per message. A page attached after you spoke, one the decision model has not passed, or a
-version other than the one you were shown is refused, as it would be for your own click. The task's history says
-"via assistant" and quotes your words with the message they came from (`data.delegation`: `words`, and `cited` with
-its `message_id` and `conversation_id`), and your Assistant chat gets a receipt, "OK'd: <title>, <stage>", whose
+server checks your words, not the Assistant, when it writes the OK: your own message in your own Assistant chat
+(spoken in a call counts), unedited, no more than 15 minutes old, saying yes ("OK", "approve", "go ahead"; not a
+question, a "don't", a "wait" or a send back) to one task. A task number (`#3555`) decides which; without one, at least
+two of its title's own words and half of them, when no other open task's title fits them too. Each message gives one
+OK, never again, even after an Undo. On a page, the decision model must have passed every version you would approve,
+attached before you spoke; a page it was unsure of, or a version other than the one you were shown, stays your own
+look. The task's history says "via assistant" with your words, and the message they came from for whoever may open
+that chat (`delegation` on the task read's `events`: `words`, and `cited` with its `message_id` and
+`conversation_id`, null for anyone else), and your Assistant chat gets a receipt, "OK'd: <title>, <stage>", whose
 `refs.assistant_ok` carries the `answer_id` to undo (`POST /api/v2/answers/{id}/undo`), the task, its title and the
 stage. Until the chat shows an Undo button on that receipt, undo it on the task, as for your own OK, while the task's
 `may` for that requirement still lists `undo`. What stays your

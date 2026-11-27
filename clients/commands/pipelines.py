@@ -352,7 +352,14 @@ def _answer(api, args, value, note):
     if note:
         body["note"] = note
     page = entry.get("page") or {}
-    if page.get("file_id") and page.get("version"):
+    approval = entry.get("approval") or {}
+    if approval.get("page_version") or (approval.get("file_id") and approval.get("version")):
+        # A document approval's key: every page submitted, at its version, and the visit it was asked on.
+        key = approval.get("page_version") or f"{approval['file_id']}@{approval['version']}"
+        body["page_version"] = key
+        if approval.get("visit_id"):
+            body["visit_id"] = approval["visit_id"]
+    elif page.get("file_id") and page.get("version"):
         body["page_version"] = f"{page['file_id']}@{page['version']}"  # the OK is for the version you were shown
     path = f"tasks/{task.get('id') or args['id']}/asks/{quote(str(entry['requirement_id']), safe='')}/answer"
     done = api.post(path, body, key=_key(args))

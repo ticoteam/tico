@@ -368,6 +368,7 @@ def _write(
         data["delegation"] = lent
     H._task_event(conn, row["id"], by, "answer", None, value, notes, data=data)
     if lent and value == OK:
+        assistant_oks.use(conn, lent, row, requirement_id, answer_id)
         assistant_oks.receipt(conn, row, answer_id, lent)
     return answer_id
 
