@@ -1299,7 +1299,6 @@ ENTRIES = TEAM_RULES + [
         for source, name in (
             ("webhook", "Webhooks"),
             ("mail", "Mail"),
-            ("idea", "Ideas"),
             ("watcher", "Watchers"),
             ("document", "Documents"),
         )
