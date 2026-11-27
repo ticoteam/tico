@@ -1019,6 +1019,77 @@ async fn no_session_worktree_is_made_under_5_gb_free_but_one_already_made_is_use
 }
 
 #[tokio::test]
+async fn a_low_disk_takes_an_open_tasks_idle_worktree_only_when_nothing_in_it_is_unsaved() {
+    let tmp = Tmp::new();
+    let (bare, _seed) = remote(&tmp.0, "bot-qa");
+    let projects = tmp.0.join("projects");
+    std::fs::create_dir_all(&projects).unwrap();
+    let main = projects.join("bot-qa");
+    sh(
+        &projects,
+        &[
+            "clone",
+            "-q",
+            bare.to_str().unwrap(),
+            main.to_str().unwrap(),
+        ],
+    );
+    std::fs::write(main.join(".gitignore"), "node_modules/\nnotes/\n").unwrap();
+    sh(&main, &["add", ".gitignore"]);
+    sh(&main, &["commit", "-qm", "ignore"]);
+    sh(&main, &["push", "-q", "origin", "HEAD:main"]);
+    let env = turn_env(&tmp.0, &[]);
+    let make = |task: &str| sessions::path_for(&projects, "qa", task);
+    for task in ["clean", "built", "changed", "ahead", "draft"] {
+        assert_eq!(
+            sessions::ensure(&main, &make(task), task, &env)
+                .await
+                .unwrap()
+                .1,
+            ""
+        );
+    }
+    // Pushed and clean, or holding only a build folder: they go, branch and all.
+    std::fs::create_dir_all(make("built").join("node_modules/pkg")).unwrap();
+    std::fs::write(make("built").join("node_modules/pkg/index.js"), "x").unwrap();
+    // A change, a commit no remote has, or a file a turn kept out of Git: they stay.
+    std::fs::write(make("changed").join("AGENT.md"), "# edited\n").unwrap();
+    std::fs::write(make("ahead").join("work.md"), "w\n").unwrap();
+    sh(&make("ahead"), &["add", "work.md"]);
+    sh(&make("ahead"), &["commit", "-qm", "unpushed"]);
+    std::fs::create_dir_all(make("draft").join("notes")).unwrap();
+    std::fs::write(make("draft").join("notes/plan.md"), "half done\n").unwrap();
+    for (task, goes) in [
+        ("clean", true),
+        ("built", true),
+        ("changed", false),
+        ("ahead", false),
+        ("draft", false),
+    ] {
+        assert_eq!(
+            sessions::remove_idle(&main, &make(task), task, &env).await,
+            goes,
+            "{task}"
+        );
+        assert_eq!(make(task).exists(), !goes, "{task}");
+        let branch = sh(
+            &main,
+            &["branch", "--list", &format!("tico-session/{task}")],
+        );
+        assert_eq!(branch.is_empty(), goes, "{task}");
+    }
+    // The next turn on the task makes it again.
+    assert_eq!(
+        sessions::ensure(&main, &make("clean"), "clean", &env)
+            .await
+            .unwrap()
+            .1,
+        ""
+    );
+    assert!(make("clean").join("AGENT.md").is_file());
+}
+
+#[tokio::test]
 async fn an_existing_task_worktree_survives_a_base_checkout_without_an_upstream() {
     let tmp = Tmp::new();
     let (bare, _) = remote(&tmp.0, "bot-ops");

@@ -11,9 +11,12 @@
 //!    no Git checkout;
 //! 4. `git worktree prune` in Tico's base clones, one at a time under the lock fetches take. Never `git gc`: a
 //!    repack of a large clone outlives the runner's Git time limit, leaves partial packs when stopped, and holds
-//!    the clone's lock while other bots' worktree steps wait.
+//!    the clone's lock while other bots' worktree steps wait;
+//! 5. session worktrees (`sessions/bot-<slug>/<task>`) of open tasks whose bot has had no turn in them for a day and
+//!    that hold nothing unsaved, other bots' tasks first (sessions.rs `evict_idle_sessions`): the next turn on the
+//!    task checks one out again.
 //!
-//! Never touched: an open task's folder, a folder the server lists nothing for, package caches in the home folder,
+//! Never touched: an open task's folder under `tasks/`, a folder the server lists nothing for, package caches in the home folder,
 //! a git checkout itself, bot repositories, the runner's state and configuration, credentials, Docker, and
 //! anything on another volume or under a mount point. Nothing is followed through a symlink, and every path is
 //! checked again just before it goes. Each removal is logged with its class and size, and the last run rides on
@@ -58,6 +61,7 @@ pub enum Class {
     Tmp,
     FinishedTaskCache,
     Git,
+    IdleSession,
 }
 
 impl Class {
@@ -66,6 +70,7 @@ impl Class {
             Class::Tmp => "tmp",
             Class::FinishedTaskCache => "finished_task_cache",
             Class::Git => "git",
+            Class::IdleSession => "idle_session_worktree",
         }
     }
 }
@@ -149,6 +154,24 @@ pub fn folder_states(rows: &[Value], busy: impl Fn(&str, &str) -> bool) -> HashM
         folder.paths.push(path);
     }
     out
+}
+
+/// The runner's session worktrees, as the clean-up's last step may take them away (sessions.rs).
+pub trait Sessions: Send + Sync + 'static {
+    /// Remove session worktrees of open tasks idle a day with nothing unsaved, other bots' tasks first, until
+    /// `enough`; each one removed, with the bytes it freed on the workspace volume.
+    fn evict_idle<'a>(
+        &'a self,
+        enough: &'a (dyn Fn() -> bool + Send + Sync),
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<(PathBuf, u64)>> + Send + 'a>>;
+}
+
+/// Bytes removing `path` would free on the volume `workspace` is on; 0 for anything on another volume.
+pub fn size_on(path: &Path, workspace: &Path) -> u64 {
+    match (device(path), real_root(workspace).and_then(|w| device(&w))) {
+        (Some(d), Some(w)) if d == w && !is_symlink(path) => walk(path, w).bytes,
+        _ => 0,
+    }
 }
 
 /// Where the clean-up may look, and what it must leave.
@@ -625,6 +648,7 @@ impl DiskClean {
         client: &Client,
         host: Arc<dyn Host>,
         trees: Arc<Worktrees>,
+        sessions: Option<Arc<dyn Sessions>>,
     ) {
         let Some((total, free_now)) = crate::readiness::disk_usage(workspace) else {
             return;
@@ -646,7 +670,10 @@ impl DiskClean {
         *self.last.lock().unwrap() = Some(Instant::now());
         let (me, workspace, client) = (self.clone(), workspace.to_path_buf(), client.clone());
         *task = Some(tokio::spawn(async move {
-            let report = run(&workspace, keep, &client, host, trees, low, free_now).await;
+            let report = run(
+                &workspace, keep, &client, host, trees, sessions, low, free_now,
+            )
+            .await;
             *me.report.lock().unwrap() = Some(report);
         }));
     }
@@ -701,12 +728,14 @@ pub fn owners_free(owners: &[(String, String)], host: &dyn Host) -> bool {
 }
 
 /// One clean-up; its report.
+#[allow(clippy::too_many_arguments)]
 async fn run(
     workspace: &Path,
     keep: Vec<PathBuf>,
     client: &Client,
     host: Arc<dyn Host>,
     trees: Arc<Worktrees>,
+    sessions: Option<Arc<dyn Sessions>>,
     low: u64,
     before: u64,
 ) -> Value {
@@ -812,6 +841,15 @@ async fn run(
     if free(workspace) < target {
         git_maintenance(workspace, host.repositories(), &env, &mut tally).await;
     }
+    if let Some(sessions) = sessions {
+        idle_sessions(
+            sessions.as_ref(),
+            &|| free(workspace) >= target,
+            &scope,
+            &mut tally,
+        )
+        .await;
+    }
     let after = free(workspace);
     let freed: u64 = tally.classes.values().map(|v| v.1).sum();
     let still_low = after < low;
@@ -826,6 +864,28 @@ async fn run(
         }
     ));
     report(&tally, before, after, low, crate::util::epoch_s())
+}
+
+/// The last step, while the volume is still short of `target` (`enough` false): idle session worktrees of open tasks
+/// (`Sessions`), each logged and counted in the report.
+async fn idle_sessions(
+    sessions: &dyn Sessions,
+    enough: &(dyn Fn() -> bool + Send + Sync),
+    scope: &Scope,
+    tally: &mut Tally,
+) {
+    if enough() {
+        return;
+    }
+    for (path, bytes) in sessions.evict_idle(enough).await {
+        log(&format!(
+            "Tico runner: disk clean-up removed {} {} ({:.1} MB)",
+            Class::IdleSession.name(),
+            label(&path, scope),
+            bytes as f64 / 1e6
+        ));
+        tally.add(Class::IdleSession, bytes);
+    }
 }
 
 /// Tico's own base clones: `repos/<folder>` with a `.git` folder holding Tico's `tico-managed` marker.
@@ -1499,6 +1559,68 @@ mod tests {
         assert_eq!(got[0]["action"], "remove");
         assert_eq!(got[0]["path"], "tasks/done/acme__app");
         assert_eq!(got[0]["owner"], "bot:dev");
+    }
+
+    struct Evicts(Vec<(PathBuf, u64)>, std::sync::atomic::AtomicUsize);
+    impl Sessions for Evicts {
+        fn evict_idle<'a>(
+            &'a self,
+            enough: &'a (dyn Fn() -> bool + Send + Sync),
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<(PathBuf, u64)>> + Send + 'a>>
+        {
+            self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let mut out = vec![];
+            for e in &self.0 {
+                if enough() {
+                    break;
+                }
+                out.push(e.clone());
+            }
+            Box::pin(async move { out })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_disk_still_low_takes_idle_session_worktrees_and_says_so_in_the_report() {
+        let (_g, root) = temp("idle");
+        let scope = Scope {
+            workspace: root.clone(),
+            ..Default::default()
+        };
+        let a = root.join("sessions/bot-qa/t1");
+        let b = root.join("sessions/bot-qa/t2");
+        let sessions = Evicts(
+            vec![(a, 1_750_000_000), (b, 1_750_000_000)],
+            Default::default(),
+        );
+        let mut tally = Tally::default();
+        // Enough free after the first one: the second stays.
+        let taken = std::sync::atomic::AtomicUsize::new(0);
+        let enough = || taken.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 2;
+        idle_sessions(&sessions, &enough, &scope, &mut tally).await;
+        let r = report(&tally, 1, 2, 30, 0.0);
+        assert_eq!(
+            r["classes"],
+            json!([{"kind": "idle_session_worktree", "count": 1, "bytes": 1_750_000_000u64}])
+        );
+        assert_eq!(r["freed_bytes"], 1_750_000_000u64);
+        // A disk already back above the mark asks for none.
+        let none = Evicts(vec![(root.join("x"), 1)], Default::default());
+        let mut untouched = Tally::default();
+        idle_sessions(&none, &|| true, &scope, &mut untouched).await;
+        assert!(untouched.classes.is_empty());
+        assert_eq!(none.1.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_size_counts_only_the_workspace_volume_and_never_follows_a_link() {
+        let (_g, root) = temp("size");
+        file(&root.join("ws/sessions/bot-qa/t1/big.bin"), 8192);
+        std::os::unix::fs::symlink(root.join("ws/sessions/bot-qa/t1"), root.join("ws/link"))
+            .unwrap();
+        assert!(size_on(&root.join("ws/sessions/bot-qa/t1"), &root.join("ws")) >= 8192);
+        assert_eq!(size_on(&root.join("ws/link"), &root.join("ws")), 0);
+        assert_eq!(size_on(&root.join("ws/missing"), &root.join("ws")), 0);
     }
 
     #[test]

@@ -160,7 +160,10 @@ removed to make room: a task that gets no session worktree waits up to two minut
 the bot's own checkout, one turn at a time, and the turn's log says why. A task that already has its worktree keeps
 using it at the limit or on a low disk. A task's worktree goes when the task is finished: at the end of
 that bot's turn, or within about 10 minutes for another bot's copy or one whose files were still uploading. A worktree
-with unsaved changes, or commits that are on no remote, stays until someone saves or discards them.
+with unsaved changes, or commits that are on no remote, stays until someone saves or discards them. On a low disk,
+the computer's own clean-up also takes away an open task's worktree that its bot has had no turn in for 24 hours and
+that holds nothing unsaved, other bots' tasks first; the next turn on the task checks it out again
+([Low disk](worktrees.md#low-disk)).
 Health lists each bot's session worktrees on each computer with their size for administrators, measured about every 30 minutes, and
 warns when one bot holds more than 30 or more than a quarter of the computer's disk; the low-disk warning names the
 bot whose worktrees take the most.

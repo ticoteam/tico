@@ -1748,8 +1748,9 @@ def install(app, store, auth, mutate):
     @app.post('/api/v2/runners/me/session-tasks')
     def session_tasks(request: Request, body: SessionTasks):
         """The status of each task a bot's session checkout on this computer is kept for (runner-rs/src/sessions.rs),
-        so the computer can take away the checkouts of finished tasks between turns. Only a task this computer ran
-        a turn of that bot in that task's lane is answered; any other is left out, and the computer keeps it."""
+        so the computer can take away the checkouts of finished tasks between turns, and idle ones on a low disk. Only
+        a task this computer ran a turn of that bot in that task's lane is answered; any other is left out, and the
+        computer keeps it."""
         who = request.state.identity
         with store.read() as c:
             validate_identity(c, who)
@@ -1780,13 +1781,24 @@ def install(app, store, auth, mutate):
                             }
                         )
                     continue
+                # The owner and when that bot's last turn in the lane ended (a running one: when it started) let a
+                # low disk take away idle worktrees of open tasks, other bots' tasks first (runner-rs/src/disk_clean.rs).
                 row = c.execute(
-                    "SELECT t.status FROM tasks t WHERE t.id=? AND EXISTS (SELECT 1 FROM attempts a "
-                    "WHERE a.runner_id=? AND a.bot_id=? AND a.lane=?)",
-                    (item.task, who.runner_id, item.bot, 'task:' + item.task),
+                    "SELECT t.status, t.owner_id, (SELECT MAX(COALESCE(a.finished_at, a.started_at, a.created_at)) "
+                    "FROM attempts a WHERE a.runner_id=? AND a.bot_id=? AND a.lane=?) AS last_turn_at "
+                    "FROM tasks t WHERE t.id=?",
+                    (who.runner_id, item.bot, 'task:' + item.task, item.task),
                 ).fetchone()
-                if row:
-                    out.append({'bot': item.bot, 'task': item.task, 'status': row['status']})
+                if row and row['last_turn_at']:
+                    out.append(
+                        {
+                            'bot': item.bot,
+                            'task': item.task,
+                            'status': row['status'],
+                            'owner': row['owner_id'] or '',
+                            'last_turn_at': row['last_turn_at'],
+                        }
+                    )
             return {'sessions': out}
 
     @app.get('/api/v2/runners/me/worktrees')
