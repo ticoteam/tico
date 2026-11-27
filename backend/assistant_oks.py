@@ -130,8 +130,9 @@ def names(text: object, task: Row, others: "list[str] | None" = None) -> bool:
     open task's title (`others`) fits the same words. A bare number or one word of a longer title names nothing."""
     said = str(text or "")
     number, prefix = str(task.get("number") or ""), str(task.get("prefix") or "").casefold()
-    numbers = {(str(p or "").casefold(), n) for p, n in _NUMBER.findall(said)}
     ids = set(_ID.findall(said.casefold()))
+    # A whole id is read as an id only: its first groups can look like a prefixed number (`abcdefab-1234`).
+    numbers = {(str(p or "").casefold(), n) for p, n in _NUMBER.findall(_ID.sub(" ", said.casefold()))}
     if numbers or ids:
         # Every number and id in the words points at this task, and at least one does.
         by_number = len({n for _, n in numbers}) == 1 and all(n == number and p in ("", prefix) for p, n in numbers)

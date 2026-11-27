@@ -445,3 +445,9 @@ def test_two_task_ids_name_neither():
     assert AO.names(f"OK {first}", task)
     assert not AO.names(f"OK {first} and {second}", task)
     assert not AO.names(f"OK {first} and #43", task)
+
+
+def test_a_whole_task_id_is_not_read_as_a_task_number():
+    """`abcdefab-1234-…` looks like the number `abcdefab-1234`; inside a whole id it is only the id."""
+    tid = "abcdefab-1234-44d5-a809-bff5bf70b671"
+    assert AO.names(f"OK {tid}", {"id": tid, "number": 42, "prefix": "E", "title": TITLE})
