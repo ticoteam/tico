@@ -1012,6 +1012,7 @@ def usage_result(c: Any, runner_id: str, sid: str, body: "UsageResult") -> Any:
         if not week:
             raise Problem("invalid", "Usage has no current valid week", 422)
         superseded = (sub["credential_at"] or "") > request["requested_at"]
+        top = None  # the read's most-used window, when this answer is the plan's newest
         if not superseded:
             five = _window(body.five_hour, timedelta(hours=6))
             models = [
@@ -1029,7 +1030,7 @@ def usage_result(c: Any, runner_id: str, sid: str, body: "UsageResult") -> Any:
         schedule.update(
             failures=0, read_at=now, next_at=H.shift(now, seconds=USAGE_EVERY + random.randint(0, USAGE_JITTER))
         )
-        if not superseded and request.get("state") == "requested":  # a new read, not a replayed answer
+        if top is not None and request.get("state") == "requested":  # a new read, not a replayed answer
             from . import login_holds
 
             LH: Any = login_holds
