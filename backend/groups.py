@@ -269,10 +269,21 @@ def with_bot_slugs(c, found):
     return found
 
 
-def one(c, roster, gid, can_see=None):
-    configs = _configs(c)
-    row = next(row for row in rows(roster, configs, _archived(c), can_see, True) if row["id"] == gid)
-    return with_bot_slugs(c, [row])[0]
+def seen_rows(c, auth, who):
+    """Every group as this caller may see it: only the bots it may see, without the groups and people hidden from it,
+    with `bot_slugs`. The list answers this, and a change answers its group's row from it."""
+    access = auth.bot_accesses(c, who)
+    roster = _roster(c)
+    found = rows(roster, _configs(c), _archived(c), lambda slug: access.get(slug, auth.FULL)["see"], True)
+    return with_bot_slugs(c, visible_rows(c, auth, who, roster, found))
+
+
+def seen_one(c, auth, who, gid):
+    """The group a caller just changed, as that caller may see it. A group hidden from it answers its id and name
+    only, never its teammates."""
+    group = _roster(c)["org_groups"][gid]
+    hidden = {"id": gid, "name": group["name"], "parent": "", "people": [], "bots": [], "bot_slugs": [], "order": 0}
+    return next((row for row in seen_rows(c, auth, who) if row["id"] == gid), hidden)
 
 
 def _may_change(auth, who):
@@ -475,7 +486,7 @@ def create(c, auth, settings, who, body, via=None):
     H.event(c, who.actor, "group.created", gid, {"name": body.name.strip(), "parent": parent})
     _audit(c, who.actor, before, via)
     leads_follow(c, via or f"group:{gid}")
-    return one(c, _roster(c), gid)
+    return seen_one(c, auth, who, gid)
 
 
 def _kept(gid):
@@ -527,7 +538,7 @@ def update(c, auth, settings, who, gid, body, via=None):
     )
     _audit(c, who.actor, before, via)
     leads_follow(c, via or f"group:{gid}")
-    return one(c, _roster(c), gid)
+    return seen_one(c, auth, who, gid)
 
 
 def delete(c, auth, who, gid):
@@ -795,10 +806,7 @@ def install(app, store, auth, mutate, settings):
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
-            access = auth.bot_accesses(c, who)
-            roster = _roster(c)
-            found = rows(roster, _configs(c), _archived(c), lambda slug: access.get(slug, auth.FULL)["see"], True)
-            return with_bot_slugs(c, visible_rows(c, auth, who, roster, found))
+            return seen_rows(c, auth, who)
 
     @app.post(
         "/api/v2/groups",
