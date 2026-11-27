@@ -34,7 +34,7 @@ from backend import read_deps, threads
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.helpers import engine as X
-from backend.tests.helpers.api import assign, claim, ready, runner, unrelated_task_managers
+from backend.tests.helpers.api import assign, claim, headers, ready, runner, unrelated_task_managers
 from backend.tests.helpers.automation_api import as_bot
 from backend.tests.helpers.page_audience import edit
 from backend.tests.helpers.pages import page
@@ -340,14 +340,26 @@ def test_a_page_attached_in_a_thread_is_removed_by_every_door_for_exactly_the_re
             assert _sql_attachments(api, w, reader) == shown, (reader, "sql")
 
 
+class KnownSqlRefusal(Exception):
+    """The one failure the expected failure below accepts: the query refused whole with tico sql's UDF error."""
+
+
 @pytest.mark.xfail(
     strict=True,
-    raises=AssertionError,  # query's: the status was 422, not 200
+    raises=KnownSqlRefusal,  # only the documented 422: a 200 with a wrong answer fails outright
     reason="tico sql's page check reads meeting_participant_readers on the guarded connection and fails the whole "
     "query for a reader in the page's audience who is no party to its task (here the owner); the follow-up task fixes it",
 )
 def test_the_owner_reads_the_page_comment_through_tico_sql_as_through_every_other_door(api, world):
-    assert _sql_attachments(api, world, "ana") == REMOVED
+    mid = world["messages"]["commented"]
+    r = api.post(
+        "/api/v2/sql", json={"sql": f"SELECT refs FROM messages WHERE id='{mid}'"}, headers=headers(PEOPLE["ana"])
+    )
+    if r.status_code == 422 and "user-defined function raised exception" in r.text:
+        raise KnownSqlRefusal(r.text)
+    assert r.status_code == 200, r.text
+    (row,) = r.json()["rows"]
+    assert _attachments(row[0]) == REMOVED
 
 
 def test_narrowing_a_page_resets_every_reader_s_stream_that_started_before_it(api, world):
