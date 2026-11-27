@@ -144,7 +144,8 @@ flight file, not the database.
 - Never add `flight_*` tables to `hub.db`.
 
 `scripts/landmines.py` enforces the `runner_support/`, Core, `flight_*` and desktop rules (`skills/honest-code/LESSONS.md`
-L35 to L39) and the lifespan, install-closure and router rules (L40 to L42). The new-file rule needs a base: run
+L35 to L39), the lifespan, install-closure and router rules (L40 to L42), and the `backend/hubdb.py` function
+ratchet (L43: a new database helper goes in a `backend/hubdb_<domain>.py` module). The new-file rule needs a base: run
 `python3 scripts/landmines.py --check --base origin/main` (`scripts/lint.sh` passes `LINT_BASE_REF`, as CI does).
 
 ## Conventions

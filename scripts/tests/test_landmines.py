@@ -737,6 +737,7 @@ def test_a_true_lessons_table_passes():
         "L40",
         "L41",
         "L42",
+        "L43",
     )  # the real rules cite rows this one-row table does not have
     assert [p for p in lesson_problems(text) if not any(i in p for i in cited_elsewhere)] == []
 
@@ -766,3 +767,72 @@ def test_a_rule_must_cite_a_lesson_that_exists():
 
 def test_the_real_lessons_file_passes():
     assert landmines.check_lessons() == []
+
+
+HUBDB = "backend/hubdb.py"
+
+
+@pytest.mark.parametrize(
+    ("bad", "good"),
+    [
+        ("def note(conn, note_id):\n    pass\n", "note = hubdb_quiet_notes.note\n"),
+        ("async def fetch(conn):\n    pass\n", "from .hubdb_history import history_event  # noqa: F401\n"),
+        (
+            "@private_task_write\ndef task_run_now(conn):\n    pass\n",
+            "class Refused(Exception):\n    def rule(self): pass\n",
+        ),
+        ("if HAS_JOBS:\n    def jobs(conn):\n        pass\n", "if HAS_JOBS:\n    jobs = _jobs\n"),
+        ("try:\n    import fast\nexcept ImportError:\n    def fast(): pass\n", "HELP = 'def help(): pass'\n"),
+    ],
+)
+def test_no_new_hubdb_def_counts_each_top_level_function_in_hubdb(bad, good):
+    assert hits(HUBDB, bad).get("no-new-hubdb-def") == 1
+    assert "no-new-hubdb-def" not in hits(HUBDB, good)
+
+
+def test_no_new_hubdb_def_skips_nested_functions_and_methods_and_reports_the_def_line():
+    text = (
+        "@decorated\n"
+        "def outer(conn):\n"
+        "    def inner():\n"
+        "        pass\n"
+        "    return inner\n"
+        "\n\n"
+        "class Box:\n"
+        "    def method(self):\n"
+        "        pass\n"
+        "\n\n"
+        "async def late():\n"
+        "    pass\n"
+    )
+    assert landmines.hits_in(HUBDB, text, landmines.RULES)["no-new-hubdb-def"] == [
+        (2, "def outer(conn):"),
+        (13, "async def late():"),
+    ]
+
+
+def test_no_new_hubdb_def_reads_only_hubdb():
+    text = "def helper(conn):\n    pass\n"
+    assert hits(HUBDB, text) == {"no-new-hubdb-def": 1}
+    for path in (
+        "backend/hubdb_quiet_notes.py",
+        "backend/hubdb_core.py",
+        "backend/store.py",
+        "backend/tests/test_hubdb.py",
+    ):
+        assert "no-new-hubdb-def" not in hits(path, text), path
+
+
+def test_a_new_hubdb_def_above_its_baseline_fails_and_names_the_domain_modules():
+    text = "def a(conn):\n    pass\n\n\ndef b(conn):\n    pass\n"
+    found = {HUBDB: landmines.hits_in(HUBDB, text, [landmines.BY_ID["no-new-hubdb-def"]])}
+    problems = landmines.compare(found, {HUBDB: {"no-new-hubdb-def": 1}})
+    assert len(problems) == 1
+    assert "has 2, its baseline allows 1" in problems[0] and f"{HUBDB}:5: def b(conn):" in problems[0]
+    assert "domain module" in problems[0] and "L43" in problems[0]
+
+
+def test_the_real_hubdb_count_equals_its_baseline():
+    text = (landmines.ROOT / HUBDB).read_text(encoding="utf-8")
+    count = len(landmines.hits_in(HUBDB, text, [landmines.BY_ID["no-new-hubdb-def"]])["no-new-hubdb-def"])
+    assert count == landmines.read_baseline()[HUBDB]["no-new-hubdb-def"]

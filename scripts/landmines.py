@@ -28,6 +28,10 @@ Three more hold the lifespan and the routes, read from the syntax tree with each
 no raw asyncio task (its loops are lifespan workers), backend/ adds no install(app, ...) / register*(app, ...) closure
 that adds routes (a ratchet: modules move to api_routing.router()), and only backend/api_routing.py builds an
 APIRouter, subclasses it or calls include_router.
+
+One keeps backend/hubdb.py from growing back: its top-level functions are a ratchet (no-new-hubdb-def), so a new
+database helper goes into a domain module (backend/hubdb_<domain>.py) that hubdb re-exports, and each domain moved out
+lowers the count.
 """
 
 import argparse
@@ -559,6 +563,30 @@ def bare_routers(path, text):
     return sorted(lines)
 
 
+HUBDB = "backend/hubdb.py"
+# Module-level statements whose bodies are still module scope: a def under `if`, `try` or `with` at the top is top-level.
+MODULE_BLOCKS = (ast.If, ast.Try, ast.TryStar, ast.With, ast.AsyncWith, ast.For, ast.AsyncFor, ast.While, ast.Match)
+
+
+def hubdb_defs(path, text):
+    """The def line of each module-level `def` / `async def` in hubdb.py, under a top-level `if`/`try`/`with` too. A
+    method, a nested function and a re-exported name (`from .hubdb_x import f`, `f = mod.f`) are not one."""
+    tree = parsed(text)
+    if tree is None:
+        return []
+    lines, todo = [], list(tree.body)
+    while todo:
+        node = todo.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            lines.append(node.lineno)
+        elif isinstance(node, MODULE_BLOCKS):
+            for name in ("body", "orelse", "finalbody", "handlers", "cases"):
+                todo.extend(getattr(node, name, ()))
+        elif isinstance(node, (ast.ExceptHandler, ast.match_case)):
+            todo.extend(node.body)
+    return sorted(lines)
+
+
 @dataclass
 class Rule:
     id: str
@@ -759,6 +787,18 @@ RULES = [
         "adds one lazy entry that hides its routes from app.routes.",
         "L42",
         find=bare_routers,
+    ),
+    Rule(
+        "no-new-hubdb-def",
+        "ratchet",
+        lambda path: path == HUBDB,
+        [],
+        "backend/hubdb.py gets no new top-level function: put a new database helper in its domain module "
+        "(backend/hubdb_history.py, hubdb_task_rooms.py, hubdb_quiet_notes.py, or a new backend/hubdb_<domain>.py that "
+        "imports nothing from hubdb at load and reaches it through _H()), and re-export it from hubdb.py only when "
+        "callers read it as H.<name>. Moving a function out lowers the count: run --write in the same commit.",
+        "L43",
+        find=hubdb_defs,
     ),
 ]
 BY_ID = {rule.id: rule for rule in RULES}
