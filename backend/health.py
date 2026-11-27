@@ -1191,6 +1191,7 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None, skip=frozens
             if idle and not resting:
                 stuck.append(
                     {**row, "reason": reason, "runner_id": where[0], "runtime": report.get("runtime") or ""}
+                    | _limit(c, settings, where[0], slug, reason, loads)
                     | (
                         {
                             "target": updating[where[0]],
@@ -1203,6 +1204,20 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None, skip=frozens
                     )
                 )
     return waiting, slow, stuck
+
+
+def _limit(c, settings, runner_id, bot, reason, loads=None):
+    """{'payer': {'plan', 'until'}} when the bot waits out a plan's usage limit (its Paid by, or its own login), so its
+    row names the plan and its reset (#3967); else {}."""
+    from . import queue_refusals
+
+    if reason == "payer_wait":
+        payer = queue_refusals.payer_wait(c, settings, runner_id, bot, loads)
+    elif reason == "cooling_off":
+        payer = queue_refusals.login_limit(c, settings, runner_id, bot)
+    else:
+        return {}
+    return {"payer": payer} if payer.get("plan") and payer.get("until") else {}
 
 
 def refused_queues(c, settings, loads=None):
@@ -1317,7 +1332,8 @@ def runtime_choice(c, bot, runtime, who, computers, harness="", model="", *, man
 HELD = {code: (reason.words, reason.fix) for code, reason in wait_reasons.REASONS.items()}
 
 
-TURNS_WAIT_MINUTES = 15
+from .start_places import LATE_MINUTES as TURNS_WAIT_MINUTES  # one number for both
+
 # Waits a person or a date ends on purpose: never a look however long they last (start_places, queue_refusals).
 TURNS_ON_PURPOSE = ("paused", "draining", "company_paused", "task_wait", "on_ice", "draft_wait", "scoped")
 
@@ -1367,17 +1383,30 @@ def _stuck(c, rows, online_ids, who, full, auth=None, loads=None):
             "A bot administrator can assign the bot there."
         )
 
-    def saved_home(bot, reason):
-        """The computer that saved a queued turn's session, by label, for continuation_home; else ""."""
+    def saved_homes(row, reason):
+        """[(runner id, label)] of the computers that saved the bot's queued turns' sessions, for continuation_home:
+        only those other than the computer it waits on, which are what refuse it there (oldest job first)."""
         if reason != "continuation_home":
-            return ""
+            return []
         from .execution import continuation_run
 
-        for job in c.execute("SELECT id FROM jobs WHERE bot_id=? AND state='queued' ORDER BY created_at,id", (bot,)):
+        found = {}
+        for job in c.execute(
+            "SELECT id FROM jobs WHERE bot_id=? AND state='queued' ORDER BY created_at,id", (row["bot"],)
+        ):
             saved = continuation_run(c, job["id"])
-            if saved and (home := one(c, "SELECT label FROM runners WHERE id=?", (saved["runner_id"],))):
-                return home["label"]
-        return ""
+            rid = saved["runner_id"] if saved else None
+            if rid and rid != row.get("runner_id") and rid not in found:
+                if home := one(c, "SELECT label FROM runners WHERE id=?", (rid,)):
+                    found[rid] = home["label"]
+        return list(found.items())[:3]
+
+    def home_fix(homes):
+        """Open <computer> when one computer holds the work, else Settings > Computers."""
+        if len(homes) == 1:
+            rid, label = homes[0]
+            return _fix(*wait_reasons.open_computer(rid, label))
+        return _fix(*COMPUTERS)
 
     computers = _movable(c, who, online_ids) if full else []
     # Each stuck bot's runtime as its config declares it (filled below with the config it reads).
@@ -1505,14 +1534,21 @@ def _stuck(c, rows, online_ids, who, full, auth=None, loads=None):
         elif reason in ("worktree_home", "worktree_conflict"):
             group = next((g for g in row.get("queue_reasons") or () if g["reason"] == reason), {"reason": reason})
             text = worktree_wait(group)
-            fix = _fix(*COMPUTERS)
+            homes = list(group.get("worktree_homes") or ())
+            found = one(c, "SELECT label FROM runners WHERE id=?", (homes[0],)) if len(homes) == 1 else None
+            fix = home_fix([(homes[0], found["label"])]) if found else _fix(*COMPUTERS)
         elif reason == "slow" or not reason:
             text = f"Not started after {QUEUE_MINUTES} min"
             fix = _fix(*RUNS)
         else:
             # Every claim reason has its words (backend/wait_reasons.py); one without them shows its code.
-            text, where = wait_reasons.say(reason, computer=label or "", home=saved_home(row["bot"], reason))
-            fix = _fix(*where)
+            saved = saved_homes(row, reason)
+            text, where = wait_reasons.say(reason, computer=label or "", home=", ".join(name for _, name in saved))
+            if row.get("payer"):
+                from .queue_refusals import limit_words
+
+                text = limit_words(row["payer"]) or text
+            fix = home_fix(saved) if saved else _fix(*where)
         queue_reasons = row.get("queue_reasons") or []
         if len(queue_reasons) > 1 and reason not in ("no_slot", "busy", "updating", "restarting"):
             # Keep one bot row, but never describe all its jobs with the oldest job's hold.
@@ -1526,7 +1562,12 @@ def _stuck(c, rows, online_ids, who, full, auth=None, loads=None):
                 + str(
                     worktree_wait(item)
                     if item.get("worktree_homes")
-                    else words.get(item["reason"]) or wait_reasons.say(item["reason"], computer=label or "")[0]
+                    else words.get(item["reason"])
+                    or wait_reasons.say(
+                        item["reason"],
+                        computer=label or "",
+                        home=", ".join(name for _, name in saved_homes(row, item["reason"])),
+                    )[0]
                 )
                 for item in queue_reasons
             )
@@ -3575,13 +3616,18 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
             # A wait over TURNS_WAIT_MINUTES is a look, not Fine (#3967), with its oldest wait's own fix.
             late = turns_late(computer["turn_counts"])
             where = wait_reasons.say(late["code"])[1] if late and late.get("code") else COMPUTERS
+            if late and late.get("home") and late.get("code") in wait_reasons.HOME_CODES:
+                # One computer holds the checkouts or saved sessions: the fix opens it.
+                found = c.execute("SELECT label FROM runners WHERE id=?", (late["home"],)).fetchone()
+                where = wait_reasons.open_computer(late["home"], found["label"]) if found else where
             checks.append(
                 _check(
                     "turns:" + computer["id"],
                     "Turns",
                     "warn" if late else "ok",
                     computer["label"] + ": " + computer["turn_summary"],
-                    [_fix(*where)] if full else [],
+                    # An agent reading its own Health gets the same fix as an administrator (AC-9).
+                    [_fix(*where)],
                 )
             )
         # Its last boot's load cannot hold a machine that is asleep on purpose.

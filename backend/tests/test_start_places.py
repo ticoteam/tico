@@ -157,10 +157,49 @@ def test_the_turns_line_names_where_a_checkout_is_and_never_says_pre_start_requi
         health = get(api, 'health')
         [turns] = [check for check in health['checks'] if check['id'] == 'turns:' + computer['runner_id']]
         assert turns['status'] == 'warn' and 'checkout is on Shared cloud machine' in turns['summary']
-        assert turns['fixes'][0]['tab'] == 'devices'
+        assert turns['fixes'][0]['label'] == 'Open Shared cloud machine'
     else:
         assert (wait['reason'], wait['code']) == ('(code: unheard_of)', refusal)
         assert '2 waiting (code: unheard_of)' in line
+
+
+def test_work_waiting_over_15_minutes_names_its_checkout_below_the_turns_warning(api, monkeypatch):
+    """#3967 review: below the turns warning level the Turns line asked no claim why, so a checkout on another
+    computer stayed plain "queued" and Fine however long it waited. Work over 15 minutes old is asked: the line names
+    the computer, is a look under Needs a look, and its fix opens that computer, for an agent reading Health too."""
+    from backend import execution, start_places
+    from backend.tests.helpers.credentials import setup
+    from backend.tests.helpers.model_subscriptions import company, machine, on
+
+    setup(api)
+    company(api)
+    computer = machine(api, signed_in=True)
+    shared = runner(api, label='Shared cloud machine')
+    on(api, 'ops', 'claude', 'claude-sonnet-5-5')
+    ready(api, computer, ['ops'])
+    post(api, 'chat/ops', {'text': 'Build it'})
+
+    def refused(c, settings, runner_id, bot, default=None, *, worktree_waits=None, sample=None, **kwargs):
+        for job in c.execute("SELECT * FROM jobs WHERE bot_id=? AND state='queued'", (bot,)).fetchall():
+            if sample is None or job['id'] in sample:
+                worktree_waits[job['id']] = {shared['runner_id']}
+                yield job, 'worktree_home'
+
+    monkeypatch.setattr(execution, 'queued_reasons', refused)
+    monkeypatch.setattr(execution, 'claim_refusal', lambda *args, **kwargs: (None, {}))
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops'", (H.shift(H.now(), minutes=-20),))
+    with store.read_transaction() as c:
+        result = start_places.summary(c, computer['runner_id'], store.settings, classify=False)
+    assert [(w['reason'], w['code'], w['home']) for w in result['waits']] == [
+        ('checkout is on Shared cloud machine', 'worktree_home', shared['runner_id'])
+    ]
+    health = get(api, 'health')
+    [turns] = [check for check in health['checks'] if check['id'] == 'turns:' + computer['runner_id']]
+    assert turns['status'] == 'warn' and 'checkout is on Shared cloud machine' in turns['summary']
+    assert turns['fixes'][0]['label'] == 'Open Shared cloud machine'
+    assert turns['fixes'][0]['href'] == f"#/computers/{shared['runner_id']}/performance"
 
 
 def test_parked_logins_take_no_start_place_so_another_login_starts_and_claims_go_on(api):
@@ -429,6 +468,11 @@ def test_finished_task_stops_a_new_pre_start_wait_before_capacity_returns(api):
     attempt = claim(api, computer)
     aid = attempt['id']
     post(api, f'attempts/{aid}/start-place', {'waiting': 'pre-start requirements'}, computer['token'])
+    from backend import start_places
+
+    with api.app.state.store.read() as c:  # an installed runner's words, said as what they are (#3967)
+        line = start_places.describe(start_places.summary(c, computer['runner_id'], api.app.state.store.settings))
+    assert '1 waiting for its checkout to be prepared' in line and 'pre-start' not in line
     with api.app.state.store.transaction() as c:
         task_engine.move(c, task['id'], task_engine.DONE, 'human:ana', 'Finished by hand')
     assert post(api, f'attempts/{aid}/renew', {}, computer['token'])['stop'] is True

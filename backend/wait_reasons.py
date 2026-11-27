@@ -19,6 +19,13 @@ BILLING: Fix = ("Open Billing", "#/settings", "billing")
 USAGE: Fix = ("Raise limit", "#/usage", "")
 # The agent's model and Paid by choice: a plan at its usage limit is fixed by switching model (or by waiting).
 SWITCH_MODEL: Fix = ("Switch model", "#/settings", "bots")
+# Where a task's checkout or a turn's saved session is: the fix opens that one computer (Settings > Computers).
+HOME_CODES = ("worktree_home", "worktree_conflict", "continuation_home")
+
+
+def open_computer(runner_id: str, label: str) -> Fix:
+    """The fix "Open <computer>", to that computer's own panel in Settings > Computers."""
+    return (f"Open {label}", f"#/computers/{runner_id}/performance", "")
 
 
 class Reason(NamedTuple):

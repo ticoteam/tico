@@ -271,6 +271,7 @@ def test_an_exact_continuation_waits_for_its_computer_and_preserves_the_thread(a
     assert claim(api, other) is None
     [held] = [row for row in get(api, "health")["stuck"] if row["reason"] == "continuation_home"]
     assert "Its saved session is on Test Mac" in held["why"]  # names the computer (#3967)
+    assert held["fix"]["href"] == f"#/computers/{home['runner_id']}/performance"
 
     if retired:
         post(api, f"computers/{home['runner_id']}/revoke", {})
@@ -346,7 +347,11 @@ def test_subtask_prefers_its_own_worktrees_and_reports_split_homes(api, homes):
     assert "Test Mac" in stuck["why"]
     if homes == "split":
         assert "Second computer" in stuck["why"]
-    assert stuck["fix"]["tab"] == "devices"
+        assert stuck["fix"]["tab"] == "devices"
+    else:
+        # One computer holds the checkout: the fix opens that computer (#3967).
+        assert stuck["fix"]["label"] == "Open Test Mac"
+        assert stuck["fix"]["href"] == f"#/computers/{old['runner_id']}/performance"
     if homes == "root":
         # A run already on the same task still holds it when its saved lane differs from the queued job's lane.
         store = api.app.state.store

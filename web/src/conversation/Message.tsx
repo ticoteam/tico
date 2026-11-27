@@ -15,6 +15,7 @@ import { SkeletonRows } from '@/kit/Skeleton';
 import { toast } from '@/kit/Toast';
 import { DidLine } from '@/kit/DidLine';
 import { Link } from '@/kit/Link';
+import { fmtWhen } from '@/lib/format';
 import { newAddressFor } from '@/oldAddress/map';
 import { Dot } from '@/tico/dot';
 import { clock, took } from './dates';
@@ -25,7 +26,8 @@ import { faultHides, ReadFault } from '@/pagekinds';
 import { agentWords, Quote } from './Quote';
 import { isPicture, linkRender, ownFile, richText, Shelf } from './Rich';
 import { fromSlack, proposalQuery, slackPlaceOf, slackThreadQuery, type SlackPlace } from './queries';
-import type { ChatMessage, LiveRun, ReplyQuote, Variant } from './types';
+import type { BotFix, ChatMessage, LiveRun, ReplyQuote, Variant } from './types';
+import { api, type ApiPath } from '@/api/client';
 
 export interface Who {
   name: string;
@@ -483,17 +485,21 @@ const USAGE_LIMIT_CODES = new Set(['payer_wait', 'cooling_off']);
 
 /** Where a reply ends without being one: something stops the agent (`stuck`, what), or its run ended with no reply
     ('none': it finished; 'failed': it stopped). One line, so the person is never left waiting on nothing. */
-export function ReplyLine({ bot, name, variant, why, detail, fix, code }: { bot: string; name?: string; variant: Variant; why: 'none' | 'failed' | 'stuck'; detail?: string; fix?: { label: string; href: string } | null; code?: string | null }) {
+export function ReplyLine({ bot, name, variant, why, detail, fix, code, until }: { bot: string; name?: string; variant: Variant; why: 'none' | 'failed' | 'stuck'; detail?: string; fix?: BotFix | null; code?: string | null; until?: string | null }) {
   // the server's name for it, where this page has not read the agent
   const who = whoOf({ sender_id: bot }, variant, undefined, useActor(bot)?.name ?? (name || undefined));
   const [waiting, setWaiting] = useState(false);
   if (why === 'stuck') {
     if (waiting) return null;
+    // The server writes the reset in UTC for agents; a person reads it in their own time.
+    const local = until ? fmtWhen(until) : '';
+    if (local && detail) detail = detail.replace(/\(resets [^)]*\)/, `(resets ${local})`);
     const line = <DidLine text={detail ? `${who.name} can't reply. ${detail}` : `${who.name} can't reply`} fault status />;
     // The one fix the server names (Switch model, Open Computers...), and Wait for a usage limit: it hides the line.
     const href = fix?.href ? (fix.href.startsWith('#/') ? (newAddressFor(fix.href) ?? fix.href) : fix.href) : null;
     const canWait = !!code && USAGE_LIMIT_CODES.has(code);
-    if (!href && !canWait) return line;
+    const post = fix?.post;
+    if (!href && !canWait && !post) return line;
     return (
       <div className="reply-stuck">
         {line}
@@ -502,6 +508,18 @@ export function ReplyLine({ bot, name, variant, why, detail, fix, code }: { bot:
             <Link className="btn" href={href}>
               {fix.label === 'Fix' ? 'Fix it' : fix.label}
             </Link>
+          )}
+          {post && fix && (
+            <Button
+              onClick={() =>
+                void api.post(post as ApiPath, {}).then(
+                  () => setWaiting(true),
+                  () => toast({ text: `${fix.label} didn't go through`, kind: 'failed' }),
+                )
+              }
+            >
+              {fix.label}
+            </Button>
           )}
           {canWait && (
             <Button variant="quiet" onClick={() => setWaiting(true)}>

@@ -45,7 +45,7 @@ CAPPED = "Waiting: too many bot turns this hour"
 BUSY = "Busy with other work"
 STARTING = "Starting"
 THINKING = "Thinking"
-KEYS = ("actor", "name", "state", "detail", "since", "run_id", "fix", "message_id", "code")
+KEYS = ("actor", "name", "state", "detail", "since", "run_id", "fix", "message_id", "code", "until")
 ENDED = ("replied", "no_reply", "stopped")
 
 _OPEN = (
@@ -414,16 +414,50 @@ def _elsewhere(c, v, bot_id, root_id):
     return BUSY
 
 
+def _refusal_seen(c, v, refusal, root_id):
+    """The bot's recorded refusal as far as viewer `v` may read it. The refusal is the bot's oldest queued job, which
+    can be other, restricted work: where its checkout or saved session is and what its Paid by waits for are said only
+    when that job is in this root or is work the viewer reads. Otherwise only the code and its computer remain."""
+    from . import task_privacy, threads
+
+    if not refusal or not refusal.get("job"):
+        return refusal
+    row = c.execute(
+        "SELECT m.*, t.task_id AS thread_task, COALESCE(t.root_id, t.id) AS thread_root FROM jobs j "
+        "JOIN messages m ON m.id=j.message_id LEFT JOIN conversations t ON t.id=m.conversation_id WHERE j.id=?",
+        (refusal["job"],),
+    ).fetchone()
+    bare = {"reason": refusal.get("reason"), "runner_id": refusal.get("runner_id")}
+    if not row:
+        return bare
+    row = dict(row)
+    if row.get("thread_root") == root_id:
+        return refusal
+    message = {**row, "refs": H._json(row.get("refs"), {}) or {}}
+    task_id = H.message_task_id(message, {"task_id": row.get("thread_task")})
+    try:
+        if task_id:
+            seen = task_privacy.readable(c, task_privacy.actor(v.who), [task_id])
+        else:
+            seen = bool(row.get("thread_root")) and threads.thread_readable(c, v, row["thread_root"])
+    except Exception:  # noqa: BLE001 - work the viewer can't be shown to read is not theirs to see
+        seen = False
+    return refusal if seen else bare
+
+
+def _manages(c, v, bot):
+    """Whether viewer `v` may manage `bot`'s computer (cloud_machines.manage), as Wake now asks."""
+    from .auth import Auth
+
+    try:
+        policy = Auth.read_policy(c)
+        return bool(policy.operator(c, v.who, bot) or policy.bot_manager(c, v.who, bot))
+    except Exception:  # noqa: BLE001 - one who can't be shown to manage the bot gets no button
+        return False
+
+
 def _fix(href, label="Fix"):
     return {"label": label, "href": href} if href else None
-
-
-def _limit_words(payer):
-    """ "It hit its Antigravity usage limit (resets Nov 26 17:40 UTC)" from a refusal's recorded payer, or ""."""
-    from .model_subscriptions import _when
-
-    plan, until = (payer or {}).get("plan"), (payer or {}).get("until")
-    return f"It hit its {plan} usage limit (resets {_when(until)})" if plan and until else ""
 
 
 def _blocked(c, bot, location, refusal):
@@ -431,12 +465,11 @@ def _blocked(c, bot, location, refusal):
     The claim's refusal is read before "asleep": a stopped cloud machine is not woken for work a refusal holds, so the
     refusal is the cause (#3967). Its words and fix come from backend/wait_reasons.py; a code with none shows itself."""
     from . import wait_reasons
-    from .cloud_machines import OUT_OF_CREDIT_WAIT, STALE, resting
+    from .cloud_machines import OUT_OF_CREDIT_WAIT, STALE, WAKE_SPENT, resting
     from .models_preset import LOGIN_NAMES
 
     row = H.bot(c, bot) or {}
     slug = row.get("slug") or bot
-    settings_href = "#/bot/" + slug + "/settings"
     machine = location.get("machine") or {}
     computer = machine.get("runner_id")
     # Settings > Devices lists every computer, with its sign-ins: there is no page for one computer.
@@ -464,6 +497,11 @@ def _blocked(c, bot, location, refusal):
                 return None  # its cloud machine is starting for this turn
             if not reason or reason in STALE or reason in BUSY_REASONS:
                 # Woken for this work: a stale report's refusal is what a wake clears.
+                if cloud.startswith(WAKE_SPENT):
+                    # A wake for this work ran nothing and none comes again by itself: Wake now (status() keeps it
+                    # for those who manage the bot).
+                    wake = {"label": "Wake now", "href": None, "post": f"/api/v2/bots/{bot}/cloud-machine/wake"}
+                    return cloud[0].upper() + cloud[1:], wake, "wake_spent"
                 return cloud[0].upper() + cloud[1:], None, "asleep"
             # Else the refusal below holds the work, and the machine is not woken for it.
         else:
@@ -476,8 +514,10 @@ def _blocked(c, bot, location, refusal):
         return OUT_OF_CREDIT_MODELS, _fix(BILLING), reason
     if reason in ("payer_wait", "cooling_off"):
         # A plan at its usage limit: name it and its reset, with Switch model (the chat adds Wait).
-        words = _limit_words(refusal.get("payer")) or wait_reasons.say(reason)[0]
-        return words, _fix(settings_href, "Switch model"), reason
+        from .queue_refusals import limit_words
+
+        words = limit_words(refusal.get("payer")) or wait_reasons.say(reason)[0]
+        return words, _fix("#/bot/" + slug + "/model", "Switch model"), reason
     if reason in BUDGET_REASONS:
         return OUT_OF_BUDGET, _fix("#/finance", "Open Finance"), reason
     label = machine.get("label") or "its computer"
@@ -487,7 +527,12 @@ def _blocked(c, bot, location, refusal):
         if str(check.get("sign_in") or "") in SIGN_IN_STATES or reason in ("sign_in_rejected", "sign_in_missing"):
             name = LOGIN_NAMES.get(runtime) or str(runtime or "Model").title()
             return f"{name} sign-in needed on {label}", _fix(computer_href, "Open Computers"), reason
-    words, where = wait_reasons.say(reason, computer=label, home=_home(c, refusal))
+    homes = _homes(c, refusal)
+    words, where = wait_reasons.say(reason, computer=label, home=", ".join(name for _, name in homes))
+    if len(homes) == 1:
+        # The checkout or saved session is on one computer: its fix opens that computer.
+        name, href, _ = wait_reasons.open_computer(*homes[0])
+        return words, _fix(href, name), reason
     if where == wait_reasons.COMPUTERS:
         return words, _fix(computer_href, where[0]), reason
     if where == wait_reasons.BOT_SETTINGS:
@@ -495,15 +540,17 @@ def _blocked(c, bot, location, refusal):
     return words, _fix("#/" + "/".join(part for part in where[1:] if part).removeprefix("#/"), where[0]), reason
 
 
-def _home(c, refusal):
-    """The computer that holds a refused task's checkout or a turn's saved session, by label, or ""."""
-    if (refusal or {}).get("reason") not in ("worktree_home", "worktree_conflict", "continuation_home"):
-        return ""
+def _homes(c, refusal):
+    """[(runner id, label)] of the computers that hold a refused task's checkout or a turn's saved session."""
+    from .wait_reasons import HOME_CODES
+
+    if (refusal or {}).get("reason") not in HOME_CODES:
+        return []
     from .execution import continuation_run
 
     job = c.execute("SELECT * FROM jobs WHERE id=?", ((refusal or {}).get("job"),)).fetchone()
     if not job:
-        return ""
+        return []
     homes = set()
     if refusal["reason"] == "continuation_home":
         saved = continuation_run(c, job["id"])
@@ -517,12 +564,11 @@ def _home(c, refusal):
         task_id = work_task_id(message, H.conversation(c, message["conversation_id"])) if message else None
         if task_id:
             homes = worktree_homes(c, job["bot_id"], task_id, task_id, None) or set()
-    names = [
-        found["label"]
+    return [
+        (home, found["label"])
         for home in sorted(homes)[:3]
         if (found := c.execute("SELECT label FROM runners WHERE id=?", (home,)).fetchone())
     ]
-    return ", ".join(names)
 
 
 def _location(c, bot):
@@ -546,6 +592,26 @@ def _location(c, bot):
         "machine": {"runner_id": row["runner_id"], "label": row["label"]},
         "readiness": bot_readiness(readiness_document(row["readiness"]), bot),
     }
+
+
+def own_wait(c, bot, detailed):
+    """What stops the bot's queued work, as its chat line says it: {'detail', 'fix', 'code', 'until'}, or None when it
+    has no queued work or nothing stops it. For `tico bot show` and the bot page (#3967 AC-9). `detailed`: the reader
+    may change the bot, so the plan, the computer holding its work and Wake now are said; else the code and plain
+    words only, as status() says them to one who doesn't read the refused work."""
+    from . import queue_refusals
+
+    if not c.execute("SELECT 1 FROM jobs WHERE bot_id=? AND state='queued' LIMIT 1", (bot,)).fetchone():
+        return None
+    refusal = queue_refusals.state(c, bot) or None
+    if refusal and not detailed:
+        refusal = {"reason": refusal.get("reason"), "runner_id": refusal.get("runner_id")}
+    blocked = _blocked(c, bot, _location(c, bot), refusal)
+    if not blocked:
+        return None
+    detail, fix, code = blocked
+    until = ((refusal or {}).get("payer") or {}).get("until") if code in ("payer_wait", "cooling_off") else None
+    return {"detail": detail, "fix": fix if detailed or code != "wake_spent" else None, "code": code, "until": until}
 
 
 def status(c, v, root):
@@ -580,6 +646,7 @@ def status(c, v, root):
             "run_id": None,
             "fix": None,
             "code": None,
+            "until": None,
         }
         runs, waiting = {}, None
         for w in wakes:  # oldest first: each row names the newest wake it stands for
@@ -603,9 +670,15 @@ def status(c, v, root):
             if waiting["capped"]:
                 waiting.update(state="cant_reply", detail=CAPPED)
             else:
-                blocked = _blocked(c, bot, _location(c, bot), refusals.get(bot))
+                refusal = _refusal_seen(c, v, refusals.get(bot), root_id)
+                blocked = _blocked(c, bot, _location(c, bot), refusal)
                 if blocked:
                     waiting.update(state="cant_reply", detail=blocked[0], fix=blocked[1], code=blocked[2])
+                    if blocked[2] == "wake_spent" and not _manages(c, v, bot):
+                        waiting["fix"] = None
+                    if blocked[2] in ("payer_wait", "cooling_off"):
+                        # The reset, so a person's screen says it in their own time (the detail says it in UTC).
+                        waiting["until"] = ((refusal or {}).get("payer") or {}).get("until")
                 else:
                     busy = BUSY if working else STARTING
                     waiting.update(state="up_next", detail=_elsewhere(c, v, bot, root_id) or busy)

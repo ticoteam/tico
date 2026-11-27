@@ -82,8 +82,17 @@ def current(c, settings, bot, default=None, loads=None):
     return value
 
 
+def limit_words(payer):
+    """ "It hit its Antigravity usage limit (resets Nov 26 17:40 UTC)" from a recorded {'plan', 'until'}, or ""."""
+    from .model_subscriptions import _when
+
+    plan, until = (payer or {}).get('plan'), (payer or {}).get('until')
+    return f'It hit its {plan} usage limit (resets {_when(until)})' if plan and until else ''
+
+
 def login_limit(c, settings, runner_id, bot):
-    """{'plan', 'until'} when the bot's own login waits out its provider's usage limit (login_holds), else {}."""
+    """{'plan', 'until'} when the bot's own login waits out its provider's usage limit (login_holds), else {}: a
+    capacity or payment hold on it is no usage limit."""
     from .model_subscriptions import RUNTIME_LABELS
     from .read_cache import one
     from .shared_bots import follow
@@ -95,7 +104,8 @@ def login_limit(c, settings, runner_id, bot):
     if not login:
         return {}
     hold = login_holds.get(c, *login)
-    if not hold.get('until'):
+    # A busy provider (capacity) says nothing of the plan, and a payment hold ends at a retry, not a reset.
+    if not hold.get('until') or hold.get('capacity') or login_holds.payment(hold.get('error')):
         return {}
     runtime = login[2]
     return {'plan': RUNTIME_LABELS.get(runtime, runtime), 'until': hold['until']}

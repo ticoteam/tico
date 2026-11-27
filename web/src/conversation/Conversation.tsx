@@ -469,7 +469,7 @@ export function Conversation({ id, variant, title, actor, session, from, starter
             );
           if (it.k === 'did') return <DidLine text={it.text} fault={it.fault} />;
           if (it.k === 'live') return <LiveRow r={it.r} variant={variant} text={it.text} />;
-          if (it.k === 'stuck') return <ReplyLine key={`${it.key}:${it.code ?? ''}:${it.detail}`} bot={it.bot} name={it.name} variant={variant} why="stuck" detail={it.detail} fix={it.fix} code={it.code} />;
+          if (it.k === 'stuck') return <ReplyLine key={`${it.key}:${it.code ?? ''}:${it.detail}`} bot={it.bot} name={it.name} variant={variant} why="stuck" detail={it.detail} fix={it.fix} code={it.code} until={it.until} />;
           if (it.k === 'quiet') return <ReplyLine bot={it.bot} variant={variant} why={it.why} />;
           if (it.k === 'reply')
             return myId ? (

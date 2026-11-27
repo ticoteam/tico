@@ -241,3 +241,16 @@ def test_over_mcp_a_required_key_sent_as_null_resets_where_its_schema_allows_nul
     assert half["error"] == "validation" and "expected integer" in half["detail"]
     assert call("tico_computer_turns_at_once", {"computer": "c1", "limit": True})["isError"]
     assert len(api.calls) == sent
+
+
+def test_the_computer_list_names_why_queued_work_waits_with_its_code():
+    """#3967 AC-4: `tico computer list` said nothing of the Turns line, so "checkout is on <computer>" was only on
+    Health. Each computer's summary carries its Turns line and each wait's words and code."""
+    from clients.commands.computers import computer_summary
+
+    wait = {"reason": "checkout is on Shared cloud machine", "count": 23, "code": "worktree_home", "oldest": "x"}
+    row = {"id": "pc_1", "label": "Builder Mac", "turn_counts": {"waits": [wait]}}
+    row["turn_summary"] = "0 running · 0 starting · 23 waiting: checkout is on Shared cloud machine (oldest 2 h)"
+    summary = computer_summary(row)
+    assert summary["turns"] == row["turn_summary"]
+    assert summary["waits"] == [{"words": "checkout is on Shared cloud machine", "count": 23, "code": "worktree_home"}]

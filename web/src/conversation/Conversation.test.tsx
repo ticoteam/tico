@@ -7,6 +7,7 @@ import { upsertMessage, type TimelineData } from '@/live';
 import type * as Live from '@/live';
 import { Composer } from './Composer';
 import { Toasts } from '@/kit/Toast';
+import { fmtWhen } from '@/lib/format';
 import { Conversation } from './Conversation';
 import { Message } from './Message';
 import { showPageName } from '@/tico/pageName';
@@ -781,17 +782,31 @@ describe('an agent answering', () => {
 
   it("names a plan at its usage limit with Switch model and Wait, and Wait hides the line (#3967)", () => {
     show();
-    const limit = 'It hit its Antigravity usage limit (resets Nov 26 17:40 UTC)';
-    waiting(wait('cant_reply', 'm2', { detail: limit, code: 'payer_wait', fix: { label: 'Switch model', href: '#/bot/qa-owner/settings' } }));
+    const until = '2026-11-26T17:40:00+00:00';
+    const sent = 'It hit its Antigravity usage limit (resets Nov 26 17:40 UTC)';
+    waiting(wait('cant_reply', 'm2', { detail: sent, code: 'payer_wait', until, fix: { label: 'Switch model', href: '#/bot/qa-owner/model' } }));
+    // The server's UTC reset reads in the person's own time.
+    const limit = `It hit its Antigravity usage limit (resets ${fmtWhen(until)})`;
     expect(screen.getByText(`QA Owner can't reply. ${limit}`)).toBeTruthy();
+    // Switch model opens the agent's model picker, not its whole settings.
     const fix = screen.getByRole('link', { name: 'Switch model' });
-    expect(fix.getAttribute('href')).not.toContain('#/bot/');
+    expect(fix.getAttribute('href')).toContain('/team/qa-owner?tab=model');
     fireEvent.click(screen.getByRole('button', { name: 'Wait' }));
     expect(screen.queryByText(`QA Owner can't reply. ${limit}`)).toBeNull();
     // Another cause comes back with its own fix, and no Wait: only a usage limit can be sat out.
     waiting(wait('cant_reply', 'm2', { detail: 'Its checkout is on Shared cloud machine', code: 'worktree_home', fix: { label: 'Open Computers', href: '#/settings/computers' } }));
     expect(screen.getByRole('link', { name: 'Open Computers' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Wait' })).toBeNull();
+  });
+
+  it('offers Wake now when a wake ran nothing, and taking it asks the server to wake the machine (#3967)', async () => {
+    serve(() => ({ status: 200, body: { woken: true } }));
+    show();
+    const spent = 'Its cloud machine was woken at 21:40 UTC and ran nothing; it is not woken again for this work';
+    waiting(wait('cant_reply', 'm2', { detail: spent, code: 'wake_spent', fix: { label: 'Wake now', href: null, post: '/api/v2/bots/qa/cloud-machine/wake' } }));
+    fireEvent.click(screen.getByRole('button', { name: 'Wake now' }));
+    await waitFor(() => expect(posts.some((p) => p.url.endsWith('/api/v2/bots/qa/cloud-machine/wake'))).toBe(true));
+    await waitFor(() => expect(screen.queryByText(`QA Owner can't reply. ${spent}`)).toBeNull());
   });
 
   it('counts a reply the agent posted with a tool: no typing comes back while its run goes on', () => {

@@ -874,6 +874,8 @@ def asked_again(c, bot):
     machine = home(c, bot)
     if machine and machine["wake_key"] and machine["state"] not in ON and machine["problem"] in ("", "stuck"):
         save(c, machine["bot"], wake_key=None, problem="", problem_at=None)
+        return True
+    return False
 
 
 def cloud_runners(c, but=None):
@@ -3459,6 +3461,8 @@ PROBLEMS = {
     OFFLINE_RESTARTING: "Restarting",
 }
 ASLEEP = "asleep; starts when work can run"
+# How a stopped machine's wait starts when a wake for this work ran nothing (`waiting`): the chat offers Wake now.
+WAKE_SPENT = "its cloud machine was woken at"
 
 
 def problem_words(problem):
@@ -3530,18 +3534,22 @@ def waiting(c, bot):
             # Woken for this work once and nothing ran: it is not woken for the same work again (`wake_for`), so the
             # words say so rather than promise a start (#3967).
             when = datetime.fromtimestamp(machine["woke_at"], timezone.utc).strftime("%H:%M UTC")
-            return f"its cloud machine was woken at {when} and ran nothing; it is not woken again for this work"
+            return f"{WAKE_SPENT} {when} and ran nothing; it is not woken again for this work"
         return "its cloud machine is " + ASLEEP
     return "starting its cloud machine"
 
 
 def _wake_spent(c, bot, machine):
-    """Whether the machine was woken for one of `bot`'s queued jobs and no turn has started or ended on its computer
-    since: `wake_for` does not wake it for that job again."""
-    if not (machine["wake_key"] and machine["woke_at"]):
+    """Whether `wake_for` will not wake the machine for `bot`'s work again: it is not Always on, it was woken for the
+    bot's current want (`bot_want` keys it to the newest unheld queued job, so newer work is woken for afresh), and no
+    turn has started or ended on its computer since."""
+    if machine["always_on"] or not (machine["wake_key"] and machine["woke_at"]):
         return False
-    queued = [r[0] for r in c.execute("SELECT id FROM jobs WHERE bot_id=? AND state='queued'", (bot,))]
-    if not any(covers(machine["wake_key"], "job:" + job) for job in queued):
+    newest = c.execute(
+        "SELECT id FROM jobs WHERE bot_id=? AND state='queued' AND held=0 ORDER BY created_at DESC,id DESC LIMIT 1",
+        (bot,),
+    ).fetchone()
+    if not newest or not covers(machine["wake_key"], "job:" + newest["id"]):
         return False
     if not machine["runner_id"]:
         return True
@@ -4468,6 +4476,18 @@ def install(app, settings, store, auth, execution, mutate):
             if not (auth.bot_admin(who) or auth.bot_manager(c, who, bot)):
                 raise Problem("forbidden", "You do not manage this bot's computer", 403)
         return remove(service, who, auth, bot, request, mutate)
+
+    @app.post("/api/v2/bots/{bot}/cloud-machine/wake")
+    def cloud_machine_wake(bot: str, request: Request):
+        """Wake now: wake the bot's stopped cloud machine once more for work a wake already ran nothing for (#3967).
+        Those who manage the bot only. `woken` false: there was no spent wake to forget (it is up, or held for
+        another reason the status names)."""
+        who = request.state.identity
+        auth.domain(who)
+        with store.transaction() as c:
+            bot = _known(c, bot)
+            manage(c, auth, who, bot)
+            return {"woken": asked_again(c, bot)}
 
     @app.post("/api/v2/bots/{bot}/cloud-machine/replace")
     def cloud_machine_replace(bot: str, request: Request):
