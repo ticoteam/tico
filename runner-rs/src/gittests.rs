@@ -4526,3 +4526,204 @@ async fn a_checkout_rebuilt_on_a_fresh_disk_starts_from_its_wip_copy_not_the_old
         head
     );
 }
+
+/// A task's worktree as a `git worktree add` stopped mid-checkout leaves it (the runner's git timeout kills the whole
+/// process group): still locked "initializing", no index but its lock, some files not written yet and the one being
+/// written cut short.
+async fn stopped_checkout(tmp: &Path, task: &str) -> (PathBuf, PathBuf, Env) {
+    let (bare, seed) = remote(tmp, "bot-ops");
+    for i in 0..4 {
+        std::fs::write(seed.join(format!("evidence-{i}.txt")), "x".repeat(4096)).unwrap();
+    }
+    sh(&seed, &["add", "-A"]);
+    sh(&seed, &["commit", "-qm", "evidence"]);
+    sh(&seed, &["push", "-q", "origin", "HEAD:main"]);
+    let projects = tmp.join("projects");
+    std::fs::create_dir_all(&projects).unwrap();
+    let main = projects.join("bot-ops");
+    sh(
+        &projects,
+        &[
+            "clone",
+            "-q",
+            bare.to_str().unwrap(),
+            main.to_str().unwrap(),
+        ],
+    );
+    let env = turn_env(tmp, &[]);
+    let session = sessions::path_for(&projects, "ops", task);
+    assert_eq!(
+        sessions::ensure(&main, &session, task, &env)
+            .await
+            .unwrap()
+            .1,
+        ""
+    );
+    let admin = PathBuf::from(sh(&session, &["rev-parse", "--absolute-git-dir"]));
+    std::fs::write(admin.join("locked"), "initializing").unwrap();
+    std::fs::remove_file(admin.join("index")).unwrap();
+    std::fs::write(admin.join("index.lock"), "").unwrap();
+    std::fs::remove_file(session.join("evidence-3.txt")).unwrap();
+    std::fs::remove_file(session.join("evidence-2.txt")).unwrap();
+    std::fs::write(session.join("evidence-1.txt"), "x".repeat(1000)).unwrap();
+    (main, session, env)
+}
+
+#[tokio::test]
+async fn a_task_worktree_whose_checkout_was_stopped_is_made_again_for_its_next_turn() {
+    let tmp = Tmp::new();
+    let (main, session, env) = stopped_checkout(&tmp.0, "t1").await;
+
+    let (tracked, problem) = sessions::ensure(&main, &session, "t1", &env).await.unwrap();
+    assert_eq!((tracked.as_str(), problem.as_str()), ("origin/main", ""));
+    assert_eq!(
+        sh(&session, &["status", "--porcelain"]),
+        "",
+        "a whole checkout"
+    );
+    assert_eq!(
+        std::fs::read_to_string(session.join("evidence-1.txt")).unwrap(),
+        "x".repeat(4096)
+    );
+    assert!(!sh(&main, &["worktree", "list", "--porcelain"]).contains("locked"));
+}
+
+#[tokio::test]
+async fn a_stopped_checkout_holding_anything_else_is_left_as_it_is() {
+    let tmp = Tmp::new();
+    let (main, session, env) = stopped_checkout(&tmp.0, "t1").await;
+    // A turn an older runner ran in the half-made checkout wrote a note there.
+    std::fs::write(session.join("notes.md"), "unsaved\n").unwrap();
+
+    let problem = sessions::ensure(&main, &session, "t1", &env)
+        .await
+        .unwrap()
+        .1;
+    assert!(problem.contains("never finished"), "{problem}");
+    assert!(!sessions::remove(&main, &session, "t1", &env).await);
+    assert_eq!(
+        std::fs::read_to_string(session.join("notes.md")).unwrap(),
+        "unsaved\n"
+    );
+
+    // An edit to a file of the commit is kept the same way, cut short or not.
+    let tmp = Tmp::new();
+    let (main, session, env) = stopped_checkout(&tmp.0, "t2").await;
+    std::fs::write(session.join("evidence-0.txt"), "y".repeat(10)).unwrap();
+    assert!(!sessions::remove(&main, &session, "t2", &env).await);
+    assert!(session.join("evidence-0.txt").is_file());
+}
+
+#[tokio::test]
+async fn a_finished_tasks_stopped_checkout_is_removed_with_its_branch() {
+    let tmp = Tmp::new();
+    let (main, session, env) = stopped_checkout(&tmp.0, "t1").await;
+
+    assert!(sessions::remove(&main, &session, "t1", &env).await);
+    assert!(!session.exists());
+    assert_eq!(sh(&main, &["branch", "--list", "tico-session/t1"]), "");
+    assert_eq!(
+        sh(&main, &["worktree", "list", "--porcelain"])
+            .matches("worktree ")
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn a_whole_checkout_left_locked_initializing_is_unlocked_and_removed_when_finished() {
+    let tmp = Tmp::new();
+    let (bare, _seed) = remote(&tmp.0, "bot-ops");
+    let projects = tmp.0.join("projects");
+    std::fs::create_dir_all(&projects).unwrap();
+    let main = projects.join("bot-ops");
+    sh(
+        &projects,
+        &[
+            "clone",
+            "-q",
+            bare.to_str().unwrap(),
+            main.to_str().unwrap(),
+        ],
+    );
+    let env = turn_env(&tmp.0, &[]);
+    let session = sessions::path_for(&projects, "ops", "t1");
+    sessions::ensure(&main, &session, "t1", &env).await.unwrap();
+    // Git wrote the whole checkout and was stopped before it dropped its lock.
+    let admin = PathBuf::from(sh(&session, &["rev-parse", "--absolute-git-dir"]));
+    std::fs::write(admin.join("locked"), "initializing").unwrap();
+
+    assert_eq!(
+        sessions::ensure(&main, &session, "t1", &env)
+            .await
+            .unwrap()
+            .1,
+        ""
+    );
+    assert!(
+        !admin.join("locked").exists(),
+        "a turn's checkout carries no stale lock"
+    );
+    std::fs::write(admin.join("locked"), "initializing").unwrap();
+    assert!(sessions::remove(&main, &session, "t1", &env).await);
+    assert!(!session.exists());
+    // A lock a person set for another reason is kept.
+    sessions::ensure(&main, &session, "t1", &env).await.unwrap();
+    sh(
+        &main,
+        &[
+            "worktree",
+            "lock",
+            "--reason",
+            "keep for review",
+            session.to_str().unwrap(),
+        ],
+    );
+    assert!(!sessions::remove(&main, &session, "t1", &env).await);
+    assert!(session.exists());
+}
+
+#[tokio::test]
+async fn a_worktree_add_that_runs_out_of_time_leaves_no_locked_checkout_behind() {
+    let tmp = Tmp::new();
+    let (bare, seed) = remote(&tmp.0, "bot-ops");
+    // Each file of the commit takes far longer to write than the add is given.
+    std::fs::write(seed.join(".gitattributes"), "*.bin filter=slow\n").unwrap();
+    std::fs::write(seed.join("a.bin"), "evidence\n").unwrap();
+    std::fs::write(seed.join("b.bin"), "evidence\n").unwrap();
+    sh(&seed, &["add", "-A"]);
+    sh(&seed, &["commit", "-qm", "slow files"]);
+    sh(&seed, &["push", "-q", "origin", "HEAD:main"]);
+    let projects = tmp.0.join("projects");
+    std::fs::create_dir_all(&projects).unwrap();
+    let main = projects.join("bot-ops");
+    sh(
+        &projects,
+        &[
+            "clone",
+            "-q",
+            bare.to_str().unwrap(),
+            main.to_str().unwrap(),
+        ],
+    );
+    sh(&main, &["config", "filter.slow.smudge", "sleep 5; cat"]);
+    sh(&main, &["config", "filter.slow.clean", "cat"]);
+    let env = turn_env(&tmp.0, &[]);
+    let session = sessions::path_for(&projects, "ops", "t1");
+
+    sessions::ADD_TIMEOUT_S.with(|v| v.set(Some(2)));
+    let problem = sessions::ensure(&main, &session, "t1", &env)
+        .await
+        .unwrap()
+        .1;
+    sessions::ADD_TIMEOUT_S.with(|v| v.set(None));
+    assert_eq!(problem, "TimeoutExpired");
+    assert!(!session.exists(), "the half-written checkout went");
+    assert_eq!(
+        sh(&main, &["worktree", "list", "--porcelain"])
+            .matches("worktree ")
+            .count(),
+        1
+    );
+    assert_eq!(sh(&main, &["branch", "--list", "tico-session/t1"]), "");
+}

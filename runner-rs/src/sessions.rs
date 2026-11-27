@@ -51,6 +51,7 @@ const WORKTREE_RETRY_S: u64 = 10;
 #[cfg(test)]
 thread_local! {
     pub(crate) static WORKTREE_WAIT: std::cell::Cell<Option<(Duration, Duration)>> = const { std::cell::Cell::new(None) };
+    pub(crate) static ADD_TIMEOUT_S: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
 }
 
 fn slug_ok(name: &str) -> bool {
@@ -565,6 +566,145 @@ async fn upstream_or_none(path: &Path, env: &Env) -> Result<String, Fault> {
 
 /// Make or reuse the task's worktree: (upstream ref, problem). A path refusal stops the turn; other problems
 /// let it run in the main checkout.
+/// The lock `git worktree add` holds on a new worktree until its checkout is written. An add stopped before then (the
+/// runner's git timeout kills its whole process group, or the computer stops) leaves it for good, and Git refuses to
+/// remove a locked worktree.
+const CREATING: &str = "initializing";
+/// What a task's turn says of a worktree an add never finished that holds something a remote lacks.
+const UNFINISHED: &str =
+    "was left by a checkout that never finished and holds changes; left as it is";
+const ADD_S: u64 = 60;
+
+fn add_timeout() -> u64 {
+    #[cfg(test)]
+    if let Some(s) = ADD_TIMEOUT_S.with(|v| v.get()) {
+        return s;
+    }
+    ADD_S
+}
+
+/// Whether a worktree's `git worktree add` finished.
+#[derive(Debug, PartialEq)]
+enum Creation {
+    /// It did, or Git wrote the whole checkout and only its lock was left (now dropped).
+    Done,
+    /// It did not, and the worktree holds nothing beyond its commit, which a remote has: files of the commit not
+    /// written yet, and at most one cut short where Git was stopped.
+    Empty,
+    /// It did not, and the worktree holds something else (an older runner gave such a worktree to turns).
+    Holds,
+}
+
+async fn creation(path: &Path, env: &Env) -> Result<Creation, Fault> {
+    let asked = g(path, env, &["rev-parse", "--absolute-git-dir"], 15).await?;
+    if !asked.ok() {
+        return Ok(Creation::Done);
+    }
+    let admin = PathBuf::from(asked.stdout.trim());
+    let locked = std::fs::read_to_string(admin.join("locked")).unwrap_or_default();
+    if locked.trim() != CREATING {
+        return Ok(Creation::Done);
+    }
+    if admin.join("index").exists() {
+        // The checkout and its index were written; Git was stopped before it dropped its lock.
+        g(path, env, &["worktree", "unlock", "."], 15).await?;
+        return Ok(Creation::Done);
+    }
+    let ahead = g(
+        path,
+        env,
+        &["rev-list", "--count", "HEAD", "--not", "--remotes"],
+        15,
+    )
+    .await?;
+    if !ahead.ok() || ahead.stdout.trim() != "0" {
+        return Ok(Creation::Holds);
+    }
+    let tree = g(
+        path,
+        env,
+        &["ls-tree", "-r", "-z", "--full-tree", "HEAD"],
+        60,
+    )
+    .await?;
+    if !tree.ok() {
+        return Ok(Creation::Holds);
+    }
+    let mut blobs: HashMap<&[u8], &str> = HashMap::new();
+    for entry in tree.raw.split(|b| *b == 0).filter(|e| !e.is_empty()) {
+        let Some(tab) = entry.iter().position(|b| *b == b'\t') else {
+            return Ok(Creation::Holds);
+        };
+        let head = std::str::from_utf8(&entry[..tab]).unwrap_or_default();
+        let mut fields = head.split(' ');
+        if let (Some("100644" | "100755"), Some("blob"), Some(id)) =
+            (fields.next(), fields.next(), fields.next())
+        {
+            blobs.insert(&entry[tab + 1..], id);
+        }
+    }
+    // Without an index every file on disk is untracked, ignored ones included.
+    let others = g(path, env, &["ls-files", "-z", "--others"], 60).await?;
+    if !others.ok() {
+        return Ok(Creation::Holds);
+    }
+    let mut written: Vec<(&str, &str)> = vec![];
+    for name in others.raw.split(|b| *b == 0).filter(|n| !n.is_empty()) {
+        match (std::str::from_utf8(name), blobs.get(name)) {
+            (Ok(name), Some(id)) => written.push((name, id)),
+            _ => return Ok(Creation::Holds),
+        }
+    }
+    let mut differ: Vec<(&str, &str)> = vec![];
+    for chunk in written.chunks(200) {
+        let mut args = vec!["hash-object", "--"];
+        args.extend(chunk.iter().map(|(name, _)| *name));
+        let hashed = g(path, env, &args, 120).await?;
+        let ids: Vec<&str> = hashed.stdout.lines().collect();
+        if !hashed.ok() || ids.len() != chunk.len() {
+            return Ok(Creation::Holds);
+        }
+        differ.extend(
+            chunk
+                .iter()
+                .zip(ids)
+                .filter(|((_, id), on_disk)| id != on_disk)
+                .map(|(c, _)| *c),
+        );
+    }
+    match differ.as_slice() {
+        [] => Ok(Creation::Empty),
+        [(name, id)] => {
+            // Git writes one file at a time: the one it was writing may be a start of the commit's file.
+            let blob = g(path, env, &["cat-file", "blob", id], 60).await?;
+            let on_disk = std::fs::read(path.join(name)).unwrap_or_default();
+            if blob.ok() && on_disk.len() < blob.raw.len() && blob.raw.starts_with(&on_disk) {
+                Ok(Creation::Empty)
+            } else {
+                Ok(Creation::Holds)
+            }
+        }
+        _ => Ok(Creation::Holds),
+    }
+}
+
+/// Remove a worktree an add never finished, lock and all, and the task's branch when given. Only for a worktree no
+/// turn has had or one `creation` found Empty: the branch then holds nothing a remote lacks.
+async fn drop_unmade(main: &Path, path: &Path, branch: Option<&str>, env: &Env) {
+    let p = path.display().to_string();
+    let _ = g(
+        main,
+        env,
+        &["worktree", "remove", "--force", "--force", &p],
+        60,
+    )
+    .await;
+    let _ = g(main, env, &["worktree", "prune"], 15).await;
+    if let Some(branch) = branch {
+        let _ = g(main, env, &["branch", "-D", branch], 15).await;
+    }
+}
+
 pub async fn ensure(
     main: &Path,
     path: &Path,
@@ -642,9 +782,20 @@ pub async fn ensure(
                     ),
                 ));
             }
-            crate::isolation::adopt(&[path.to_path_buf()]);
-            let tracked = upstream_or_none(path, &env).await?;
-            return Ok((tracked, String::new()));
+            match creation(path, &env).await? {
+                Creation::Done => {
+                    crate::isolation::adopt(&[path.to_path_buf()]);
+                    let tracked = upstream_or_none(path, &env).await?;
+                    return Ok((tracked, String::new()));
+                }
+                Creation::Holds => {
+                    return Ok((String::new(), format!("{} {UNFINISHED}", path.display())));
+                }
+                // Nothing in it a remote lacks: made again below, as if it had never been started.
+                Creation::Empty => {
+                    drop_unmade(main, path, Some(&format!("{BRANCH}{task}")), &env).await;
+                }
+            }
         }
 
         let tracked = if private {
@@ -717,7 +868,13 @@ pub async fn ensure(
         } else {
             vec!["worktree", "add", "--quiet", "-b", &branch, &p, &tracked]
         };
-        let added = g(main, &env, &args, 60).await?;
+        let added = g(main, &env, &args, add_timeout()).await;
+        if !added.as_ref().is_ok_and(Out::ok) {
+            // A stopped add leaves its half-written checkout locked "initializing", which no cleanup removes and the
+            // next turn would take for a checkout. No turn has had it, so it goes now (a failed add's branch with it).
+            drop_unmade(main, path, (!exists).then_some(branch.as_str()), &env).await;
+        }
+        let added = added?;
         if !added.ok() {
             let last = added
                 .stderr
@@ -955,6 +1112,15 @@ pub async fn remove(main: &Path, path: &Path, task: &str, turn: &Env) -> bool {
         return true;
     }
     let gone: Result<bool, Fault> = async {
+        match creation(path, &env).await? {
+            Creation::Holds => return Ok(false),
+            Creation::Empty => {
+                let branch = format!("{BRANCH}{task}");
+                drop_unmade(main, path, Some(&branch), &env).await;
+                return Ok(!path.exists());
+            }
+            Creation::Done => {}
+        }
         if !g(path, &env, &["status", "--porcelain"], 15)
             .await?
             .stdout
