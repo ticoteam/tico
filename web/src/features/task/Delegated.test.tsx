@@ -31,7 +31,7 @@ beforeEach(() => queryClient.setQueryData(['directory'], { actors: [CHRIS], byId
 afterEach(() => queryClient.clear());
 
 /** The line on a page of its own, beside the thread page a link may open; Tico's sheet is the shell's. */
-function show(events: HistoryEvent[]) {
+function show(events: HistoryEvent[], at = '/') {
   const root = createRootRoute({
     component: () => (
       <>
@@ -42,7 +42,7 @@ function show(events: HistoryEvent[]) {
   });
   const task = createRoute({ getParentRoute: () => root, path: '/', component: () => <DelegatedOks events={events} /> });
   const thread = createRoute({ getParentRoute: () => root, path: '/threads/$thread', component: () => <p>The thread</p> });
-  const router = createRouter({ routeTree: root.addChildren([task, thread]), history: createMemoryHistory({ initialEntries: ['/'] }) });
+  const router = createRouter({ routeTree: root.addChildren([task, thread]), history: createMemoryHistory({ initialEntries: [at] }) });
   const r = render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
@@ -83,6 +83,24 @@ describe("the history line of an OK the person's Assistant gave", () => {
   it('says via Agent Ops when Agent Ops gave the OK on his word', async () => {
     show([{ ...okVia(null), via: 'botops' }]);
     expect(await screen.findByText("Chris OK'd · via Agent Ops")).toBeTruthy();
+  });
+
+  it('is laid out as a Details line: its mark first, then the words', async () => {
+    const { container } = show([okVia(null)]);
+    await screen.findByText(/“OK the spec for the suggestion cards task”/);
+    const line = container.querySelector('.dt-line');
+    expect(line?.firstElementChild?.classList.contains('dt-mark')).toBe(true);
+    expect(line?.children[1]?.classList.contains('dt-text')).toBe(true);
+  });
+
+  it('closes the task open over the page, so his Assistant room in its sheet is seen', async () => {
+    queryClient.setQueryData(ticoRoomQuery.queryKey, 'room-chris');
+    const { router } = show([okVia({ message_id: 'm9', conversation_id: 'room-chris' })], '/?task=t1');
+    listen('room-chris');
+    fireEvent.click(await screen.findByRole('button', { name: 'Open message' }));
+    await waitFor(() => expect(jumps).toEqual(['room-chris m9']));
+    await waitFor(() => expect((router.state.location.search as { task?: string }).task).toBeUndefined());
+    expect(router.state.location.pathname).toBe('/');
   });
 
   it('marks an OK he took back', async () => {

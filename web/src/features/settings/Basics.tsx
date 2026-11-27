@@ -112,6 +112,7 @@ function AssistantOks() {
       <Facts label="Assistant">
         <SwitchLine
           label="Give OKs for me when I tell you to"
+          wrap
           checked={oks.data.gives_oks}
           disabled={!oks.data.may_change || saving}
           onChange={change}

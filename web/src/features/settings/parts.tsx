@@ -77,15 +77,18 @@ export function SwitchLine({
   onChange,
   target,
   disabled,
+  wrap,
 }: {
   label: string;
   checked: boolean;
   onChange: (on: boolean) => void;
   target?: string;
   disabled?: boolean;
+  /** A label longer than the label column wraps instead of being cut: its words are the setting. */
+  wrap?: boolean;
 }) {
   return (
-    <div className="fact set-sw" data-target={target}>
+    <div className={wrap ? 'fact set-sw is-wrap' : 'fact set-sw'} data-target={target}>
       <Switch label={<span>{label}</span>} checked={checked} onCheckedChange={onChange} disabled={disabled} />
     </div>
   );
