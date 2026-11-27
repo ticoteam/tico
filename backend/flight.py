@@ -1372,6 +1372,26 @@ def _seed(target, hub_path, now=None, timeout=30.0):
     return copied
 
 
+def keep_before_drop(conn):
+    """Before the drop migration takes the seven old tables out of the server's database `conn`: a server that never
+    made its flight file (an update straight from a release before it) gets one now, seeded from those tables
+    (`_seed`), so the release comparison keeps the hour before the update and Health every start. Nothing when the file
+    is there (it was seeded when it was made), the database is in memory, or the old tables hold no row. A file that
+    cannot be made is logged and the drop goes on: the file is disposable, and a boot never waits on it."""
+    row = conn.execute("PRAGMA database_list").fetchone()
+    hub_path = row[2] if row else ""
+    target = path(hub_path)
+    if target is None or target.exists():
+        return
+    present = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if not any(conn.execute(f"SELECT EXISTS(SELECT 1 FROM {t})").fetchone()[0] for t in TABLES if t in present):
+        return
+    try:
+        _ensure(target, Path(hub_path))
+    except (OSError, sqlite3.Error) as exc:
+        LOG.warning("Flight database not seeded before the drop, its history is lost: %s", type(exc).__name__)
+
+
 def connect(db_path, timeout=DB_WAIT):
     """A connection of its own (autocommit, rows by name) to the flight database beside the server's database
     `db_path`, made and brought to SCHEMA_VERSION first. It never makes the file itself (`mode=rw`), so a file

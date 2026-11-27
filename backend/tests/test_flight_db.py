@@ -546,6 +546,72 @@ def test_an_upgraded_server_database_drops_its_old_flight_tables_and_keeps_the_p
     assert hub_flight_tables(store.settings.db_path) == set()
 
 
+def old_server_database(store, monkeypatch):
+    """The store's database as a release before the flight file left it: the drop migration not run, the seven tables
+    in it with recent rows, and no hub.flight.db beside it."""
+    monkeypatch.setattr(flight, "_now", lambda: NOW)
+    version = next(m for m in migrations.files() if m.version.endswith("_drop_hub_flight_tables")).version
+    with closing(sqlite3.connect(store.settings.db_path, isolation_level=None)) as c:
+        make_old_hub_tables(c)
+        c.execute(
+            "INSERT INTO flight_requests VALUES(?,60,'GET /api/v2/tasks','human',3,0,30,30.0,10,10,10,'{}')",
+            (NOW - 600,),
+        )
+        c.execute(
+            "INSERT INTO flight_events(created_at,kind,detail) VALUES(?,'start','{\"version\":\"0.6.0\"}')",
+            (NOW - 86400,),
+        )
+        c.execute("DELETE FROM schema_migrations WHERE version=?", (version,))
+    flight._READY.clear()
+    return flight.path(store.settings.db_path)
+
+
+def test_an_upgrade_from_before_the_flight_file_moves_the_history_into_it_before_the_drop(store, monkeypatch):
+    """A company updating straight from a release before hub.flight.db: the boot's drop migration first makes the file
+    from the old tables (the release comparison's last hour, every start), then takes them out of hub.sqlite."""
+    target = old_server_database(store, monkeypatch)
+    assert not target.exists()
+
+    Store(Settings(db_path=store.settings.db_path, registry_dir=store.settings.registry_dir)).initialize(
+        seed_market=False
+    )
+
+    assert hub_flight_tables(store.settings.db_path) == set()
+    with flight.tables(store) as c:
+        assert [r[0] for r in c.execute("SELECT created_at FROM flight_requests")] == [NOW - 600]
+        assert [r[0] for r in c.execute("SELECT kind FROM flight_events ORDER BY id")] == ["start", "seeded"]
+    assert stat.S_IMODE(os.stat(target).st_mode) == 0o600
+
+
+def test_an_existing_flight_file_is_left_as_it_is_by_the_drop(store, monkeypatch):
+    target = old_server_database(store, monkeypatch)
+    flight.record_event(store, "note", {})  # this server already writes its own file (seeded once, when it made it)
+    with flight.tables(store) as c:
+        before = c.execute("SELECT * FROM flight_events ORDER BY id").fetchall()
+    flight._READY.clear()
+
+    with closing(sqlite3.connect(store.settings.db_path, isolation_level=None)) as c:
+        migrations.apply(c)
+
+    with flight.tables(store) as c:
+        assert c.execute("SELECT * FROM flight_events ORDER BY id").fetchall() == before  # not seeded a second time
+    assert hub_flight_tables(store.settings.db_path) == set() and target.exists()
+
+
+def test_a_flight_file_that_cannot_be_made_never_stops_the_drop(store, monkeypatch):
+    """The file is disposable: a folder that cannot take it loses the old history, logged, and the server still boots."""
+    old_server_database(store, monkeypatch)
+    warned = []
+    monkeypatch.setattr(flight.LOG, "warning", lambda *a, **k: warned.append(a))
+    monkeypatch.setattr(flight, "_create", lambda target: (_ for _ in ()).throw(PermissionError("read-only folder")))
+
+    with closing(sqlite3.connect(store.settings.db_path, isolation_level=None)) as c:
+        migrations.apply(c)
+
+    assert hub_flight_tables(store.settings.db_path) == set()
+    assert [w[0] for w in warned] == ["Flight database not seeded before the drop, its history is lost: %s"]
+
+
 def test_the_release_comparison_names_an_empty_baseline(api, monkeypatch):
     monkeypatch.setenv("TICO_VERSION", "0.2.0")
     history = [

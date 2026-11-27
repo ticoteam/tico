@@ -303,10 +303,12 @@ def busy_minute(ts):
 
 def make_db(data, freelist=False):
     schema = sqlite3.connect(data / "hub.sqlite", isolation_level=None)
-    migrations.apply(schema)  # the server's schema, the flight tables included
+    migrations.apply(schema)  # the server's schema: no flight table since the recorder has its own file
     schema.close()
     c = sqlite3.connect(data / "hub.sqlite")
     c.execute("PRAGMA journal_mode=WAL")
+    # A server from before that file kept flight_sql in its own database: the cell reads it there until the file exists.
+    c.execute(next(s for s in flight.SCHEMA if s.startswith("CREATE TABLE flight_sql(")))
     hour = int(NOW) // 3600 * 3600
     c.executemany(
         "INSERT INTO flight_sql VALUES(?,?,?,?,?,?,?)",
@@ -850,6 +852,19 @@ def test_sql_top_reads_the_recorders_own_file_and_the_servers_database_on_a_cell
         )
         c.commit()
     assert [r["shape"] for r in cs.sql_top(box, name, NOW)] == ["SELECT moved"]
+
+
+def test_sql_top_is_empty_on_a_cell_whose_server_has_neither_the_file_nor_the_old_table(tmp_path):
+    """A server on this code before its first recorder write: hub.sqlite has no flight_sql and hub.flight.db is not
+    there yet. The read answers no shapes, not an error."""
+    b = FakeBox(tmp_path)
+    b.add_edge()
+    data = b.add_company("boatyard", updater=True)
+    with closing(sqlite3.connect(data / "hub.sqlite", isolation_level=None)) as c:
+        migrations.apply(c)
+    out, why = cs.exec_db(b, "tico-boatyard-server-1", "top", cs.SQL_TOP_BUDGET, int(NOW) - 7200, cs.SQL_TOP)
+    assert (out, why) == ({"sql_top": []}, "")
+    assert cs.sql_top(b, "tico-boatyard-server-1", NOW) == []
 
 
 # --- SQLite: never on the host ----------------------------------------------------------------------------------------
