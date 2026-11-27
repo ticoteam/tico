@@ -30,15 +30,17 @@ The workflows (.github/workflows/train.yml, hotfix.yml) call it. Environment:
     RELEASE_HOLD                           any value holds promotion to stable (a hotfix too, unless override_hold)
     RELEASE_TRAINS                         `on` lets schedules, pushes and finished runs act; a manual run always acts
                                            (a dispatch naming VALIDATION_RUN is a finished run, not a manual one)
-    RELEASE_NEEDS_PERSON                   `on`: every release waits for a person's approval. Anything else (the
-                                           default): only new High risk items or cut-short notes need a person
+    RELEASE_NEEDS_PERSON                   `on`: every release waits for a person's approval. `high-risk`: only new
+                                           High risk items or cut-short notes need a person. Anything else (the
+                                           default): no release waits for a person
     GITHUB_ACTOR                           hotfix only: who overrode a hold
 
 Approval: the candidate on the canary has an issue, "Release vX.Y.Z: awaiting approval" (label release-approval), whose
 body is its release notes. A candidate waiting for a person can reuse the previous waiting issue. A person with write
 access approves by adding the `approved` label or commenting `/approve` (a bot or app never counts). With
-RELEASE_NEEDS_PERSON off and complete notes, a release is automatically approved if one earlier human-approved issue
-lists all its High risk items, or if it has none. The `hold` label keeps it from stable. Promotion takes an approved,
+RELEASE_NEEDS_PERSON unset, every release is approved automatically (the notes still list its High risk items). With
+RELEASE_NEEDS_PERSON=high-risk and complete notes, a release is automatically approved if one earlier human-approved
+issue lists all its High risk items, or if it has none. The `hold` label keeps it from stable. Promotion takes an approved,
 healthy canary release to stable and closes its issue. Superseded issues close too, with the reason in their body.
 
 There are no release windows: a candidate is validated and shipped whenever main has moved past the newest release
@@ -92,14 +94,14 @@ APPROVED = "approved"
 HOLD = "hold"
 WRITE_LEVELS = ("admin", "maintain", "write")  # the repository roles that may approve
 APPROVAL_TITLE = re.compile(r"^Release (v\d+\.\d+\.\d+): awaiting approval$")
-# How a release is approved when no person is needed: RELEASE_NEEDS_PERSON is not `on` and the notes list no High risk
-# item. The issue says so when stable takes it.
-AUTO_APPROVED = "approved automatically (no high-risk items; RELEASE_NEEDS_PERSON is off)"
+# How a release is approved when no person is needed: RELEASE_NEEDS_PERSON is unset, or it is `high-risk` and the notes
+# list no High risk item. The issue says so when stable takes it.
+AUTO_APPROVED = "approved automatically (RELEASE_NEEDS_PERSON is off)"
 APPROVE_FOOTER = (
     "---\n"
     "Approve: a person with write access adds the `approved` label or comments `/approve`. Hold: add the `hold` label.\n"
-    "With RELEASE_NEEDS_PERSON off and complete notes, a release with no High risk items or with all its High risk"
-    " items covered by an earlier person's approval is approved automatically.\n"
+    "With RELEASE_NEEDS_PERSON unset, every release is approved automatically; with it set to high-risk, only a release"
+    " with no High risk items (or all of them covered by an earlier person's approval) is.\n"
     "Stable (TIDY) takes an approved release at the next train run (the backstop runs every 20 minutes), unless it is"
     " held or a health check fails."
 )
@@ -1285,6 +1287,12 @@ def needs_person(env):
     return (env.get("RELEASE_NEEDS_PERSON") or "").strip().lower() == "on"
 
 
+def risk_needs_person(env):
+    """Whether RELEASE_NEEDS_PERSON is `high-risk`: a new High risk item (or cut-short notes) then waits for a person.
+    Unset (the default), no release waits for a person."""
+    return (env.get("RELEASE_NEEDS_PERSON") or "").strip().lower() == "high-risk"
+
+
 def earlier_approval(gh, version, prs):
     """An earlier record whose notes list every PR in `prs` and which a person approved."""
     for issue in gh.approval_issues("all"):
@@ -1299,6 +1307,8 @@ def automatic_approval(gh, version, body, env):
     """How the release was approved automatically, or why it needs a person."""
     if needs_person(env):
         return "", "RELEASE_NEEDS_PERSON is on"
+    if not risk_needs_person(env):
+        return AUTO_APPROVED, ""
     cut_short = release_notes.cut_short(body)
     if release_notes.high_risk(body):
         prs = release_notes.high_risk_prs(body)
