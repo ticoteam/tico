@@ -58,9 +58,13 @@ _WORD = re.compile(r"[a-z0-9]+")
 _YES = frozenset("ok okay approve approved yes yep lgtm accept accepted agree".split())
 _YES_PAIRS = (("go", "ahead"), ("sign", "off"), ("signed", "off"), ("ship", "it"))
 _NOT = frozenset(
-    "no not nope never don didn doesn isn wasn won shouldn wouldn wait hold stop reject rejected later cancel undo "
-    "back".split()
+    "no not nope never cannot cant dont didnt doesnt isnt wasnt wont shouldnt wouldnt don didn doesn isn wasn won "
+    "shouldn wouldn wait hold stop reject rejected later cancel undo back".split()
 )
+# "can't", "won’t": the "n't" is a "not", whichever apostrophe.
+_NT = re.compile(r"n[\'\u2019]t\b")
+# A task's id written out whole.
+_ID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b")
 # `#3555`, or `E-3555`: an explicit task number in the words.
 _NUMBER = re.compile(r"(?<![\w-])(?:#|([a-z]{1,8})-)(\d+)\b", re.IGNORECASE)
 
@@ -97,13 +101,13 @@ def _words(text: object) -> list[str]:
 
 def says_yes(text: object, task: Row) -> bool:
     """Whether the person's words say yes: a yes word ("OK", "approve", "go ahead"), no word that unsays it ("don't",
-    "wait", "send it back"), and no question. The task's own title words do not count either way ("OK the stop-loss
-    task" is a yes)."""
+    "cannot", "wait", "send it back"), and no question. Every word counts, the task's title words too: "OK the stop-loss
+    task" is refused, and its number ("OK #42") says yes without them."""
+    del task  # a title's words never excuse a no
     said = str(text or "")
     if "?" in said:
         return False
-    own = set(_words(task.get("title")))
-    words = [w for w in re.findall(r"[a-z0-9]+", said.casefold()) if w not in own]
+    words = re.findall(r"[a-z0-9]+", _NT.sub(" not", said.casefold()))
     if any(w in _NOT for w in words):
         return False
     pairs = set(zip(words, words[1:], strict=False))
@@ -119,17 +123,18 @@ def _title_names(said: str, title: object) -> bool:
 
 
 def names(text: object, task: Row, others: "list[str] | None" = None) -> bool:
-    """Whether the person's words name this task and no other. A task number in them (`#3555`, `E-3555`) decides:
-    exactly one, and it is this task's. Else its id, or at least two of its title's own words and half of them ("the
+    """Whether the person's words name this task and no other. Task numbers (`#3555`, `E-3555`) and whole task ids in
+    them decide: every one is this task's. Else at least two of its title's own words and half of them ("the
     suggestion cards task" for "Hide suggestion cards when typing"; a title of one own word, that word), when no other
     open task's title (`others`) fits the same words. A bare number or one word of a longer title names nothing."""
     said = str(text or "")
     number, prefix = str(task.get("number") or ""), str(task.get("prefix") or "").casefold()
     numbers = {(str(p or "").casefold(), n) for p, n in _NUMBER.findall(said)}
-    if numbers:
-        return len({n for _, n in numbers}) == 1 and all(n == number and p in ("", prefix) for p, n in numbers)
-    if task.get("id") and str(task["id"]) in said:
-        return True
+    ids = set(_ID.findall(said.casefold()))
+    if numbers or ids:
+        # Every number and id in the words points at this task, and at least one does.
+        by_number = len({n for _, n in numbers}) == 1 and all(n == number and p in ("", prefix) for p, n in numbers)
+        return (by_number or not numbers) and (ids == {str(task.get("id") or "").casefold()} or not ids)
     return _title_names(said, task.get("title")) and not any(_title_names(said, t) for t in others or [])
 
 

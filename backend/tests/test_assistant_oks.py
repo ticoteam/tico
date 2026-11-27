@@ -418,3 +418,30 @@ def test_names_reads_number_title_words_and_not_one_word_alone():
     assert not AO.names("OK the suggestion task", task), "one title word is not the task"
     assert not AO.names("OK 3555", task), "a bare number may be anything"
     assert not AO.names("OK the pricing spec", task)
+
+
+@pytest.mark.parametrize(
+    "words",
+    [
+        "I cannot approve #42",
+        "I can't approve #42",
+        "I can’t OK #42",
+        "Do not approve #42",  # the title's own "not" keeps meaning no
+        "OK #42?",
+    ],
+)
+def test_says_yes_hears_every_no(words):
+    assert not AO.says_yes(words, {"id": "t42", "number": 42, "title": "Do not deploy on Fridays"})
+
+
+def test_says_yes_hears_a_plain_yes():
+    task = {"id": "t42", "number": 42, "title": "Do not deploy on Fridays"}
+    assert AO.says_yes("OK #42", task) and AO.says_yes("go ahead with #42", task) and AO.says_yes("Approve it", task)
+
+
+def test_two_task_ids_name_neither():
+    first, second = "0195e399-7437-44d5-a809-bff5bf70b671", "0195e399-7437-44d5-a809-bff5bf70b672"
+    task = {"id": first, "number": 42, "prefix": "E", "title": TITLE}
+    assert AO.names(f"OK {first}", task)
+    assert not AO.names(f"OK {first} and {second}", task)
+    assert not AO.names(f"OK {first} and #43", task)
