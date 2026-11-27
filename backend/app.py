@@ -26,7 +26,7 @@ from . import setup_failures
 from . import sources as SRC
 from . import ask_ingest, owner_link, setup_handoff
 from . import org_rule_check
-from . import roadmaps
+from . import cors, roadmaps
 from . import task_rule_gate
 from . import bot_home_merge
 from . import cloud_access
@@ -1043,7 +1043,7 @@ def _install_request_guard(
             if request.url.path == "/healthz":
                 return await call_next(request)
             # An outside requester's withdrawal link (backend/roadmaps.py withdraw): its token is the credential.
-            if request.method == "DELETE" and roadmaps.WITHDRAW_PATH.fullmatch(request.url.path):
+            if request.method == "DELETE" and cors.WITHDRAW_PATH.fullmatch(request.url.path):
                 return await call_next(request)
             # A visual in a reply (backend/visuals.py): its signed token is the credential, and the app's cookies are
             # never read there. Its own headers stand: nothing below adds the app's framing or caching rules.
@@ -2044,7 +2044,7 @@ def _rule_checks(app, assistant_mod, auth, routed_message, settings, store):
                 out["body"] = org_rule_check.warned_note(gate, getattr(body, "body", None) or "")
             return out
         if not approved and "public_summary" not in out and rule_shows_public(body, row):
-            # The public roadmap shows the public title and summary, never the note: the line goes on the summary it
+            # Public text is the public title and summary, never the note: the line goes on the summary it
             # will show (the one kept, or the line alone when there is none), the title kept whole.
             summary = getattr(body, "public_summary", None)
             # A kept summary warned before carries only this line: the bot's own text stays within the cap.
@@ -2065,7 +2065,7 @@ def _rule_checks(app, assistant_mod, auth, routed_message, settings, store):
         return getattr(body, "visibility", None) == "public" and row.get("visibility") != "public"
 
     def rule_shows_public(body, row):
-        """Whether a task change puts public text before the public roadmap's readers: it makes the task public, or
+        """Whether a task change publishes public text: it makes the task public, or
         gives one that is or becomes public a new public title."""
         public = (getattr(body, "visibility", None) or row.get("visibility")) == "public"
         return public and (rule_newly_public(body, row) or bool(getattr(body, "public_title", None)))

@@ -1,6 +1,6 @@
 """A task's public text and who may write it (backend/roadmaps.py publication): a bot files none without an approved
 publication, internal text never becomes public text, the public roadmap's pages, settings and visitor routes are
-gone (removed with backend/public_roadmaps.py), and an outside requester's token still takes their details back."""
+gone (task #4095), and an outside requester's token still takes their details back."""
 
 import hashlib
 import json
@@ -127,7 +127,7 @@ def test_internal_text_never_becomes_public_text(api):
     assert all(text not in shown.text for text in ('jane@', '$40k', 'Keep Acme happy', 'Faster exports'))
 
 
-def test_the_public_roadmap_its_settings_and_its_visitor_routes_are_gone(api):
+def test_the_roadmap_pages_settings_and_visitor_writes_are_gone(api):
     """Task #4095: the public roadmap is removed, not off. Its pages and visitor writes are no routes, its settings
     route is gone, its guard adds no CORS headers, and a fresh install keeps no visitor rate table or address secret.
     Only a requester's withdrawal is left (the next test)."""
@@ -197,3 +197,24 @@ def test_an_outside_requesters_token_still_takes_their_details_back(api):
         c.execute('UPDATE task_trash SET purged_at=NULL WHERE task_id=?', (trashed['id'],))
     post(api, 'tasks/' + trashed['id'] + '/restore', {})
     assert count(trashed['id']) == 1
+
+
+def test_a_wrong_withdrawal_token_never_takes_the_write_gate(api, monkeypatch):
+    """The withdrawal route needs no sign-in, so a token it does not hold is refused on a read: a flood of made-up
+    tokens never waits on the store's one writer. Only a held token, spent on its first use, writes."""
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Add exports', 'body': 'Internal'})
+    token = post(api, f"tasks/{task['id']}/requesters", {'email': 'customer@acme.example'})['requester_token']
+    store, writes = api.app.state.store, []
+    real = store.transaction
+
+    def counted(*args, **kwargs):
+        writes.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(store, 'transaction', counted)
+    for made_up in ('x', 'y' * 43, token[:-1] + ('A' if token[-1] != 'A' else 'B')):
+        assert api.delete(f"/public/roadmaps/r/tasks/{task['id']}/requesters/{made_up}").status_code == 404
+    assert api.delete(f'/public/roadmaps/r/tasks/not-a-task/requesters/{token}').status_code == 404
+    assert writes == []
+    assert api.delete(f"/public/roadmaps/r/tasks/{task['id']}/requesters/{token}").status_code == 200
+    assert writes == [1]

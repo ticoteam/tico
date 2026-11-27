@@ -693,8 +693,12 @@ def parser():
         s.set_defaults(fn="task worktree " + operation)
     s = task.add_parser("create")
     s.add_argument("--visibility", choices=["public", "private"])
-    s.add_argument("--public-title", dest="public_title", help="public roadmap title (needed with --visibility public)")
-    s.add_argument("--public-summary", dest="public_summary", help="public roadmap summary")
+    s.add_argument(
+        "--public-title",
+        dest="public_title",
+        help="public title, for people outside the team (needed with --visibility public)",
+    )
+    s.add_argument("--public-summary", dest="public_summary", help="public summary, for people outside the team")
     s.add_argument("--private", action="store_true", default=None, help="only its requester, owner and readers see it")
     s.add_argument(
         "--share-with",

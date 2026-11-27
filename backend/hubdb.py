@@ -4991,10 +4991,10 @@ def task_create(
     if visibility == 'public' or public_title or public_summary:
         from .strategy_acts import gate
 
-        gate(conn, actor, "publish", f"publish a new task on the public roadmap: {public_title or title}")
+        gate(conn, actor, "publish", f"publish a new task's public text: {public_title or title}")
     bot_review = (is_bot(actor) or VIA.get()) and BOTS_NEED_A_PUBLISH_OK
     if bot_review and (visibility == 'public' or public_title or public_summary):
-        # Said rather than dropped, so the bot knows its text is not on the roadmap.
+        # Said rather than dropped, so the bot knows its public text was not saved.
         refuse(
             conn,
             actor,

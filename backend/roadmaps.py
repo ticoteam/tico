@@ -13,13 +13,14 @@ from fastapi import Request
 from pydantic import Field
 
 from . import api_routing
+from .api_answers import roadmaps as A
 from . import hubdb as H
 from .deps import Injected
 from .models import Contract
 from .store import Problem
 from .api_contract import api_v2, error
 
-NOT_YET = 'The public roadmap is not available yet.'
+NOT_YET = 'A task\'s public text stays on the task: no page outside the team shows it yet.'
 # Whether a bot's public text (or one acting for a person) needs an exact approved publication (approve). It was the
 # removed public roadmap settings' `bot_public_approval`, on by default; no setting turns it off any more. Tests that
 # check where a warned public text goes switch it off.
@@ -62,7 +63,7 @@ def approve(c, actor, task_id, operation, values, approval_id=None):
     if strategy_acts.is_strategy_bot(actor) and not approval_id:
         # Publishing is the owner's at every level: the Strategy Owner publishes only what a person approved, whatever the
         # team's setting for other bots.
-        strategy_acts.gate(c, actor, "publish", f"publish a change to a task on the public roadmap ({operation})")
+        strategy_acts.gate(c, actor, "publish", f"publish a change to a task's public text ({operation})")
     # From here the OK is checked exactly; for the Strategy Owner whatever the setting, so any id is not enough. The OK
     # (backend/task_asks.py) is the one this actor asked on this task for exactly this publication, given from its
     # preview by the person's own click, and it is used here, once.
@@ -182,19 +183,34 @@ def remove_requester(c, task_id, *, token=None, ident=None, actor=None):
     return {'removed': True}
 
 
-def withdraw(c, task_id, token):
-    """An outside requester's token removes their request whatever became of the task since: private, or in the
-    trash (where its snapshot would otherwise bring them back). A purged trash row is past withdrawing from."""
-    digest = hashlib.sha256(token.encode()).hexdigest()
-    if c.execute('SELECT 1 FROM task_requesters WHERE task_id=? AND token_hash=?', (task_id, digest)).fetchone():
-        return remove_requester(c, task_id, token=token)
+def _trashed_requesters(c, task_id):
+    """A task in the trash: its snapshot and the requester rows it would bring back; ({}, []) when it is not there or
+    was purged."""
     trash = (
         c.execute('SELECT rows FROM task_trash WHERE task_id=? AND purged_at IS NULL', (task_id,)).fetchone()
         if H._has_table(c, 'task_trash')
         else None
     )
     snapshot = json.loads(trash[0]) if trash else {}
-    rows = snapshot.get('rows', {}).get('task_requesters') or []
+    return snapshot, snapshot.get('rows', {}).get('task_requesters') or []
+
+
+def holds(c, task_id, token):
+    """Whether a requester's token is still held for this task, live or in the trash: a read, so the anonymous
+    withdrawal route refuses an unknown token before it takes the store's one writer."""
+    digest = hashlib.sha256(token.encode()).hexdigest()
+    if c.execute('SELECT 1 FROM task_requesters WHERE task_id=? AND token_hash=?', (task_id, digest)).fetchone():
+        return True
+    return any(r.get('token_hash') == digest for r in _trashed_requesters(c, task_id)[1])
+
+
+def withdraw(c, task_id, token):
+    """An outside requester's token removes their request whatever became of the task since: private, or in the
+    trash (where its snapshot would otherwise bring them back). A purged trash row is past withdrawing from."""
+    digest = hashlib.sha256(token.encode()).hexdigest()
+    if c.execute('SELECT 1 FROM task_requesters WHERE task_id=? AND token_hash=?', (task_id, digest)).fetchone():
+        return remove_requester(c, task_id, token=token)
+    snapshot, rows = _trashed_requesters(c, task_id)
     kept = [r for r in rows if r.get('token_hash') != digest]
     if len(kept) == len(rows):
         raise Problem('not_found', 'Requester not found', 404)
@@ -204,9 +220,10 @@ def withdraw(c, task_id, token):
     return {'removed': True}
 
 
-# The one visitor address left of the public roadmap, which already-issued withdrawal links use: no sign-in (the
-# token is the credential; backend/app.py's request guard lets it through) and no CORS. The label is not read.
-WITHDRAW_PATH = re.compile(r'/public/roadmaps/[^/]+/tasks/[^/]+/requesters/[^/]+')
+# The one visitor address left of the removed public pages, which already-issued withdrawal links use: no sign-in (the
+# token is the credential; backend/app.py's request guard lets it through) and no CORS (backend/cors.py leaves it
+# alone). The label is not read. No rate limit either: an unknown token is refused on a read, before the store's one
+# writer, and a held token is spent by its one write, so writes are bounded by the tokens ever issued.
 router = api_routing.router()
 
 
@@ -214,6 +231,9 @@ router = api_routing.router()
 def withdraw_requester(label: str, tid: str, token: str, deps: Injected):
     if len(token) > 100:
         raise Problem('not_found', 'Requester not found', 404)
+    with deps.store.read() as c:
+        if not holds(c, tid, token):
+            raise Problem('not_found', 'Requester not found', 404)
     from . import events
 
     with deps.store.transaction() as c:
@@ -337,7 +357,7 @@ def install_internal(app, store, auth, mutate, mover):
     @app.get(
         '/api/v2/tasks/{tid}/requesters',
         **api_v2(
-            "Roadmaps", "listTaskRequesters", "Internal requester contacts, paged and byte-capped", "TaskRequesterList"
+            "Roadmaps", "listTaskRequesters", "Internal requester contacts, paged and byte-capped", A.TaskRequesterList
         ),
     )
     def requesters(request: Request, tid: str, limit: int = 100, offset: int = 0):
@@ -370,7 +390,7 @@ def install_internal(app, store, auth, mutate, mover):
     @app.post(
         '/api/v2/tasks/{tid}/requesters',
         **api_v2(
-            "Roadmaps", "addTaskRequester", "Record a requester; returns a removal token once", "TaskRequesterAdded"
+            "Roadmaps", "addTaskRequester", "Record a requester; returns a removal token once", A.TaskRequesterAdded
         ),
     )
     def create_requester(request: Request, tid: str, body: RequesterInput):
@@ -404,7 +424,7 @@ def install_internal(app, store, auth, mutate, mover):
 
     @app.post(
         '/api/v2/tasks/{tid}/requesters/{rid}/delete',
-        **api_v2("Roadmaps", "deleteTaskRequester", "Remove a requester", "TaskRequesterRemoved"),
+        **api_v2("Roadmaps", "deleteTaskRequester", "Remove a requester", A.TaskRequesterRemoved),
     )
     def delete_requester(request: Request, tid: str, rid: str, body: Contract):
         def work(c):
@@ -430,7 +450,7 @@ def install_internal(app, store, auth, mutate, mover):
 
     @app.post(
         '/api/v2/tasks/{tid}/requesters/{rid}',
-        **api_v2("Roadmaps", "updateTaskRequester", "Replace internal requester details", "TaskRequesterUpdated"),
+        **api_v2("Roadmaps", "updateTaskRequester", "Replace internal requester details", A.TaskRequesterUpdated),
     )
     def update_requester(request: Request, tid: str, rid: str, body: RequesterInput):
         def work(c):
@@ -471,7 +491,7 @@ def install_internal(app, store, auth, mutate, mover):
 
     @app.post(
         '/api/v2/tasks/{tid}/comments/{mid}/moderate',
-        **api_v2("Roadmaps", "moderateTaskComment", "Hide, restore or delete a public comment", "TaskCommentModerated"),
+        **api_v2("Roadmaps", "moderateTaskComment", "Hide, restore or delete a public comment", A.TaskCommentModerated),
     )
     def moderate(request: Request, tid: str, mid: str, body: Moderate):
         def work(c):
@@ -501,7 +521,7 @@ def install_internal(app, store, auth, mutate, mover):
             "Roadmaps",
             "listRoadmapTasks",
             "The Product pipeline's tasks the caller can read, ranked by who asked for them",
-            "RoadmapTaskList",
+            A.RoadmapTaskList,
             description="Every task of the company's Product pipeline the caller may read, in any stage and status, "
             "with its requester tallies, paged and byte-capped. sort is requester_count (the default), "
             "external_requesters, important, organization or size; direction is desc (the default) or asc. A task "

@@ -229,3 +229,13 @@ def test_an_open_redirect_is_refused(signin, target):
 def test_a_frontend_must_send_a_pkce_challenge(signin):
     assert start(signin, challenge="short").status_code == 400
     assert start(signin, PROD + "/").status_code == 302
+
+
+def test_a_requesters_withdrawal_link_answers_no_website_even_an_allowed_one(api):
+    """Task #4095: the withdrawal link left of the removed public pages has no CORS, so even an allowed origin gets no
+    preflight and no access-control headers on it."""
+    path = "/public/roadmaps/r/tasks/not-a-task/requesters/" + "x" * 43
+    ask = {"Origin": APP, "Access-Control-Request-Method": "DELETE"}
+    for r in (api.options(path, headers=ask), api.delete(path, headers={"Origin": APP})):
+        assert not [k for k in r.headers if k.lower().startswith("access-control-")], (r.request.method, r.headers)
+    assert api.delete(path, headers={"Origin": APP}).status_code == 404
