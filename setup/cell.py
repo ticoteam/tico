@@ -2809,9 +2809,7 @@ class Cell:
             os.chmod(p, 0o700)
             self.system.chown(p, SERVER_UID, SERVER_UID)
         changed = _write_atomic(d / "compose.yaml", compose)
-        changed = (
-            _write_atomic(d / "compose.cell.yaml", company_override(c, data)) or changed
-        )
+        changed = _write_atomic(d / "compose.cell.yaml", company_override(c, data)) or changed
         return self.updater_token(d) or changed
 
     def updater_token(self, d: Path) -> bool:
