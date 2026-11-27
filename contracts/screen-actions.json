@@ -8430,6 +8430,7 @@
             "enum": [
               "webhook",
               "mail",
+              "idea",
               "watcher",
               "document",
               "slack"

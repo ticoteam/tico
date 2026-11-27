@@ -400,7 +400,7 @@ export const screenMode = defineAction({
   id: 'settings.setScreening',
   title: 'Change how a door is screened',
   kind: 'change',
-  input: z.strictObject({ door: z.enum(['webhook', 'mail', 'watcher', 'document', 'slack'] as const), mode: z.enum(['off', 'warn', 'hold'] as const) }),
+  input: z.strictObject({ door: z.enum(['webhook', 'mail', 'idea', 'watcher', 'document', 'slack'] as const), mode: z.enum(['off', 'warn', 'hold'] as const) }),
   // Holding is the strict side and stays Tico's; anything looser is the person's own press.
   can: (ctx, { mode }) => !(mode !== 'hold' && ctx.via === 'tico'),
   run: (_ctx, { door, mode }) => setScreening({ [door]: mode }),

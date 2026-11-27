@@ -1,7 +1,8 @@
 """Publication and requesters extend tasks; comments remain messages in their task thread.
 
 The public roadmap, its pages, settings and visitor routes, is removed (task #4095). A task's public fields, the OK a
-bot needs to write them, and its requesters are kept; the signed-in Roadmap ranks the Product pipeline's tasks."""
+bot needs to write them, and its requesters are kept; the signed-in Roadmap ranks the Product pipeline's tasks. One
+visitor route is left: an outside requester's token still takes their details back (withdraw)."""
 
 import hashlib
 import json
@@ -11,7 +12,9 @@ import secrets
 from fastapi import Request
 from pydantic import Field
 
+from . import api_routing
 from . import hubdb as H
+from .deps import Injected
 from .models import Contract
 from .store import Problem
 from .api_contract import api_v2, error
@@ -177,6 +180,48 @@ def remove_requester(c, task_id, *, token=None, ident=None, actor=None):
     c.execute('UPDATE tasks SET updated_at=? WHERE id=?', (H.now(), task_id))
     H.event(c, actor or H.TICO_ACTOR, 'task.requester.remove', task_id, {})
     return {'removed': True}
+
+
+def withdraw(c, task_id, token):
+    """An outside requester's token removes their request whatever became of the task since: private, or in the
+    trash (where its snapshot would otherwise bring them back). A purged trash row is past withdrawing from."""
+    digest = hashlib.sha256(token.encode()).hexdigest()
+    if c.execute('SELECT 1 FROM task_requesters WHERE task_id=? AND token_hash=?', (task_id, digest)).fetchone():
+        return remove_requester(c, task_id, token=token)
+    trash = (
+        c.execute('SELECT rows FROM task_trash WHERE task_id=? AND purged_at IS NULL', (task_id,)).fetchone()
+        if H._has_table(c, 'task_trash')
+        else None
+    )
+    snapshot = json.loads(trash[0]) if trash else {}
+    rows = snapshot.get('rows', {}).get('task_requesters') or []
+    kept = [r for r in rows if r.get('token_hash') != digest]
+    if len(kept) == len(rows):
+        raise Problem('not_found', 'Requester not found', 404)
+    snapshot['rows']['task_requesters'] = kept
+    c.execute('UPDATE task_trash SET rows=? WHERE task_id=?', (json.dumps(snapshot, default=str), task_id))
+    H.event(c, H.TICO_ACTOR, 'task.requester.remove', task_id, {'trashed': True})
+    return {'removed': True}
+
+
+# The one visitor address left of the public roadmap, which already-issued withdrawal links use: no sign-in (the
+# token is the credential; backend/app.py's request guard lets it through) and no CORS. The label is not read.
+WITHDRAW_PATH = re.compile(r'/public/roadmaps/[^/]+/tasks/[^/]+/requesters/[^/]+')
+router = api_routing.router()
+
+
+@router.delete('/public/roadmaps/{label}/tasks/{tid}/requesters/{token}')
+def withdraw_requester(label: str, tid: str, token: str, deps: Injected):
+    if len(token) > 100:
+        raise Problem('not_found', 'Requester not found', 404)
+    from . import events
+
+    with deps.store.transaction() as c:
+        since = events.mark(c)
+        result = withdraw(c, tid, token)
+        logged = events.claim(c, since, 'external:roadmap')
+    deps.store.ring(logged)
+    return result
 
 
 # A task's requester tallies over its task_requesters rows: one aggregate for a task's requester list and the ranking.

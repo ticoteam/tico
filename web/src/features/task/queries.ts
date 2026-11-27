@@ -526,7 +526,7 @@ import type { GoalResult, TaskMeeting, TaskMeetings } from '@/api/schema';
 /** The detail's task as Details reads its facts: its goal, which the schema's task leaves out. */
 export type TaskFacts = TaskData & { goal_id?: string | null };
 
-/** Who may see it: its team, the public roadmap too, or only its people. */
+/** Who may see it: its team, its team with its public text cleared to go outside, or only its people. */
 export type Visible = 'team' | 'public' | 'private';
 export const visibleOf = (t: Pick<TaskData, 'private' | 'visibility'>): Visible => (t.private ? 'private' : t.visibility === 'public' ? 'public' : 'team');
 
@@ -569,10 +569,10 @@ export function setTaskRoles(id: string, role: string, people: string[]) {
   return edit(id, shown, { roles: { [role]: people } });
 }
 
-/** The public roadmap's title or summary. */
+/** A task's public title or summary: its words for people outside the team. */
 export const setTaskPublic = (id: string, field: 'public_title' | 'public_summary', text: string) => edit(id, { [field]: text }, { [field]: text });
 
-/** Team, Public roadmap or Private (ui/app/task-props.ts, Visible to). Out of private, then onto the roadmap, is two saves. */
+/** Team, Public or Private (ui/app/task-props.ts, Visible to). Out of private, then public, is two saves. */
 export async function setTaskVisible(id: string, to: Visible) {
   const held = queryClient.getQueryData<TaskData>(keys.tasks.detail(id));
   const now = held ? visibleOf(held) : 'team';

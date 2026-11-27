@@ -315,6 +315,7 @@ text at the doors it comes in by, before a bot reads it. Change it in **Settings
 |---|---|---|
 | Webhooks | A call whose automation opens a task for a bot or starts a bot's turn, and a rule's `create_task` on `webhook.received`. In a JSON body, only its strings of three words or more, not ids, numbers or links | Warn |
 | Mail | An inbound message a bot reads (`tico inbound read`): the subject and body | Warn |
+| Ideas | A company page reader's message to the company: its text | Warn |
 | Watchers | A watcher's new task, except the Support Agent's HQ tickets, which [support triage](support.md#support-triage) checks | Warn |
 | Documents | A document or a link that the Rules Owner reads to suggest rules (Rules › External): the file's text, or the page the link fetches | Warn |
 | Slack | A message a person sends a bot in Slack (a DM or an @mention), and a message in a channel linked to a thread, with its edits | Warn |

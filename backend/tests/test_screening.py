@@ -61,7 +61,7 @@ def holding(api):
     """Hold at every door that holds: the shipped default is Warn everywhere (observe only), and these tests check the
     hold path. The settings test reads the defaults themselves."""
     with api.app.state.store.transaction() as c:
-        S.save_modes(c, "human:ana", {"webhook": "hold", "watcher": "hold"})
+        S.save_modes(c, "human:ana", {"webhook": "hold", "idea": "hold", "watcher": "hold"})
 
 
 @pytest.fixture
@@ -394,6 +394,7 @@ def test_owners_and_admins_set_the_modes_and_run_the_test(api):
     assert view["defaults"] == {
         "webhook": "warn",
         "mail": "warn",
+        "idea": "warn",
         "watcher": "warn",
         "document": "warn",
         "slack": "warn",
@@ -401,6 +402,7 @@ def test_owners_and_admins_set_the_modes_and_run_the_test(api):
     assert view["modes"] == {
         "webhook": "hold",
         "mail": "warn",
+        "idea": "hold",
         "watcher": "hold",
         "document": "warn",
         "slack": "warn",
@@ -410,8 +412,6 @@ def test_owners_and_admins_set_the_modes_and_run_the_test(api):
     saved = api.put("/api/v2/screening", json={"webhook": "warn", "mail": "hold"}, headers=headers()).json()
     assert saved["modes"]["webhook"] == "warn" and saved["modes"]["mail"] == "warn"  # mail is never held
     assert api.put("/api/v2/screening", json={"webhook": "block"}, headers=headers()).status_code == 422
-    # The public roadmap's idea form is gone (task #4095), and its door with it.
-    assert api.put("/api/v2/screening", json={"idea": "hold"}, headers=headers()).status_code == 422
     assert view["layers"] == {"patterns": True, "model": True}
     off = api.put("/api/v2/screening", json={"patterns": False}, headers=headers()).json()
     assert off["layers"] == {"patterns": False, "model": True} and off["modes"]["webhook"] == "warn"

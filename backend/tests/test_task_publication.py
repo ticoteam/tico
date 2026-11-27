@@ -1,7 +1,8 @@
 """A task's public text and who may write it (backend/roadmaps.py publication): a bot files none without an approved
-publication, internal text never becomes public text, and the public roadmap's pages, settings and visitor routes are
-gone (removed with backend/public_roadmaps.py)."""
+publication, internal text never becomes public text, the public roadmap's pages, settings and visitor routes are
+gone (removed with backend/public_roadmaps.py), and an outside requester's token still takes their details back."""
 
+import hashlib
 import json
 
 from backend import roadmaps as R
@@ -128,7 +129,8 @@ def test_internal_text_never_becomes_public_text(api):
 
 def test_the_public_roadmap_its_settings_and_its_visitor_routes_are_gone(api):
     """Task #4095: the public roadmap is removed, not off. Its pages and visitor writes are no routes, its settings
-    route is gone, its guard adds no CORS headers, and a fresh install keeps no visitor rate table or address secret."""
+    route is gone, its guard adds no CORS headers, and a fresh install keeps no visitor rate table or address secret.
+    Only a requester's withdrawal is left (the next test)."""
     origin = {'Origin': 'https://acme.example'}
     task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Add exports', 'body': 'Internal'})
     base = '/public/roadmaps/roadmap/tasks/' + task['id']
@@ -136,7 +138,7 @@ def test_the_public_roadmap_its_settings_and_its_visitor_routes_are_gone(api):
     for r in (
         api.get('/public/roadmaps/roadmap', headers=origin),
         api.post('/public/roadmaps/roadmap/suggest', json={'title': 'Exports'}, headers=origin),
-        api.delete(base + '/requesters/' + 'x' * 43, headers=origin),
+        api.post(base + '/requesters', json={'email': 'x@acme.example'}, headers=origin),
     ):
         assert r.status_code == 401 and R.NOT_YET not in r.text, (r.request.url, r.status_code, r.text)
         assert 'access-control-allow-origin' not in r.headers
@@ -151,3 +153,47 @@ def test_the_public_roadmap_its_settings_and_its_visitor_routes_are_gone(api):
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM sqlite_master WHERE name='roadmap_actions'").fetchone()
         assert not c.execute("SELECT 1 FROM registry_metadata WHERE key IN ('roadmaps','roadmap_ip_secret')").fetchone()
+
+
+def test_an_outside_requesters_token_still_takes_their_details_back(api):
+    """Task #4095 keeps the one visitor route that guards customer data: the token handed back when an outside
+    requester is recorded removes their details with no sign-in, at the address already-issued links use, whatever
+    became of the task, the trash included. A wrong, spent or purged token is a plain 404."""
+
+    def follow(tid):
+        made = post(api, f'tasks/{tid}/requesters', {'email': 'customer@acme.example', 'phone': '555-0100'})
+        return made['requester_token']
+
+    def withdraw(tid, token):
+        return api.delete(f'/public/roadmaps/any-label/tasks/{tid}/requesters/{token}')
+
+    def count(tid):
+        with api.app.state.store.read() as c:
+            return c.execute('SELECT count(*) FROM task_requesters WHERE task_id=?', (tid,)).fetchone()[0]
+
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Add exports', 'body': 'Internal'})
+    leaving, staying = follow(task['id']), follow(task['id'])
+    gone = withdraw(task['id'], leaving)
+    assert gone.status_code == 200 and gone.json() == {'removed': True}
+    assert count(task['id']) == 1
+    assert 'access-control-allow-origin' not in gone.headers
+    spent, elsewhere = withdraw(task['id'], leaving), withdraw('not-a-task', staying)
+    assert spent.status_code == elsewhere.status_code == 404 and spent.json() == elsewhere.json()
+    assert withdraw(task['id'], 'x' * 101).status_code == 404
+
+    trashed = post(api, 'tasks', {'owner': 'ben', 'title': 'Bulk exports', 'body': 'Internal'})
+    leaving, staying = follow(trashed['id']), follow(trashed['id'])
+    assert post(api, 'tasks/' + trashed['id'] + '/delete', {}) == {'deleted': trashed['id']}
+    assert withdraw(trashed['id'], leaving).status_code == 200
+    assert withdraw(trashed['id'], leaving).status_code == 404
+    with api.app.state.store.read() as c:
+        snapshot = c.execute('SELECT rows FROM task_trash WHERE task_id=?', (trashed['id'],)).fetchone()[0]
+    assert hashlib.sha256(leaving.encode()).hexdigest() not in snapshot
+    assert hashlib.sha256(staying.encode()).hexdigest() in snapshot
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE task_trash SET purged_at='2026-01-01T00:00:00Z' WHERE task_id=?", (trashed['id'],))
+    assert withdraw(trashed['id'], staying).status_code == 404
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE task_trash SET purged_at=NULL WHERE task_id=?', (trashed['id'],))
+    post(api, 'tasks/' + trashed['id'] + '/restore', {})
+    assert count(trashed['id']) == 1

@@ -26,6 +26,7 @@ from . import setup_failures
 from . import sources as SRC
 from . import ask_ingest, owner_link, setup_handoff
 from . import org_rule_check
+from . import roadmaps
 from . import task_rule_gate
 from . import bot_home_merge
 from . import cloud_access
@@ -1040,6 +1041,9 @@ def _install_request_guard(
             ):
                 raise Problem("not_found", "Not found", 404)
             if request.url.path == "/healthz":
+                return await call_next(request)
+            # An outside requester's withdrawal link (backend/roadmaps.py withdraw): its token is the credential.
+            if request.method == "DELETE" and roadmaps.WITHDRAW_PATH.fullmatch(request.url.path):
                 return await call_next(request)
             # A visual in a reply (backend/visuals.py): its signed token is the credential, and the app's cookies are
             # never read there. Its own headers stand: nothing below adds the app's framing or caching rules.
@@ -2198,6 +2202,7 @@ def _install_features(
     from .roadmaps import install_internal
 
     install_internal(app, store, auth, mutate, mover)
+    api_routing.include(app, roadmaps.router)
     from .company_page import api as company_page_api
 
     company_page_api.register(app, store, auth, mutate, settings)

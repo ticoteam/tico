@@ -1,7 +1,9 @@
 # Roadmap
 
-The public roadmap, its pages under `/public/roadmaps/{label}`, its settings and its visitor routes, is removed. What
-stays is signed in:
+The public roadmap, its pages under `/public/roadmaps/{label}`, its settings and its visitor routes, is removed, but
+for one: `DELETE /public/roadmaps/{label}/tasks/{id}/requesters/{token}` still removes an outside requester's details
+with no sign-in, so the token handed back when they were recorded always takes them back, from a task in the trash
+too. Tokens are bound to one task; an unknown or spent token gets 404. What else stays is signed in:
 
 - A task's requesters are internal: `GET`/`POST /api/v2/tasks/{id}/requesters`,
   `POST .../requesters/{requester_id}` (partial update) and `POST .../requesters/{requester_id}/delete`, and
