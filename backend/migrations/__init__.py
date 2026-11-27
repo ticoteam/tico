@@ -62,6 +62,8 @@ CUTOVER_PREREQUISITES = {
     "20261125055503_page_kit": ("20261124213459_preview_html_blob_ids.sql",),
     # The same for page_apps' `app` column: after page_kit's (which brings preview_html_blob_ids' before its own).
     "20261125055536_page_apps": ("20261125055503_page_kit.sql",),
+    # flight_slow_parts alters a table this drops: on a company at the floor, run newest first, the ALTER runs first.
+    "20261127053651_drop_hub_flight_tables": ("20261126013526_flight_slow_parts.sql",),
 }
 RETIRED_LIST = "retired.txt"
 # Older releases recorded their pre-file history as `legacy_user_version_<N>` and `legacy_cloud_<N>` rows with this
