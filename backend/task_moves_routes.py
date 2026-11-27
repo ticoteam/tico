@@ -951,7 +951,7 @@ def register(
         in this write: an approver's own click is a direct human action, which no rule gates (True: the write skips
         the rule gate), and Send anyway never replays a person's answer to one."""
         asked = requirement_on(c, task_id, params["requirement_id"])
-        refused = task_asks.refuses_ok_by(c, who, asked, body.value)
+        refused = task_asks.refuses_ok_by(c, who, asked, body.value, task_id=task_id)
         if refused:
             raise Problem("ok_not_yours", refused, 403)
         if not task_asks.shared_page(c, asked):

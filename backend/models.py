@@ -1024,6 +1024,12 @@ class AssistantViewerLearned(Contract):
     include_learned: bool
 
 
+class AssistantOkSettings(Contract):
+    """Whether your Assistant gives OKs for you when you tell it to (backend/assistant_oks.py)."""
+
+    gives_oks: bool
+
+
 class GoalReadBack(Contract):
     """The whole plan the owner's Assistant reads back in their chat (backend/goal_read_back.py): each change an object
     with a `kind` (goal_create, goal_update, measure_add, target_set, measure_remove, suggestion) and its fields. The

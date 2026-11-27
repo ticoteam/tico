@@ -511,6 +511,8 @@ KEEP = (
             "learned_entries",
             "assistant_shares",  # who a person lets view their Assistant chat: a choice, it sends nothing
             "assistant_share_settings",
+            "assistant_ok_settings",  # whether a person lets their Assistant give OKs for them: a choice
+            "assistant_ok_uses",  # which of a person's messages lent an OK: ids, it sends nothing
             "linked_docs",
             "live_meeting_chat",
             "live_meeting_chat_routes",

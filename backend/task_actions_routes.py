@@ -293,8 +293,14 @@ def register_core(
 
             history = task_reads.readable_history(c, auth, who, H.task_history(c, tid, provenance=True), related_sql)
             lines = SRC.lookup(c, SRC.actors_of(history))
+            from . import assistant_oks
+
             for event in history:
                 event["source"] = SRC.source_of(lines, event)  # reads `data`, which the answer leaves out
+                # An OK the person's Assistant gave on their word: their words, and the link to them for a reader of
+                # that chat (backend/assistant_oks.py `shown_delegation`).
+                if lent := assistant_oks.shown_delegation(c, auth, who, event):
+                    event["delegation"] = lent
                 event.pop("data", None)
             # An ask's words come from the pages it showed (body_sources): a reader who may not open one reads none.
             from .files import readable_page_refs

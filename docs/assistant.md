@@ -182,7 +182,8 @@ shows you as the actor, `via` assistant, and the audit event's `delegation` name
 **Never on your words.** These stay a Confirm card, or your own tap in Tico or Settings, whatever you ask
 (`NEVER` in backend/assistant.py lists the routes): a personal token, service key, stored credential or its grants,
 enrollment, runner or agent pairing, a password, a reader's invite, single sign-on and the directory's SCIM token; owner
-transfer; an OK on a task, which is your own click on its preview; the Assistant's own on or off switch; the team rule
+transfer; an OK on a task, which is your own click on its preview (unless you let it give OKs for you, below); the
+Assistant's own on or off switch; the team rule
 that sets
 the Assistant (`assistant_direct`); a Tico support report or ticket; deleting a person, the
 company's server connection or its storage. A write whose body carries a secret is refused from chat too: a secret goes
@@ -199,10 +200,26 @@ cannot be cited, and it does not lend the run any authority. Your own sentence i
 someone else), comments and changes on tasks that are yours alone, and marking updates read. Everything else is a card,
 including what you ask for in your DM. An assistant run's credential works only while its lease is live.
 
-**OKs are yours alone.** The Assistant answers asks on your words, but it never gives an OK: an OK on something that
-leaves the company or spends money is your own click on its preview ([Asks and OKs](tasks.md#asks-and-oks)). A walk
-through Needs you (`tico needs-you commit`) answers, sends back, finishes and closes; an OK bound to a preview is
-refused there too.
+**OKs are yours, unless you say so.** The Assistant answers asks on your words, but by default it never gives an OK.
+Turn on **Give OKs for me when I tell you to** with `POST /api/v2/assistant/settings {"gives_oks": true}` from your own
+signed-in session (its switch in Settings > General > Assistant is coming; only your own click changes it, never the
+Assistant, Agent Ops or a personal token) and it gives a
+plain OK on a stage, or a page only you approve, when you tell it to in your own words (backend/assistant_oks.py). The
+server checks your words, not the Assistant, when it writes the OK: your own message in your own Assistant chat
+(spoken in a call counts), unedited, no more than 15 minutes old, saying yes ("OK", "approve", "go ahead"; not a
+question, a "don't", a "wait" or a send back) to one task. A task number (`#3555`) decides which; without one, at least
+two of its title's own words and half of them, when no other open task's title fits them too. Each message gives one
+OK, never again, even after an Undo. On a page, the decision model must have passed every version you would approve,
+attached before you spoke; a page it was unsure of, or a version other than the one you were shown, stays your own
+look. The task's history says "via assistant" with your words, and the message they came from for whoever may open
+that chat (`delegation` on the task read's `events`: `words`, and `cited` with its `message_id` and
+`conversation_id`, null for anyone else), and your Assistant chat gets a receipt, "OK'd: <title>, <stage>", whose
+`refs.assistant_ok` carries the `answer_id` to undo (`POST /api/v2/answers/{id}/undo`), the task, its title and the
+stage. Until the chat shows an Undo button on that receipt, undo it on the task, as for your own OK, while the task's
+`may` for that requirement still lists `undo`. What stays your
+own click, whatever the setting: an OK on something that leaves the company, spends money, or touches a file or access
+(any OK bound to a preview, [Asks and OKs](tasks.md#asks-and-oks)), a page several people approve, and an OK on your
+own ask. A walk through Needs you (`tico needs-you commit`) answers, sends back, finishes and closes, but never OKs.
 
 ## Routines from chat
 

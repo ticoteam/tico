@@ -6,6 +6,17 @@ from ._base import ACTORS, SCHEMAS, items, obj
 
 SCHEMAS.update(
     {
+        "AssistantOkSettingsResult": obj(
+            {
+                "gives_oks": {"type": "boolean", "description": "Your Assistant gives OKs for you when you tell it to"},
+                "may_change": {
+                    "type": "boolean",
+                    "description": "Whether this caller may change it: only the person's own click in Tico, so false "
+                    "for their Assistant, Agent Ops or a personal token (show the switch disabled)",
+                },
+            },
+            required=["gives_oks", "may_change"],
+        ),
         "Assistant": obj(
             {
                 "available": "b",
