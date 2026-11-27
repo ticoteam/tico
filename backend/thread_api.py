@@ -383,6 +383,16 @@ def _thread_message(message):
     )
 
 
+def _pages_as_read(c, auth, who, message):
+    """`message` with each page it names as `who` may read it now (files.readable_page_refs): a write's answer is a
+    read too, and its writer may have lost the page since it was posted."""
+    from .files import readable_page_refs
+
+    if not isinstance(message, dict) or not message.get("refs"):
+        return message
+    return {**message, "refs": readable_page_refs(c, auth, who, message["refs"])}
+
+
 def _read_or_404(c, v, target):
     """Read on a teammate, or the same 404 whether they are missing or the viewer may not read them. A missing teammate
     passes this check and fails in threads.home with the same 404, so the two never differ."""
@@ -1256,7 +1266,7 @@ def install(app, store, auth, mutate, rule_check):
             reach.check_edit(c, who, message_id, body.text, viewer)
             edited = threads.edit_message(c, viewer, message_id, body.text)
             assert edited is not None  # the message just edited
-            return {**_thread_message(edited), **org_rule_check.answer(gate)}
+            return {**_pages_as_read(c, auth, who, _thread_message(edited)), **org_rule_check.answer(gate)}
 
         return mutate(request, body, work)
 

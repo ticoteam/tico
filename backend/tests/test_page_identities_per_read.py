@@ -360,15 +360,24 @@ def test_a_message_list_looks_its_pages_up_once(api):
     task = post(api, "tasks", {"owner": "ops", "title": "One", "body": "b", "private": False})["id"]
     pages = [made(api, attempt, task, f"p{n}.html", html(f"p {n}")) for n in range(12)]
     messages = [{"id": f"m{n}", "text": "see page:" + fid, "refs": {"file": fid}} for n, fid in enumerate(pages)]
-    store, lookups = api.app.state.store, []
-    with store.read() as c:
-        c.set_trace_callback(lambda q: lookups.append(q) if "page_identities WHERE identity IN" in q else None)
-        files.prime_page_references(c, messages)
-        for message in messages:
-            files.readable_page_refs(c, api.app.state.auth, Identity("human:cara", "human"), message)
-        c.set_trace_callback(None)
-        assert read_cache.cache(c) is not None
-    assert len(lookups) == 1, lookups
+    store = api.app.state.store
+
+    def lookups(listed):
+        seen = []
+        with store.read() as c:
+            c.set_trace_callback(lambda q: seen.append(q) if "page_identities WHERE identity IN" in q else None)
+            files.prime_page_references(c, listed)
+            for message in listed:
+                files.readable_page_refs(c, api.app.state.auth, Identity("human:cara", "human"), message)
+            c.set_trace_callback(None)
+            assert read_cache.cache(c) is not None
+        return seen
+
+    twelve = lookups(messages)
+    # The messages' pages in one lookup. Deciding a page a run wrote also reads that run's inputs, in one lookup of
+    # their own (files.prime_visible), so the total is the same for one message as for twelve.
+    assert len([q for q in twelve if any(fid in q for fid in pages)]) == 1, twelve
+    assert len(twelve) == len(lookups(messages[:1])), twelve
 
 
 def test_a_failed_lookup_is_not_remembered_as_allowed(api, monkeypatch):
