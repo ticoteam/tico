@@ -1184,19 +1184,19 @@ describe('a rule to add', () => {
     expect(sent.at(-1)?.body).toMatchObject({ shown_hash: 'h-rule' });
   });
 
-  it('shows Outside editions beside Everyone, and each allowed value as its own item @approvals', async () => {
+  it('shows the names beside Everyone, and each allowed value as its own item @approvals', async () => {
     shown = ruleTask();
     const wide = {
       ...bound,
       if_broken: 'block', // a Stop rule with a named reviewer: its holds still go to them
-      who: { ...bound.who, everyone: true, outside_editions: true },
+      who: { ...bound.who, everyone: true },
       exact_check: { kind: 'allow_list', action: 'mail', field: 'to', values: ['a.example, b.example', 'c.example'] },
     };
     reply = (url) => (url.endsWith('/api/v2/oks/r1') ? { body: { requirement_id: 'r1', subject: 'rule:o7', content: wide, shown_hash: 'h-rule', standing: 'waiting' } } : null);
     show(<TaskChat task="12" />, '/tasks/p1/12');
     const box = await decision();
     const facts = await within(box).findByRole('group', { name: 'The rule' });
-    expect(within(facts).getByText('Everyone, Outside editions, Ops')).toBeTruthy();
+    expect(within(facts).getByText('Everyone, Ops')).toBeTruthy();
     expect(within(facts).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['a.example, b.example', 'c.example']);
     const pairs = [...facts.querySelectorAll('.fact')].map((f) => [f.firstElementChild?.textContent, f.lastElementChild?.textContent]);
     expect(pairs).toContainEqual(['If broken', 'Stop']);
