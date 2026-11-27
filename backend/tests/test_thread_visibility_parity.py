@@ -11,7 +11,12 @@ a turn and an external agent:
 - a page attached to a comment on that task, and a company message whose review names the page, after the page's
   audience is narrowed to one person (per-reader file refusals);
 - a reply to that review message: a row whose walk reads a message naming a file, which read_deps never settles;
-- a direct message between two people, a thread whose member is a group, and a private task held by a pipeline stage.
+- a direct message between two people, a thread whose member is a group, a private task held by a pipeline stage, and a
+  person's own private task that no other reader is a party to (the admin reads none of it).
+
+The live stream is read as it is delivered: every thread renamed and every message edited in each state, read on the
+`messages` and `threads` topics from just before. A stream that started before the page's audience changed resets.
+The sidebar and the unread counts are pinned as rows and numbers, so a door refusing too much fails as well.
 
 Each state is read twice by SQL's history gate: before the read_deps sweep (every row unsettled, so `tico sql` walks
 each row's provenance) and after it (settled rows read from read_deps, a denied task still worked out per read).
@@ -39,7 +44,19 @@ from backend.tests.threads_e2e import call, create_thread, make_group, ok, say
 PEOPLE = {"ana": "ana-test", "ben": "ben-test", "cara": "cara-test"}
 READERS = ("ana", "ben", "cara", "ops", "finance")
 # Each message's first word, unique in the world, is what search looks it up by.
-WORDS = ("zqplain", "zqnames", "zqtask", "zqsub", "zqstaged", "zqgroup", "zqdm", "zqcommented", "zqreview", "zqreply")
+WORDS = (
+    "zqplain",
+    "zqnames",
+    "zqtask",
+    "zqsub",
+    "zqstaged",
+    "zqgroup",
+    "zqdm",
+    "zqcommented",
+    "zqreview",
+    "zqreply",
+    "zqsecret",
+)
 # What each reader reads, threads and messages, while the task is public and once it is private.
 EVERYONE = {"company", "plain"}
 # The task's thread, a sub-thread under it, and their messages (a comment with the page attached among them).
@@ -49,10 +66,12 @@ STAGED = {"staged", "staged_said"}
 GROUP = {"group", "group_said"}
 DM = {"dm", "dm_said"}
 REVIEW = {"review", "reply"}  # the page's: Cara is not in its audience
+# Cara's own private task, outside every other reader's parties and Ben's management: an admin seat reads none of it.
+SECRET = {"secret", "secret_said"}
 PUBLIC = {
     "ana": EVERYONE | TASK | NAMES_TASK | GROUP | REVIEW,
     "ben": EVERYONE | TASK | NAMES_TASK | STAGED | DM | REVIEW,
-    "cara": EVERYONE | TASK | NAMES_TASK | STAGED | GROUP | DM,
+    "cara": EVERYONE | TASK | NAMES_TASK | STAGED | GROUP | DM | SECRET,
     "ops": EVERYONE | TASK | NAMES_TASK | STAGED | REVIEW,
     # An external agent reads no company thread by standing (C1); a public task's thread it reads as any bot does.
     "finance": TASK,
@@ -68,6 +87,13 @@ PRIVATE = {
 # The reply's walk reads the message it answers, which names a file (read_deps.names_file): it is never settled, so
 # SQL walks it on every read. The review row's own file check is SQL's page gate, so it settles.
 NEVER_SETTLED = {"reply"}
+# The sidebar each person sees in every state: a few rows each, so a door that refuses too much fails too.
+SIDEBAR = {
+    "ana": {"company", "group"},
+    "ben": {"company", "dm", "staged"},
+    "cara": {"company", "dm", "group"},
+    "ops": {"company", "task"},
+}
 
 
 @pytest.fixture
@@ -84,6 +110,7 @@ def world(api):
         staged = H.task_create(
             c, "human:cara", "Build the export", "Rows.", "human:ben", private=True, pipeline="eng", lint=False
         )
+        secret = H.task_create(c, "human:cara", "Salary review", "Mine.", "human:cara", private=True, lint=False)
     machine = runner(api)
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
@@ -99,12 +126,19 @@ def world(api):
     company = create_thread(api, title="All hands", audience="company")["id"]
     legal = make_group(api, "Legal", people=["cara"])["id"]
     group = create_thread(api, title="Legal only", members=["group:" + legal])["id"]
-    t = {"company": company, "task": late["conversation_id"], "staged": staged["conversation_id"], "group": group}
+    t = {
+        "company": company,
+        "task": late["conversation_id"],
+        "staged": staged["conversation_id"],
+        "group": group,
+        "secret": secret["conversation_id"],
+    }
     m = {
         "plain": say(api, "ana-test", company, "zqplain the agenda"),
         "task_said": say(api, "ben-test", t["task"], "zqtask launch notes"),
         "staged_said": say(api, "cara-test", t["staged"], "zqstaged export columns"),
         "group_said": say(api, "ana-test", group, "zqgroup contract terms"),
+        "secret_said": say(api, "cara-test", t["secret"], "zqsecret my numbers"),
     }
     m["sub_said"] = say(api, "ben-test", t["task"], "zqsub the venue", parent_message_id=m["task_said"]["id"])
     t["sub"] = m["sub_said"]["conversation_id"]
@@ -128,9 +162,18 @@ def world(api):
         )
         m["reply"] = threads.post(c, "human:ben", company, "zqreply agreed", in_reply_to=m["review"]["id"])
     assert t["sub"] not in (t["task"], company) and m["commented"]["conversation_id"] == t["task"]
+    with store.read() as c:
+        before = E.latest(c)
     # After it was attached, the page goes to Ben alone (and whoever reads every page).
     edit(api, fid, {"people": ["ben"]})
-    return {"threads": t, "messages": {k: v["id"] for k, v in m.items()}, "task": late["id"], "attempt": attempt}
+    return {
+        "threads": t,
+        "messages": {k: v["id"] for k, v in m.items()},
+        "task": late["id"],
+        "attempt": attempt,
+        "file": fid,
+        "before_narrowing": before,
+    }
 
 
 def _identity(api, w, reader):
@@ -154,16 +197,20 @@ def _reads(api, w, reader):
         ids["python"] = {t for t in tids if threads.readable(c, threads.viewer(auth, who), t)} | {
             mid for mid in mids if threads.readable(c, threads.viewer(auth, who), rows[mid])
         }
-        sse = threads.readable_ids(c, threads.viewer(auth, who), tids)
+        # a door for threads only: the messages it is compared on are the Python answer
+        ids["readable_ids"] = threads.readable_ids(c, threads.viewer(auth, who), tids) | (ids["python"] - set(tids))
     sent, after, more = [], w["since"], True
     while more:  # the stream sends a batch at a time; read it all
         with store.read() as c:
             batch, after, reset, more = E.read(
-                c, auth, who, after, topics=("messages",), task_views=lambda *_, **__: [], task_view=None
+                c, auth, who, after, topics=("messages", "threads"), task_views=lambda *_, **__: [], task_view=None
             )
         assert not reset
         sent += batch
-    ids["sse"] = sse | {d.get("id") for _, topic, d in sent if topic == "messages" and not d.get("deleted")}
+    # Every thread was renamed and every message edited since `since` (_check): the stream names what it delivers.
+    ids["sse"] = {d["thread_id"] for _, topic, d in sent if topic == "threads" and d.get("kind") == "renamed"} | {
+        d.get("id") for _, topic, d in sent if topic == "messages" and not d.get("deleted")
+    }
     ids["sql"] = {r[0] for r in query(api, "SELECT id FROM conversations", token)["rows"]} | {
         r[0] for r in query(api, "SELECT id FROM messages", token)["rows"]
     }
@@ -193,6 +240,9 @@ def _check(api, w, expected, state):
         w["since"] = E.latest(c)
         marks = ",".join("?" * len(w["messages"]))
         c.execute(f"UPDATE messages SET edited_at=? WHERE id IN ({marks})", [state, *w["messages"].values()])
+        # and every thread on the `threads` topic, as a rename sends it
+        marks = ",".join("?" * len(w["threads"]))
+        c.execute(f"UPDATE conversations SET subject=? WHERE id IN ({marks})", [state, *w["threads"].values()])
     for reader in READERS:
         found = _reads(api, w, reader)
         assert found["python"] == expected[reader], (state, reader, sorted(found["python"] ^ expected[reader]))
@@ -201,6 +251,7 @@ def _check(api, w, expected, state):
         if reader != "finance":  # an external agent has no sidebar of its own here
             listed = _sidebar(api, w, reader)
             assert listed <= found["python"], (state, reader, "sidebar", sorted(listed - found["python"]))
+            assert listed == SIDEBAR[reader], (state, reader, "sidebar", sorted(listed ^ SIDEBAR[reader]))
 
 
 def _settled(api, w):
@@ -238,13 +289,24 @@ def test_every_door_reads_threads_and_messages_alike_as_a_task_goes_private_and_
 
 # ----------------------------------------------------------------------------- a page attached, per reader
 def _attachments(refs):
-    """What a message's attachments show its reader: the page's file id, or the placeholder of one they may not open."""
+    """What a message's attachments show its reader: the page's file id, or the whole placeholder of one they may not
+    open (compared whole, so a placeholder that kept the file's id, title or blob fails)."""
     refs = H._json(refs, {}) if isinstance(refs, str) else refs
-    return [a.get("label") if a.get("removed") else a.get("file_id") for a in (refs or {}).get("attachments") or []]
+    return [a if a.get("removed") else a.get("file_id") for a in (refs or {}).get("attachments") or []]
+
+
+REMOVED = [{"removed": True, "label": "A page you can't open"}]  # files.page_ref_denials' placeholder, nothing more
+DOORS = ("timeline", "message", "sse")  # and `tico sql`, asked apart (_sql_attachments)
+
+
+def _sql_attachments(api, w, reader, label="commented"):
+    mid = w["messages"][label]
+    (row,) = query(api, f"SELECT refs FROM messages WHERE id='{mid}'", _token(w, reader))["rows"]
+    return _attachments(row[0])
 
 
 def _attachment_doors(api, w, reader, label="commented"):
-    """{door: the attachments it shows `reader` on that message}."""
+    """{door: the attachments it shows `reader` on that message}, but for `tico sql`."""
     auth, store = api.app.state.auth, api.app.state.store
     mid, token, who = w["messages"][label], _token(w, reader), _identity(api, w, reader)
     with store.transaction() as c:
@@ -261,9 +323,6 @@ def _attachment_doors(api, w, reader, label="commented"):
         "timeline": [_attachments(r.get("refs")) for r in timeline if r.get("id") == mid][0],
         "message": _attachments(ok(call(api, "GET", "messages/" + mid, token))["refs"]),
         "sse": _attachments((live.get("message") or live).get("refs") if isinstance(live, dict) else live.refs),
-        "sql": [_attachments(r[0]) for r in query(api, f"SELECT refs FROM messages WHERE id='{mid}'", token)["rows"]][
-            0
-        ],
     }
 
 
@@ -271,72 +330,129 @@ def test_a_page_attached_in_a_thread_is_removed_by_every_door_for_exactly_the_re
     api, world
 ):
     w = world
-    with api.app.state.store.read() as c:
-        (fid,) = c.execute("SELECT file_id FROM pages").fetchone()
-    removed = ["A page you can't open"]
-    # Ben is the page's audience and ops made it; Cara and the external agent read the task's thread but not the page.
-    expected = {"ben": [fid], "ops": [fid], "cara": removed, "finance": removed}
+    fid = w["file"]
+    # Ben is the page's audience and ops made it; the owner, Cara and the external agent read the task's thread but not
+    # the page (the owner's `tico sql` read is the expected failure below).
+    expected = {"ben": [fid], "ops": [fid], "ana": REMOVED, "cara": REMOVED, "finance": REMOVED}
     for reader, shown in expected.items():
-        assert _attachment_doors(api, w, reader) == dict.fromkeys(("timeline", "message", "sse", "sql"), shown), reader
+        assert _attachment_doors(api, w, reader) == dict.fromkeys(DOORS, shown), reader
+        if reader != "ana":
+            assert _sql_attachments(api, w, reader) == shown, (reader, "sql")
 
 
 @pytest.mark.xfail(
     strict=True,
+    raises=AssertionError,  # query's: the status was 422, not 200
     reason="tico sql's page check reads meeting_participant_readers on the guarded connection and fails the whole "
     "query for a reader in the page's audience who is no party to its task (here the owner); the follow-up task fixes it",
 )
 def test_the_owner_reads_the_page_comment_through_tico_sql_as_through_every_other_door(api, world):
-    shown = _attachment_doors(api, world, "ana")
-    assert shown == dict.fromkeys(("timeline", "message", "sse", "sql"), ["A page you can't open"])
+    assert _sql_attachments(api, world, "ana") == REMOVED
+
+
+def test_narrowing_a_page_resets_every_reader_s_stream_that_started_before_it(api, world):
+    """A stream reading across the page's audience change sends nothing it would have to take back: it resets, and the
+    reader reloads (events.read_in). Read from the change on, the same reader's stream goes on."""
+    w = world
+    auth, store = api.app.state.auth, api.app.state.store
+    with store.read() as c:
+        moved = E.latest(c)
+    for reader in READERS:
+        who = _identity(api, w, reader)
+        with store.read() as c:
+            sent, cursor, reset, more = E.read(
+                c, auth, who, w["before_narrowing"], topics=E.AGENT_TOPICS, task_views=lambda *_, **__: []
+            )
+            assert (sent, cursor, reset, more) == ([], moved, True, False), reader
+            assert E.read(c, auth, who, moved, topics=E.AGENT_TOPICS, task_views=lambda *_, **__: [])[2] is False
 
 
 # ----------------------------------------------------------------------------- unread counts
-# (reader, thread) -> the messages its unread count counts that the reader may not open (the timeline shows each as a
-# hidden row). The count reads only who wrote a message and whom it was delivered to (threads.unread_message_sql).
+# {(reader, thread): its unread count}, every thread a reader reads that has one; each count also holds the message a
+# task or a direct message opens with. Pinned as numbers, so a count that drops a message its reader opens fails.
+UNREAD = {
+    "public": {
+        ("ana", "company"): 1,
+        ("ana", "task"): 3,
+        ("ana", "sub"): 1,
+        ("ben", "company"): 3,
+        ("ben", "staged"): 2,
+        ("ben", "dm"): 1,
+        ("cara", "company"): 4,
+        ("cara", "task"): 3,
+        ("cara", "group"): 1,
+        ("cara", "sub"): 1,
+        ("cara", "dm"): 1,
+        ("ops", "company"): 4,
+        ("ops", "task"): 3,
+        ("ops", "staged"): 2,
+        ("ops", "sub"): 1,
+        ("finance", "task"): 3,
+        ("finance", "sub"): 1,
+    },
+    "private": {
+        ("ana", "company"): 1,
+        ("ben", "company"): 3,
+        ("ben", "staged"): 2,
+        ("ben", "dm"): 1,
+        ("cara", "company"): 4,
+        ("cara", "group"): 1,
+        ("cara", "dm"): 1,
+        ("ops", "company"): 4,
+        ("ops", "task"): 3,
+        ("ops", "staged"): 2,
+        ("ops", "sub"): 1,
+    },
+}
+# (reader, thread) -> the messages its count counts that the reader may not open (the timeline shows each as a hidden
+# row). The count reads only who wrote a message and whom it was delivered to (threads.unread_message_sql).
 UNREAD_HIDDEN = {
     "public": {("cara", "company"): {"review", "reply"}},
     "private": {("cara", "company"): {"names_task", "review", "reply"}},
 }
 
 
-def _unread_hidden(api, w):
-    """{(reader, thread label): the messages counted unread that the reader may not open}, for every thread each reader
-    reads, after checking the sidebar's subtree count says the same as the thread's own."""
+def _unread(api, w):
+    """({(reader, thread label): unread count}, {(reader, thread label): the counted messages the reader may not open})
+    for every thread each reader reads, after checking the sidebar's subtree count says the same as the thread's own."""
     auth, store = api.app.state.auth, api.app.state.store
     labels = {v: k for k, v in w["messages"].items()}
-    found = {}
+    counts, hidden = {}, {}
     with store.read() as c:
         for reader in READERS:
             v = threads.viewer(auth, _identity(api, w, reader))
             for name, tid in w["threads"].items():
                 if not threads.readable(c, v, tid):
                     continue
-                row = threads.thread_row(c, tid)
+                count = threads.unread(c, v, tid)["unread"]
+                if threads.thread_row(c, tid)["root_id"] == tid and name != "task":  # no sub-thread: its row's count
+                    assert threads.subtree_summaries(c, v, [tid]).get(tid, {"unread": 0})["unread"] == count, (
+                        reader,
+                        name,
+                    )
+                if count:
+                    counts[(reader, name)] = count
                 follower = c.execute(
                     "SELECT last_read_seq FROM thread_followers WHERE thread_id=? AND actor=?", (tid, v.actor)
                 ).fetchone()
                 mark = max(follower[0] if follower else 0, threads._backfill_floor(c, v))
-                counted = [
-                    r[0]
-                    for r in c.execute(
-                        f"SELECT m.id FROM messages m WHERE m.conversation_id=? AND m.seq>? AND "
-                        f"{threads.unread_message_sql()}",
-                        (tid, mark, v.actor, v.actor),
-                    )
-                ]
-                assert threads.unread(c, v, tid)["unread"] == len(counted), (reader, name)
-                if row["root_id"] == tid and name not in ("task",):  # a root with no sub-thread: its row is its count
-                    summary = threads.subtree_summaries(c, v, [tid]).get(tid, {"unread": 0})
-                    assert summary["unread"] == len(counted), (reader, name, summary)
-                hidden = {labels[m] for m in counted if m in labels and not threads.readable(c, v, H.message(c, m))}
-                if hidden:
-                    found[(reader, name)] = hidden
-    return found
+                counted = c.execute(
+                    f"SELECT m.id FROM messages m WHERE m.conversation_id=? AND m.seq>? AND "
+                    f"{threads.unread_message_sql()}",
+                    (tid, mark, v.actor, v.actor),
+                ).fetchall()
+                assert len(counted) == count, (reader, name)
+                unopened = {
+                    labels[r[0]] for r in counted if r[0] in labels and not threads.readable(c, v, H.message(c, r[0]))
+                }
+                if unopened:
+                    hidden[(reader, name)] = unopened
+    return counts, hidden
 
 
-def test_the_unread_count_counts_only_what_its_reader_opens_but_for_the_hidden_rows_it_is_known_to_count(api, world):
+def test_the_unread_count_counts_what_its_reader_opens_and_the_hidden_rows_it_is_known_to_count(api, world):
     w = world
-    assert _unread_hidden(api, w) == UNREAD_HIDDEN["public"]
+    assert _unread(api, w) == (UNREAD["public"], UNREAD_HIDDEN["public"])
     with api.app.state.store.transaction() as c:
         H.task_update(c, "human:ben", w["task"], private=True)
-    assert _unread_hidden(api, w) == UNREAD_HIDDEN["private"]
+    assert _unread(api, w) == (UNREAD["private"], UNREAD_HIDDEN["private"])
