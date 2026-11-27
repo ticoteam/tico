@@ -1,0 +1,5 @@
+{
+  "backend/company_page/api_editions.py": {
+    "no-install-closure": 1
+  }
+}

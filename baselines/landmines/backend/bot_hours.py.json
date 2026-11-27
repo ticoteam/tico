@@ -1,0 +1,5 @@
+{
+  "backend/bot_hours.py": {
+    "no-install-closure": 1
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "backend/ask_snoozes.py": {
+    "no-install-closure": 1
+  }
+}

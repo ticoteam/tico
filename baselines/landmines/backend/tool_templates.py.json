@@ -1,0 +1,5 @@
+{
+  "backend/tool_templates.py": {
+    "no-install-closure": 1
+  }
+}

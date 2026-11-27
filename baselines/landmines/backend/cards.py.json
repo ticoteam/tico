@@ -1,5 +1,6 @@
 {
   "backend/cards.py": {
-    "core-imports-app": 12
+    "core-imports-app": 12,
+    "no-install-closure": 1
   }
 }

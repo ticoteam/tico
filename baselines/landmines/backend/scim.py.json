@@ -1,0 +1,5 @@
+{
+  "backend/scim.py": {
+    "no-install-closure": 1
+  }
+}

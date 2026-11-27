@@ -1,0 +1,5 @@
+{
+  "backend/visuals.py": {
+    "no-install-closure": 1
+  }
+}

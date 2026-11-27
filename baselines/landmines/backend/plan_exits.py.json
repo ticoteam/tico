@@ -1,0 +1,5 @@
+{
+  "backend/plan_exits.py": {
+    "no-install-closure": 1
+  }
+}

@@ -55,6 +55,7 @@ from .execution import (
 from .onboarding import AGENT_OPS, Onboarding
 from .recruit import Recruiter
 from . import names as actor_names
+from . import api_routing, deps
 from . import settings_catalog
 from .files import raw_media
 from . import company_server
@@ -182,11 +183,14 @@ def _configure_app(
 
     flight.install_middleware(app, recorder)
 
-    actor_names.install_route_class(app, store)
+    # Every route answers through TicoRoute (backend/api_routing.py). HTTP middleware's call_next wraps every response
+    # as a stream, hiding its original type: names are added before that wrapping, so file and stream answers stay.
+    app.router.route_class = api_routing.TicoRoute
 
     flight.register_timing(app)
 
     mutate = _mutation(auth, store)
+    app.state.deps = deps.Deps(store=store, auth=auth, mutate=mutate)  # route modules' services (backend/deps.py)
 
     mover, task_view, task_views, visible_tasks = task_list_routes.readers(auth)
 
@@ -2664,9 +2668,9 @@ def _install_features(
     from .team_build import install as install_team_build
 
     install_team_build(app, store, auth, mutate, onboarding)
-    from .report_order import install as install_report_order
+    from . import report_order
 
-    install_report_order(app, store, auth, mutate)
+    api_routing.include(app, report_order.router)
     from .settings_catalog import install as install_settings_catalog
 
     install_settings_catalog(app, store, auth, settings)

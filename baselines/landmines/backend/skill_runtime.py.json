@@ -1,0 +1,5 @@
+{
+  "backend/skill_runtime.py": {
+    "no-install-closure": 1
+  }
+}

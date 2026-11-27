@@ -450,7 +450,14 @@ pub async fn git_clear(c: &Candidate, env: &Env) -> bool {
     worktrees::git(
         checkout,
         env,
-        &["rev-list", "--count", "HEAD", "--not", "--remotes=origin"],
+        &[
+            "rev-list",
+            "--count",
+            "HEAD",
+            "--not",
+            crate::worktrees::NOT_A_BACKUP,
+            "--remotes=origin",
+        ],
         true,
     )
     .await

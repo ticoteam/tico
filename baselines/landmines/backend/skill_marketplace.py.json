@@ -1,0 +1,5 @@
+{
+  "backend/skill_marketplace.py": {
+    "no-install-closure": 1
+  }
+}

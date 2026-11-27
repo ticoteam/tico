@@ -1,0 +1,5 @@
+{
+  "backend/dream.py": {
+    "no-install-closure": 1
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "backend/org_routes.py": {
+    "no-install-closure": 1
+  }
+}

@@ -1,5 +1,6 @@
 {
   "backend/strategy.py": {
-    "core-imports-app": 1
+    "core-imports-app": 1,
+    "no-install-closure": 1
   }
 }

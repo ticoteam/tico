@@ -1,0 +1,5 @@
+{
+  "backend/postal_mail.py": {
+    "no-install-closure": 1
+  }
+}

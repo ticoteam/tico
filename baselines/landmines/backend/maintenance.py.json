@@ -1,0 +1,5 @@
+{
+  "backend/maintenance.py": {
+    "no-install-closure": 1
+  }
+}

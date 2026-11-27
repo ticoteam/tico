@@ -398,10 +398,12 @@ new commit to borrow an old run. Roll back this tooling change by reverting it; 
 ## Tests on a PR
 
 Open the pull request as a draft and run tests on your computer while you work: a draft runs no checks, so pushes are
-free. When the change is done, `python3 scripts/pr_checks.py local --ready` runs the tests the plan selects for the
-branch (the same selection a pull request's run makes, through `scripts/heavy.sh`), prints a receipt line naming the full
-head sha and the result for the task's review, and marks the draft ready after a pass; without `--ready` it only
-runs and prints. It names what only CI runs (Rust conformance). A change that reaches most of
+free. When the change is done, mark it ready with `gh pr ready`: its checks run the tests the plan selects. Running
+them first on your computer is optional and never waited for: when a heavy slot is free,
+`python3 scripts/pr_checks.py local --ready` applies the same selection rules (through `scripts/heavy.sh`; CI caps with
+recent queue timings and diffs from the merge base, so the files kept can differ when the time cap applies), prints a receipt line
+naming the full head sha and the result for the task's review, and marks the draft ready after a pass; without
+`--ready` it only runs and prints. It names what only CI runs (Rust conformance). A change that reaches most of
 the suite (a catalog template, a shared module) selects most of it: with `TICO_HEAVY_REMOTE=1` each part runs on a RunsOn
 VM against the pushed head instead. Mark a pull request ready once:
 each later push runs its checks again. A push to a ready pull request runs the cheap checks on free GitHub-hosted runners:
@@ -446,7 +448,7 @@ time from a parameter, a subprocess's own reads) must name that file or folder l
 select it. A file that makes a computed import or lists the repository with `git ls-files` runs on every change.
 The Release validation workflow retains its full candidate gate and never cancels a running validation.
 
-Write unit tests while you build and run them as you go; keep every one that guards a real failure, as many as the change needs, and drop the trivial ones. Before you mark the PR ready, run `python3 scripts/pr_checks.py local`, not the full suite. For each release, run the full suite once on its frozen candidate.
+Write unit tests while you build and run them as you go; keep every one that guards a real failure, as many as the change needs, and drop the trivial ones. When the PR is ready, its checks run the selected tests, not the full suite. For each release, run the full suite once on its frozen candidate.
 
 Use `pytest -ra` to see prerequisite skip reasons. Systemd lifecycle scenarios run on Linux;
 unit rendering still runs on every host. Installer scenarios need Docker and stage their mounts
@@ -493,7 +495,8 @@ checks on that merge commit, and moves main only when they pass.
   same day, or deleted. Release validation runs without retries.
 - **Required check**: `checks` on main. It fails when a job it needs failed or was cancelled; a skipped job passes.
 
-Agents open pull requests as drafts and run `python3 scripts/pr_checks.py local --ready` once the change is done; the
+Agents open pull requests as drafts and mark them ready with `gh pr ready` once the change is done; the PR checks run
+the selected tests (`python3 scripts/pr_checks.py local` applies the same rules locally, optional and never waited for), and the
 queue runs the selected set once per group.
 
 **Enqueue once.** A pull request needs no rebase to be current: the queue merges it onto the current main. Rebase only when
@@ -554,16 +557,13 @@ the manifests and files it would publish, and pushes nothing.
 
 The reviewed workflow controls and selected candidate have separate checkouts: a workflow merged after a candidate was
 frozen can check that candidate without changing it. The candidate's `scripts/release_checks.py --release` is unchanged.
-It can also run one slice of the gate (`--part product|browser|python|desktop`, with `--shard K/N` splitting the Python test
+It can also run one slice of the gate (`--part product|browser|python`, with `--shard K/N` splitting the Python test
 files, or the browser scripts, into N groups balanced by the times in `scripts/test-timings.json`; refresh the browser
 times with `--record-browser-timings` from a validation's browser logs). The hosted workflow selects product, four browser
-shards, 36 Python shards, desktop. Every part starts with the candidate and runs its setup while the Linux
-binaries build. Product, desktop and Python shards 1–2 wait for those binaries; the other shards start their tests
+shards and 36 Python shards. Every part starts with the candidate and runs its setup while the Linux
+binaries build. Product and Python shards 1–2 wait for those binaries; the other shards start their tests
 immediately. Only product needs the images and waits for the image builds;
-without `--part`, the command runs the whole gate, with desktop only where the Linux app builds. The desktop
-part runs the Tauri app's tests on Linux, among them a company app updating from a feed this candidate publishes
-(`scripts/app_release.py`) and serves (`backend/downloads.py`) behind a hub session: it must find, download, verify and
-install the update. It does not cover the macOS or Windows installers.
+without `--part`, the command runs the whole gate. The gate does not build or test the desktop app's installers.
 Python tests marked `alone` run without workers after their shard's parallel tests pass, so wall-clock budgets do not
 compete with other pytest workers. Both passes share one check and contribute to its JUnit report and shard timings.
 Python shard planning reads candidate files using pytest.ini's discovery settings (pytest defaults when absent),
@@ -750,72 +750,20 @@ rebuilds and pushes one small layer per image.
 
 ## Desktop apps follow the release
 
-The desktop app never holds up the server release. Only `validated`, `runner-changes` and `release` run before core
-publication; the Mac binaries, desktop and company build branches start afterwards so their fan-out cannot
-compete with publication for job slots. A manual rebuild of an already published tag still runs those branches when
-`release` is skipped. The Release workflow compares the tag with the previous release
-tag: when nothing the shell is built from changed (`app/`, `scripts/app_release.py`, `scripts/company_apps.py` and the
-two desktop workflows), it builds nothing and copies the previous release's desktop files and `latest.json` onto the new
-release, with the manifest's URLs moved to the new tag. The app keeps its earlier version, so installed apps are not
-offered an update, and the download links keep working. When the shell did change, `.github/workflows/app.yml` builds
-it (with a Rust cache, so only the app crate recompiles) and the files are added to the already published release, the
-updater manifest last. A failed desktop build leaves the server release published and the Release run red; rerun the
-workflow from the tag (Run workflow, `desktop` checked) once it is fixed. The app's version is the release's
-(v0.3.6 → app 0.3.6, including any prerelease suffix), stamped from the tag at build time.
+The desktop app (`desktop/`, Electron) never holds up the server release. Only `validated`, `runner-changes` and
+`release` run before core publication; the Mac binaries and the desktop app start afterwards so their fan-out cannot
+compete with publication for job slots. A manual rebuild of an already published tag still runs them when `release` is
+skipped. A failed desktop build leaves the server release published and the Release run red; rerun the workflow from
+the tag (Run workflow, `desktop` checked) once it is fixed. When the workflow builds the app, its version is the release's
+(v0.3.6 → app 0.3.6, including any prerelease suffix), stamped from the tag; carried-forward files keep the version
+of the release that built them.
 
-The comparison excludes desktop tests (`app/tests/`, the vendored GLib's `tests/` and `benches/`),
-`app/src/testdata/` and Markdown docs anywhere under `app/`. Changes to shipped Rust code, configuration, icons, dependencies, packaging
-or those build workflows still build new apps. A missing previous updater manifest or the manual `desktop`
-override also forces a build.
-
-Because the files arrive a few minutes after the release, a hub that looks for them in that window finds none and asks
-again a minute later. A hub accepts an app version older than its own release when the files are that release's assets.
-
-All public CI builds are the generic **Tico** app. They do not consume company or legacy
-per-environment repository variables. The three build jobs upload their bundles as `app-<target>` artifacts. After those
-jobs pass, the Release workflow downloads them and adds these assets to the published GitHub release:
-
-- macOS universal `.dmg`, `.app.tar.gz` and `.app.tar.gz.sig`;
-- Windows NSIS `-setup.exe` and `-setup.exe.sig`;
-- Linux `.AppImage`, `.AppImage.sig` and `.deb`;
-- `latest.json`, the Tauri updater manifest, with both macOS architectures pointing at the
-  universal archive and every platform URL pointing at an asset of that GitHub release.
-
-`TAURI_SIGNING_PRIVATE_KEY` (and its optional password) signs the updater artifacts. Keep the
-corresponding public key in `app/tauri.conf.json`. Missing signatures or platform bundles stop
-publication. Generic apps check
-`https://github.com/ticoteam/tico/releases/latest/download/latest.json`; prereleases are not
-selected by GitHub's latest-release endpoint. See [Desktop app](desktop.md) for installation.
-
-Generate the public manifest locally from collected bundles without uploading anything:
-
-```bash
-python scripts/app_release.py --github --version X.Y.Z --tag vX.Y.Z --output latest.json bundles/
-```
-
-Public CI no longer runs the legacy variable-based S3 publisher: its variables and branded
-artifacts could expose private company configuration in a public repository's Actions run.
-Use the private company workflow below for CI publishing. `scripts/app.sh --env <slug>` and
-manual `scripts/app_release.py` S3 publishing retain their per-environment behavior.
-Hubs prefer a valid company bucket manifest even when older than the server;
-without a bucket manifest they offer assets from the GitHub release of their running version, with a ten-minute
-cache and no credentials sent to GitHub. Concurrent requests share one GitHub fetch;
-other callers use the last cached result or wait at most 100 ms on a cold cache. This fallback applies only to human download routes
-(`/download/{os}` and `/api/download/{os}`). `/download/latest.json` serves only the bucket
-manifest, including older environment builds without an `app_kind` field, and returns 404 when
-none exists. Explicitly generic manifests and updater URLs outside the hub's download-file
-route are rejected. Company installer URLs are constructed from that same hub route. Download
-storage uses the blob store's region, endpoint and bucket prefix; environment artifacts belong
-under `<prefix>/releases/app/` when a prefix is configured. The fallback offers the Electron app's installers when the
-release has them (`Tico-<version>-arm64.dmg`, else `-universal.dmg`; `-setup.exe`; `-x86_64.AppImage`; `-amd64.deb`),
-never marked signed or notarized since the release records neither, and the Tauri app's that `latest.json` names
-otherwise.
-
-**The Electron app** (`desktop/`) ships on the same releases, beside the Tauri app, the same way: the
-`electron-changes` job builds it with `.github/workflows/desktop.yml` when `desktop/` (tests and Markdown aside) or
-that workflow changed since the previous release, or the previous release has no `latest-mac.yml`; otherwise
-`electron-assets` carries the previous release's Electron files forward unchanged. Run the workflow from the tag with
-`desktop` checked to force a rebuild of both apps. The files are `Tico-<version>-arm64.dmg` and `.zip` (the Mac build
+The Release workflow's `electron-changes` job builds it with `.github/workflows/desktop.yml` unless all of these hold
+for the previous release tag (the newest version tag the new one descends from), in which case `electron-assets`
+carries that release's Electron files forward unchanged: it is not a prerelease (an `-rc` app carries its prerelease
+version), `desktop/` (`*.test.ts` and `*.md` aside) and that workflow did not change since it, and it has all three
+update feeds (`latest-mac.yml`, `latest.yml`, `latest-linux.yml`). Run the workflow from the tag with
+`desktop` checked to force a rebuild. The files are `Tico-<version>-arm64.dmg` and `.zip` (the Mac build
 is Apple-chip only; there is no Intel Mac build), `Tico-<version>-setup.exe` (one installer for Windows x64 and arm64),
 `Tico-<version>-x86_64.AppImage` and `Tico-<version>-amd64.deb`, their `.blockmap` files, and the update feeds
 `latest-mac.yml`, `latest.yml` and `latest-linux.yml`, uploaded last. Each release also keeps the earlier versions'
@@ -827,6 +775,12 @@ signed when `DESKTOP_MAC_CERT` (a base64 `.p12`) and `DESKTOP_MAC_CERT_PASSWORD`
 `DESKTOP_NOTARY_KEY` (the App Store Connect API key's `.p8` contents), `DESKTOP_NOTARY_KEY_ID` and
 `DESKTOP_NOTARY_ISSUER` are set too. Without them it is unsigned, and an unsigned Mac app cannot install its own
 updates. The Windows installer is unsigned for now.
+
+A server offers the installers of its running version's GitHub release (`backend/downloads.py`):
+`Tico-<version>-arm64.dmg`, else `-universal.dmg`; `-setup.exe`; `-x86_64.AppImage`, never marked signed or notarized
+since the release records neither. Its GitHub lookups carry no credentials. A lookup that found the installers is
+cached for ten minutes; one that found none (the files arrive a few minutes after the release) is asked again after a
+minute. See [Desktop app](desktop.md#downloads-from-your-tico-server).
 
 ## The Release Owner's rollout
 
@@ -904,120 +858,3 @@ Validate the published copy against this release: server Decision calls and HQ s
 Inbox Manager's single disabled weekday 07:30 Routine and assigned-mailbox access, and the complete KPI colour example in
 [Goals and KPIs](goals-and-kpis.md#the-colours). Run `npm run screenshots` when local dependencies and browsers are available and publish
 images from the same release as the UI. Preserve inbound links when moving pages; the transcript and old docs-sync pages link to their successors.
-
-## Company apps
-
-A version tag whose shell changed builds, after core publication and beside the generic desktop app, `.github/workflows/company-app.yml` for
-each configured company: its macOS universal DMG and signed updater archive, Windows NSIS
-installer with signature, and Linux AppImage with signature plus Debian package. The app version
-is stamped from the tag. Company builds restore the generic build's Rust cache (compiled dependencies and the Tauri CLI)
-and never save to it, so no branded output reaches a cache a public build could read. A tag whose shell did not change
-leaves each company's bucket manifest as it is; after adding a company, run the Release workflow from the current tag
-with `desktop` checked. Every build uses the same updater signing key as the generic app,
-with `team.tico.env.<stable UUID>` as its bundle ID, its own name and PNG icon, its own server
-address, and `<runner_url or url>/download/latest.json` as the update endpoint.
-
-The company shell preserves its configured updater endpoint, including a separate public
-`runner_url`. If the configured endpoint is the generic default, it uses the selected hub's
-`/download/latest.json`. A hub-origin feed may use the signed-in WebView session when one exists;
-the cookie is optional for public feeds and is never attached to a different runner origin. Hub
-feeds do not follow redirects, and artifact URLs from them must stay on the selected hub origin.
-Tauri still verifies each updater signature before installation. An older shell that cannot reach
-the protected feed must be replaced from the team's signed-in **Download** page; see
-[Desktop app](desktop.md#your-companys-app).
-
-Keep the JSON list in the private repository Actions **secret** `TICO_COMPANY_APPS`. A secret is
-used instead of an Actions variable because the runner prints variables in its pre-step environment
-banner before masking commands can run. Company names and URLs must never enter repository
-files, public GitHub release assets or job summaries. Each list entry has these fields:
-
-```json
-{"slug":"acme","id":"12345678-1234-4234-8234-123456789abc","app_name":"Acme Tico",
- "url":"https://tico.example.com","runner_url":"https://runner.example.com",
- "icon_url":"/api/v2/team/icon","deploy_role_arn":"arn:aws:iam::123456789012:role/tico-company-app-publisher",
- "bucket":"acme-app-files","prefix":"team"}
-```
-
-`runner_url` and `prefix` are optional. `prefix` must match the server's storage prefix.
-`icon_url` is an HTTPS PNG URL or a path on `url`. URLs require HTTPS except loopback HTTP.
-The URL must be reachable without authentication from GitHub's build runners and return a PNG
-of at most 1 MiB. If it is `/api/v2/team/icon`, the owner must upload a team icon on that server
-(Settings > Team, or `POST /api/v2/team/icon`); the endpoint returns 404 until one is set.
-Builds retry transient icon download errors up to eight times, waiting 30, 60, 90, then at most 120 seconds between
-attempts, so a server restarting for the update can recover. Permanent HTTP errors and TLS certificate verification
-failures are not retried, because waiting does not change them. Invalid or oversized PNGs fail the run at once. If the
-download still fails after the retries (network, DNS, timeout or HTTP status), or fails on a certificate, the `icon`
-check skips that company's build and publish with a `::warning::` and a job summary line, and the run stays green. The
-public release and other companies are unaffected. The company's bucket manifest is not replaced, so its installed app
-keeps its current version. Retry logs contain no company URL or remote error text.
-The UUID must remain stable across renames to preserve installed preferences and login state.
-
-Company apps put nothing in the macOS menu bar; the Dock shows the company logo with the
-Needs you count as its badge. A `tray_label` left in an older private entry is ignored.
-
-Prepare each company's IAM publisher role in its own AWS account, using the normal AWS
-credential chain. This script defaults to a dry run that reads live OIDC settings with
-`gh api repos/ticoteam/tico/actions/oidc/customization/sub`; authenticate `gh` to the repository
-first. Inspect its output privately and run it with `--apply` when ready. It creates the GitHub
-OIDC provider if absent, trusts only the repository's default version-tag subject
-(`repo:ticoteam/tico:ref:refs/tags/v*` for legacy subjects or the configured repository-ID prefix
-for immutable subjects) with audience `sts.amazonaws.com`, and grants only GetObject/PutObject
-beneath `[prefix/]releases/app/*` and ListBucket for that prefix. Unsupported custom subject
-templates and failed settings discovery are rejected.
-
-```bash
-scripts/aws/company-app-publisher.sh --slug acme --id 12345678-1234-4234-8234-123456789abc \
-  --app-name 'Acme Tico' --url https://tico.example.com --runner-url https://runner.example.com \
-  --icon-url /api/v2/team/icon --bucket acme-app-files --prefix team --account-id 123456789012
-```
-
-It prints the role ARN, trust and permission policies, and the JSON entry to add to the secret's
-list. Its output is private operator configuration; do not commit it or run it in public CI.
-The publisher uses short-lived GitHub OIDC credentials, with the AWS action pinned by commit.
-It uploads via `scripts/app_release.py --complete --quiet --prefix ...` into the company's
-bucket at `[prefix/]releases/app/<version>/` and then atomically replaces
-`[prefix/]releases/app/latest.json` only after all signed platform assets have uploaded.
-
-Matrices and artifact names contain only SHA-256 hashes of slugs. Every company value used is
-masked before use; compiler/bundler output is suppressed since it can include derived company
-filenames. GitHub Actions artifacts in a public repository can be read by other signed-in
-users, so company bundles and their filenames are encrypted with streaming AES-GCM before
-upload. A separately derived key uses the existing `TAURI_SIGNING_PRIVATE_KEY` secret; no
-additional secret is required. That secret must contain the private signing key material,
-rather than a predictable filename. Authentication binds each archive to its company hash, version
-tag and CI run. The publisher authenticates each archive before extracting files, rejects paths
-and duplicates, and bounds extraction to 32 files and 2 GiB across the three platforms.
-Each pack uses a fresh random 96-bit nonce; the signing bytes are never used directly as an
-AES key. Decryption uses one automatically closed anonymous temporary file at a time, and
-removes extracted files on any failure. Downloaded ciphertext is bounded to 2 GiB plus archive
-overhead, with at most 4 GiB of temporary/extracted plaintext on ephemeral publisher disk. Branded
-plaintext exists only on ephemeral job disks and in the company's bucket. Ciphertext artifacts
-expire after one day and are never matched by the public release's `app-*` artifact download.
-The publisher does not fetch the logo again, so a logo change or outage after the build cannot
-block publication of already built bundles. Apple signing flags describe only the Mac installer;
-Windows and Linux updater signatures do not imply installer code signing.
-Company jobs use `fail-fast: false`; one build or publish failure fails that company's workflow
-and marks the run red, while other companies and the public release continue independently.
-The public release depends on no desktop build. Entries are validated within
-their own company job; a malformed company does not prevent valid companies from publishing.
-Entries without a slug produce a generic warning and cannot be dispatched. Unparseable JSON
-fails the matrix with a generic error and does not prevent the public release.
-
-Company build diagnostics name the failed operation without printing private values. Configuration
-and icon fetching run before installing build dependencies. An icon download error reports the HTTP
-status or DNS/TLS/timeout category and names `TICO_COMPANY_APPS.icon_url`; it does not indicate a
-signing or publishing failure. For a 404, verify the icon exists; for 401/403, allow unauthenticated
-icon access. Correct the entry's `icon_url` (and `url` for a relative path) in the repository's
-Settings > Secrets and variables > Actions > `TICO_COMPANY_APPS` if the address is wrong. A TLS error means the
-icon host's certificate fails verification from GitHub's runners (expired, incomplete chain or wrong name); fix the
-certificate on that host. The skip warning names the same category. After the fix, run the Release workflow from the
-current tag with `desktop` checked to build and publish that company again.
-Missing configuration fields and required environment variables are named explicitly. Icon generation,
-bundling, Apple certificate import, artifact encryption/decryption and publication have separate
-failure labels; private tool output and raw exception text remain suppressed. An old catch-all
-failure log cannot establish which HTTP status or network error occurred; collect the new diagnostic
-before changing credentials or assuming the icon is missing.
-
-Validate a private list locally without printing it or fetching icons:
-`python scripts/company_apps.py matrix --dry-run` with `TICO_COMPANY_APPS` supplied through
-your environment. Publishing still requires the owner's release instruction.

@@ -1,5 +1,6 @@
 {
   "backend/connectors.py": {
-    "core-imports-app": 8
+    "core-imports-app": 8,
+    "no-install-closure": 1
   }
 }

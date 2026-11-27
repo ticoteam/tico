@@ -1,0 +1,5 @@
+{
+  "backend/bot_status_routes.py": {
+    "no-install-closure": 1
+  }
+}

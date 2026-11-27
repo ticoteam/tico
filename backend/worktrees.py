@@ -192,6 +192,11 @@ def recovery_prompt(c, task, bot):
                 "This brings back published work on your current computer. Work that was not pushed "
                 "stayed on the retired computer; do not ask a person to restore this checkout first."
             )
+        elif row['state'] == 'present' and detail.get('backup_error'):
+            notes.append(  # the checkout still works; its unpushed commits are on this computer's disk alone
+                f"{detail['backup_error']} ({row['repo']}, branch {row['branch']}). Push your commits to the task "
+                "branch: a replaced computer loses what is on its disk alone."
+            )
     return notes
 
 
@@ -841,6 +846,8 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
             detail['runner_report_at'] = now  # the computer's first report after a push webhook's delivery
         if report.error is None and not refused_cleanup(report.state, detail):
             detail.pop('error', None)  # every report carries the computer's current error, if any
+        if report.backup_error is None:
+            detail.pop('backup_error', None)  # and its latest wip/ copy's failure, if any
         legacy_present = (
             report.state == 'present'
             and report.checkout_state == 'legacy_present'
@@ -1090,6 +1097,143 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
     return actions
 
 
+def _recovery(existing, detail):
+    """Turn a checkout record on a retired computer into a queued recovery: its last report becomes history and the
+    next computer restores it from the task branch or a newer wip/ copy (runner-rs recover_retired)."""
+    old = {
+        k: detail[k]
+        for k in (
+            'last_commit',
+            'pushed',
+            'ahead',
+            'behind',
+            'dirty_files',
+            'current_branch',
+            'recovery_note',
+            'backed_up',
+        )
+        if k in detail
+    }
+    old.update(computer_id=existing['computer_id'], branch=existing['branch'], path=existing['path'])
+    # A later checkout cannot account for work left on an earlier computer.
+    history = detail.get('retired_worktrees') or (
+        [detail['retired_worktree']] if detail.get('retired_worktree') else []
+    )
+    history = [*history, old]
+    previous = detail.get('recovery') or {}
+    # A fallback starts another branch; its origin need not contain the abandoned branch's heads.
+    heads = {h for tree in history if tree.get('branch') == existing['branch'] for h in H.worktree_heads(tree)}
+    if previous.get('branch') == existing['branch']:
+        heads.update(previous.get('published_heads') or [previous.get('published_head')])
+    heads = sorted(h for h in heads if isinstance(h, str) and re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', h))
+    head = detail.get('pushed') or (detail.get('last_commit') if detail.get('ahead') == 0 else None)
+    if not isinstance(head, str) or not re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', head):
+        head = heads[-1] if heads else None
+    detail['retired_worktree'] = old
+    detail['retired_worktrees'] = history
+    detail['recovery'] = {
+        'branch': existing['branch'],
+        'published_head': head,
+        'published_heads': heads,
+        'fallback_branch': f"tico/{existing['task_id'][:8]}-recovery-{uuid.uuid4().hex[:12]}",
+    }
+    # The old report belongs to that computer. New reports describe only the replacement checkout.
+    for key in (
+        'last_commit',
+        'pushed',
+        'ahead',
+        'behind',
+        'dirty_files',
+        'current_branch',
+        'size_mb',
+        'runner_report_at',
+        'wait_id',
+        'recovery_note',
+        'missing_since',
+        'stale_notified',
+        'backed_up',
+        'backup_error',
+    ):
+        detail.pop(key, None)
+
+
+def _reallocate(c, existing, detail, computer, owner, attaching=False):
+    """Queue link `existing` again on `computer` for `owner`, with `detail` already carrying any recovery."""
+    # This is a new allocation on the same link, not another attempt to release the retired tree.
+    # A link released before the spelling changed holds `cancelled` in its stored detail.
+    for key in (
+        *REMOVAL,
+        'release_reason',
+        'removed_by',
+        'restore_on_reopen',
+        'canceled',
+        'cancelled',
+        'cleanup_attempts',
+        'cleanup_retry_at',
+        'cleanup_gave_up',
+        'cleanup_retry_generation',
+        'pending_expired',
+        'error',
+        'held',
+    ):
+        detail.pop(key, None)
+    detail['allocation_started'] = H.now()
+    detail['owner'] = owner
+    detail.update(checkout_state='attached_pending' if attaching else 'queued', setup_pending=not attaching)
+    detail.pop('expected_head', None)
+    detail.pop('checkout_target', None)
+    detail.pop('expected_base', None)
+    now = detail['record_changed'] = H.now()
+    c.execute(
+        "UPDATE task_links SET state='pending',computer_id=?,detail=?,updated_at=? WHERE id=?",
+        (computer, json.dumps(detail), now, existing['id']),
+    )
+
+
+def follow_replacement(c, gone, computer, bots):
+    """A cloud machine made again on a new disk: its new computer `computer` takes the place of the computers in `gone`
+    (revoked). Each open checkout the machine's `bots` had there moves to `computer` as a queued recovery, so the new
+    computer rebuilds it from the task branch or the newer wip/ copy its predecessor pushed, without the bot asking
+    (task #3448). A checkout of a finished task, one asked to be removed, or one of a task that changed hands is closed
+    instead, its last report kept as history. Other computers
+    (a bot's own, re-registered by a person) never come here. Returns (moved, closed)."""
+    gone = [g for g in gone if g and g != computer and retired(c, g)]
+    owners = {'bot:' + b for b in bots}
+    if not gone or not owners:
+        return 0, 0
+    moved = closed = 0
+    for part in H.chunks(gone):
+        rows = c.execute(
+            "SELECT l.*,t.owner_id,t.status AS task_status FROM task_links l JOIN tasks t ON t.id=l.task_id "
+            "WHERE l.kind='worktree' AND coalesce(l.state,'unknown')<>'removed' AND l.computer_id IN (%s) "
+            "ORDER BY l.created_at" % ','.join('?' * len(part)),
+            part,
+        ).fetchall()
+        for existing in rows:
+            detail = json.loads(existing['detail'] or '{}')
+            owner = detail.get('owner', existing['owner_id'])
+            if owner not in owners or not existing['repo']:
+                continue  # another computer's bot, or an attached folder with no repository to rebuild from
+            # Closed, not moved: a finished task; a checkout someone asked to delete (`tico task unlink`, which a
+            # rebuild would undo); a task that changed hands, whose new owner adds its own checkout. The last report
+            # is kept (head, published head, unpushed count, the wip/ copy's head): reopening the task recovers it.
+            changed_hands = owner != existing['owner_id']
+            if existing['task_status'] in CLOSED or changed_hands or detail.get('delete_requested'):
+                last = json.loads(status(c, existing, gone=True)['detail'] or '{}')
+                now = detail['record_changed'] = H.now()
+                detail.update(removed_by='replacement', release_reason=last.get('error') or RETIRED)
+                c.execute(
+                    "UPDATE task_links SET state='removed',detail=?,updated_at=? WHERE id=?",
+                    (json.dumps(detail), now, existing['id']),
+                )
+                closed += 1
+                continue
+            _recovery(existing, detail)
+            _reallocate(c, existing, detail, computer, owner)
+            moved += 1
+    return moved, closed
+
+
 def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=False):
     """The one path a task worktree is made or reused by: the owner bot's request, a person's, and a worktree wait
     being served (backend/worktree_waits.py) all go through it, so each checks permission, ownership and computer.
@@ -1266,82 +1410,11 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
                 raise Problem('computer_update', 'Update this computer to bring back work from a retired computer', 409)
             if attaching:
                 raise Problem('worktree_path', 'Use add to bring back work from a retired computer', 409)
-            old = {
-                k: detail[k]
-                for k in ('last_commit', 'pushed', 'ahead', 'behind', 'dirty_files', 'current_branch', 'recovery_note')
-                if k in detail
-            }
-            old.update(computer_id=existing['computer_id'], branch=existing['branch'], path=existing['path'])
-            # A later checkout cannot account for work left on an earlier computer.
-            history = detail.get('retired_worktrees') or (
-                [detail['retired_worktree']] if detail.get('retired_worktree') else []
-            )
-            history = [*history, old]
-            previous = detail.get('recovery') or {}
-            # A fallback starts another branch; its origin need not contain the abandoned branch's heads.
-            heads = {h for tree in history if tree.get('branch') == existing['branch'] for h in H.worktree_heads(tree)}
-            if previous.get('branch') == existing['branch']:
-                heads.update(previous.get('published_heads') or [previous.get('published_head')])
-            heads = sorted(h for h in heads if isinstance(h, str) and re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', h))
-            head = detail.get('pushed') or (detail.get('last_commit') if detail.get('ahead') == 0 else None)
-            if not isinstance(head, str) or not re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', head):
-                head = heads[-1] if heads else None
-            detail['retired_worktree'] = old
-            detail['retired_worktrees'] = history
-            detail['recovery'] = {
-                'branch': existing['branch'],
-                'published_head': head,
-                'published_heads': heads,
-                'fallback_branch': f'tico/{short}-recovery-{uuid.uuid4().hex[:12]}',
-            }
-            # The old report belongs to that computer. New reports describe only the replacement checkout.
-            for key in (
-                'last_commit',
-                'pushed',
-                'ahead',
-                'behind',
-                'dirty_files',
-                'current_branch',
-                'size_mb',
-                'runner_report_at',
-                'wait_id',
-                'recovery_note',
-                'missing_since',
-                'stale_notified',
-            ):
-                detail.pop(key, None)
+            _recovery(existing, detail)
         else:
             # A recovered tree later released here follows the ordinary local reuse rules.
             detail.pop('recovery', None)
-        # This is a new allocation on the same link, not another attempt to release the retired tree.
-        # A link released before the spelling changed holds `cancelled` in its stored detail.
-        for key in (
-            *REMOVAL,
-            'release_reason',
-            'removed_by',
-            'restore_on_reopen',
-            'canceled',
-            'cancelled',
-            'cleanup_attempts',
-            'cleanup_retry_at',
-            'cleanup_gave_up',
-            'cleanup_retry_generation',
-            'pending_expired',
-            'error',
-            'held',
-        ):
-            detail.pop(key, None)
-        detail['allocation_started'] = H.now()
-        detail['owner'] = task['owner_id']
-        detail.update(checkout_state='attached_pending' if attaching else 'queued', setup_pending=not attaching)
-        detail.pop('expected_head', None)
-        detail.pop('checkout_target', None)
-        detail.pop('expected_base', None)
-        now = detail['record_changed'] = H.now()
-        c.execute(
-            "UPDATE task_links SET state='pending',computer_id=?,detail=?,updated_at=? WHERE id=?",
-            (assigned['id'], json.dumps(detail), now, existing['id']),
-        )
+        _reallocate(c, existing, detail, assigned['id'], task['owner_id'], attaching)
         return {
             'link_id': existing['id'],
             'branch': existing['branch'],

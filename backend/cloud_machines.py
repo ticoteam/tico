@@ -1222,8 +1222,8 @@ def enrolled(c, execution, runner_id, key):
     burst = burst_key(key)
     if old and old != runner_id:
         mark_revoked(c, old, execution=execution if burst else None)
+    gone = [] if burst else replaced(c, key, old, runner_id)
     if not burst:
-        replaced(c, key, old, runner_id)
         from . import performance
 
         # Its overloads, points and turns follow the machine, newest computer first: a minute both reported keeps
@@ -1234,6 +1234,19 @@ def enrolled(c, execution, runner_id, key):
     save(c, key, runner_id=runner_id, enroll_by=0, enroll_fails=0)
     checked_in(c, runner_id)
     H.event(c, H.TICO_ACTOR, "cloud_machine.enrolled", key, {"runner": runner_id})
+    if gone:
+        from .worktrees import follow_replacement
+
+        # The old disk is gone: its task checkouts are rebuilt here, not left for each bot to add again (#3448).
+        moved, closed = follow_replacement(c, gone, runner_id, hosted(c, key))
+        if moved or closed:
+            H.event(
+                c,
+                H.TICO_ACTOR,
+                "cloud_machine.checkouts_moved",
+                key,
+                {"runner": runner_id, "from": gone, "moved": moved, "closed": closed},
+            )
     if not burst:
         c.execute("DELETE FROM registry_metadata WHERE key=?", (REPLACES_KEY + key,))
     for bot in hosted(c, key):

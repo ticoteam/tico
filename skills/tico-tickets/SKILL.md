@@ -62,8 +62,9 @@ Loop until nothing is left that you can move:
 4. **PR**: title in plain words; body **What / Why / Surfaces / How it was checked**, and `Closes #<n>`.
    **Surfaces** lists which entries of CLAUDE.md's "Hit every surface" applied and what was done for each.
 5. **Merge**: open the PR as a draft (`gh pr create --draft`) and push freely; a draft runs no CI. When the change is
-   done, run `python3 scripts/pr_checks.py local --ready` once: it runs the tests the PR checks select for the diff on
-   this computer, prints a receipt line with the head sha, and marks the PR ready after a pass. Each push to a ready PR
+   done, mark it ready with `gh pr ready` once: its checks run the tests the PR checks select for the diff.
+   `python3 scripts/pr_checks.py local --ready` applies the same selection rules on this computer first and prints a
+   receipt line with the head sha (when the time cap applies, the files it keeps can differ from CI's); it is optional, for when a heavy slot is free, and never waited for. Each push to a ready PR
    runs CI again, so batch fixes. When the PR is reviewed and its `checks` are green, enqueue it with
    `gh pr merge <n> --merge`. That puts the PR in main's merge queue, which runs
    the selected checks on the merged result and lands it only if they pass; a red run removes the PR from the queue.

@@ -387,3 +387,88 @@ def test_recovery_keeps_both_published_heads_when_the_webhook_lags_the_computer(
     response = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test')
     assert response.status_code == 200, response.text
     assert set(response.json()['recovery']['published_heads']) == {'a' * 40, 'c' * 40}
+
+
+def test_a_person_replacing_a_bots_own_computer_leaves_its_checkouts_to_the_bot_as_before(prepared):
+    """Task #3448 moves checkouts only when a cloud machine is made again (cloud_machines.enrolled); a computer a
+    person registers again keeps today's behaviour: the bot brings its checkout back with `worktree add`."""
+    api, tid, _ = prepared
+    link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
+    replace_current_computer(api)
+    with api.app_state.store.read() as c:
+        row = dict(c.execute('SELECT * FROM task_links WHERE id=?', (link['link_id'],)).fetchone())
+        assert row['computer_id'] == 'r1' and W.status(c, row)['state'] == 'retired'
+        assert W.recovery_prompt(c, H.task(c, tid), 'cmo')
+
+
+def test_follow_replacement_moves_only_the_machines_bots_open_checkouts(prepared):
+    api, tid, _ = prepared
+    link = leave_on_old_computer(api, tid)
+    with api.app_state.store.transaction() as c:
+        assert W.follow_replacement(c, ['old'], 'r1', ['cpo']) == (0, 0)  # not a bot that runs there
+        assert W.follow_replacement(c, ['r1'], 'r1', ['cmo']) == (0, 0)  # the new computer itself
+        revoked = c.execute("SELECT revoked_at FROM runners WHERE id='old'").fetchone()[0]
+        c.execute("UPDATE runners SET revoked_at=NULL WHERE id='old'")
+        assert W.follow_replacement(c, ['old'], 'r1', ['cmo']) == (0, 0)  # another computer, still registered
+        c.execute("UPDATE runners SET revoked_at=? WHERE id='old'", (revoked,))
+        assert W.follow_replacement(c, ['old'], 'r1', ['cmo']) == (1, 0)
+        row = dict(c.execute('SELECT * FROM task_links WHERE id=?', (link['link_id'],)).fetchone())
+        detail = json.loads(row['detail'])
+        assert (row['computer_id'], row['state'], detail['checkout_state']) == ('r1', 'pending', 'queued')
+        assert detail['recovery']['published_head'] == 'a' * 40 and detail['retired_worktree']['ahead'] == 2
+        assert not any(detail.get(k) for k in (*W.IDENTITY, *W.REMOVAL, 'cleanup_gave_up'))
+        assert W.preparable(c, row, detail)  # the new computer restores it when the bot is idle
+        assert W.follow_replacement(c, ['old'], 'r1', ['cmo']) == (0, 0)  # moved once
+
+
+@pytest.mark.parametrize('why', ['deleted', 'changed hands'])
+def test_follow_replacement_closes_a_checkout_asked_deleted_or_of_a_task_that_changed_hands(prepared, why):
+    """Review of #3448: a rebuild undid a pending `tico task unlink`, and a task given to another bot left its old
+    owner's checkout on the retired computer. Both close at replacement, their last report kept."""
+    api, tid, _ = prepared
+    link = leave_on_old_computer(api, tid)
+    with api.app_state.store.transaction() as c:
+        row = c.execute('SELECT detail FROM task_links WHERE id=?', (link['link_id'],)).fetchone()
+        detail = json.loads(row['detail'])
+        detail.update({'delete_requested': True} if why == 'deleted' else {'owner': 'bot:cpo'})
+        c.execute('UPDATE task_links SET detail=? WHERE id=?', (json.dumps(detail), link['link_id']))
+        assert W.follow_replacement(c, ['old'], 'r1', ['cmo', 'cpo']) == (0, 1)
+        row = dict(c.execute('SELECT * FROM task_links WHERE id=?', (link['link_id'],)).fetchone())
+        detail = json.loads(row['detail'])
+        assert (row['state'], row['computer_id'], detail['removed_by']) == ('removed', 'old', 'replacement')
+        assert (detail['last_commit'], detail['ahead']) == ('c' * 40, 2) and '2 unpushed' in detail['release_reason']
+
+
+def test_a_failed_backup_warns_the_owner_and_health_while_the_checkout_stays_usable(prepared):
+    """Review of #3448: a refused wip/ copy was stored but shown nowhere."""
+    api, tid, _ = prepared
+    link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
+    reason = 'Unpushed commits not backed up: remote refused the push'
+    with api.app_state.store.transaction() as c:
+        c.execute(
+            "UPDATE task_links SET state='present',detail=? WHERE id=?",
+            (json.dumps({'owner': 'bot:cmo', 'checkout_state': 'ready', 'backup_error': reason}), link['link_id']),
+        )
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id='r1'", (json.dumps(READY),))
+    with api.app_state.store.read() as c:
+        assert any(reason in note for note in W.recovery_prompt(c, H.task(c, tid), 'cmo'))
+        row = dict(c.execute('SELECT * FROM task_links WHERE id=?', (link['link_id'],)).fetchone())
+    body = api.get('/api/v2/health', headers=auth('owner-test'))
+    assert body.status_code == 200, body.text
+    check = next(x for x in body.json()['checks'] if x['id'] == 'worktrees')
+    assert check['status'] == 'warn' and reason in check['summary']
+    assert not W.current_error(row['state'], json.loads(row['detail']))  # nothing waits on it as a failure
+
+
+def test_a_reopened_task_brings_back_a_checkout_closed_at_replacement(prepared):
+    api, tid, _ = prepared
+    link = leave_on_old_computer(api, tid)
+    with api.app_state.store.transaction() as c:
+        end(c, tid, 'done')
+        assert W.follow_replacement(c, ['old'], 'r1', ['cmo']) == (0, 1)
+        end(c, tid, 'open')
+    again = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test')
+    assert again.status_code == 200, again.text
+    body = again.json()
+    assert body['link_id'] == link['link_id'] and body['checkout_state'] == 'queued'
+    assert body['recovery']['published_head'] == 'a' * 40 and body['retired_worktree']['ahead'] == 2

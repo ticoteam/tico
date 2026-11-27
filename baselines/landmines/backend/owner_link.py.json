@@ -1,0 +1,5 @@
+{
+  "backend/owner_link.py": {
+    "no-install-closure": 1
+  }
+}
