@@ -12,12 +12,15 @@ const KEY = 'tico-next:chat-window';
 type Mark = { agent: string; id: string; sent?: boolean };
 let memory: Mark | null = null;
 
+/* Memory first: `keep` writes it on every change, so it is never behind sessionStorage, and it is the only copy when
+   the browser refuses the write (a full quota). sessionStorage is what a reload starts from. */
 function read(agent: string): Mark | null {
+  if (memory?.agent === agent) return memory;
   try {
     const v = JSON.parse(sessionStorage.getItem(KEY) ?? 'null') as Mark | null;
     return v && v.agent === agent && typeof v.id === 'string' ? v : null;
   } catch {
-    return memory?.agent === agent ? memory : null;
+    return null;
   }
 }
 
