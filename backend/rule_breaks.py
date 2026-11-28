@@ -31,6 +31,13 @@ import json
 import os
 from typing import Any
 
+from fastapi import Request
+from pydantic import Field
+
+from . import api_routing
+from .api_contract import api_v2
+from .deps import Injected
+from .models import Contract
 from .store import H as hubdb, Problem
 
 H: Any = hubdb  # untyped module, through Any as in question_marks.py
@@ -371,48 +378,48 @@ def of_rule(c: Any, auth: Any, who: Any, rule_id: str, limit: int = LIST_MAX) ->
     }
 
 
-def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
-    from fastapi import Request
-    from pydantic import Field
+class BreakAnswer(Contract):
+    answer: str = Field(max_length=10)
+    note: str | None = Field(default=None, max_length=NOTE_MAX)
 
-    from .api_contract import api_v2
-    from .models import Contract
 
-    class BreakAnswer(Contract):
-        answer: str = Field(max_length=10)
-        note: str | None = Field(default=None, max_length=NOTE_MAX)
+class BreakEmpty(Contract):
+    pass
 
-    class BreakEmpty(Contract):
-        pass
 
-    @app.get(
-        "/api/v2/rules/{rule_id}/breaks",
-        **api_v2(
-            "Rules",
-            "listRuleBreaks",
-            "A Warn rule's breaks of the last 30 days, newest first, each with its answer, and their tally",
-        ),
-    )
-    def rule_breaks(request: Request, rule_id: str) -> Row:
-        with store.read() as c:
-            return of_rule(c, auth, request.state.identity, rule_id)
+router = api_routing.router()
 
-    @app.post(
-        "/api/v2/rule-breaks/{break_id}/answer",
-        **api_v2(
-            "Rules",
-            "answerRuleBreak",
-            "Yes, block (block) or Don't block (pass) a Warn rule's break: by the person it went to, an Admin or an editor of the rule",
-        ),
-    )
-    def rule_break_answer(request: Request, break_id: str, body: BreakAnswer) -> Any:
-        who = request.state.identity
-        return mutate(request, body, lambda c: answer(c, auth, who, break_id, body.answer, body.note))  # pyright: ignore[reportUnknownLambdaType]
 
-    @app.post(
-        "/api/v2/rule-breaks/{break_id}/undo",
-        **api_v2("Rules", "undoRuleBreak", "Take back your answer to a rule's break, within 24 hours"),
-    )
-    def rule_break_undo(request: Request, break_id: str, body: BreakEmpty) -> Any:
-        who = request.state.identity
-        return mutate(request, body, lambda c: undo(c, auth, who, break_id))  # pyright: ignore[reportUnknownLambdaType]
+@router.get(
+    "/api/v2/rules/{rule_id}/breaks",
+    **api_v2(
+        "Rules",
+        "listRuleBreaks",
+        "A Warn rule's breaks of the last 30 days, newest first, each with its answer, and their tally",
+    ),
+)
+def rule_breaks(request: Request, rule_id: str, deps: Injected) -> Row:
+    with deps.store.read() as c:
+        return of_rule(c, deps.auth, request.state.identity, rule_id)
+
+
+@router.post(
+    "/api/v2/rule-breaks/{break_id}/answer",
+    **api_v2(
+        "Rules",
+        "answerRuleBreak",
+        "Yes, block (block) or Don't block (pass) a Warn rule's break: by the person it went to, an Admin or an editor of the rule",
+    ),
+)
+def rule_break_answer(request: Request, break_id: str, body: BreakAnswer, deps: Injected) -> Any:
+    who = request.state.identity
+    return deps.mutate(request, body, lambda c: answer(c, deps.auth, who, break_id, body.answer, body.note))  # pyright: ignore[reportUnknownLambdaType]
+
+
+@router.post(
+    "/api/v2/rule-breaks/{break_id}/undo",
+    **api_v2("Rules", "undoRuleBreak", "Take back your answer to a rule's break, within 24 hours"),
+)
+def rule_break_undo(request: Request, break_id: str, body: BreakEmpty, deps: Injected) -> Any:
+    who = request.state.identity
+    return deps.mutate(request, body, lambda c: undo(c, deps.auth, who, break_id))  # pyright: ignore[reportUnknownLambdaType]
