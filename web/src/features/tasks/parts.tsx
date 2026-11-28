@@ -5,8 +5,9 @@ import { Avatar } from '@/kit/Avatar';
 import { FlowMark } from '@/kit/FlowMark';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
-import { ContextMenu, Menu, MenuItem } from '@/kit/Menu';
+import { ContextMenu, Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
+import { snoozeChoices } from './many';
 import { waitsOnMe } from './needs';
 import type { Stage, TaskItem } from './queries';
 
@@ -40,8 +41,8 @@ export const taskHref = (pipeline: string, t: Pick<TaskItem, 'id' | 'number'>) =
 export const isPending = (t: Pick<TaskItem, 'id'>) => t.id.startsWith('tmp:');
 
 /**
- * A row or a card with its "Move to" menu: on "⋯" (a pointer or the keyboard) and on a right click or a long press.
- * The move is an action, so Tico moves a task the same way.
+ * A row or a card with its menu: Move to a stage, Snooze ›, Close. On "⋯" (a pointer or the keyboard) and on a right
+ * click or a long press. Each is an action, so Tico does it the same way; Close says so and takes it back.
  */
 export function Movable({
   task,
@@ -59,14 +60,27 @@ export function Movable({
   children: ReactElement;
 }) {
   const move = useAction('tasks.move');
+  const snooze = useAction('tasks.snoozeMany');
+  const close = useAction('tasks.moveMany');
   if (isPending(task)) return <div className="tk-item">{children}</div>;
-  const items = stages.map((s) => (
-    <MenuItem key={s.id} label={s.name} on={s.id === task.stage_id} onSelect={() => s.id !== task.stage_id && void move.run({ task: task.id, to: s.id })} />
-  ));
+  const items = (
+    <>
+      {stages.map((s) => (
+        <MenuItem key={s.id} label={s.name} on={s.id === task.stage_id} onSelect={() => s.id !== task.stage_id && void move.run({ task: task.id, to: s.id })} />
+      ))}
+      <MenuRule />
+      <MenuSub label="Snooze" icon="clock">
+        {snoozeChoices().map((c) => (
+          <MenuItem key={c.label} label={c.label} onSelect={() => void snooze.run({ tasks: [task.id], until: c.until })} />
+        ))}
+      </MenuSub>
+      <MenuItem label="Close" icon="archive" onSelect={() => void close.run({ tasks: [task.id], to: 'closed' })} />
+    </>
+  );
   return (
     <div className="tk-item" {...wrap}>
       <ContextMenu items={items}>{children}</ContextMenu>
-      <Menu trigger={<IconButton icon="more" label="Move to" size="sm" className="tk-more" />}>{items}</Menu>
+      <Menu trigger={<IconButton icon="more" label="Change" size="sm" className="tk-more" />}>{items}</Menu>
       {after}
     </div>
   );

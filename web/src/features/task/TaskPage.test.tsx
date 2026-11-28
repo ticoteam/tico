@@ -877,6 +877,62 @@ describe('a page’s versions, a new page and a picture', () => {
   });
 });
 
+describe('the task’s Snooze and Close', () => {
+  it('snoozes from the head in one press, busy until the server answers', async () => {
+    const reply = holdReply();
+    serve((url) => (url.endsWith('/snooze') ? reply.promise : undefined));
+    details();
+    await screen.findByRole('heading', { level: 1, name: 'Fix the sign-in page' });
+    fireEvent.click(screen.getByRole('button', { name: 'Snooze' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Tomorrow' }));
+    await waitFor(() => expect(sent.at(-1)?.url).toBe('/api/v2/tasks/t1/snooze'));
+    // snoozed at once, and Unsnooze waits on the server's answer
+    const unsnooze = await screen.findByRole('button', { name: 'Unsnooze' });
+    expect(unsnooze.getAttribute('aria-busy')).toBe('true');
+    await act(async () => reply.resolve({ status: 200, body: { task: task({ snoozed: true } as Partial<TaskData>) } }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Unsnooze' }).getAttribute('aria-busy')).toBeNull());
+  });
+
+  it('closes from the head, busy until the server answers, and only then goes', async () => {
+    const reply = holdReply();
+    serve((url) => (url.endsWith('/move') ? reply.promise : undefined));
+    details();
+    fireEvent.click(await screen.findByRole('button', { name: 'Close task' }));
+    await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/tasks/t1/move', body: { to: 'closed' } }));
+    // shown closed at once, and the button stays, busy, until the answer
+    expect(screen.getByRole('button', { name: 'Close task' }).getAttribute('aria-busy')).toBe('true');
+    await act(async () => reply.resolve({ status: 200, body: { task: task({ status: 'closed' } as Partial<TaskData>) } }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Close task' })).toBeNull());
+  });
+
+  it('a refused close comes back open, no longer busy', async () => {
+    serve((url) =>
+      url.endsWith('/move') ? { status: 409, body: { error: { code: 'task_turn_running', detail: 'A turn is running' } } } : undefined,
+    );
+    details();
+    fireEvent.click(await screen.findByRole('button', { name: 'Close task' }));
+    await waitFor(() => expect(sent.at(-1)?.url).toBe('/api/v2/tasks/t1/move'));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Close task' }).getAttribute('aria-busy')).toBeNull());
+    expect(screen.getByRole('button', { name: 'Stage: Review' })).toBeTruthy();
+  });
+
+  it('closes from ⋯, beside Mark done', async () => {
+    serve((url) => (url.endsWith('/move') ? { status: 200, body: { task: task() } } : undefined));
+    details();
+    await more();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Close' }));
+    await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/tasks/t1/move', body: { to: 'closed' } }));
+  });
+
+  it('a finished task has neither', async () => {
+    serve(reads(task({ status: 'done' } as Partial<TaskData>)));
+    details();
+    await screen.findByRole('heading', { level: 1, name: 'Fix the sign-in page' });
+    expect(screen.queryByRole('button', { name: 'Snooze' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Close task' })).toBeNull();
+  });
+});
+
 describe('the task’s More menu', () => {
   it('snoozes the task until a day the person picks @s51', async () => {
     serve((url, method) => (method === 'POST' ? { status: 200, body: { task: task() } } : base(url)));
@@ -900,6 +956,32 @@ describe('the task’s More menu', () => {
     fireEvent.click(within(ask).getByRole('button', { name: 'Delete' }));
     await waitFor(() => expect(sent.at(-1)).toEqual({ method: 'POST', url: '/api/v2/tasks/t1/delete', body: {} }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1'));
+  });
+
+  it('a refused delete says the server’s reason, never a bare Not saved', async () => {
+    const why = 'Only a person, signed in as themselves, deletes a task; close it instead';
+    serve((url) =>
+      url.endsWith('/delete')
+        ? { status: 403, body: { error: { code: 'forbidden', detail: why } } }
+        : undefined,
+    );
+    details();
+    await more();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    const ask = await screen.findByRole('alertdialog');
+    fireEvent.click(within(ask).getByRole('button', { name: 'Delete' }));
+    expect(await within(ask).findByText(why)).toBeTruthy();
+    expect(within(ask).queryByText('Not saved')).toBeNull();
+  });
+
+  it('a delete the server failed on says so, not Not saved', async () => {
+    serve((url) => (url.endsWith('/delete') ? { status: 500, body: 'Internal Server Error' } : undefined));
+    details();
+    await more();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    const ask = await screen.findByRole('alertdialog');
+    fireEvent.click(within(ask).getByRole('button', { name: 'Delete' }));
+    expect(await within(ask).findByText('Something went wrong. Try again.', {}, { timeout: 5000 })).toBeTruthy();
   });
 
   it('deleted once another task is open in its place: that one stays open', async () => {

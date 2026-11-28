@@ -168,7 +168,7 @@ export function LinkPage({ task, onDone }: { task: string; onDone: () => void })
     setError('');
     const r = await run('task.linkPage', { task, page }, { via: 'click' });
     setBusy(null);
-    if (!r.ok) return setError(reasonOf(r.error));
+    if (!r.ok) return setError(reasonOf(r));
     toast({ text: 'Linked', name: title });
     onDone();
   };
@@ -218,7 +218,7 @@ export function UploadFiles({ task, onDone }: { task: string; onDone: (file: str
     for (const file of files) {
       const r = await run('task.upload', { task, file }, { via: 'click' });
       if (!r.ok) {
-        setError(`${file.name}: ${reasonOf(r.error)}`);
+        setError(`${file.name}: ${reasonOf(r)}`);
         break;
       }
       added++;

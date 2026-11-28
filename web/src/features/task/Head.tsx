@@ -186,7 +186,7 @@ function ReopenAsk({ t, onClose }: { t: TaskData; onClose: () => void }) {
     );
     setBusy(false);
     if (r.ok) return onClose();
-    setError(reasonOf(r.error));
+    setError(reasonOf(r));
   };
   return (
     <Dialog
@@ -372,9 +372,53 @@ export function OwnerPick({ t }: { t: TaskData }) {
   );
 }
 
+/** An open task's Snooze and Close, one press from the head (on a phone, under ⋯). Each stays busy until the server
+    answers, though the task shows snoozed or closed at once. */
+export function QuickActions({ t }: { t: TaskData }) {
+  const [busy, setBusy] = useState<"snooze" | "close" | null>(null);
+  const press = async (what: "snooze" | "close", id: string, input: object) => {
+    setBusy(what);
+    const r = await run(id, { task: t.id, ...input }, { via: "click" });
+    setBusy(null);
+    if (!r.ok) failed(r);
+  };
+  const snooze = (until: string | null) => press("snooze", "task.snooze", { until });
+  if (t.status !== "open" && busy !== "close") return null;
+  return (
+    <>
+      {t.snoozed ? (
+        <Button icon="clock" busy={busy === "snooze"} disabled={!!busy} onClick={() => snooze(null)}>
+          Unsnooze
+        </Button>
+      ) : (
+        <Menu
+          trigger={
+            <Button icon="clock" busy={busy === "snooze"} disabled={!!busy}>
+              Snooze
+            </Button>
+          }
+        >
+          {snoozeChoices().map(([label, at]) => (
+            <MenuItem key={label} label={label} onSelect={() => void snooze(at.toISOString())} />
+          ))}
+        </Menu>
+      )}
+      <Button
+        icon="archive"
+        aria-label="Close task"
+        busy={busy === "close"}
+        disabled={!!busy}
+        onClick={() => press("close", "task.move", { to: "closed" })}
+      >
+        Close
+      </Button>
+    </>
+  );
+}
+
 type Asking = "move" | "reopen" | "delete" | null;
 
-/** "⋯": snooze, done (the due date and tags edit in Details). Then the rest:
+/** "⋯": snooze, done, close (the due date and tags edit in Details). Then the rest:
     watch the agent's session, copy the link, move to another pipeline, reopen with a reason, delete. Reopen and Delete
     ask first. */
 export function MoreMenu({
@@ -414,7 +458,7 @@ export function MoreMenu({
     const r = await run(id, { task: t.id, ...input }, { via: "click" });
     setBusy(false);
     if (r.ok) setAsking(null);
-    else setError(reasonOf(r.error));
+    else setError(reasonOf(r));
   };
   const snooze = async (until: string | null) => {
     const r = await run("task.snooze", { task: t.id, until }, { via: "click" });
@@ -479,6 +523,17 @@ export function MoreMenu({
                 void run("task.done", { task: t.id }, { via: "click" }).then(
                   (r) => (r.ok ? undefined : failed(r)),
                 )
+              }
+            />
+            <MenuItem
+              label="Close"
+              icon="archive"
+              onSelect={() =>
+                void run(
+                  "task.move",
+                  { task: t.id, to: "closed" },
+                  { via: "click" },
+                ).then((r) => (r.ok ? undefined : failed(r)))
               }
             />
           </>

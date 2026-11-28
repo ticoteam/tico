@@ -54,7 +54,7 @@ TASK_ROWS = (
     "matters",  # a risk's facts on the task (backend/risk.py)
     "matter_dates",  # its key dates (backend/risk.py)
 )
-# Where a task stands in its pipeline is not kept: its visits, answers, asks and snooze go with it
+# Where a task stands in its pipeline is not kept: its visits, answers, pinned pages, asks and snooze go with it
 # (task_engine.on_delete), and a restore starts it on a new visit (task_engine.restore). The tasks it filed, and the
 # task that filed it, keep their link to it: a deleted task counts as closed for the work that waited on it.
 # A table whose rows name the task other than by `task_id`: its column and the rows of it that are a task's. A task's

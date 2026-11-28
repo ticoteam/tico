@@ -687,3 +687,31 @@ def test_snapshot_keys_follow_every_wave_in_order(monkeypatch):
     assert list(renames.current_rows({"old_reminders": [{"id": 1}]})) == ["task_reminders"]
     # a row with both an old and a new name keeps both, for the restore to refuse rather than guess
     assert renames.current_row("tasks", {"owner": "a", "owner_id": "b"}) == {"owner": "a", "owner_id": "b"}
+
+
+def test_a_task_whose_bot_pinned_a_page_to_its_stage_deletes_and_comes_back(api):
+    # A QA report pinned to the stage's page requirement (requirement_pages) points at the task's visit: deleting the
+    # visit under it failed the whole delete, so a person's Delete said only "Not saved".
+    from backend import task_pages as P
+    from backend.blobs import Blobs
+    from backend.tests.helpers import engine as X
+    from backend.tests.helpers.page_requirement import WRITER, _page, _pipeline, _task
+
+    store = api.app.state.store
+    store.blobs = getattr(store, "blobs", None) or Blobs(store.settings)
+    with store.transaction() as c:
+        for slug in ("writer", "manager"):
+            X.bot(c, slug)
+        _pipeline(c)
+        row = _task(c)
+        fid, _ = _page(c, store)
+        seen = c.execute("SELECT version FROM tasks WHERE id=?", (row["id"],)).fetchone()[0]
+        P.attach(c, row["id"], "Spec page", "page:" + fid, WRITER, seen_version=seen)
+        assert c.execute(
+            "SELECT count(*) FROM requirement_pages p JOIN visits v ON v.id=p.visit_id WHERE v.task_id=?", (row["id"],)
+        ).fetchone()[0]
+    assert post(api, f"tasks/{row['id']}/delete", {}) == {"deleted": row["id"]}
+    get(api, "tasks/" + row["id"], expected=404)
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM visits WHERE task_id=?", (row["id"],)).fetchone()[0] == 0
+    assert post(api, f"tasks/{row['id']}/restore", {})["restored"] == row["id"]

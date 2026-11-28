@@ -19,7 +19,7 @@ export function Kv({ k, children, target }: { k: string; children: ReactNode; ta
 /** Runs a change on the task; the refusal's reason, or null once it is saved. */
 export async function saved(id: string, input: object): Promise<string | null> {
   const r = await run(id, input, { via: 'click' });
-  return r.ok ? null : reasonOf(r.error);
+  return r.ok ? null : reasonOf(r);
 }
 
 /** A field written in place: Enter saves, Escape puts it back. A refusal reads under it and the words stay. */

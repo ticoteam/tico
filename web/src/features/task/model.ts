@@ -256,18 +256,25 @@ export function tabAddress(t: Pick<TaskData, 'number' | 'id' | 'pipeline_id'>, t
   return tab ? `${base}/${tab}` : base;
 }
 
-/** A refusal's reason, as the action layer carries it ("code: reason", then what is missing a line each). */
-export function reasonOf(error: string | undefined): string {
+/** A refusal's reason: the server's own (`why`), else the action layer's ("code: reason", then what is missing a line
+    each). A server fault says so rather than "Not saved". */
+export function reasonOf(r: string | Pick<Result, 'error' | 'why'> | undefined): string {
+  const { error, why } = typeof r === 'object' ? r : { error: r, why: undefined };
+  if (why) return why;
   if (!error) return 'Not saved';
   if (error === 'not_allowed') return 'You can’t do that on this task';
   if (error.startsWith('network')) return 'Needs a connection';
+  if (/^http_5\d\d/.test(error)) return 'Something went wrong. Try again.';
   const head = error.split('\n')[0] ?? '';
   const i = head.indexOf(': ');
   return (i >= 0 && head.slice(i + 2).trim()) || 'Not saved';
 }
 
-/** A refused press's toast: "Not saved", then why. */
-export const failedToast = (r: Pick<Result, 'error' | 'why'>): RefusalToast => refusal(r, 'Not saved', 'You can’t do that on this task');
+/** A refused press's toast: "Not saved", then why; a server fault says so. */
+export function failedToast(r: Pick<Result, 'error' | 'why'>): RefusalToast {
+  if (/^http_5\d\d/.test(r.error ?? '')) return { text: 'Not saved', name: reasonOf(r), kind: 'failed' };
+  return refusal(r, 'Not saved', 'You can’t do that on this task');
+}
 
 export interface Refusal {
   code: string;
