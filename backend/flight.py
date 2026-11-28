@@ -1209,6 +1209,10 @@ SCHEMA = (
     "CREATE TABLE flight_web(created_at INTEGER NOT NULL, span INTEGER NOT NULL, metric TEXT NOT NULL, "
     "route TEXT NOT NULL, n INTEGER NOT NULL, hist TEXT NOT NULL, PRIMARY KEY(created_at, span, metric, route)) "
     "WITHOUT ROWID",
+    # flight_usage (USAGE_SCHEMA): not one of TABLES, so a remake never drops it.
+    "CREATE TABLE IF NOT EXISTS flight_usage(id INTEGER PRIMARY KEY, created_at INTEGER NOT NULL, event TEXT NOT NULL, "
+    "actor TEXT NOT NULL, detail TEXT NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS flight_usage_event ON flight_usage(event, created_at)",
 )
 # A new file takes the server database's recorder rows from these last seconds (the hour before an update, which the
 # release comparison reads, with room), two days of the hourly size samples (Health's 24-hour growth), and every start.
@@ -1471,11 +1475,8 @@ def record_event(store, kind, detail, now=None):
 # Usage events (WEB_EVENTS) name the person who sent them, so they are kept apart from flight_events: a reader of an
 # older release, after a rollback that keeps the flight file, returns flight_events' details to bots as they are, and
 # never reads this table. It is not one of TABLES, so no schema version drops it, and it is made where it is used.
-USAGE_SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS flight_usage(id INTEGER PRIMARY KEY, created_at INTEGER NOT NULL, event TEXT NOT NULL, "
-    "actor TEXT NOT NULL, detail TEXT NOT NULL)",
-    "CREATE INDEX IF NOT EXISTS flight_usage_event ON flight_usage(event, created_at)",
-)
+# Its statements are the last two of SCHEMA (IF NOT EXISTS): a new file has it, and an older file gets it here.
+USAGE_SCHEMA = SCHEMA[-2:]
 
 
 def _usage_table(c):
