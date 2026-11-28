@@ -80,9 +80,11 @@ failures, cost and trend. The **Runs** tab shows every run in that range, newest
 ended. A built-in automation can't be edited or deleted; only the top of the org can turn one off.
 
 ```
-tico automation recent-runs [--range 1h] [--status failed] [--trigger system] [--owner O]
+tico automation recent-runs [--range 1h] [--status failed] [--trigger system|listening] [--owner O]
 tico automation stats [--range 24h]
 ```
+
+Listening runs are left out unless you ask for `--trigger listening` or name the automation.
 
 These are `tico_automation_recent_runs` and `tico_automation_stats` over MCP, and `GET /api/v2/automations/runs` and
 `GET /api/v2/automations/stats` in the API. A system job counts once per recorded run; quiet repeats with the same result,
