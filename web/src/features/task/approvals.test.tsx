@@ -846,10 +846,12 @@ describe('the decision', () => {
         const which = method !== 'GET' ? null : url.includes('/needs-you?limit=') ? 'list' : url.includes('/needs-you?count=true') ? 'count' : null;
         if (!which) return null;
         reads[which]++;
-        if (down) return fails;
+        // a read held back answers as held, even once the server refuses the rest
         const late = held[which];
         held[which] = null;
-        return late ?? (which === 'list' ? listed() : counted());
+        if (late) return late;
+        if (down) return fails;
+        return which === 'list' ? listed() : counted();
       };
     };
     /** As the shell does on a task's page: the list and the menu's count, each read while shown (`count`: the count
@@ -916,16 +918,33 @@ describe('the decision', () => {
       expect(reads).toEqual({ list: 0, count: 1 });
     });
 
-    it('refused after a list read landed while it was sent: the row is back on the next read @approvals', async () => {
+    it('refused after a list read landed while it was sent: the list read after the refusal is the server\'s own @approvals', async () => {
       await approving();
       await readAgain(['flow']);
       expect(ids()).toEqual(['t9']);
-      held.list = Promise.resolve(listed()); // the server still lists it once it refused
+      // what the server lists once it refused: the task, and one that came in meanwhile
+      held.list = Promise.resolve({ body: { items: [need('t1', 12, 'r1'), need('t8', 11, 'r8'), need('t9', 13, 'r9')], next: null } });
       await act(async () => {
         down = true;
         take();
       });
-      await waitFor(() => expect(ids()).toEqual(['t1', 't9']));
+      await waitFor(() => expect(ids()).toEqual(['t1', 't8', 't9']));
+    });
+
+    it('refused, with a newer list read landed meanwhile and the read after it failing: the row is back in that list, the newer rows kept @approvals', async () => {
+      await approving();
+      // a read while it is sent brings a new task, t8: the list is no longer the one the answer changed
+      held.list = Promise.resolve({ body: { items: [need('t1', 12, 'r1'), need('t8', 11, 'r8'), need('t9', 13, 'r9')], next: null } });
+      await readAgain(['flow']);
+      expect(ids()).toEqual(['t8', 't9']);
+      await act(async () => {
+        down = true; // the answer refused, and the read after it fails too (the connection dropped)
+        take();
+      });
+      await waitFor(() => expect(reads.list).toBeGreaterThan(1));
+      // back where it was, above the row that followed it then
+      await waitFor(() => expect(ids()).toEqual(['t8', 't1', 't9']));
+      expect(within(await decision()).getByRole('alert')).toBeTruthy();
     });
 
     it('an answer never taken, with Needs you not to be read again, leaves the task listed and the count as it was @approvals', async () => {

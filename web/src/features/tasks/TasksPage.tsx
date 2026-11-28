@@ -1,8 +1,8 @@
 import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
-import { useEffect, useState, type MouseEvent, type ReactNode } from 'react';
+import { useEffect, useState, type ComponentProps, type MouseEvent, type ReactNode } from 'react';
 import { useAction } from '@/actions';
-import { meQuery } from '@/data';
+import { meQuery, useSendingAnswer } from '@/data';
 import { CardFix, lineFor, StatusLine, TaskSend } from '@/features/task/exports';
 import { useFollow } from '@/live/follow';
 import { Ago } from '@/kit/Ago';
@@ -342,17 +342,19 @@ function Card({ t, p, me, waits, picked, onPick }: { t: TaskItem; p: Pipeline; m
   // The card's status line in the mark's place (Starting, Up next, Working, Needs you, Paused · Fix); Select's box while
   // picking. Needs you is Needs you's own answer, not the turn's.
   const line = !onPick && lineFor(t, me, waits);
+  // an Approve or Request changes on it being sent: said in the status line's place, and not a link until its reply
+  const sending = useSendingAnswer(t.id);
   const inner = (
     <>
       <span className="card-title">{t.title}</span>
       <span className="card-foot">
-        {(onPick || line || t.stuck || t.late || t.blocks?.length || t.email_send || t.reconcile) && (
+        {(onPick || line || sending || t.stuck || t.late || t.blocks?.length || t.email_send || t.reconcile) && (
           <span className="card-marks">
             {onPick ? (
               <Pick on={!!picked} />
             ) : (
               <>
-                {line && <StatusLine t={t} me={me} waits={waits} inLink />}
+                {sending ? <Answering how={sending} /> : line && <StatusLine t={t} me={me} waits={waits} inLink />}
                 {t.stuck && <StoppedMark />}
               </>
             )}
@@ -370,9 +372,9 @@ function Card({ t, p, me, waits, picked, onPick }: { t: TaskItem; p: Pipeline; m
       </span>
     </>
   );
-  if (isPending(t))
+  if (isPending(t) || sending)
     return (
-      <div className="card" title={t.title}>
+      <div className="card" title={t.title} aria-busy={sending ? true : undefined} aria-disabled={sending ? true : undefined}>
         {inner}
       </div>
     );
@@ -392,6 +394,28 @@ function Card({ t, p, me, waits, picked, onPick }: { t: TaskItem; p: Pipeline; m
     >
       {inner}
     </Link>
+  );
+}
+
+/** An answer on the task being sent, in its status line's place. */
+const Answering = ({ how }: { how: 'ok' | 'no' }) => (
+  <span className="answering" role="status">
+    {how === 'ok' ? 'Approving…' : 'Sending back…'}
+  </span>
+);
+
+/** A list row with an answer on its task being sent: said in its mark's place, and not a link until its reply. */
+function ListRow({ t, p, mark, ...rest }: { t: TaskItem; p: Pipeline; mark: ReactNode } & Omit<ComponentProps<typeof TaskRow>, 'title' | 'href' | 'mark'>) {
+  const sending = useSendingAnswer(t.id);
+  return (
+    <TaskRow
+      {...rest}
+      title={t.title}
+      href={isPending(t) || sending ? undefined : taskHref(p.id, t)}
+      mark={sending ? <Answering how={sending} /> : mark}
+      aria-busy={sending ? true : undefined}
+      aria-disabled={sending ? true : undefined}
+    />
   );
 }
 
@@ -510,9 +534,9 @@ function Sections({ p, rows, needs, folds, fold, more, cut, countOf, picking, to
                 measure={cards}
                 draw={(t) => (
                   <Movable key={t.id} task={t} stages={p.stages}>
-                    <TaskRow
-                      title={t.title}
-                      href={isPending(t) ? undefined : taskHref(p.id, t)}
+                    <ListRow
+                      t={t}
+                      p={p}
                       target={`task:${t.number ?? t.id}`}
                       mark={picking ? <Pick on={picking.has(t.id)} /> : markOf(t, needs)}
                       selected={picking?.has(t.id)}

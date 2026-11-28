@@ -230,6 +230,24 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
     expect(router.state.location.pathname).toBe('/tasks/eng');
   });
 
+  it.each([
+    ['board', 'ok', 'Approving…'],
+    ['list', 'no', 'Sending back…'],
+  ] as const)('on the %s, a task whose answer is being sent says so and cannot be opened until its reply @approvals', async (view, how, says) => {
+    serve(() => ({ status: 200, body: {} }));
+    seed([task('a1', 7, 'Fix the export', 's1')]);
+    show(<TasksPage pipeline="eng" search={{ view }} />, `/tasks/eng?view=${view}`);
+    const shown = () => screen.getByTitle('Fix the export');
+    await screen.findByTitle('Fix the export');
+    act(() => void leaveNeedsYou('a1', 'r1', how));
+    await waitFor(() => expect(within(shown()).getByText(says)).toBeTruthy());
+    expect(shown().closest('a')).toBeNull();
+    expect(shown().closest('[aria-busy="true"]')).toBeTruthy();
+    act(() => settleNeedsYou({ task: 'a1', wait: 'r1' }));
+    await waitFor(() => expect(shown().closest('a')?.getAttribute('href')).toBe('/tasks/eng/7'));
+    expect(within(shown()).queryByText(says)).toBeNull();
+  });
+
   it('a list row opens its task under the pipeline', async () => {
     serve(() => ({ status: 200, body: {} }));
     seed([task('a1', 7, 'Fix the export', 's1')]);
@@ -999,6 +1017,21 @@ describe('Needs you @s5 @s112', () => {
     settleNeedsYou({ task: 't2', wait: 'r-t2' });
     await readAgain();
     expect(ids()).toEqual(['t1', 't3']);
+  });
+
+  it('an answer being sent takes out only what it answers: a read that adds another ask on the task keeps its row @approvals', async () => {
+    const need = (id: string, rid: string) => ({ kind: 'ask', id: `v:${rid}`, task_id: id, requirement_id: rid, line: 'Send it?', since: ago(5),
+      task: { id, number: 1, title: 'Task 1', pipeline_id: 'eng' }, ask: { kind: 'ok', requirement_id: rid, asked_by: 'bot:so' } });
+    let listed = [need('t1', 'r1')];
+    serve((url) => (url.includes('/needs-you?limit=') ? { status: 200, body: { items: listed, next: null } } : { status: 200, body: { items: [] } }));
+    const read = () => queryClient.getQueryData<{ task_ids: string[]; waits: Record<string, string[]> }>(flowQuery.queryKey);
+    await queryClient.fetchQuery(flowQuery);
+    leaveNeedsYou('t1', 'r1'); // its only ask then: the row goes
+    expect(read()?.task_ids).toEqual([]);
+    listed = [need('t1', 'r1'), need('t1', 'r2')]; // a second ask on it arrives while the first answer is sent
+    await queryClient.refetchQueries({ queryKey: flowQuery.queryKey, exact: true });
+    expect(read()?.task_ids).toEqual(['t1']);
+    expect(read()?.waits.t1).toEqual(['r2']);
   });
 
   it('a long Needs you, opened past its cap, measures each row it draws, so a ❓ card never overlaps the rows below', async () => {

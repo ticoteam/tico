@@ -147,19 +147,65 @@ const stop = () => READS.forEach((queryKey) => void queryClient.cancelQueries({ 
 /** Which answer a read keeps out while it is sent (data keepOut). */
 const sendingKey = (task: string, wait: string | null) => `${task} ${wait ?? ''}`;
 
-/** An answer to `wait` on `task` given (null: all of it): it leaves Needs you's reads now (needsYouWithout), and stays
-    out of every list read that lands until its reply is heard (settleNeedsYou, or the undo). Returns the undo for an
-    answer never taken: each read as it was, unless a newer read landed since. */
-export function leaveNeedsYou(task: string, wait: string | null = null): () => void {
+/** The task's row, what it waits on, its approvals and its asks, as `before` had them, put back into `cur` (a list read
+    since): an answer refused after the list moved on. Rows read since stay; the row goes back before the first row
+    that followed it then and is still listed. */
+export function needsYouWith(task: string, before: Flow, cur: Flow): Flow {
+  const row = before.items.find((w) => w.id === task);
+  if (!row) return cur;
+  const at = cur.items.findIndex((w) => w.id === task);
+  let items: typeof cur.items;
+  let order = cur.order;
+  if (at >= 0) items = cur.items.map((w) => (w.id === task ? row : w));
+  else {
+    const was = latestOf(before);
+    const next = was.slice(was.indexOf(task) + 1).find((id) => cur.items.some((w) => w.id === id) || cur.order?.includes(id));
+    const i = next === undefined ? -1 : cur.items.findIndex((w) => w.id === next);
+    items = i < 0 ? [...cur.items, row] : [...cur.items.slice(0, i), row, ...cur.items.slice(i)];
+    if (cur.order) {
+      const j = next === undefined ? -1 : cur.order.indexOf(next);
+      order = j < 0 ? [...cur.order, task] : [...cur.order.slice(0, j), task, ...cur.order.slice(j)];
+    }
+  }
+  // in a list of ids, before the first that followed it then
+  const placed = (ids: readonly string[]) => {
+    const was = latestOf(before);
+    const next = was.slice(was.indexOf(task) + 1).find((id) => ids.includes(id));
+    const j = next === undefined ? -1 : ids.indexOf(next);
+    return j < 0 ? [...ids, task] : [...ids.slice(0, j), task, ...ids.slice(j)];
+  };
+  const mine = <T,>(list: readonly T[] | undefined, of: (x: T) => boolean) => [...(list ?? []).filter((x) => !of(x))];
+  return {
+    ...cur,
+    items,
+    count: items.length + (cur.requests?.length ?? 0),
+    ...(order && { order }),
+    ...(cur.task_ids && { task_ids: cur.task_ids.includes(task) ? cur.task_ids : placed(cur.task_ids) }),
+    ...(cur.waits && before.waits?.[task] && { waits: { ...cur.waits, [task]: before.waits[task] } }),
+    ...(cur.approvals && { approvals: [...mine(cur.approvals, (a) => a.id === task), ...(before.approvals ?? []).filter((a) => a.id === task)] }),
+    ...(cur.asks && { asks: [...mine(cur.asks, (a) => a.task === task), ...(before.asks ?? []).filter((a) => a.task === task)] }),
+  };
+}
+
+/** An answer to `wait` on `task` given (null: all of it; `how`: Approve or Request changes, which its card and row show
+    while it is sent): it leaves Needs you's reads now (needsYouWithout), and stays out of every list read that lands
+    until its reply is heard (settleNeedsYou, or the undo), worked out on each read, so an ask that read adds stays.
+    Returns the undo for an answer never taken: each read as it was, or, where a newer read landed since, the task put
+    back into it (needsYouWith), so it is listed again even when the read after the refusal fails. */
+export function leaveNeedsYou(task: string, wait: string | null = null, how?: 'ok' | 'no'): () => void {
   stop();
   const change = needsYouWithout(task, wait);
   const key = sendingKey(task, wait);
-  keepOut(key, change);
+  keepOut(key, { task, how, change: (cur) => (isNeedsYouRead(cur) && !('wakeAt' in (cur as object)) ? needsYouWithout(task, wait, cur as Flow)(cur) : change(cur)) });
   const was = READS.map((k) => queryClient.getQueryData(k));
   const now = READS.map((k) => queryClient.setQueryData(k, (cur: unknown) => (cur === undefined ? cur : change(cur))));
   return () => {
     letIn(key);
-    READS.forEach((k, i) => queryClient.getQueryData(k) === now[i] && queryClient.setQueryData(k, was[i]));
+    READS.forEach((k, i) => {
+      const cur = queryClient.getQueryData(k);
+      if (cur === now[i]) queryClient.setQueryData(k, was[i]);
+      else if (i === 0 && cur && was[0] && isNeedsYouRead(was[0])) queryClient.setQueryData(k, needsYouWith(task, was[0] as Flow, cur as Flow));
+    });
   };
 }
 
