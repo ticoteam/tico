@@ -4680,3 +4680,7 @@ def test_a_burst_return_waits_when_the_computer_it_left_is_the_shared_one_being_
         guest_on_burst(c, burst, shared)
         assert not compute_pool.return_guests(c, burst)
         assert c.execute("SELECT runner_id FROM assignments WHERE bot='ops'").fetchone()[0] == burst
+        # HQ refused for good: the shared computer stays, so the waiting guest now returns to it.
+        c.execute("DELETE FROM cloud_machine_deletions")
+        assert compute_pool.return_guests(c, burst)
+        assert c.execute("SELECT runner_id FROM assignments WHERE bot='ops'").fetchone()[0] == shared
