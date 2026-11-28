@@ -220,20 +220,58 @@ def test_the_outbound_loops_are_told_to_stop_before_the_workers_end_and_joined_a
     # A rehearsal copy runs the outbound, webhook and Finance loops' way out without the scheduler.
     app = create_app(dataclasses.replace(api_settings(tmp_path), rehearsal=True))
     release = threading.Event()
+    inbound_ended = threading.Event()
     loop = background.Loop("test-outbound-shutdown", lambda: None)
     seen_at_stop = []
+    # One per shutdown join: its budget, whether the inbound worker had ended when it began, and our thread alive
+    # when it began and when it ended.
+    joins = []
+    at_close = []  # our thread alive, and the loop's registered threads, when the store closes
+    join = background.join
+
+    def recorded_join(threads, timeout):
+        threads = list(threads)
+        ours = [t for t in threads if t in loop.threads]
+        ended, before = inbound_ended.is_set(), [t.is_alive() for t in ours]
+        if joins:
+            # The thread is held until a later stop's join: only that join lets it end.
+            release.set()
+        join(threads, timeout)
+        joins.append((timeout, ended, before, [t.is_alive() for t in ours]))
 
     async def inbound(stop):
         await stop.wait()
         seen_at_stop.append(loop.stopped())
-        release.set()
+        inbound_ended.set()
+
+    store = app.state.store
+    close = store.close
+    held = []
+
+    def recorded_close():
+        at_close.append(([t.is_alive() for t in held], list(loop.threads)))
+        close()
 
     monkeypatch.setattr(app.state.inbound, "loop", inbound)
+    monkeypatch.setattr(background, "join", recorded_join)
+    monkeypatch.setattr(store, "close", recorded_close)
     try:
         with served(app):
-            # The thread cannot end during the first stop. Only the inbound worker can release it.
+            # The thread cannot end during the first stop or while the workers end. Only the final stop releases it.
             loop.start(lambda _halt: release.wait())
+            held.extend(loop.threads)
+        assert len(held) == 1
         assert seen_at_stop == [True], "signalled with the other stops, before a worker ended"
+        assert [budget for budget, *_ in joins] == [0, background.STOP_WAIT], (
+            "the early stop joins for no time and the final stop spends the full join budget"
+        )
+        assert [ended for _, ended, *_ in joins] == [False, True], (
+            "the early stop came before the inbound worker ended and the final stop after it"
+        )
+        assert [alive for *_, before, after in joins[1:] for alive in (before, after)] == [[True], [False]], (
+            "the thread ran until the final stop, and that join waited it out"
+        )
+        assert at_close == [([False], [])], "the thread had ended and been cleared before the store closed"
         assert not loop.threads, "shutdown joined and cleared the thread after the inbound worker ended"
     finally:
         release.set()
