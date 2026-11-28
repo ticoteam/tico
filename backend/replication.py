@@ -71,6 +71,9 @@ NO_RECENT_COPY = "Litestream has not sent any copy of the database to the backup
 SYNC_INTERVAL_DEFAULT = 60
 # The replica fields write_status keeps when it has no mirror to read, and drops when the generation changes.
 REPLICA_FIELDS = ("last_replicated_at", "reason", "replica_txid", "behind_since", "pending_txid")
+# How the loop's reads of the backup location last failed. Dropped with the replica fields when the generation changes, so
+# a new generation's first failed read starts its own run of failures.
+LISTING_FIELDS = ("listing_error", "listing_failed_at", "listing_failing_since")
 _LTX_NAME = re.compile(r"([0-9a-f]{16})-([0-9a-f]{16})\.ltx")
 _SYNC_UNITS = {"s": 1, "m": 60, "h": 3600}
 FILES_PREFIX = "files"
@@ -304,7 +307,8 @@ def status(env=None, path=None):
     """{mode, last_replicated_at, reason, behind_since, checked_at, unsent_files, target_kind, warning, credential_key,
     key_files} for the config payload. `reason` says why there is no copy at all; `behind_since` is when the backup location
     fell behind the database (null when caught up); `checked_at` is when the loop last read the backup location, and
-    `unsent_files` is the local level-0 pile-up (local_level_zero())."""
+    `unsent_files` is the local level-0 pile-up (local_level_zero()). `listing_error` names the error type of the
+    loop's last read of the backup location when it failed (null when it worked), at `listing_failed_at`; `listing_failing_since` is when the failures in a row began."""
     env = os.environ if env is None else env
     if rehearsal_on(env) or env.get("TICO_BACKUP_MODE") == "rehearsal":
         return {"mode": "rehearsal", "last_replicated_at": None, "target_kind": "none", "warning": ""}
@@ -338,6 +342,9 @@ def status(env=None, path=None):
         "reason": saved.get("reason"),
         "behind_since": saved.get("behind_since"),
         "checked_at": saved.get("checked_at"),
+        "listing_error": saved.get("listing_error"),
+        "listing_failed_at": saved.get("listing_failed_at"),
+        "listing_failing_since": saved.get("listing_failing_since"),
         "unsent_files": saved.get("unsent_files"),
         "target_kind": kind,
         "warning": warning,
@@ -1020,15 +1027,16 @@ def write_status(
 
     Lag is judged by TXIDs (_next_lag). `last_replicated_at` is the newest copy of the first replica level that has one,
     so an idle replica still shows a time; it is null, with `reason`, only when the replica holds no database file at all.
-    When the listing fails, the replica fields are kept, the error type is recorded as `listing_error`, the local pile-up is
+    When the listing fails, the replica fields are kept, the error type is recorded as `listing_error` (and when, as
+    `listing_failed_at`, with `listing_failing_since` for when the failures in a row began), the local pile-up is
     still written, and `checked_at` is left where it was, so health sees the status age. Without a mirror (backups off) the
     replica fields are carried over, not read. `warn_after` is the warning time, for the cell stats to judge by."""
     now = time.time() if now is None else now
     saved = _status_file({}, path)
     if (saved.get(GENERATION_FIELD) or "") != generation:
         # Written for another backup generation: a reset may have moved the data to a new folder, so none of its lag or
-        # copy times apply here and they are dropped before anything is compared.
-        saved = {key: value for key, value in saved.items() if key not in REPLICA_FIELDS}
+        # copy times, nor its failed reads, apply here and they are dropped before anything is compared.
+        saved = {key: value for key, value in saved.items() if key not in REPLICA_FIELDS + LISTING_FIELDS}
     data = {
         "unsent_files": unsent,
         "warn_after_s": warn_after,
@@ -1044,6 +1052,13 @@ def write_status(
         except Exception as exc:  # unreachable or unreadable: the type only, nothing a message might quote
             data.update({key: saved[key] for key in REPLICA_FIELDS if key in saved})
             data["listing_error"] = type(exc).__name__
+            data["listing_failed_at"] = _stamp(now)
+            # When this run of failures began; a successful listing drops it, so the next failure starts a new run.
+            data["listing_failing_since"] = (
+                (saved.get("listing_failing_since") or saved.get("listing_failed_at") or _stamp(now))
+                if saved.get("listing_error")
+                else _stamp(now)
+            )
             if saved.get("checked_at"):
                 data["checked_at"] = saved["checked_at"]
             else:

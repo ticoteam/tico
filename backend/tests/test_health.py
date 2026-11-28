@@ -33,7 +33,9 @@ def test_all_good(environment, monkeypatch):
     api = environment()
     runner = enrolled(api)
     heartbeat(api, runner, seconds_ago=5, runtimes=SIGNED_IN)
-    with_backup(monkeypatch, {"mode": "remote", "last_replicated_at": H.now(), "target_kind": "s3"})
+    with_backup(
+        monkeypatch, {"mode": "remote", "checked_at": H.now(), "last_replicated_at": H.now(), "target_kind": "s3"}
+    )
     health.record_never_stuck(api.app.state.store)  # the hourly reading
     body, checks = health_of(api)
     assert {k: v["status"] for k, v in checks.items() if k != "signin"} == {
@@ -154,9 +156,15 @@ def test_backups_are_judged_by_how_long_they_have_been_behind_not_by_the_copy_ag
     api = environment()
     old = H.shift(H.now(), hours=-30)
     # A quiet database: its newest copy is a day old, and nothing is behind it.
-    with_backup(monkeypatch, {"mode": "remote", "last_replicated_at": old, "behind_since": None, "target_kind": "s3"})
+    with_backup(
+        monkeypatch,
+        {"mode": "remote", "checked_at": H.now(), "last_replicated_at": old, "behind_since": None, "target_kind": "s3"},
+    )
     assert health_of(api)[1]["backups"]["status"] == "ok"
-    with_backup(monkeypatch, {"mode": "remote", "last_replicated_at": old, "behind_since": old, "target_kind": "s3"})
+    with_backup(
+        monkeypatch,
+        {"mode": "remote", "checked_at": H.now(), "last_replicated_at": old, "behind_since": old, "target_kind": "s3"},
+    )
     assert health_of(api)[1]["backups"]["status"] == "bad"
     with_backup(monkeypatch, {"mode": "off"})
     assert health_of(api)[1]["backups"]["status"] == "bad"
@@ -172,6 +180,7 @@ def test_lag_is_judged_by_how_long_it_has_lasted_against_the_sync_interval(monke
         {
             "backup": {
                 "mode": "remote",
+                "checked_at": H.now(),
                 "target_kind": "s3",
                 "last_replicated_at": H.now(),
                 "behind_since": H.shift(H.now(), minutes=-minutes),
@@ -191,13 +200,20 @@ def test_a_replica_with_no_database_file_says_copies_are_not_arriving():
 
     from backend import health, replication
 
-    backup = {"mode": "remote", "target_kind": "s3", "last_replicated_at": None, "reason": replication.NO_RECENT_COPY}
+    backup = {
+        "mode": "remote",
+        "checked_at": H.now(),
+        "target_kind": "s3",
+        "last_replicated_at": None,
+        "reason": replication.NO_RECENT_COPY,
+    }
     check = health._backups({"backup": backup}, SimpleNamespace(loopback=False))
     assert check["status"] == "warn" and check["summary"] == replication.NO_RECENT_COPY
     assert (
-        health._backups({"backup": {"mode": "remote", "last_replicated_at": None}}, SimpleNamespace(loopback=False))[
-            "summary"
-        ]
+        health._backups(
+            {"backup": {"mode": "remote", "checked_at": H.now(), "last_replicated_at": None}},
+            SimpleNamespace(loopback=False),
+        )["summary"]
         == "Set up, but nothing has been copied yet."
     )
     behind = {**backup, "behind_since": H.shift(H.now(), hours=-2)}
@@ -209,7 +225,7 @@ def test_a_pile_up_of_local_files_is_a_stuck_backup():
 
     from backend import health
 
-    remote = {"mode": "remote", "target_kind": "s3", "last_replicated_at": H.now()}
+    remote = {"mode": "remote", "checked_at": H.now(), "target_kind": "s3", "last_replicated_at": H.now()}
     check = lambda **extra: health._backups({"backup": {**remote, **extra}}, SimpleNamespace(loopback=False))
     assert check(unsent_files=1000)["status"] == "ok"
     stuck = check(unsent_files=27914)
@@ -398,7 +414,7 @@ def test_a_local_credential_key_that_is_not_backed_up_is_a_warning_or_a_note():
 
     from backend import health
 
-    remote = {"mode": "remote", "last_replicated_at": H.now(), "target_kind": "s3"}
+    remote = {"mode": "remote", "checked_at": H.now(), "last_replicated_at": H.now(), "target_kind": "s3"}
     server, local = SimpleNamespace(loopback=False), SimpleNamespace(loopback=True)
     check = lambda backup, where=server: health._backups({"backup": backup}, where)
     # No local key (a KMS install, or no credential saved yet): as before.
@@ -1754,7 +1770,7 @@ def test_a_pile_up_is_judged_against_two_sync_intervals_of_local_files(monkeypat
 
     from backend import health
 
-    remote = {"mode": "remote", "target_kind": "s3", "last_replicated_at": H.now()}
+    remote = {"mode": "remote", "checked_at": H.now(), "target_kind": "s3", "last_replicated_at": H.now()}
     check = lambda unsent: health._backups(
         {"backup": {**remote, "unsent_files": unsent}}, SimpleNamespace(loopback=False)
     )

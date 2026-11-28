@@ -529,10 +529,10 @@ def _reported(c, prefix, limit=200):
     )
 
 
-def harness_denies(c, settings):
+def harness_denies(c, settings, unread=None):
     """(bot, command, repositories) for each GitHub write in GITHUB_WRITES (a push) a bot's access allows on a
     repository other than its own but its Claude Code settings deny. Its own repository is left out, so a bot that
-    only reads keeps its denies."""
+    only reads keeps its denies. A bot whose tools could not be read is skipped, and added to `unread` when given."""
     from .bot_tools import listing, prime_state
     from .github_app import repo_of
     from .repositories import Reads
@@ -561,6 +561,8 @@ def harness_denies(c, settings):
         try:
             tools = listing(c, settings, bot, reads=reads)["tools"]
         except Exception:
+            if unread is not None and bot not in unread:
+                unread.append(bot)
             continue
         row = configs.get(bot)
         own = (
@@ -598,8 +600,30 @@ def harness_denies(c, settings):
     return out
 
 
-def _harness_denies_check(c, settings):
-    rows = harness_denies(c, settings)
+def _harness_denies_checks(c, settings):
+    """The Harness permissions rows: a warning for the denies found, and a Can't tell row naming the bots whose tools
+    could not be read, so a failed read never leaves the page saying every part is fine."""
+    unread = []
+    rows = harness_denies(c, settings, unread)
+    out = []
+    if unread:
+        names = sorted(_bot_name(c, bot) for bot in unread)
+        who = _listing(names) if len(names) <= 2 else f"{names[0]} and {len(names) - 1} more"
+        out.append(
+            _check(
+                "harness_unread",
+                "Harness permissions",
+                "unknown",
+                f"Could not read the tools of {who}.",
+                [_fix("Open bots", "#/settings", "bots")],
+            )
+        )
+    if denies := _harness_denies_check(c, rows):
+        out.append(denies)
+    return out
+
+
+def _harness_denies_check(c, rows):
     if not rows:
         return None
     by_bot = {}
@@ -1796,6 +1820,12 @@ def _clock(at):
     return f"{day}{when:%H:%M} UTC"
 
 
+def _dated(at):
+    """A stored time with its day always: "Nov 22, 14:02 UTC", for a reading whose age matters."""
+    when = datetime.fromisoformat(str(at).replace("Z", "+00:00")).astimezone(timezone.utc)
+    return f"{when:%b} {when.day}, {when:%H:%M} UTC"
+
+
 def _tokens_words(n):
     return f"{n / 1e9:.1f}B" if n >= 1e9 else f"{n / 1e6:.0f}M" if n >= 1e6 else f"{n:,}"
 
@@ -2107,6 +2137,16 @@ def _slack(c):
         return None
     fix = _fix("Open Slack settings", "#/settings", "cloud")
     if state["state"] == "connected":
+        # The service rewrites this line every few minutes while it is up: an older one means it stopped saying so.
+        at, now = H.parse_ts(state["last_succeeded_at"] or ""), H.parse_ts(H.now())
+        if at is None or now is None or (now - at).total_seconds() > slack_app.SILENT_SECONDS:
+            return _check(
+                "slack",
+                "Slack",
+                "unknown",
+                f"The Slack service has not reported since {_clock(state['last_succeeded_at'])}. Is it running?",
+                [fix],
+            )
         return _check("slack", "Slack", "ok", "Connected.")
     if state["state"] == "waiting":
         return _check(
@@ -2168,6 +2208,19 @@ def _backups(config, settings):
     # The loop writes checked_at every round, even when the listing fails; an old one means it has stopped or cannot reach
     # the backup location, so nothing it last reported (copies, lag) can be trusted.
     checked = _age_status(backup.get("checked_at"))
+    if not backup.get("checked_at") and backup.get("listing_error"):
+        # No listing has worked yet: the failures in a row are judged by when they began, by the same age rule.
+        failing = backup.get("listing_failing_since") or backup.get("listing_failed_at")
+        checked = _age_status(failing)
+        if checked != "ok":
+            return _check(
+                "backups",
+                "Backups",
+                checked,
+                f"Could not read the backup location since {_clock(failing)} ({backup['listing_error']}); it has "
+                "never been read.",
+                [fix],
+            )
     if checked != "ok":
         return _check(
             "backups",
@@ -2185,6 +2238,35 @@ def _backups(config, settings):
             "bad" if behind == "bad" else "warn",
             f"Backups are stuck: Litestream has {unsent:,} unsent files. Restart the server; if it continues, "
             "see the backup docs.",
+            [fix],
+        )
+    if backup.get("listing_error"):
+        # The last read failed (a first one too, with no check time yet). The age rule above turns it to Look, then
+        # Broken, once it lasts past the warning time. Lag the last good read already saw still counts.
+        if behind != "ok":
+            return _check(
+                "backups",
+                "Backups",
+                behind,
+                f"Copies to {target or 'the remote'} have been behind the database since {_clock(since)}, and the "
+                f"backup location could not be read at {_clock(backup.get('listing_failed_at') or H.now())} "
+                f"({backup['listing_error']}).",
+                [fix],
+            )
+        return _check(
+            "backups",
+            "Backups",
+            "unknown",
+            f"Could not read the backup location at {_clock(backup.get('listing_failed_at') or H.now())} "
+            f"({backup['listing_error']}). Newest copy known: {_clock(last) if last else 'none'}.",
+            [fix],
+        )
+    if mode == "remote" and not backup.get("checked_at"):
+        return _check(
+            "backups",
+            "Backups",
+            "unknown",
+            "This server has not read its backup location yet, so whether copies arrive is not known.",
             [fix],
         )
     if mode in ("local-only", "local"):
@@ -2843,6 +2925,7 @@ NEVER_STUCK_COUNTS = ("waiting_on_nothing", "retry", "manager", "person", "cant_
 NEVER_STUCK_KEY = "health:never_stuck"
 NEVER_STUCK_TASKS_KEY = "health:never_stuck:tasks"
 NEVER_STUCK_FRESH_MINUTES = 10  # an older reading says when it was read
+NEVER_STUCK_STALE_MINUTES = 3 * 60  # an older one (two missed hourly runs) cannot tell
 
 
 def never_stuck_reading(c):
@@ -2953,8 +3036,13 @@ def _never_stuck_check(c, visible_sql=None):
         f"{counts['waiting_on_nothing']} waiting on nothing, {counts['retry']} on a retry, "
         f"{counts['manager']} with a manager, {counts['person']} at the ladder's end, {counts['cant_run']} can't run."
     )
-    if reading.get("at") and str(reading["at"]) < H.shift(H.now(), minutes=-NEVER_STUCK_FRESH_MINUTES):
-        summary += f" Read at {str(reading['at'])[11:16]} UTC; tasks closed since are left out."
+    at = str(reading.get("at") or "")
+    # Two hourly runs missed: its numbers say nothing about now, so it cannot tell.
+    stale = bool(at) and at < H.shift(H.now(), minutes=-NEVER_STUCK_STALE_MINUTES)
+    if stale:
+        summary = f"The hourly reading last ran {_dated(at)}. " + summary
+    elif at and at < H.shift(H.now(), minutes=-NEVER_STUCK_FRESH_MINUTES):
+        summary += f" Read at {_dated(at)}; tasks closed since are left out."
     if counts["no_one"]:
         # The company's owner and Admins learn how many, never which: no one who reads them can move them.
         them = "it" if counts["no_one"] == 1 else "them"
@@ -2962,6 +3050,8 @@ def _never_stuck_check(c, visible_sql=None):
     if counts["broken"]:
         summary += f" {_plural(counts['broken'], 'rule break')}."
     status = "bad" if counts["broken"] else "warn" if counts["no_one"] else "ok"
+    if stale and status == "ok":  # a break or a stranded task it saw still shows as it was
+        status = "unknown"
     check = _check("never_stuck", "Tasks", status, summary)
     # The same numbers as fields, so a screen reads them rather than the sentence.
     check["counts"] = counts
@@ -2978,8 +3068,12 @@ def _claimed_oks_check(c):
     try:
         waiting = len(support.claimed(c))
         refused = support.refused_lately(c)
-    except sqlite3.OperationalError:  # an install that never made the tables: nothing was claimed
-        waiting = refused = 0
+    except sqlite3.DatabaseError as exc:  # OperationalError included; a corrupt file raises DatabaseError itself
+        if not isinstance(exc, sqlite3.OperationalError) or "no such table" not in str(
+            exc
+        ):  # a locked or failing database: nothing read, so nothing to say is fine
+            return _check("claimed_oks", "OK'd sends", "unknown", f"Could not read OK'd sends ({type(exc).__name__}).")
+        waiting = refused = 0  # an install that never made the tables: nothing was claimed
     said = []
     if waiting:
         said.append(
@@ -3437,8 +3531,8 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
                     [_fix("Open webhooks", "#/tools/webhooks")],
                 )
             )
-    if full and (denies := _harness_denies_check(c, settings)):
-        checks.append(denies)
+    if full:
+        checks.extend(_harness_denies_checks(c, settings))
     if full:
         from .worktrees import current_error, finished_and_retired, statuses
 
@@ -4329,6 +4423,8 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
         "audience": kind,
         "checks": checks,
         "attention": sum(1 for x in checks if x["status"] in ("warn", "bad")),
+        # Checks that could not read what they check: apart from attention, so an agent tells the two apart.
+        "unknown": sum(1 for x in checks if x["status"] == "unknown"),
         "offline": {
             "silent": sorted(x["id"] for x in silent),
             "computers": named_computers,

@@ -2250,6 +2250,26 @@ class Gateway:
                 self.wait(bell)
 
 
+def beat(gateway, state, store, team, clock=time.monotonic):
+    """The gateway's heartbeat: writes its Health line on a change of state, and rewrites "connected" every
+    BEAT_SECONDS while it stays up, so Health can tell a stopped service from a quiet one (health._slack). Ends the
+    connection when the saved tokens change."""
+    up = gateway.slack.connected() if hasattr(gateway.slack, "connected") else True
+    now = clock()
+    changed = up != state["connected"]
+    if changed or (up and now - state.get("reported", now) >= slack_app.BEAT_SECONDS):
+        state["connected"], state["reported"] = up, now
+        if up:
+            slack_app.report(store, "connected", team=team)
+            if changed:
+                gateway.bridge.catch_up_soon()  # what the socket missed while it was down
+        else:
+            slack_app.report(store, "disconnected", "The Slack websocket dropped; reconnecting")
+    if state["stamp"] is not None and slack_app.stamp(store) != state["stamp"]:
+        LOG.info("Slack tokens changed; reconnecting")
+        gateway.stop.set()
+
+
 class _Fallback(Exception):
     """Every recipient of a message was dropped: the write is rolled back, and the assistant (or Agent Ops) is checked and asked."""
 
@@ -2446,20 +2466,9 @@ def main(argv=None, make_slack=None):
             "stamp": _when_free(stopping, "Slack token stamp", slack_app.stamp, store) if stored else None,
         }
 
-        def heartbeat(gateway=gateway, state=state, store=store, verified=verified):  # this connection's own
-            up = gateway.slack.connected() if hasattr(gateway.slack, "connected") else True
-            if up != state["connected"]:
-                state["connected"] = up
-                if up:
-                    slack_app.report(store, "connected", team=verified["team_id"])
-                    gateway.bridge.catch_up_soon()  # what the socket missed while it was down
-                else:
-                    slack_app.report(store, "disconnected", "The Slack websocket dropped; reconnecting")
-            if state["stamp"] is not None and slack_app.stamp(store) != state["stamp"]:
-                LOG.info("Slack tokens changed; reconnecting")
-                gateway.stop.set()
-
-        gateway.heartbeat = heartbeat
+        gateway.heartbeat = lambda gateway=gateway, state=state, store=store, team=verified["team_id"]: beat(
+            gateway, state, store, team
+        )  # this connection's own
         background.start("slack-stopper", lambda gateway=gateway: (stopping.wait(), gateway.request_stop()))
         try:
             gateway.run()
