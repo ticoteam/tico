@@ -14,10 +14,12 @@ from backend.tests.helpers.engine import ok_ask
 from backend.tests.helpers.org_rule_check import (  # noqa: F401 - fixtures
     COLOR,
     LAUNCH,
+    checked_after,
     color_rule,
     hand_over,
     hold_row,
     not_a_friday,
+    notes_to,
     ruled,
     sql,
     task_for_ops,
@@ -280,8 +282,11 @@ def test_a_bots_ask_only_warn_rules_meet_is_asked_when_the_check_cannot_judge(ru
     cannot_judge(monkeypatch, cause)
     got = bots_ask(api, task, "OK the launch day plan for Monday or Tuesday or later this month?")
     assert got["requirement_id"] and len(asks_on(api, task)) == len(before) + 1
-    if cause != "busy":
-        assert "could not be checked" in got["rule_warning"]["text"] or "too long" in got["rule_warning"]["text"]
+    assert "rule_warning" not in got  # checked right after it is asked, never before
+    checked_after(api)
+    if cause != "busy":  # a busy check waits for a slot (org_rule_check LATE_BUSY_SECONDS)
+        told = " ".join(notes_to(api))
+        assert "could not be checked" in told or "too long" in told, told
     assert sql(api, "SELECT count(*) AS n FROM org_rule_holds")[0]["n"] == 0
 
 
@@ -290,8 +295,10 @@ def test_a_bots_ask_a_warn_rule_finds_broken_is_asked_with_the_warning(ruled):
     color_rule(api, if_broken="warn")
     task = task_for_ops(api)
     got = bots_ask(api, task)
-    assert got["requirement_id"] and got["rule_warning"]["rules"][0]["text"] == COLOR
-    assert "delivered with a warning" in got["rule_warning"]["text"]
+    assert got["requirement_id"] and "rule_warning" not in got  # asked first, checked right after
+    checked_after(api)
+    [told] = [n for n in notes_to(api) if COLOR in n]
+    assert "delivered with a warning" in told
     assert row(api, task["id"])["note"].startswith("Warning: ")
     assert sql(api, "SELECT count(*) AS n FROM org_rule_holds")[0]["n"] == 0
 

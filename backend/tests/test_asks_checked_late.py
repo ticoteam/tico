@@ -1,0 +1,330 @@
+"""A bot's ❓ to a person is checked right after it is saved when every rule it meets only warns (spec "Bots' questions
+checked after save", 2026-11-25): the plain-words rule ("Asks to a person", a Warn) no longer makes the bot wait for the
+judge. A Block or Escalate rule is still checked first and refuses it, nothing written; a ❓ Tico answers itself queues
+no check (backend/task_comments_routes.py task_question, backend/task_rule_gate.py check)."""
+
+import json
+import threading
+from types import SimpleNamespace
+
+import pytest
+
+from backend import org_rule_check
+from backend import org_rules as OR
+from backend.tests.helpers.api import headers
+from backend.tests.helpers.wait import wait_for
+from backend.tests.helpers.org_rule_check import (  # noqa: F401 - fixtures
+    COLOR,
+    checked_after,
+    color_rule,
+    notes_to,
+    ruled,
+    sql,
+    task_for_ops,
+)
+
+
+def question(api, task, text, to="ana", token="ops-test"):
+    return api.post(f"/api/v2/tasks/{task['id']}/questions", json={"to": to, "text": text}, headers=headers(token))
+
+
+def comment(api, task, text, token="ops-test"):
+    r = api.post(f"/api/v2/tasks/{task['id']}/comments", json={"text": text}, headers=headers(token))
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def age_late_checks(api, seconds):
+    """Every waiting late check's write made `seconds` ago."""
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE org_rule_late SET created_at=?", (org_rule_check.H.shift(org_rule_check.H.now(), seconds=-seconds),)
+        )
+
+
+def settle(api):
+    """Run the late checks still waiting, after the drain thread's pass (org_rule_check.drain_late holds one lane)."""
+    checked_after(api)
+    assert not sql(api, "SELECT 1 FROM org_rule_late LIMIT 1"), "a late rule check was still waiting"
+
+
+def events(api, action):
+    return [json.loads(e["detail"]) for e in sql(api, "SELECT detail FROM events WHERE action=?", (action,))]
+
+
+def test_a_bots_questions_under_warn_rules_do_not_wait_for_the_judge(ruled, monkeypatch):
+    """Criterion 1: with the built-in Warn ask rule, 20 ❓s each answer without asking the judge, and each is still
+    judged right after it is saved. The late checks' drain thread is kept from starting while they are asked, so any
+    call during them would be a request's own."""
+    api, judge = ruled
+    assert sql(api, "SELECT if_broken FROM org_rules WHERE text=?", (OR.ASKS_TO_A_PERSON,))[0]["if_broken"] == "warn"
+    monkeypatch.setattr(org_rule_check, "kick_late", lambda store, primary: None)
+    task = task_for_ops(api)
+    for n in range(20):
+        r = question(api, task, f"Which of the two launch note drafts goes out in week {n + 2}?")
+        assert r.status_code == 200, r.text
+        assert r.json()["question"] and "rule_warning" not in r.json()
+    assert judge.calls == [], "no ❓ waited for the judge"
+    assert sql(api, "SELECT count(*) AS n FROM org_rule_late")[0]["n"] == 20
+    settle(api)
+    assert len(judge.calls) == 20, "each ❓ is still checked, right after it is saved"
+
+
+def test_a_question_a_warn_rule_finds_broken_reaches_its_person_and_the_bot_is_told_after(ruled):
+    """Criterion 2: the ❓ is saved and marked as sent; within 10 s the bot has one note naming the rule and
+    rules.warned is recorded once."""
+    api, judge = ruled
+    color_rule(api, if_broken="warn")
+    task = task_for_ops(api)
+    text = "May I say our favorite color is red in the launch note?"
+    r = question(api, task, text)
+    assert r.status_code == 200, r.text
+    got = r.json()
+    assert got["question"]["line"] == text and "rule_warning" not in got
+    assert sql(api, "SELECT person_id FROM question_marks")[0]["person_id"] == "human:ana"
+    settle(api)
+    told = [n for n in notes_to(api) if COLOR in n]
+    assert len(told) == 1, notes_to(api)
+    warned = events(api, "rules.warned")
+    assert len(warned) == 1 and warned[0].get("late") is True, warned
+    assert sql(api, "SELECT person_id FROM question_marks")[0]["person_id"] == "human:ana", "the ❓ stays asked"
+
+
+def test_a_question_a_block_rule_finds_broken_is_refused_before_anything_is_written(ruled):
+    """Criterion 3: a Block rule is checked before the write, as today: refused with the rule's words."""
+    api, judge = ruled
+    color_rule(api)  # block
+    task = task_for_ops(api)
+    text = "May I say our favorite color is red in the launch note?"
+    r = question(api, task, text)
+    assert r.status_code == 409, r.text
+    said = r.json()
+    detail = said["error"]["detail"] if isinstance(said.get("error"), dict) else said["detail"]
+    assert COLOR in detail and len(judge.calls) == 1
+    assert sql(api, "SELECT count(*) AS n FROM messages WHERE body LIKE ?", (f"%{text}%",))[0]["n"] == 0
+    assert sql(api, "SELECT count(*) AS n FROM question_marks")[0]["n"] == 0
+    assert sql(api, "SELECT count(*) AS n FROM org_rule_late")[0]["n"] == 0
+
+
+def test_a_question_whose_late_check_times_out_stays_asked_and_is_recorded_unchecked(ruled):
+    """Criterion 4: the judge out after the ❓ is saved: it stays, and rules.unchecked is recorded as today."""
+    api, judge = ruled
+    judge.fail = TimeoutError("judge timed out")
+    task = task_for_ops(api)
+    r = question(api, task, "Which tone should the launch note take, warm or plain?")
+    assert r.status_code == 200, r.text
+    settle(api)
+    assert sql(api, "SELECT count(*) AS n FROM question_marks")[0]["n"] == 1
+    unchecked = events(api, "rules.unchecked")
+    assert len(unchecked) == 1 and unchecked[0]["operation"] == "question" and unchecked[0].get("late"), unchecked
+
+
+def test_a_question_tico_answers_itself_saves_no_question_and_queues_no_check(ruled, monkeypatch):
+    """Criterion 5: Tico's own answer comes back; no ❓ is saved and no check is queued."""
+    api, judge = ruled
+    monkeypatch.setattr("backend.stage_inputs.repositories", lambda c, task_id, readable: ["acme/app"])
+    task = task_for_ops(api)
+    r = question(api, task, "Which repo is this in?")
+    assert r.status_code == 200, r.text
+    assert r.json()["asked"] is False and "acme/app" in r.json()["answered_by_tico"]
+    assert sql(api, "SELECT count(*) AS n FROM question_marks")[0]["n"] == 0
+    assert sql(api, "SELECT count(*) AS n FROM org_rule_late")[0]["n"] == 0
+    assert judge.calls == []
+
+
+def test_an_older_clients_question_on_the_asks_route_is_checked_after_save_too(ruled):
+    """The asks route (an older `tico`'s question) drops the same exception: its Warn check runs after the write."""
+    api, judge = ruled
+    color_rule(api, if_broken="warn")
+    task = task_for_ops(api)
+    r = api.post(
+        f"/api/v2/tasks/{task['id']}/asks",
+        json={"to": "ana", "line": "May I say our favorite color is red?", "version": task["version"]},
+        headers=headers("ops-test"),
+    )
+    assert r.status_code == 200, r.text
+    assert "rule_warning" not in r.json() and r.json()["question"]
+    settle(api)
+    assert len(events(api, "rules.warned")) == 1
+    assert [n for n in notes_to(api) if COLOR in n]
+
+
+def test_a_questions_late_check_stops_waiting_for_a_busy_slot_in_time_for_its_10_seconds(ruled, monkeypatch):
+    """Criterion 2 with every call slot busy: a ❓'s check waits for a slot only so long that a call started then still
+    ends within 10 s of the save; past that it is recorded unchecked (reason `busy`), as a check before the save was.
+    A comment's check of the same age keeps waiting (its own LATE_BUSY_SECONDS)."""
+    K = org_rule_check
+    assert K.LATE_QUESTION_BUSY_SECONDS + K.DEADLINES[K.RULE_LEVEL] + K.LATE_RETRY_SECONDS <= 10
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    task = task_for_ops(api)
+    monkeypatch.setattr(K, "kick_late", lambda store, primary: None)
+    monkeypatch.setattr(K, "_ask", lambda *a, **k: (None, "busy"))
+    assert question(api, task, "May I say our favorite color is red in the launch note?").status_code == 200
+    comment(api, task, "Fun fact: our favorite color is red.")
+    checked_after(api)
+    assert sql(api, "SELECT count(*) AS n FROM org_rule_late")[0]["n"] == 2, "both wait for a slot at first"
+    age_late_checks(api, K.LATE_QUESTION_BUSY_SECONDS + 1)
+    checked_after(api)
+    [unchecked] = events(api, "rules.unchecked")
+    assert unchecked["operation"] == "question" and unchecked["reason"] == "busy" and unchecked["late"] is True
+    assert sql(api, "SELECT count(*) AS n FROM question_marks")[0]["n"] == 1, "the ❓ stays asked"
+    assert sql(api, "SELECT count(*) AS n FROM org_rule_late")[0]["n"] == 1, "the comment's check still waits"
+
+
+def test_a_question_queued_behind_other_late_checks_is_checked_first(ruled, monkeypatch):
+    """A backlog of other writes' late checks never holds a ❓'s back: the ❓, saved last, is in the first group judged."""
+    api, judge = ruled
+    color_rule(api, if_broken="warn")
+    task = task_for_ops(api)
+    monkeypatch.setattr(org_rule_check, "kick_late", lambda store, primary: None)
+    for n in range(12):
+        comment(api, task, f"Step {n} is done.")
+    asked = "Which of the two launch note drafts goes out first?"
+    assert question(api, task, asked).status_code == 200
+    settle(api)
+    said = [c["state"]["output"] for c in judge.calls]
+    assert len(said) == 13
+    first = said[: org_rule_check._late_width(api.app.state.store)]  # one group, judged side by side
+    assert any(asked in s for s in first), said
+
+
+def test_late_checks_run_side_by_side(ruled, monkeypatch):
+    """A backlog drains several checks at a time, not one by one: two calls are in the judge at once. One by one, the
+    first would wait for a second that never comes, fail, and be recorded unchecked."""
+    api, judge = ruled
+    color_rule(api, if_broken="warn")
+    task = task_for_ops(api)
+    monkeypatch.setattr(org_rule_check, "kick_late", lambda store, primary: None)
+    for n in range(4):
+        comment(api, task, f"Fun fact {n}: our favorite color is red.")
+    together = threading.Barrier(2, timeout=4)
+    answer = judge.__call__
+
+    def side_by_side(state, questions, label=None):
+        together.wait()
+        return answer(state, questions, label)
+
+    api.app.state.judge = side_by_side
+    settle(api)
+    assert events(api, "rules.unchecked") == []
+    assert len(events(api, "rules.warned")) == 4
+
+
+def test_a_question_behind_more_late_checks_than_one_read_takes_is_still_in_the_first_group(ruled, monkeypatch):
+    """The queue is read a page at a time (LATE_READ): a ❓ behind a full page of older checks still goes first."""
+    api, judge = ruled
+    color_rule(api, if_broken="warn")
+    task = task_for_ops(api)
+    monkeypatch.setattr(org_rule_check, "kick_late", lambda store, primary: None)
+    monkeypatch.setattr(org_rule_check, "LATE_READ", 4)
+    for n in range(12):
+        comment(api, task, f"Step {n} is done.")
+    asked = "Which of the two launch note drafts goes out first?"
+    assert question(api, task, asked).status_code == 200
+    settle(api)
+    said = [c["state"]["output"] for c in judge.calls]
+    assert len(said) == 13
+    assert any(asked in s for s in said[: org_rule_check._late_width(api.app.state.store)]), said
+
+
+@pytest.fixture
+def held(ruled, monkeypatch):
+    """The late checks' drain running on its own thread with every comment's call kept in the judge until `let_go` is
+    set (each one in the judge releases `in_judge`); a ❓'s call answers at once and sets `asked`. While a test holds
+    `reads`, the drain reads nothing from the queue (a read under way finishes first), so writes made meanwhile reach
+    it together."""
+    api, judge = ruled
+    color_rule(api, if_broken="warn")
+    task = task_for_ops(api)
+    monkeypatch.setattr(org_rule_check, "kick_late", lambda store, primary: None)
+    reads, read = threading.Lock(), org_rule_check._late_read
+
+    def gated_read(store):
+        with reads:
+            return read(store)
+
+    monkeypatch.setattr(org_rule_check, "_late_read", gated_read)
+    asked, let_go, in_judge = threading.Event(), threading.Event(), threading.Semaphore(0)
+    ended_before = []  # how many checks had ended (a comment's call times out after its deadline) when the ❓'s came
+    answer = judge.__call__
+
+    def slow_for_comments(state, questions, label=None):
+        if "launch note drafts" in state["output"]:
+            ended_before.append(len(events(api, "rules.unchecked")) + len(events(api, "rules.warned")))
+            asked.set()
+        elif "Step" in state["output"]:
+            in_judge.release()
+            let_go.wait(10)
+        return answer(state, questions, label)
+
+    api.app.state.judge = slow_for_comments
+    drain = threading.Thread(target=checked_after, args=(api,), daemon=True)
+    try:
+        yield SimpleNamespace(
+            api=api,
+            task=task,
+            asked=asked,
+            let_go=let_go,
+            drain=drain,
+            in_judge=in_judge,
+            ended_before=ended_before,
+            reads=reads,
+        )
+    finally:
+        let_go.set()
+        drain.join(15)
+
+
+def test_a_question_saved_while_other_checks_fill_their_lanes_is_judged_before_any_of_them_ends(held):
+    """QA, criterion 2 under a backlog: other checks never fill every lane and a lane is not held for a group's slowest
+    call, so a ❓ saved while slow checks are in the judge is judged at once, not after them."""
+    api, task, asked, let_go, drain = held.api, held.task, held.asked, held.let_go, held.drain
+    for n in range(8):
+        comment(api, task, f"Step {n} is done.")
+    drain.start()
+    width = org_rule_check._late_width(api.app.state.store)
+    for _ in range(max(1, width - 1)):
+        assert held.in_judge.acquire(timeout=10), "the comments' checks reach the judge"
+    assert question(api, task, "Which of the two launch note drafts goes out first?").status_code == 200
+    assert asked.wait(10), "the ❓ was judged"
+    assert held.ended_before == [0], "the ❓ was judged while every comment's call was still in the judge"
+    let_go.set()
+    drain.join(15)
+    assert sql(api, "SELECT count(*) AS n FROM org_rule_late")[0]["n"] == 0
+
+
+def test_a_question_past_its_deadline_behind_busy_lanes_is_recorded_unchecked_without_waiting_for_them(held):
+    """QA, criterion 2's 10 s under a backlog: a ❓ that can no longer start a call ending within 10 s of its save
+    (LATE_QUESTION_BUSY_SECONDS) is recorded unchecked (reason `busy`) while the calls ahead of it are still running,
+    and is never sent to the judge."""
+    api, task, asked, let_go, drain = held.api, held.task, held.asked, held.let_go, held.drain
+    K = org_rule_check
+    store = api.app.state.store
+    for n in range(8):
+        comment(api, task, f"Step {n} is done.")
+    drain.start()
+    for _ in range(max(1, K._late_width(store) - 1)):
+        assert held.in_judge.acquire(timeout=10), "the comments' checks reach the judge"
+    late = "Which of the two launch note drafts goes out first?"
+    # The ❓ is saved and its queue row backdated in two writes; the drain must not read it between them (it would
+    # then start the ❓'s call on the lane kept for ❓s), so it reads nothing until both are done.
+    with held.reads:
+        assert question(api, task, late).status_code == 200
+        with store.transaction() as c:
+            backdated = c.execute(
+                "UPDATE org_rule_late SET created_at=? WHERE output LIKE ?",
+                (K.H.shift(K.H.now(), seconds=-(K.LATE_QUESTION_BUSY_SECONDS + 1)), f"%{late}%"),
+            ).rowcount
+        assert backdated == 1, "the ❓'s check is queued, not yet run"
+    [unchecked] = wait_for(
+        lambda: [e for e in events(api, "rules.unchecked") if e["operation"] == "question"], "the ❓ recorded unchecked"
+    )
+    assert len(events(api, "rules.unchecked")) == 1, "recorded before any call ahead of it ended"
+    assert unchecked["operation"] == "question" and unchecked["reason"] == "busy" and unchecked["late"] is True
+    assert not let_go.is_set(), "recorded while the calls ahead of it were still in the judge"
+    assert not asked.is_set(), "a ❓ past its deadline asks the judge nothing"
+    assert sql(api, "SELECT count(*) AS n FROM question_marks")[0]["n"] == 1, "the ❓ stays asked"
+    let_go.set()
+    drain.join(15)
+    assert not drain.is_alive()

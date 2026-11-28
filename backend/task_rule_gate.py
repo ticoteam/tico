@@ -11,9 +11,10 @@ applied inside it.
 - An ask a rule covers (docs/dev/pipelines-v3.md, "How a rule stops the next one"): a bot's ask a Block or Escalate rule
   finds broken is refused with the rule's words, under `COVERS`, an engine-style refusal that never counts toward
   quarantine. With the judge out the ask goes; a cause here (`LOCAL`: every call slot busy, the day's calls spent, too
-  long to check) refuses it to try again. A Warn rule never stops an ask: the ask reaches its person and the bot is told
-  the rule (`rule_warning`), whether it was found broken or could not be checked. A bot's ❓ (on a task's chat or in a
-  direct chat) is refused the same way, never held (`refuse_question`).
+  long to check) refuses it to try again. A Warn rule never stops an ask: when every rule it meets only warns, the ask
+  is saved first and checked right after (`late`), and a broken or unchecked rule reaches the bot as a note on its next
+  run, with the line on the ask; it never waits for the judge. A bot's ❓ (on a task's chat or in a direct chat) is
+  refused the same way, never held (`refuse_question`).
 - The check cannot run (an error here, not the judge being out): nothing is written (fail closed).
 
 The hold's text is what the write says. A hand-off also says the task to its new owner, so the judge reads the task's
@@ -323,8 +324,8 @@ class TaskRules:
         ask: bool = False,
     ) -> Any:
         """The verdict for one task write by `who`, outside the write, or None (nothing to check). `late`: when every
-        rule it meets only warns, the check runs right after the write (org_rule_check `check_as`); never for a bot's
-        ask (`ask`), checked before it is asked so the bot's answer carries any warning. `said` is the
+        rule it meets only warns, the check runs right after the write (org_rule_check `check_as`), a bot's ask
+        (`ask`) too: a Block or Escalate rule is still checked before it is asked. `said` is the
         write's (label, text) pairs; `to` who it reaches besides the task's people, `also(c)` anyone else; `hands_over`
         that it gives the task to `to`. The write's place is its task's thread (`place`). A task the caller may not
         read is `org_rule_check.refused`. Any other error is a refusal too: the write never goes unchecked because
@@ -333,7 +334,6 @@ class TaskRules:
             author = org_rule_check.author_of(who, self.auth.settings.assistant_bot)
             if not author:
                 return None
-            late = late and not (ask and H.is_bot(author))
             if not any(value for _, value in said) and not hands_over:
                 return None
             with self.store.read() as c:
