@@ -47,8 +47,8 @@ Click a bot on the Usage page to see what explains its spend, under the page's r
 
 - **A summary**: its API-equivalent cost, runs, tokens and cache rate, and two counts beside its runs: how many
   **changed nothing** (made no write; a reviewer's approval with no write counts too) and how many were **cold starts**
-  (resumed a session more than an hour after the bot's last run on the same task settled, measured to the run's start;
-  past the provider's 1-hour cache the prompt is likely written to the cache again), each with what those runs cost,
+  (resumed a session more than an hour after the bot's last run on the same task settled, measured to the run's start; a run
+  its computer handed back before starting is not a last run; past the provider's 1-hour cache the prompt is likely written to the cache again), each with what those runs cost,
   and for cold starts the cache-write tokens their runners reported.
 - **Tokens**: one bar split into four parts, with a legend giving each part's count and share of all tokens.
   - **Cache reads**: input the provider read from its prompt cache (`cached_tokens`). On most models these cost about a

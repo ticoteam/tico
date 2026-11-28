@@ -343,21 +343,24 @@ def test_a_run_says_whether_it_resumed_its_session_and_a_new_one_is_in_the_tasks
 
 
 @pytest.mark.parametrize(
-    "kind,idle_min,idle_s,cold,claimed_early",
+    "kind,idle_min,idle_s,cold,claimed_early,unstarted",
     [
-        ("resumed", 61, 3660, True, 0),
-        ("resumed", 59, 3540, False, 0),
-        ("new", 180, None, False, 0),
+        ("resumed", 61, 3660, True, 0, False),
+        ("resumed", 59, 3540, False, 0, False),
+        ("new", 180, None, False, 0, False),
         # Claimed 59 minutes after the last run settled, started at 61: the cache aged until the start.
-        ("resumed", 61, 3660, True, 2),
+        ("resumed", 61, 3660, True, 2, False),
+        # A retry 68 minutes after the last real run, with a lease handed back unstarted 2 minutes before it: still cold.
+        ("resumed", 68, 4080, True, 0, True),
     ],
 )
 def test_a_resumed_run_records_how_long_its_session_sat_idle_since_the_bots_last_run_on_the_task(
-    api, kind, idle_min, idle_s, cold, claimed_early
+    api, kind, idle_min, idle_s, cold, claimed_early, unstarted
 ):
     """idle_s runs from the bot's own latest settled run on the same task to this run's actual start, not its claim:
-    another bot's run, or one on another task, does not reset it. Over an hour, a resumed run is a cold start; a new
-    session never is."""
+    another bot's run, one on another task, or a lease of its own that settled without starting does not reset it. The
+    last run here was recorded with no lease (no `started_at`) and still counts. Over an hour, a resumed run is a cold
+    start; a new session never is."""
     r = machine(api)
     task = post(api, "tasks", {"owner": "ops", "title": "Watch the release", "body": "Each hour."})
     other = post(api, "tasks", {"owner": "ops", "title": "Another task", "body": "Later."})
@@ -380,6 +383,14 @@ def test_a_resumed_run_records_how_long_its_session_sat_idle_since_the_bots_last
             c.execute(
                 "INSERT INTO attempts(id, bot_id, created_at, settled_at, exit, task_id) VALUES(?,?,?,?,'completed',?)",
                 (rid, bot, ago(idle_min + 40), settled, tid),
+            )
+        if unstarted:  # the same bot's lease on the task, handed back before it started: settled, never ran
+            own = c.execute("SELECT job_id, runner_id FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
+            c.execute(
+                "INSERT INTO attempts(id, job_id, bot_id, runner_id, generation, token_hash, state, lease_until, "
+                "created_at, settled_at, exit, task_id) VALUES('handed-back',?,'ops',?,1,'unstarted-lease','expired',"
+                "?,?,?,'expired',?)",
+                (own["job_id"], own["runner_id"], ago(1), ago(3), ago(2), task["id"]),
             )
         c.execute("UPDATE attempts SET created_at=? WHERE id=?", (ago(claimed_early), attempt["id"]))
     post(

@@ -257,15 +257,20 @@ def new_session(c, task_id, why, actor=None):
 # How long a resumed run's session sat idle: seconds from its bot's latest settled run on the same task to this run's
 # actual start (`started_at`, set when its runner starts it; a run recorded with no lease has none and uses its
 # `created_at`), NULL with no such run (a chat, or the first run on the task). A run claimed and started later is
-# measured to its start: the cache aged until then. One subquery inside the session's own UPDATE, on
-# attempts_task, so recording a session costs no extra statement. Migration 20261126063935_attempts_idle_s backfills
-# with the same expression.
+# measured to its start: the cache aged until then. Only a run that ran counts as the previous one: a lease its
+# computer handed back or let lapse before starting settles too, but never touched the session, so it must not hide a
+# cold wake. A run ran when it started, was recorded with no lease (`job_id` NULL, so never a `started_at`), or posted
+# events (`last_seq`>0: a leased run that reported its work without a start). One subquery inside the session's own
+# UPDATE, on attempts_task, so recording a session costs no extra statement. Migration
+# 20261126063935_attempts_idle_s backfills with the same expression.
 IDLE_SQL = (
     "(SELECT CAST(round((julianday(coalesce(attempts.started_at,attempts.created_at))-julianday(max(p.settled_at)))"
     "*86400) AS INTEGER) FROM attempts p WHERE p.task_id=attempts.task_id AND p.bot_id=attempts.bot_id "
-    "AND p.id<>attempts.id AND p.settled_at<=coalesce(attempts.started_at,attempts.created_at))"
+    "AND p.id<>attempts.id AND p.settled_at<=coalesce(attempts.started_at,attempts.created_at) "
+    "AND (p.started_at IS NOT NULL OR p.job_id IS NULL OR p.last_seq>0))"
 )
-# A cold start: a resumed session idle longer than the provider's 1-hour prompt cache, so its prompt was written again.
+# A cold start: a resumed session idle longer than the provider's 1-hour prompt cache, so the cache had likely expired
+# and its prompt may have been written to it again (the run's cache_write_tokens say what was).
 COLD_IDLE_S = 3600
 COLD_SQL = f"(a.session_kind='resumed' AND a.idle_s>{COLD_IDLE_S})"
 
