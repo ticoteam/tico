@@ -352,6 +352,14 @@ def installed(m: Machine) -> bool:
     return all((m.unit_dir / f"tico-{job}.service").is_file() for job in JOBS)
 
 
+def reloaded(m: Machine) -> bool:
+    """`systemctl daemon-reload`, and whether systemd took it."""
+    try:
+        return not m.system("systemctl", "daemon-reload").returncode
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def move_boot_unit(m: Machine, unit_dir: Path = UNIT_DIR) -> bool:
     """Point a saved image's boot unit at `runner_support.cloud_machine` (images saved before it said
     `runner.cloud_machine`, through the runner/ forwarder that is to be deleted) and daemon-reload. Runs at each boot,
@@ -373,10 +381,7 @@ def move_boot_unit(m: Machine, unit_dir: Path = UNIT_DIR) -> bool:
         return False
 
     def reload() -> bool:
-        try:
-            return not m.system("systemctl", "daemon-reload").returncode
-        except (OSError, subprocess.SubprocessError):
-            return False
+        return reloaded(m)
 
     if reload():
         m.say(f"{UNIT} now starts python -m runner_support.cloud_machine")
@@ -400,19 +405,56 @@ def unit_moved(text: str) -> bool:
 
 def move_unit_now(m: Machine, unit_dir: Path | None = None) -> int:
     """`move-unit`, as root, from a runner's start (move_at_start): move the boot unit with this release's code, reload
-    systemd, and once the unit names runner_support record that the next boot uses it. 0 when it does; 1 when the unit
-    is missing or still old, and then the record stays as it was (the runner keeps reporting the old package)."""
+    systemd, and record that the next boot uses runner_support only after systemd took a unit that names it. 0 when it
+    did; 1 otherwise, and then the record stays as it was (the runner keeps reporting the old package). A record that
+    cannot be written puts the old unit back, so unit and record never disagree towards clear."""
     unit_dir = UNIT_DIR if unit_dir is None else unit_dir
-    move_boot_unit(m, unit_dir)
+    path = unit_dir / UNIT
     try:
-        if not unit_moved((unit_dir / UNIT).read_text()):
+        before = path.read_bytes()
+        mode = path.stat().st_mode & 0o7777
+    except OSError as exc:
+        m.say(f"could not read {UNIT}: {type(exc).__name__}")
+        return 1
+    text = before.decode(errors="replace")
+    if unit_moved(text):
+        # Moved earlier (by a boot, or a move whose rollback could not write): systemd confirms it before the record.
+        moved_now = False
+        if not reloaded(m):
+            m.say(f"systemctl daemon-reload failed; {UNIT} stays unrecorded, the next start tries again")
             return 1
+    elif OLD_EXEC in text:
+        moved_now = True
+        if not move_boot_unit(m, unit_dir):
+            return 1
+        try:
+            if not unit_moved(path.read_text()):
+                return 1
+        except OSError:
+            return 1
+    else:
+        m.say(f"{UNIT} names neither cloud machine module: left as it is")
+        return 1
+    try:
         write_root_file(m.etc / ENTRY_FILE, "runner_support\n", 0o644)
-    except (OSError, ValueError) as exc:
-        m.say(f"could not record that the next boot uses runner_support: {type(exc).__name__}")
+    except OSError as exc:
+        m.say(f"could not record that the next boot uses runner_support: {exc.strerror or type(exc).__name__}")
+        if moved_now:
+            from runner_support import release_update
+
+            try:
+                release_update.replace_file(path, before, mode)
+            except OSError:
+                m.say(f"could not put the old {UNIT} back")
+            reloaded(m)
         return 1
     m.say("the next boot starts through runner_support")
     return 0
+
+
+def warn(line: str) -> None:
+    """A line for the runner's log, out before __main__ execs the Rust runner (an unflushed print is lost with it)."""
+    print(line, file=sys.stderr, flush=True)
 
 
 def move_at_start(
@@ -422,7 +464,7 @@ def move_at_start(
     run=subprocess.run,
     python: str | None = None,
     root: Path = ROOT,
-    say=print,
+    say=warn,
 ) -> None:
     """At a runner's start (runner_support/__main__.py `run`), on a cloud machine whose boot unit or boot record still
     says the old package: run this release's `move-unit` as root (the runner's user has sudo there, sudoers_text). A

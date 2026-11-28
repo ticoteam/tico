@@ -111,7 +111,8 @@ fn etc() -> PathBuf {
 /// sets TICO_RUNNER_ENTRY from runner/__main__.py's word), when this cloud machine's boot record says so, or when its
 /// boot unit still names the old module (its next boot needs it). The record is written by each boot and, once the unit
 /// names runner_support, by the runner's start (runner_support/cloud_machine.py move_at_start). On a cloud machine with
-/// no clear "runner_support" record (a failed write or move), None: the server shows it as not reported, never as clear.
+/// no clear "runner_support" record (a failed write or move), or whose boot unit is missing, unreadable or names neither
+/// module, None: the server shows it as not reported, never as clear.
 /// Anywhere else, "runner_support".
 pub fn entry() -> Option<&'static str> {
     if std::env::var("TICO_RUNNER_ENTRY").as_deref() == Ok("runner") {
@@ -126,12 +127,15 @@ pub fn entry() -> Option<&'static str> {
     if unit.contains("-m runner.cloud_machine") {
         return Some("runner");
     }
+    // Clear only with the unit's own word for it: a record left from before is no proof when the unit is gone,
+    // unreadable or names something else.
+    let unit_clear = unit.contains("-m runner_support.cloud_machine");
     match std::fs::read_to_string(etc.join("tico/boot-entry"))
         .as_deref()
         .map(str::trim)
     {
         Ok("runner") => Some("runner"),
-        Ok("runner_support") => Some("runner_support"),
+        Ok("runner_support") if unit_clear => Some("runner_support"),
         _ => None,
     }
 }
@@ -2559,8 +2563,19 @@ scope['main'](sys.argv[1:])
         // Its boot came through `python -m runner.cloud_machine boot`: the old package, read again at each report.
         std::fs::write(&boot, "runner\n").unwrap();
         assert_eq!(said(&f), Some(json!("runner")));
+        // A clear record with no boot unit to back it (gone or unreadable): not clear.
         std::fs::write(&boot, "runner_support\n").unwrap();
+        assert_eq!(said(&f), None);
+        // ... nor with a unit that names neither module.
+        std::fs::write(&unit, "[Service]\nExecStart=/bin/true\n").unwrap();
+        assert_eq!(said(&f), None);
+        std::fs::write(
+            &unit,
+            "[Service]\nExecStart=/home/user/tico/runtime/runner-venv/bin/python -m runner_support.cloud_machine boot\n",
+        )
+        .unwrap();
         assert_eq!(said(&f), Some(json!("runner_support")));
+        std::fs::remove_file(&unit).unwrap();
         // A boot record it cannot trust (a half-written file): not clear.
         std::fs::write(&boot, "").unwrap();
         assert_eq!(said(&f), None);

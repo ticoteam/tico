@@ -575,7 +575,69 @@ def test_a_runner_start_records_runner_support_when_the_unit_already_moved(machi
     entry_file(machine.etc).write_text("runner\n")
     assert cm.move_unit_now(m, units) == 0
     assert entry_file(machine.etc).read_text() == "runner_support\n"
-    assert ["systemctl", "daemon-reload"] not in fake.calls
+    assert fake.calls.count(["systemctl", "daemon-reload"]) == 1  # systemd confirms the unit before the record
+
+
+def test_an_already_moved_unit_gets_no_record_when_systemd_does_not_reload(machine, tmp_path):
+    # A rollback whose own write failed left the new text on disk unreloaded: the next start must not call it clear.
+    m, _ = machine()
+    units = tmp_path / "units"
+    units.mkdir()
+    (units / cm.UNIT).write_text(cm.unit_text(m))
+    entry_file(machine.etc).parent.mkdir(parents=True)
+    entry_file(machine.etc).write_text("runner\n")
+    m.run = lambda command, **kw: subprocess.CompletedProcess(command, 1, "", "")
+    assert cm.move_unit_now(m, units) == 1
+    assert entry_file(machine.etc).read_text() == "runner\n"
+
+
+def test_a_failed_reload_whose_rollback_also_fails_records_nothing(machine, tmp_path, monkeypatch):
+    from runner_support import release_update
+
+    m, _ = machine()
+    units = tmp_path / "units"
+    old_boot_unit(m, units)
+    entry_file(machine.etc).parent.mkdir(parents=True)
+    entry_file(machine.etc).write_text("runner\n")
+    real, writes = release_update.replace_file, []
+
+    def first_only(path, content, mode):
+        writes.append(content)
+        if len(writes) > 1:
+            raise OSError(28, "No space left on device")
+        real(path, content, mode)
+
+    monkeypatch.setattr(release_update, "replace_file", first_only)
+    m.run = lambda command, **kw: subprocess.CompletedProcess(command, 1, "", "")
+    assert cm.move_unit_now(m, units) == 1
+    assert (units / cm.UNIT).read_text() == cm.unit_text(m)  # the rollback could not write
+    assert entry_file(machine.etc).read_text() == "runner\n"
+
+
+def test_a_failed_record_write_puts_the_old_unit_back(machine, tmp_path, monkeypatch):
+    m, fake = machine()
+    units = tmp_path / "units"
+    text = old_boot_unit(m, units)
+    entry_file(machine.etc).parent.mkdir(parents=True)
+    entry_file(machine.etc).write_text("runner\n")
+
+    def full(path, content, mode):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(cm, "write_root_file", full)
+    assert cm.move_unit_now(m, units) == 1
+    assert (units / cm.UNIT).read_text() == text
+    assert entry_file(machine.etc).read_text() == "runner\n"
+    assert fake.calls.count(["systemctl", "daemon-reload"]) == 2  # the move, then the rollback
+
+
+def test_an_unrecognized_boot_unit_is_left_alone_and_records_nothing(machine, tmp_path):
+    m, fake = machine()
+    units = tmp_path / "units"
+    units.mkdir()
+    (units / cm.UNIT).write_text("[Service]\nExecStart=/bin/true\n")
+    assert cm.move_unit_now(m, units) == 1
+    assert not entry_file(machine.etc).exists() and fake.calls == []
 
 
 def test_a_machine_with_no_boot_unit_records_nothing(machine, tmp_path):
@@ -658,3 +720,27 @@ def test_a_failed_move_at_the_runners_start_is_said_and_the_runner_still_starts(
     cm.move_at_start(UNIT_ENV, etc=etc, run=run, python="/py", root=tmp_path, say=said.append)  # never raises
     assert any("boot unit" in line for line in said)
     assert (etc / "tico" / "boot-entry").read_text() == "runner\n"
+
+
+def test_a_failed_move_is_in_the_runner_log_even_when_the_runner_execs_at_once(tmp_path):
+    # The runner unit sends both streams to its log file and __main__ then execs the Rust runner: an unflushed line is
+    # lost with the Python process.
+    etc = cloud_etc(tmp_path, "runner.cloud_machine", "runner\n")
+    log = tmp_path / "runner.log"
+    script = (
+        "import os, subprocess, sys\n"
+        "from pathlib import Path\n"
+        "from runner_support import cloud_machine as cm\n"
+        "fail = lambda c, **kw: subprocess.CompletedProcess(c, 1, '', 'sudo: a password is required')\n"
+        f"cm.move_at_start({UNIT_ENV!r}, etc=Path({str(etc)!r}), run=fail, python='/py', root=Path('.'))\n"
+        "os.execv('/bin/true', ['true'])\n"
+    )
+    with log.open("w") as out:
+        subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=Path(cm.__file__).resolve().parents[1],
+            stdout=out,
+            stderr=out,
+            timeout=60,
+        )
+    assert "could not move the boot unit" in log.read_text()
