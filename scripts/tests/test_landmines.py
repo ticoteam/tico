@@ -761,6 +761,13 @@ def test_an_encoded_row_must_name_a_real_rule_or_script():
     assert any("does not exist" in p for p in lesson_problems(missing, exists=lambda path: False))
 
 
+def test_a_repeated_lesson_id_fails_and_is_named():
+    text = lessons() + ROW.format(
+        id="L01", incidents="2026-11-04 #2295", cls="judgment", seen="1", status="open", where="-"
+    )
+    assert any("L01 appears 2 times" in p for p in lesson_problems(text))
+
+
 def test_a_rule_must_cite_a_lesson_that_exists():
     assert any("cites L02, which is not in" in p for p in lesson_problems(lessons()))
 
