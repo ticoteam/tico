@@ -159,37 +159,36 @@ def moved_by_hand(c: Any, rid: str, after: int) -> bool:
     return False
 
 
-def where_left(c: Any, rid: str, to: str, after: int) -> list[str]:
-    """The managers removals since the event at rowid `after` may have left `rid` with, who that removal moved to `to`:
-    `to`, then, if `to` has left since and their removal moved `rid` on, that manager, and so on up the chain. (If `to`
-    is back since, their restore moved `rid` back to them.)"""
-    chain: list[str] = []
-    while to not in chain:
-        chain.append(to)
-        found = last_record(c, to) if to else None
-        if not found or found[1] <= after or rid not in (found[0].get("reports") or []):
-            break
-        to, after = found[0].get("to") or "", found[1]
-    return chain
+def above(people: list[Row], pid: str) -> set[str]:
+    """Everyone over `pid` on the chart, left or not: their manager, that manager's, and so on, then the top ("")."""
+    managers = {p["id"]: p.get("reports_to") or "" for p in people}
+    out: set[str] = set()
+    to = managers.get(pid, "")
+    while to and to not in out and to != pid:
+        out.add(to)
+        to = managers.get(to, "")
+    return out | {""}
 
 
 def restore(c: Any, people: list[Row], pid: str) -> Row:
     """Move `pid`'s reports back to them, in `people` (the caller's list, mutated), and say what could not come back.
-    A report someone gave a manager by hand since the removal stays where they put them, as does one whose manager is
-    no longer the one Remove (or a later removal of that manager) moved them to. A report who has left since moves back
-    too, so restoring two people in either order, after removing them in either order, rebuilds the chart between them."""
+    A report someone gave a manager by hand since the removal stays where they put them, as does one whose manager now
+    is not over `pid` (a closer manager of theirs is back first). A report who has left since moves back too, so
+    restoring people in any order, after removing them in any order and as often, rebuilds the chart between them."""
     found = last_record(c, pid)
     kept: Row = found[0] if found else {}
     after = found[1] if found else 0
     index = {p["id"]: i for i, p in enumerate(people)}
+    over = above(people, pid)
     moved: list[Row] = []
     ids: list[str] = kept.get("reports") or []
     for rid in ids:
         i = index.get(rid)
-        # Still where Remove put them, or where a later removal of that manager moved them on (Cara leaves, then
-        # Ben: Dee went to Ben, then on to Ana, and restoring Cara first brings Dee back from Ana).
-        put = where_left(c, rid, kept.get("to") or "", after)
-        if i is None or (people[i].get("reports_to") or "") not in put or moved_by_hand(c, rid, after):
+        # Removals since moved them up only, and restores of managers over `pid` brought them back down to those: so
+        # one now under someone over `pid` is where those moves left them (Cara leaves, then Ben: Dee goes to Ben, then
+        # to Ana, and restoring Cara first brings Dee back from Ana). One under a manager now back below `pid` (Ben
+        # restored after Cara found Dee under Cara) stays.
+        if i is None or (people[i].get("reports_to") or "") not in over or moved_by_hand(c, rid, after):
             continue
         people[i] = {**people[i], "reports_to": pid}
         if not people[i].get("hidden"):

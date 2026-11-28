@@ -182,6 +182,36 @@ def test_restore_after_two_removals_keeps_a_report_moved_by_hand_in_between(api)
     assert manager(api, "dee") == "ana"
 
 
+def test_removing_and_restoring_the_same_manager_twice_puts_the_report_back(api):
+    """Ana > Ben > Cara > Dee, and nobody moves Dee by hand: Dee ends under Cara (QA's sequence). Ben's restore moved
+    Dee from Ana to Ben, so Cara's second restore follows Dee there."""
+    chart(api, ben="ana", cara="ben", dee="cara")
+    steps = [
+        ("humans/cara", True, "ben"),
+        ("humans/ben", True, "ana"),
+        ("access/humans/cara", False, "cara"),
+        ("humans/cara", True, "ana"),
+        ("access/humans/ben", False, "ben"),
+        ("access/humans/cara", False, "cara"),
+    ]
+    for path, left, dee in steps:
+        post(api, path, {"left": left})
+        assert manager(api, "dee") == dee, path
+    assert (manager(api, "ben"), manager(api, "cara")) == ("ana", "ben")
+
+
+def test_restoring_the_same_manager_twice_keeps_a_report_moved_by_hand_in_between(api):
+    """The same sequence, but someone gives Dee to Ana by hand after Ben's restore: Cara's restore leaves Dee there."""
+    chart(api, ben="ana", cara="ben", dee="cara")
+    for path, left in (("humans/cara", True), ("humans/ben", True), ("access/humans/cara", False)):
+        post(api, path, {"left": left})
+    post(api, "humans/cara", {"left": True})
+    post(api, "access/humans/ben", {"left": False})
+    post(api, "humans/dee", {"reports_to": "ana"})
+    post(api, "access/humans/cara", {"left": False})
+    assert manager(api, "dee") == "ana"
+
+
 def operated_by(api, slug, person):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET owner_id=? WHERE bot IN (?,?)", (person, slug, H.resolve_bot(c, slug)["id"]))
