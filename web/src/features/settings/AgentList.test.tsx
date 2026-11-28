@@ -1282,6 +1282,22 @@ describe('Settings › Computers', () => {
     expect(sent).toHaveLength(0);
   });
 
+  it('Computers counts which computers still start through the old runner package, and each panel says how it starts', async () => {
+    serve();
+    queryClient.setQueryData(agentsQuery.queryKey, []);
+    queryClient.setQueryData(teamComputers.queryKey, [
+      { id: 'r1', label: 'Old Mac', online: true, update: { starts: 'old_package', starts_label: 'Starts through the old runner package' } },
+      { id: 'r2', label: 'New Mac', online: true, update: { starts: 'runner_support', starts_label: 'Starts through runner_support' } },
+      { id: 'r3', label: 'Quiet Box', online: false, update: { starts: 'not_reported', starts_label: 'Not reported' } },
+      // A server from before the report sends no `starts`: not reported, never clear.
+      { id: 'r4', label: 'Older Server', online: true, update: {} },
+    ] as never);
+    show(<Computers open="computer:r1" />, '/settings/computers');
+    const summary = await screen.findByRole('status', { name: 'How computers start' });
+    expect(summary.textContent).toBe('Starts through the old runner package: 1 · through runner_support: 1 · not reported: 2');
+    expect(await screen.findByText('Starts through the old runner package')).toBeTruthy();
+  });
+
   it('Add computer makes a one-time code in the dialog; Tico cannot @s728', async () => {
     queryClient.setQueryData(computersQuery.queryKey, []);
     serve((url, method) => (url === '/api/v2/enrollments' && method === 'POST' ? ok({ code: 'JOIN-4821' }) : undefined));

@@ -32,6 +32,14 @@ LABELS = {
     "incompatible": "Incompatible (bots paused)",
     "unknown": "Release not reported",
 }
+# How a computer's runner starts (its report's `entry`), for deleting the legacy runner/ package (#4343): only a computer
+# online now that said runner_support is clear. One that says nothing (a release from before the report) or is offline
+# is not reported, never clear.
+STARTS = {
+    "old_package": "Starts through the old runner package",
+    "runner_support": "Starts through runner_support",
+    "not_reported": "Not reported",
+}
 
 
 def clean(value):
@@ -118,6 +126,14 @@ def record(c, runner_id, body):
             moved,
         ),
     )
+    if body.entry:
+        c.execute(
+            "INSERT INTO runner_entries(runner_id,entry,reported_at) VALUES(?,?,?) ON CONFLICT(runner_id) DO UPDATE SET "
+            "entry=excluded.entry,reported_at=excluded.reported_at WHERE entry IS NOT excluded.entry",
+            (runner_id, body.entry, now),
+        )
+    else:
+        forget_entry(c, runner_id)
     nudge(c, runner_id)
 
 
@@ -336,6 +352,24 @@ def view(row, server=None):
         else row.get("update_error") or "",
         "min_runner": MIN_RUNNER_RELEASE,
     }
+
+
+def forget_entry(c, runner_id):
+    """A heartbeat without `entry` (or without a release at all): how this runner starts is not known now."""
+    c.execute("DELETE FROM runner_entries WHERE runner_id=?", (runner_id,))
+
+
+def entries(c):
+    """{runner_id: entry} as each computer last reported it."""
+    return {r["runner_id"]: r["entry"] for r in c.execute("SELECT runner_id,entry FROM runner_entries")}
+
+
+def starts(entry, online):
+    """How a computer's runner starts, from its reported entry: old_package, runner_support or not_reported (no
+    report, or offline now)."""
+    found = {"runner": "old_package", "runner_support": "runner_support"}.get((entry or "") if online else "")
+    found = found or "not_reported"
+    return {"starts": found, "starts_label": STARTS[found]}
 
 
 def health_check(computers, server=None):

@@ -101,6 +101,7 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
         # `run_timings`: a run's result may carry where its time went on the computer (`timings`; an older one refuses it).
         # `run_timings_turn`: those timings may say how many model requests the turn made and whether it ran warm
         # (`model_calls`, `warm`; an older one refuses them).
+        # `runner_entry`: a heartbeat may say which package started the runner (`entry`; an older one refuses it).
         return {
             **runner_versions.desired(),
             "features": {
@@ -125,6 +126,7 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
                 "source_continue": True,
                 "run_timings": True,
                 "run_timings_turn": True,
+                "runner_entry": True,
                 **({"burst_preparation": True} if burst else {}),
             },
         }
