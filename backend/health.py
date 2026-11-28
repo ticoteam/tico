@@ -2242,7 +2242,17 @@ def _backups(config, settings):
         )
     if backup.get("listing_error"):
         # The last read failed (a first one too, with no check time yet). The age rule above turns it to Look, then
-        # Broken, once it lasts past the warning time.
+        # Broken, once it lasts past the warning time. Lag the last good read already saw still counts.
+        if behind != "ok":
+            return _check(
+                "backups",
+                "Backups",
+                behind,
+                f"Copies to {target or 'the remote'} have been behind the database since {_clock(since)}, and the "
+                f"backup location could not be read at {_clock(backup.get('listing_failed_at') or H.now())} "
+                f"({backup['listing_error']}).",
+                [fix],
+            )
         return _check(
             "backups",
             "Backups",

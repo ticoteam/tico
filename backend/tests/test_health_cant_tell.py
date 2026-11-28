@@ -148,6 +148,40 @@ def test_the_backup_loop_keeps_when_its_failures_in_a_row_began_until_a_listing_
     assert json.loads(path.read_text())["listing_failing_since"].startswith("2023-11-15T00:14:20")
 
 
+def test_a_new_backup_generation_starts_its_own_run_of_failed_reads(tmp_path):
+    from backend import replication
+
+    path = tmp_path / "status.json"
+
+    class Down:
+        def latest(self, levels):
+            raise ConnectionError("no route")
+
+    start = 1_700_000_000
+    replication.write_status(Down(), path, now=start)
+    replication.write_status(Down(), path, now=start + 7200)
+    # A reset moves the data to a new generation; its first failed read does not inherit the old generation's failures.
+    replication.write_status(Down(), path, generation="g2", now=start + 7260)
+    saved = json.loads(path.read_text())
+    assert saved["listing_failing_since"] == saved["listing_failed_at"]
+    assert saved["listing_failing_since"].startswith("2023-11-15T00:14:20")
+
+
+def test_a_failed_backup_listing_keeps_the_lag_the_last_good_read_saw(monkeypatch):
+    monkeypatch.delenv("TICO_BACKUP_SYNC_INTERVAL", raising=False)
+    backup = _remote(
+        checked_at=H.shift(H.now(), minutes=-3),
+        listing_error="ConnectionError",
+        listing_failed_at=H.shift(H.now(), minutes=-1),
+        behind_since=H.shift(H.now(), minutes=-30),
+    )
+    check = health._backups({"backup": backup}, REMOTE)
+    assert check["status"] == "warn"
+    assert "behind the database since" in check["summary"] and "(ConnectionError)" in check["summary"]
+    worse = {**backup, "behind_since": H.shift(H.now(), minutes=-120)}
+    assert health._backups({"backup": worse}, REMOTE)["status"] == "bad"
+
+
 def test_the_backup_loop_records_when_and_how_its_listing_failed(tmp_path):
     from backend import replication
 
