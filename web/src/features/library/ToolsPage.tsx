@@ -498,15 +498,16 @@ function ApiToolView({ id, row }: { id: string; row: ToolIndexRow | undefined })
   const vendorReads = new Set(mcp?.read_only_names ?? []);
   const marks = new Map((mcp?.only_reads ?? []).map((m) => [m.name, m]));
   const unlisted = (mcp?.only_reads ?? []).filter((m) => !m.listed);
-  const markOnly = (n: string, on: boolean) => {
-    const next = [...marks.keys()].filter((k) => k !== n).concat(on ? [n] : []);
-    void press('tools.setOnlyReads', { tool: id, only_reads: next }, 'Not saved');
-  };
+  // A mark is used only while active: the vendor still lists it and no check dropped it since (then it needs marking again).
+  const isActive = (m: { listed: boolean; active?: boolean } | undefined) => !!m && (m.active ?? m.listed);
+  const activeMarks = (mcp?.only_reads ?? []).filter(isActive).length;
+  const markOnly = (n: string, on: boolean) => void press('tools.setOnlyReads', { tool: id, name: n, on }, 'Not saved');
   const reads = (n: string) => {
     if (vendorReads.has(n)) return <Pill>Read-only (vendor)</Pill>;
     const m = marks.get(n);
-    if (manage) return <Switch label={`${n}: Only reads`} labelHidden checked={!!m} onCheckedChange={(on) => markOnly(n, on)} />;
-    if (!m) return null;
+    if (manage && m && !m.listed) return <Button variant="quiet" aria-label={`Remove ${n} mark`} onClick={() => markOnly(n, false)}>Remove</Button>;
+    if (manage) return <Switch label={`${n}: Only reads`} labelHidden checked={isActive(m)} onCheckedChange={(on) => markOnly(n, on)} />;
+    if (!m || !isActive(m)) return null;
     return <Pill title={m.at ? `Marked ${when(m.at)}` : undefined}>{m.by ? `Only reads (marked by ${actors.find((a) => a.id === m.by)?.name ?? m.by})` : 'Only reads'}</Pill>;
   };
   const showList = () => {
@@ -561,7 +562,7 @@ function ApiToolView({ id, row }: { id: string; row: ToolIndexRow | undefined })
             {mcp?.tools != null && (
               <LabelValue label="Tools">
                 <Button variant="quiet" onClick={showList}>
-                  {[`${mcp.tools} tools`, mcp.read_only ? `${mcp.read_only} read-only` : '', marks.size ? `${marks.size} marked` : ''].filter(Boolean).join(', ')}
+                  {[`${mcp.tools} tools`, mcp.read_only ? `${mcp.read_only} read-only` : '', activeMarks ? `${activeMarks} marked` : ''].filter(Boolean).join(', ')}
                 </Button>
               </LabelValue>
             )}
@@ -659,7 +660,7 @@ function ApiToolView({ id, row }: { id: string; row: ToolIndexRow | undefined })
             {unlisted.map((m) => (
               <div key={m.name} className="row arow" title={m.name}>
                 <span className="row-title is-code">{m.name}</span>
-                <Dim>no longer listed</Dim>
+                <Dim>no longer listed, not used</Dim>
                 {reads(m.name)}
               </div>
             ))}

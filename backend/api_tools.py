@@ -864,7 +864,7 @@ def _mark_rows(c, tool_id, floor=None, before=None, limit=RECENT):
         said = said if isinstance(said, dict) else {}
         parts = [
             f"Only reads {verb}: {', '.join(str(n) for n in said.get(key) or [])}"
-            for key, verb in (("added", "on"), ("removed", "off"))
+            for key, verb in (("added", "on"), ("removed", "off"), ("suspended", "suspended, no longer listed"))
             if said.get(key)
         ]
         rows.append(
@@ -1371,6 +1371,14 @@ class ToolUpdate(Contract):
     # An MCP tool's Only reads, the whole list: tool names its server sends no readOnlyHint for that a bot at Read may
     # call (backend/mcp_connect.py `set_only_reads`). An administrator's to set.
     only_reads: list[Annotated[str, Field(min_length=1, max_length=200)]] | None = Field(default=None, max_length=500)
+    # Or just these names marked (on) and unmarked (off), leaving every other mark as it is: what the Tools switch sends,
+    # so a page loaded before another administrator's change never undoes it.
+    only_reads_on: list[Annotated[str, Field(min_length=1, max_length=200)]] | None = Field(
+        default=None, max_length=500
+    )
+    only_reads_off: list[Annotated[str, Field(min_length=1, max_length=200)]] | None = Field(
+        default=None, max_length=500
+    )
     # Who can see it: null is Everyone, an audience Only listed (`set_audience`). Left out, it stays as it is.
     audience: AccessAudience | None = None
 
@@ -1537,13 +1545,24 @@ def create_tool(c, who, body, admins, vault=None):
 
 
 ONLY_READS_ADMIN = "Only an administrator marks MCP tools Only reads"
+ONLY_READS_FIELDS = ("only_reads", "only_reads_on", "only_reads_off")
+
+
+def _marks_asked(body):
+    return any(getattr(body, f) is not None for f in ONLY_READS_FIELDS)
 
 
 def update_tool(c, who, tool_id, body, admins, auth=None):
     """A tool's settings, and its Who can see it (`audience`, which the owner may change too)."""
-    if body.only_reads is not None and not _admin(c, who, admins):
+    if _marks_asked(body) and not _admin(c, who, admins):
         raise Problem("forbidden", ONLY_READS_ADMIN, 403)
-    asked = body.model_dump(exclude_none=True, exclude={"audience", "everyone_reads", "record_owner", "only_reads"})
+    if body.only_reads is not None and (body.only_reads_on is not None or body.only_reads_off is not None):
+        raise Problem(
+            "only_reads", "Send only_reads (the whole list) or only_reads_on and only_reads_off, not both", 422
+        )
+    asked = body.model_dump(
+        exclude_none=True, exclude={"audience", "everyone_reads", "record_owner", *ONLY_READS_FIELDS}
+    )
     audience_set = "audience" in body.model_fields_set
     if asked or not audience_set or getattr(who, "role", "") != "owner":
         # Its service, address, check or delivery: on an ads, payments or CRM tool a person's own (tool_access Rule P).
@@ -1577,8 +1596,10 @@ def update_tool(c, who, tool_id, body, admins, auth=None):
         c.execute("UPDATE tools SET record_owner=?,updated_at=? WHERE id=?", (body.record_owner, H.now(), tool_id))
         H.event(c, who.actor, "tool.record_owner_changed", tool_id, {"after": body.record_owner})
         tool = dict(tool_row(c, tool_id))
-    if body.only_reads is not None:
-        mcp_connect.set_only_reads(c, who.actor, tool, body.only_reads)
+    if _marks_asked(body):
+        mcp_connect.set_only_reads(
+            c, who.actor, tool, body.only_reads, on=body.only_reads_on or (), off=body.only_reads_off or ()
+        )
         tool = dict(tool_row(c, tool_id))
     fields = {k: v for k, v in _clean(asked).items()}
     merged = tool | fields
@@ -2493,13 +2514,15 @@ def install(app, store, auth, settings):
         """A tool's settings and its Who can see it (`audience`: null for Everyone, or an audience for Only listed)."""
 
         def authorize(c, w):
-            if body.only_reads is not None and not _admin(c, w, vault().admins):
+            if _marks_asked(body) and not _admin(c, w, vault().admins):
                 raise Problem("forbidden", ONLY_READS_ADMIN, 403)  # said as itself, not as any other setting
             setter(c, w)
 
         return change(
             request,
-            _Receipt(body, omit_none=("record_owner", "only_reads")),  # a retry from before them fingerprints the same
+            _Receipt(
+                body, omit_none=("record_owner", *ONLY_READS_FIELDS)
+            ),  # a retry from before them fingerprints the same
             authorize,
             lambda c: update_tool(c, request.state.identity, tool_id, body, vault().admins, auth),
         )

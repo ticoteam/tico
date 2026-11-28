@@ -618,8 +618,10 @@ def check(store: Any, vault: Any, tool_id: str) -> list[Json]:
                 "names": [t["name"] for t in listed],
                 "read_only": [t["name"] for t in listed if t["read_only"]],
                 "listed_at": H.now(),
+                "exact": True,  # names kept whole (NAME_MAX), never cut: set_only_reads trusts a long one only then
             }
             c.execute("UPDATE tools SET mcp_tools=? WHERE id=?", (encode(found), tool_id))
+            _suspend_dropped(c, tool_id, set(found["names"]), found["listed_at"])
     rows.sort(key=lambda r: r["ok"])
     return rows
 
@@ -652,22 +654,53 @@ def only_reads(tool: Any) -> list[Json]:
     return [m for m in marks if isinstance(m.get("name"), str)]
 
 
+def active(mark: Json, listed: set[str]) -> bool:
+    """A mark grants Read only while the last check lists its name and no check has dropped it since it was made: a
+    name the vendor drops and lists again needs a fresh mark (`suspended_at`, set by `check`)."""
+    return mark["name"] in listed and not mark.get("suspended_at")
+
+
 def marked(tool: Any) -> frozenset[str]:
-    """The names a bot at Read may call on this tool by an administrator's mark (backend/tool_proxy.py)."""
-    return frozenset(m["name"] for m in only_reads(tool))
+    """The names a bot at Read may call on this tool by an administrator's mark (backend/tool_proxy.py): only active
+    ones (`active`)."""
+    listed = set(_strs(_listed(tool).get("names")))
+    return frozenset(m["name"] for m in only_reads(tool) if active(m, listed))
 
 
 def _listed(tool: Any) -> Json:
     try:
         return _obj(json.loads(tool["mcp_tools"] or "null"))
-    except ValueError:
+    except (IndexError, KeyError, ValueError):
         return {}
 
 
-def set_only_reads(c: Any, actor: str, tool: Any, names: list[str]) -> None:
-    """Replace the tool's Only reads with `names` (the caller checked the actor is a credential administrator). A new
-    name must be in the last check's listing; a vendor-hinted name is already a read and is not stored; a stored name
-    the vendor no longer lists may stay. One `tool.only_reads_changed` event with what was added and removed."""
+def _suspend_dropped(c: Any, tool_id: str, names: set[str], at: str) -> None:
+    """After a check that listed `names`: each mark whose name it no longer lists is suspended (kept, with who made it,
+    and shown, but never used again; marking it again after the vendor lists it again makes a fresh mark)."""
+    tool = c.execute("SELECT * FROM tools WHERE id=?", (tool_id,)).fetchone()
+    marks = only_reads(tool) if tool else []
+    dropped = [m["name"] for m in marks if m["name"] not in names and not m.get("suspended_at")]
+    if not dropped:
+        return
+    kept = [m | {"suspended_at": at} if m["name"] in dropped else m for m in marks]
+    c.execute("UPDATE tools SET mcp_only_reads=? WHERE id=?", (encode(kept), tool_id))
+    H.event(c, "system", "tool.only_reads_changed", tool_id, {"added": [], "removed": [], "suspended": dropped})
+
+
+def set_only_reads(
+    c: Any,
+    actor: str,
+    tool: Any,
+    names: list[str] | None = None,
+    on: list[str] | tuple[str, ...] = (),
+    off: list[str] | tuple[str, ...] = (),
+) -> None:
+    """Change the tool's Only reads (the caller checked the actor is a credential administrator): `names` replaces the
+    whole list (the CLI); else `on` and `off` mark and unmark just those names, so a page loaded before another
+    administrator's change never undoes it (the Tools switch). A new mark needs the name in the last check's listing; a
+    vendor-hinted name is already a read and is not stored. A suspended mark (`active`) kept in a whole list stays
+    suspended unless its name is listed again, when the list marks it afresh. One `tool.only_reads_changed` event with
+    what was added and removed."""
     if not tool["mcp_url"]:
         raise Problem(
             "only_reads", f"{tool['name']} is not an MCP server: only its tools can be marked Only reads", 422
@@ -676,15 +709,32 @@ def set_only_reads(c: Any, actor: str, tool: Any, names: list[str]) -> None:
     hinted = set(_strs(listed.get("read_only")))
     known = set(_strs(listed.get("names")))
     before = {m["name"]: m for m in only_reads(tool)}
+    if names is None:
+        names = [n for n in before if n not in off] + [n for n in on if n not in before and n not in off]
+        asked = set(on)
+    else:
+        asked = set(names)
     after: dict[str, Json] = {}
     now = H.now()
     for name in names:
         if name in after or name in hinted:
             continue
-        if name not in before and name not in known:
+        prev = before.get(name)
+        if prev is not None and (active(prev, known) or name not in asked):
+            after[name] = prev  # unchanged (an unmentioned suspended mark stays suspended)
+            continue
+        if name not in known:
+            if prev is not None:  # suspended and still not listed: kept as it is
+                after[name] = prev
+                continue
             raise Problem("only_reads", f"{tool['name']}'s last check did not list {name}", 422)
-        after[name] = before.get(name) or {"name": name, "by": actor, "at": now}
-    added = [n for n in after if n not in before]
+        if len(name) >= NAME_MAX and not listed.get("exact"):
+            # A listing from before names were kept whole cut long ones to 200 characters: this may be a cut name.
+            raise Problem(
+                "only_reads", f"Check {tool['name']} again before marking {name}: its last check is too old", 422
+            )
+        after[name] = {"name": name, "by": actor, "at": now}
+    added = [n for n in after if after[n] is not before.get(n)]
     removed = [n for n in before if n not in after]
     if not added and not removed:
         return
@@ -723,6 +773,8 @@ def view(c: Any, tool: Any, keys: list[Any]) -> Json | None:
                 "by": str(m.get("by") or ""),
                 "at": str(m.get("at") or ""),
                 "listed": m["name"] in names,
+                # Used for Read: listed, and not dropped by a check since it was made (`active`).
+                "active": active(m, set(names)),
             }
             for m in only_reads(tool)
         ],

@@ -41,6 +41,7 @@ class Server:
         self.seen, self.codes, self.refreshes, self.n = [], {}, set(), 0
         self.client_auth = []
         self.extra = []  # more tools on the listing's second page
+        self.hidden = set()  # names the vendor has dropped from its listing
 
     def mint(self):
         self.n += 1
@@ -82,10 +83,8 @@ class Server:
             }
         elif method == "tools/list":
             # count_errors only reads, but this vendor leaves its hint off (an administrator may mark it Only reads).
-            result = {
-                "tools": [{"name": "get_error", "annotations": {"readOnlyHint": True}}, {"name": "count_errors"}]
-                + self.extra
-            }
+            listed = [{"name": "get_error", "annotations": {"readOnlyHint": True}}, {"name": "count_errors"}]
+            result = {"tools": [t for t in listed + self.extra if t["name"] not in self.hidden]}
         else:
             result = {"content": [{"type": "text", "text": "3 errors"}]}
         data = json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": result})
@@ -329,7 +328,7 @@ def test_an_administrator_marks_an_unhinted_read_only_reads_and_a_read_bot_calls
     it, and taking the mark off refuses the call again."""
     from backend import tool_proxy
 
-    server(oauth=False)
+    fake = server(oauth=False)
     post(api, "mcp-tools", {"name": "Acme Errors", "url": MCP, "auth": "token", "token": TOKEN})
     path = "/api/v2/api-tools/acme-errors"
     mark = lambda names, token="ana-test": api.patch(path, json={"only_reads": names}, headers=headers(token))  # noqa: E731
@@ -362,14 +361,33 @@ def test_an_administrator_marks_an_unhinted_read_only_reads_and_a_read_bot_calls
         "is Read, and the MCP tool resolve_error is not marked read-only by its server. If it only reads, an "
         "administrator can mark it Only reads in Tools > Acme Errors; otherwise set Read and write."
     )
-    # The vendor drops the name: the mark stays, shown no longer listed, and a save that keeps it is no new mark.
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tools SET mcp_tools=? WHERE id='acme-errors'", (json.dumps({"names": ["list_errors"]}),))
-    assert [m["listed"] for m in get(api, "api-tools/acme-errors")["mcp"]["only_reads"]] == [False]
-    assert mark(["count_errors"]).status_code == 200
+    count = lambda: mcp_call(api, servers[0], token, "tools/call", {"name": "count_errors", "arguments": {}})  # noqa: E731
+    shown = lambda: [  # noqa: E731
+        (m["by"], m["listed"], m["active"]) for m in get(api, "api-tools/acme-errors")["mcp"]["only_reads"]
+    ]
+    # The vendor drops the name: the next check suspends the mark. It stays with who made it, shown no longer listed and
+    # unused, and the Read bot is refused; a whole-list save that keeps it is no new mark and leaves it unused.
+    fake.hidden = {"count_errors"}
+    assert post(api, "api-tools/acme-errors/check", {})["rows"][0]["ok"]
+    assert shown() == [("human:ana", False, False)]
+    assert count().status_code == 403
+    assert mark(["count_errors"]).status_code == 200 and shown() == [("human:ana", False, False)]
+    # The vendor lists it again: the old mark stays suspended, so the call is still refused until it is marked afresh.
+    fake.hidden = set()
+    post(api, "api-tools/acme-errors/check", {})
+    assert shown() == [("human:ana", True, False)]
+    assert count().status_code == 403
+    with api.app.state.store.read() as c:
+        rows = c.execute("SELECT actor, detail FROM events WHERE action='tool.only_reads_changed'").fetchall()
+    assert ("system", {"added": [], "removed": [], "suspended": ["count_errors"]}) in [
+        (r[0], json.loads(r[1])) for r in rows
+    ]
+    assert api.patch(path, json={"only_reads_on": ["count_errors"]}, headers=headers("ana-test")).status_code == 200
+    assert shown() == [("human:ana", True, True)]
+    assert count().status_code == 200
     # Taken off: the Read bot is refused again.
     assert mark([]).status_code == 200
-    assert mcp_call(api, servers[0], token, "tools/call", {"name": "count_errors", "arguments": {}}).status_code == 403
+    assert count().status_code == 403
 
 
 def test_a_mark_shows_in_the_tools_activity_and_tool_show_and_a_name_over_200_characters_is_never_markable(api, server):
@@ -543,3 +561,45 @@ def test_a_live_claim_makes_a_refresh_wait_and_a_lapsed_claim_is_taken_over(api,
     with store.transaction() as c:
         c.execute("UPDATE oauth_refresh_claims SET claimed_until='2000-01-01T00:00:00.000000Z'")
     assert mcp_connect.access_token(store, vault, cid).startswith("acme-synthetic-access-")
+
+
+def test_a_switch_changes_only_its_own_name_so_a_stale_page_never_restores_a_removed_mark(api, server):
+    """The Tools switch sends one name on or off: a page loaded before another administrator removed a mark, turning a
+    different switch, leaves that removal in force. Only an administrator may send either, and not with a whole list."""
+    server(oauth=False)
+    post(api, "mcp-tools", {"name": "Acme Errors", "url": MCP, "auth": "token", "token": TOKEN})
+    path = "/api/v2/api-tools/acme-errors"
+    patch = lambda body, token="ana-test": api.patch(path, json=body, headers=headers(token))  # noqa: E731
+    names = lambda: [m["name"] for m in get(api, "api-tools/acme-errors")["mcp"]["only_reads"]]  # noqa: E731
+    assert patch({"only_reads": ["count_errors", "resolve_error"]}).status_code == 200
+    # Another administrator removes count_errors; the stale page (still showing it on) turns resolve_error off.
+    assert patch({"only_reads_off": ["count_errors"]}).status_code == 200
+    assert patch({"only_reads_off": ["resolve_error"]}).status_code == 200
+    assert names() == []
+    assert patch({"only_reads_on": ["resolve_error"]}).status_code == 200
+    assert names() == ["resolve_error"]
+    r = patch({"only_reads_on": ["count_errors"]}, "cara-test")
+    assert r.status_code == 403 and r.json()["error"]["detail"] == "Only an administrator marks MCP tools Only reads"
+    assert patch({"only_reads_on": ["export_everything"]}).status_code == 422
+    assert patch({"only_reads": [], "only_reads_off": ["resolve_error"]}).status_code == 422
+    assert names() == ["resolve_error"]
+
+
+def test_a_long_name_from_a_listing_made_before_names_were_kept_whole_needs_a_fresh_check(api, server):
+    """A listing stored before names were kept whole cut long names to 200 characters: such a name may be a cut one the
+    vendor never listed, so marking it waits for a fresh check (which keeps names whole and says so)."""
+    fake = server(oauth=False)
+    exact = "count_" + "y" * 194  # 200 characters: what an old listing would have cut a longer name to
+    fake.extra = [{"name": exact}]
+    post(api, "mcp-tools", {"name": "Acme Errors", "url": MCP, "auth": "token", "token": TOKEN})
+    path = "/api/v2/api-tools/acme-errors"
+    with api.app.state.store.transaction() as c:
+        old = json.loads(c.execute("SELECT mcp_tools FROM tools WHERE id='acme-errors'").fetchone()[0])
+        assert old.pop("exact") is True and exact in old["names"]
+        c.execute("UPDATE tools SET mcp_tools=? WHERE id='acme-errors'", (json.dumps(old),))
+    r = api.patch(path, json={"only_reads_on": [exact]}, headers=headers("ana-test"))
+    assert r.status_code == 422 and r.json()["error"]["detail"].startswith("Check Acme Errors again before marking")
+    # A short name in the same old listing was never cut, and is marked as before.
+    assert api.patch(path, json={"only_reads_on": ["count_errors"]}, headers=headers("ana-test")).status_code == 200
+    post(api, "api-tools/acme-errors/check", {})
+    assert api.patch(path, json={"only_reads_on": [exact]}, headers=headers("ana-test")).status_code == 200

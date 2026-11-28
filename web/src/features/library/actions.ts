@@ -888,8 +888,8 @@ export const toolsSetOnlyReads = defineAction({
   id: 'tools.setOnlyReads',
   title: "Mark an MCP tool's tools Only reads",
   kind: 'change',
-  input: z.strictObject({ tool: id, only_reads: z.array(z.string().check(z.minLength(1), z.maxLength(200))).check(z.maxLength(500)) }),
-  run: (_ctx, i) => setOnlyReads(i.tool, i.only_reads),
+  input: z.strictObject({ tool: id, name: z.string().check(z.minLength(1), z.maxLength(200)), on: z.boolean() }),
+  run: (_ctx, i) => setOnlyReads(i.tool, i.name, i.on),
   did: () => 'Saved',
   target: (i) => ({ kind: 'tool-can', id: `api:${i.tool}` }),
 });

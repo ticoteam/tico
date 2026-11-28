@@ -982,14 +982,18 @@ export function editApiTool(tool: string, change: ApiToolChange) {
   );
 }
 
-/** An MCP tool's Only reads, the whole list: tools its server does not mark read-only that a bot at Read may call.
-    An administrator's to set; the server stores who marked each. */
-export function setOnlyReads(tool: string, names: string[]) {
+/** Mark (`on`) or unmark one of an MCP tool's tools Only reads: one its server does not mark read-only that a bot at
+    Read may then call. Only that name changes, so a page loaded before another administrator's change never undoes
+    it. An administrator's to set; the server stores who marked each. */
+export function setOnlyReads(tool: string, name: string, on: boolean) {
   return write<unknown>({
     key: ['tools', 'api', tool],
-    optimistic: (cur: ApiTool | undefined) =>
-      cur?.mcp ? { ...cur, mcp: { ...cur.mcp, only_reads: cur.mcp.only_reads.filter((m) => names.includes(m.name)) } } : cur,
-    send: (idempotencyKey) => api.patch(`/api/v2/api-tools/${enc(tool)}`, { only_reads: names }, { idempotencyKey }),
+    optimistic: (cur: ApiTool | undefined) => {
+      if (!cur?.mcp) return cur;
+      const rest = cur.mcp.only_reads.filter((m) => m.name !== name);
+      return { ...cur, mcp: { ...cur.mcp, only_reads: on ? [...rest, { name, by: '', at: '', listed: true, active: true }] : rest } };
+    },
+    send: (idempotencyKey) => api.patch(`/api/v2/api-tools/${enc(tool)}`, on ? { only_reads_on: [name] } : { only_reads_off: [name] }, { idempotencyKey }),
   });
 }
 

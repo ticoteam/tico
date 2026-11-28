@@ -214,10 +214,11 @@ SCHEMAS['ApiTool'] = obj(
                         'read_only': 'i',
                         'names': items('s'),
                         'read_only_names': items('s') | {'description': 'The names its server marks readOnlyHint'},
-                        'only_reads': items(obj({'name': 's', 'by': 's', 'at': 's', 'listed': 'b'}))
+                        'only_reads': items(obj({'name': 's', 'by': 's', 'at': 's', 'listed': 'b', 'active': 'b'}))
                         | {
-                            'description': 'Names an administrator marked Only reads (a bot at Read may call them), '
-                            'who marked each and when; listed is false once the last check no longer lists it'
+                            'description': 'Names an administrator marked Only reads, who marked each and when; listed '
+                            'is false once the last check no longer lists it, and active (a bot at Read may call it) is '
+                            'false then and stays false until it is marked again'
                         },
                         'listed_at': 'n',
                         'signed_in_by': 'n',

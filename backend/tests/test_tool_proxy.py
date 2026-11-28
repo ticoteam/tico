@@ -676,8 +676,18 @@ def test_only_an_mcp_read_sent_to_exactly_the_tools_mcp_address_is_not_a_write(a
     assert send("mcp", count) == 4
     with api.app.state.store.transaction() as c:
         c.execute("""UPDATE tools SET mcp_only_reads='[{"name":"count_leads"}]' WHERE id='close-crm'""")
-    assert send("mcp", count) == 4
-    assert send("mcp/", count) == 5
+    assert send("mcp", count) == 5  # a mark counts only while the last check lists its name
+    with api.app.state.store.transaction() as c:
+        c.execute("""UPDATE tools SET mcp_tools='{"names":["search","count_leads"]}' WHERE id='close-crm'""")
+    assert send("mcp", count) == 5
+    assert send("mcp/", count) == 6
+    # A check dropped it since (suspended): no longer a read, even listed again, until it is marked afresh.
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            """UPDATE tools SET mcp_only_reads='[{"name":"count_leads","suspended_at":"2026-11-27T00:00:00Z"}]'"""
+            " WHERE id='close-crm'"
+        )
+    assert send("mcp", count) == 7
 
 
 def test_write_keys_of_ads_payments_and_crm_tools_reach_runs_only_through_the_proxy_and_meet_the_gate(api):
