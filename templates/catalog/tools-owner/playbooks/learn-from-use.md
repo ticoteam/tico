@@ -29,6 +29,11 @@ Done when: usage.md is updated and committed, each new finding below has its one
      request`), as the manage skill says.
    - **Tico refused a bot's calls** (`refused`: no level, Read on a write, no stored key): the bot's job needs it, so
      ask the person who can give it on a task of yours (`tico task ask`), naming the bot, the tool and the level.
+     A bot at Read refused an MCP tool its server does not mark read-only ("is not marked read-only by its server"):
+     when the tool's name and description only read (`get_`, `list_`, `search_`, nothing it creates, changes or
+     sends), ask a credential administrator to mark it Only reads (Tools > the tool > What it can do, or `tico tool
+     edit <tool> --only-reads-on <names>`), naming the tool. Ask for Read and write only when the bot's job writes. Never
+     mark it yourself.
    - **One bot keeps getting the same vendor 4xx on one endpoint** (3 or more in a day, no 2xx on it since): tell
      that bot how to call it right. Find the cause in the vendor's guide or the vendor's docs, then file it to the bot
      (`tico task create --owner <bot> --title "<tool>: <method> <endpoint> answers <status>" --message "<the cause and

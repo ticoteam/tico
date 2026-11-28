@@ -197,6 +197,26 @@ resource_metadata=…`, RFC 9728, or `/.well-known/oauth-protected-resource`) **
 The tool's check is `initialize` and `tools/list` instead of a GET: Working or Key rejected as any tool's, and the
 number of tools the server lists, with how many it marks read-only (`readOnlyHint`).
 
+#### Only reads
+
+A bot at Read on an MCP tool with a Read and write key or a sign-in may call only the server's tools that only read:
+those the server's own `tools/list` marks `readOnlyHint`, and those a credential administrator marked **Only reads**.
+Many servers leave the hint off their reads, and the MCP specification treats hints from a server as untrusted, so the
+decision is the administrator's. Tap the tool count on the tool's page: **What it can do** lists every tool the last
+check found, with **Read-only (vendor)** on hinted ones and an **Only reads** switch on the rest (others see who marked
+it). Each switch sends only its own name (`only_reads_on` / `only_reads_off`), so a page loaded before another
+administrator's change never undoes it; from the command line `tico tool edit <tool> --only-reads-on a,b` and
+`--only-reads-off a,b` do the same, `--only-reads a,b` sets the whole list (a suspended mark it keeps stays suspended),
+and `tico tool show <tool>` lists the marks with who made them and which are suspended. Only a name the last check listed can be marked (a
+name over 200 characters is left out of the listing, never cut short; a 200-character name from a listing made before
+names were kept whole waits for a fresh check); a hinted name is already a read. A marked name a check finds the server
+has dropped is suspended: it stays with who made it, shown **no longer listed, not used**, and grants nothing, even if
+the server lists the name again, until an administrator marks that name afresh (the switch, or `only_reads_on`). A renamed tool needs a new mark. Each change is a `tool.only_reads_changed` event with what was added
+and removed, shown in the tool's activity with who made it. The proxy reads the marks from the tool on every call, so they hold across a restart; for the Rules gate a
+marked tool is a read only at the tool's exact MCP address, as a hinted one is. A bot at Read refused on an unmarked
+tool is told an administrator can mark it Only reads, or set Read and write. Mark only a tool you know only reads:
+every Read bot on the tool can call it.
+
 An MCP tool is granted by level like any tool, and a bot needs **no bot.yaml entry** for it: each run's
 `credential-runtime` lists the server of every MCP tool it holds (`mcp_servers`: name, address, transport and a header
 with the key's variable as `${VAR}`), and the runner passes it to the harness beside bot.yaml's own servers (bot.yaml's
