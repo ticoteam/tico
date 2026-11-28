@@ -107,6 +107,13 @@ def test_with_no_owner_set_who_may_change_a_board_is_as_before(c):
         PS.save(c, CARA, dict(saved, goal="Cara's goal"))
     after = PS.save(c, "bot:manager", dict(saved, goal="The manager's goal"), seen_version=saved["settings_version"])
     assert after["goal"] == "The manager's goal"
+    # The board's own human manager keeps every change they had, a person's OK they are not named on included.
+    managed = PS.save(c, BEN, _ops(name="Facilities", prefix="FA", owner_id=None, manager_id=CARA))
+    managed["stages"][1]["requirements"][0]["who_oks"] = "people_with_exceptions"
+    managed = PS.save(c, CARA, managed)
+    assert managed["stages"][1]["requirements"][0]["who_oks"] == "people_with_exceptions"
+    managed["stages"][1]["requirements"] = []
+    assert PS.save(c, CARA, managed)["stages"][1]["requirements"] == []
 
 
 def test_the_log_says_what_changed_from_and_to_with_the_version_and_the_full_list(c):

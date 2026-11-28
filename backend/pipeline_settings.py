@@ -1672,7 +1672,8 @@ def save(
         and not company_admin(conn, by)
     ):
         _refuse(conn, by, "task_settings", OWNER_ADMINS_ONLY)
-    if existing and is_human(by) and not company_admin(conn, by):
+    if existing and existing.get("owner_id") and is_human(by) and not company_admin(conn, by):
+        # Only on a board with an owner: on one without, who may change what is as before (a manager keeps it all).
         sign_off = _loosens_people_only(conn, str(existing["id"]), parsed, named=by)
         if sign_off:
             _refuse(conn, by, "task_settings", LOOSENS_NAMED.format(sign_off))
