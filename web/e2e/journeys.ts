@@ -309,6 +309,36 @@ test("a task's link from outside opens it over Tasks with Needs you as its list;
   clean(page);
 });
 
+test('a toast that names its thing reads whole when it fits, and a long one ends in an ellipsis inside the window', async ({ browser, hub }) => {
+  const [draft] = hub.facts.board.tasks;
+  const page = await open(browser, hub, '/tasks', { viewport: { width: 1280, height: 800 } });
+  await expect(page).toHaveURL(new RegExp(`^${hub.url}/tasks`));
+  /** Remove a file from the task's viewer; its toast ("Removed: <name>") is measured in the window it stands in. */
+  const removed = async (name: string) => {
+    const form = new FormData();
+    form.append('file', new Blob(['Launch on Friday.\n'], { type: 'text/plain' }), name);
+    const added = await post<{ file_id: string }>(hub, `tasks/${draft!.id}/files`, form);
+    await page.goto(`${hub.url}/tasks/launch/${draft!.number}/details?file=${added.file_id}`);
+    await expect(layers(page)).toHaveCount(2);
+    await layers(page).last().getByRole('button', { name: 'More', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Remove file' }).click();
+    const named = page.locator('.toast.is-named').filter({ hasText: name });
+    await expect(named).toBeVisible();
+    return named.evaluate((t) => {
+      const line = t.querySelector('span')!;
+      const box = t.getBoundingClientRect();
+      return { cut: line.scrollWidth > line.clientWidth, inside: box.left >= 0 && box.right <= window.innerWidth, wide: box.width };
+    });
+  };
+  // a short name has room: every letter shows, no ellipsis
+  expect(await removed('notes.txt')).toMatchObject({ cut: false, inside: true });
+  // a name wider than the window still stops inside it, cut with an ellipsis (wide letters: the server keeps names short)
+  const long = await removed(`${'MW'.repeat(55)}.txt`);
+  expect(long).toMatchObject({ cut: true, inside: true });
+  expect(long.wide).toBeGreaterThan(1280 / 2);
+  clean(page);
+});
+
 test('one history path: a row, a file from Details opened and closed, Close, then Back and Forward; a Cmd+K hit, Close, Back', async ({ browser, hub }) => {
   const [draft, date] = hub.facts.board.tasks;
   const form = new FormData();
