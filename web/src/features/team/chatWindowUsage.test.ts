@@ -43,6 +43,24 @@ describe("an agent's chat window's usage events", () => {
     expect(bodies()[0]?.surface).toBe('desktop');
   });
 
+  it('counts the first send when the browser cannot write session storage (quota full), under the opened window id', () => {
+    const write = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
+    });
+    try {
+      chatWindowOpened('qa');
+      chatWindowOpened('qa'); // the same window again: still one opened
+      chatWindowSent('qa');
+      chatWindowSent('qa'); // the second message: no second sent
+    } finally {
+      write.mockRestore();
+    }
+    const [opened, sent, ...rest] = bodies();
+    expect(opened?.event).toBe('chat_window.opened');
+    expect(sent).toEqual({ ...opened, event: 'chat_window.sent' });
+    expect(rest).toEqual([]);
+  });
+
   it('a page that is no chat window (no mark) never sends sent, and a failed send throws nothing', () => {
     chatWindowSent('qa');
     expect(post).not.toHaveBeenCalled();
