@@ -284,11 +284,11 @@ export const chatWindowWho = (pathname: string): string => decodeURIComponent(CH
 export type ChatWindowOpened = 'desktop' | 'window' | 'tab' | 'full' | 'blocked' | 'unavailable';
 
 /** Whether this page can open an agent's chat in its own window. A browser can; the desktop app only with its
-    chatWindow call. An older desktop app (the Electron one without the call, or the Tauri shell) cannot: it sends a new
-    window to the system browser, which has none of the app's sign-in, so the control is hidden there. */
+    chatWindow call. An older desktop app (without the call) cannot: it sends a new window to the system browser,
+    which has none of the app's sign-in, so the control is hidden there. */
 export const canOpenChatWindow = (): boolean => {
   const t = desktop();
-  return t ? !!t.chatWindow : !inOldDesktopApp();
+  return !t || !!t.chatWindow;
 };
 
 /** Opens an agent's chat in its own window. The desktop app opens and keeps its own; a browser gets one window per

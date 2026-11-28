@@ -461,7 +461,7 @@ describe('the root', () => {
 
   // An older desktop app sends a new window to the system browser, which has no sign-in: no mark there at all.
   it.each([
-    ['a browser', () => undefined, true],
+    ['a browser', (): void => undefined, true],
     ['the desktop app with chat windows', () => Object.assign(fakeDesktop(), { chatWindow: { open: vi.fn() } }), true],
     ['an older desktop app without them', () => fakeDesktop(), false],
   ] as const)('in %s, an agent’s menu row offers its chat in a new window only where one can open', async (_where, setUp, offered) => {

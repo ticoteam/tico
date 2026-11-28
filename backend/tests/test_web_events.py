@@ -49,9 +49,9 @@ def send(client, token, body):
 
 def stored(app):
     rec = app.state.flight
-    with app.state.store.transaction() as c:
+    with flight.tables(app.state.store, write=True) as c:  # the recorder's rows are in their own file
         flight.write(c, rec.take(int(time.time() // 60 * 60)))
-    with app.state.store.read() as c:
+    with flight.tables(app.state.store) as c:
         return [
             (r[0], json.loads(r[1]))
             for r in c.execute("SELECT kind,detail FROM flight_events WHERE kind<>'start' ORDER BY id")
