@@ -713,7 +713,7 @@ def message_bot_mailbox(c, person, bot):
     """The address `bot` reads for `person` as their message bot: the mailbox it declares, else their email."""
     from . import routines
 
-    return _addr(routines.declared_mailbox(_bot_config(c, bot)) or (person or {}).get("email"))
+    return routines.message_bot_mailbox(c, person, bot)
 
 
 def message_bot_changed(c, person, old_bot, old_address, bot):

@@ -487,6 +487,59 @@ def human_invite(api, args):
     return api.post(f"access/humans/{quote(person['id'], safe='')}/invite", {}, key=_key(args))
 
 
+def _leaving_lines(seen):
+    """What removing someone would do, in the words the Remove dialog uses (backend/leaving.py `preview`)."""
+
+    def names(rows):
+        return ", ".join(r.get("name") or r.get("id") or "" for r in rows)
+
+    lines = []
+    for plan in seen.get("plans") or []:
+        bots = plan.get("bots") or []
+        lines.append(f"remove {plan['name']}" + (f"; {names(bots)} lose their model" if bots else ""))
+    if seen.get("reports"):
+        to = (seen.get("to") or {}).get("name") or "the top of the chart"
+        lines.append(f"move {len(seen['reports'])} reports to {to}: {names(seen['reports'])}")
+    waits = [f"{n} open tasks" if n != 1 else "1 open task" for n in [seen.get("tasks") or 0] if n] + [
+        f"{n} asks" if n != 1 else "1 ask" for n in [seen.get("asks") or 0] if n
+    ]
+    if waits:
+        lines.append(f"put {' and '.join(waits)} in the company's Needs you")
+    if seen.get("message_bot"):
+        bot = seen["message_bot"]
+        lines.append(f"stop {bot['name']} reading {bot.get('address') or 'their mailbox'}")
+    if seen.get("groups"):
+        lines.append(f"leave {names(seen['groups'])} without a lead")
+    return lines
+
+
+@tool(
+    "tico_human_leaving",
+    "What removing a person would do, changing nothing: the model plans they connected that go and the bots that lose "
+    "their model, the reports that move and to whom, their open tasks and asks, their message bot and the groups they "
+    "lead. The owner or an admin, or a bot run for one; the remove itself stays a person's own (tico_human_remove). "
+    "On the command line `tico human remove <person> --preview` runs this.",
+    {"human": _s("The person: their id, email or exact name")},
+    required=("human",),
+    audience=PEOPLE + ("bot", "botops", "agent"),
+)
+def human_leaving(api, args):
+    person = _person(api, args["human"], _roles(api))
+    seen = api.get(f"humans/{quote(person['id'], safe='')}/leaving")
+    name = person.get("name") or person.get("email") or person["id"]
+    lines = _leaving_lines(seen)
+    return {
+        **seen,
+        "would": lines,
+        "says": "\n".join(
+            [f"Removing {name} would:"]
+            + ["  " + line for line in lines or ["end their sign-in; nothing else moves"]]
+            + ["Nothing was changed."]
+        ),
+        "changed": False,
+    }
+
+
 @tool(
     "tico_human_remove",
     "Take a person off the team, as the owner: they are marked as left (off the org chart and every list, their sign-in "
@@ -766,8 +819,14 @@ HUMAN = (
         example="tico human availability-set me --availability async --until 2030-01-01T09:00:00Z",
     ),
     Command(
+        "human leaving",
+        "what removing someone would move, changing nothing (`human remove <person> --preview` runs it too)",
+        example="tico human leaving ben",
+    ),
+    Command(
         "human remove",
-        "mark someone as left; --delete removes someone with no history for good (the owner)",
+        "mark someone as left; --preview lists what it would move first; --delete removes someone with no history for "
+        "good (the owner)",
         args=(Arg("confirm", "--confirm"), Arg("delete", default=None)),
         example='tico human remove ben --confirm "Ben Ortiz"',
     ),

@@ -367,6 +367,17 @@ def declared_mailbox(config):
     return ""
 
 
+def message_bot_mailbox(c, person, bot):
+    """The address `bot` reads for `person` as their message bot: the mailbox it declares, else their email. Core's
+    own reader (backend/leaving.py), so Core never imports the Mail modules for it; mailbox_access uses it too."""
+    found = c.execute(BS.ONE_SQL, (bot,)).fetchone()
+    try:
+        config = json.loads(found["config"] or "{}") if found else {}
+    except ValueError:
+        config = {}
+    return declared_mailbox(config) or str((person or {}).get("email") or "").strip().lower()
+
+
 def set_declared_mailbox(c, bot, address):
     """Record the address `bot` reads, as the identity of its `gmail` tool in the bot's stored config (the owner's
     word, not the bot's repository: a bot cannot widen what its runs may open). Other tools are kept."""

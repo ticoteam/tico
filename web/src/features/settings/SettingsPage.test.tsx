@@ -906,6 +906,110 @@ describe('Settings › People: joining, left and adds @s1073', () => {
     await waitFor(() => expect(sent).toContainEqual({ url: '/api/v2/access/humans/p3', method: 'POST', body: { left: false } }));
   });
 
+  const NOTHING = { person: { id: 'p2', name: 'Ben Sample' }, plans: [], bots: [], reports: [], to: null, tasks: 0, asks: 0, message_bot: null, groups: [] };
+  const bot = (slug: string, name: string) => ({ id: `id-${slug}`, slug, name });
+
+  it('Remove names the plan and the bots that lose their model first, and Cancel changes nothing', async () => {
+    const seen = {
+      ...NOTHING,
+      plans: [{ id: 's1', name: 'Company Max', kind: 'Claude', bots: [bot('builder', 'Builder'), bot('support', 'Support')] }],
+      bots: [bot('builder', 'Builder'), bot('support', 'Support')],
+      reports: [{ id: 'p4', name: 'Sam' }],
+      to: { id: 'p1', name: 'Ana Test' },
+    };
+    serveFull((url) => (url === '/api/v2/humans/p2/leaving' ? ok(seen) : undefined));
+    show(<People open="p2" />, '/settings/people');
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+    const dlg = await screen.findByRole('alertdialog', { name: 'Remove Ben Sample?' });
+    const press = await within(dlg).findByRole('button', { name: "Remove, and stop 2 bots' model" });
+    expect(within(dlg).getByRole('link', { name: 'Builder' })).toBeTruthy();
+    expect(within(dlg).getByTestId('leaving').textContent).toContain('Ana Test');
+    fireEvent.click(within(dlg).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(press.isConnected).toBe(false));
+    expect(sent).toEqual([]);
+  });
+
+  it('someone with nothing to move gets the plain dialog and a plain Remove', async () => {
+    serveFull((url) => (url === '/api/v2/humans/p2/leaving' ? ok(NOTHING) : undefined));
+    show(<People open="p2" />, '/settings/people');
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+    const dlg = await screen.findByRole('alertdialog', { name: 'Remove Ben Sample?' });
+    await waitFor(() => expect(read).toContain('/api/v2/humans/p2/leaving'));
+    await waitFor(() => expect((within(dlg).getByRole('button', { name: 'Remove' }) as HTMLButtonElement).disabled).toBe(false));
+    expect(within(dlg).queryByTestId('leaving')).toBeNull();
+    fireEvent.click(within(dlg).getByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(sent).toContainEqual({ url: '/api/v2/humans/p2', method: 'POST', body: { left: true } }));
+  });
+
+  it('Remove stays off until the list loads; a failed list says so and Try again reads it again', async () => {
+    let calls = 0;
+    serveFull((url) => {
+      if (url !== '/api/v2/humans/p2/leaving') return undefined;
+      calls += 1;
+      return calls === 1 ? { status: 403, body: { code: 'forbidden', message: 'No' } } : ok(NOTHING);
+    });
+    show(<People open="p2" />, '/settings/people');
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+    const dlg = await screen.findByRole('alertdialog', { name: 'Remove Ben Sample?' });
+    expect(await within(dlg).findByTestId('leaving-error')).toBeTruthy();
+    const press = within(dlg).getByRole('button', { name: 'Remove' }) as HTMLButtonElement;
+    expect(press.disabled).toBe(true);
+    fireEvent.click(press);
+    fireEvent.click(within(dlg).getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect((within(dlg).getByRole('button', { name: 'Remove' }) as HTMLButtonElement).disabled).toBe(false));
+    expect(within(dlg).queryByTestId('leaving-error')).toBeNull();
+    expect(calls).toBe(2);
+    expect(sent).toEqual([]);
+  });
+
+  it('reopened, Remove shows nothing from the last list and stays off until the fresh one loads', async () => {
+    const before = { ...NOTHING, plans: [{ id: 's1', name: 'Company Max', kind: 'Claude', bots: [bot('builder', 'Builder')] }], bots: [bot('builder', 'Builder')] };
+    let calls = 0;
+    let answer: (r: Reply) => void = () => {};
+    serve((url) => {
+      if (url === '/api/v2/access') return ok(FULL);
+      if (url !== '/api/v2/humans/p2/leaving') return undefined;
+      calls += 1;
+      return calls === 1 ? ok(before) : new Promise<Reply>((done) => (answer = done));
+    });
+    show(<People open="p2" />, '/settings/people');
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+    let dlg = await screen.findByRole('alertdialog', { name: 'Remove Ben Sample?' });
+    await within(dlg).findByRole('button', { name: "Remove, and stop 1 bot's model" });
+    fireEvent.click(within(dlg).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+    dlg = await screen.findByRole('alertdialog', { name: 'Remove Ben Sample?' });
+    await waitFor(() => expect(calls).toBe(2));
+    // The plan was disconnected since: the old list must not stand in for the new one.
+    expect(within(dlg).queryByTestId('leaving')).toBeNull();
+    const press = within(dlg).getByRole('button', { name: 'Remove' }) as HTMLButtonElement;
+    expect(press.disabled).toBe(true);
+    answer(ok(NOTHING));
+    await waitFor(() => expect((within(dlg).getByRole('button', { name: 'Remove' }) as HTMLButtonElement).disabled).toBe(false));
+    expect(within(dlg).queryByTestId('leaving')).toBeNull();
+    expect(sent).toEqual([]);
+  });
+
+  it('Restore says which plan went and which bots to set to it again', async () => {
+    const restored = {
+      name: 'Cal Former',
+      reports: [{ id: 'p4', name: 'Sam' }],
+      plans: [
+        { name: 'Company Max', kind: 'Claude', bots: [bot('builder', 'Builder')] },
+        { name: 'Cal Codex', kind: 'Codex', bots: [bot('support', 'Support')] },
+      ],
+      bots: [bot('builder', 'Builder'), bot('support', 'Support')],
+    };
+    serveFull((url, method) => (url === '/api/v2/access/humans/p3' && method === 'POST' ? ok({ person: 'p3', restored }) : undefined));
+    show(<People />, '/settings/people');
+    const left = await unfold('Left');
+    fireEvent.click(within(left).getByRole('button', { name: 'Restore' }));
+    const said = (await screen.findByText(/Cal Former is back\./)).textContent ?? '';
+    // Each plan names only its own bots.
+    expect(said).toMatch(/Company Max was removed: [^.]*then set Builder to it\. Their Cal Codex was removed: [^.]*then set Support to it\./);
+  });
+
   it('widening who can join, raising the limit and restoring are closed to Tico; tightening is open', async () => {
     serve();
     expect(await run('settings.setJoining', { allowed: FULL.allowed, domains: ['other.test', 'example.test'] }, { via: 'tico' })).toMatchObject({

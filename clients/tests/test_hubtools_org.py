@@ -294,6 +294,28 @@ def test_human_remove_needs_the_exact_name_or_email():
     assert api.writes() == [("POST", "humans/u2", {}, {"left": True}, None, False)]
 
 
+def test_human_leaving_lists_what_removing_would_move_and_writes_nothing():
+    seen = {
+        "plans": [{"name": "Claude plan", "bots": [{"name": "Builder"}, {"name": "Support"}]}],
+        "reports": [{"id": "u3", "name": "Sam"}, {"id": "u4", "name": "Ari"}],
+        "to": {"id": "u1", "name": "Lee"},
+        "tasks": 5,
+        "asks": 1,
+        "message_bot": {"name": "Mailbot", "address": "ben@acme.example"},
+        "groups": [],
+    }
+    api = FakeAPI(company({("GET", "humans/u2/leaving"): seen}))
+    out = tool("tico_human_leaving", api, human="Ben Ortiz")
+    assert out["would"] == [
+        "remove Claude plan; Builder, Support lose their model",
+        "move 2 reports to Lee: Sam, Ari",
+        "put 5 open tasks and 1 ask in the company's Needs you",
+        "stop Mailbot reading ben@acme.example",
+    ]
+    assert out["changed"] is False and api.writes() == []
+    assert "botops" in hubtools.offered_to(hubtools.BY_NAME["tico_human_leaving"])
+
+
 def test_human_remove_delete_reaches_someone_already_left():
     api = FakeAPI(company())
     out = tool("tico_human_remove", api, human="gone@acme.example", confirm="Gone Person", delete=True)
@@ -356,6 +378,7 @@ def run(argv):
         (["human", "show", "u2"], ("GET", "org", {})),
         (["human", "invite", "u2"], ("POST", "access/humans/u2/invite", {})),
         (["human", "remove", "u2", "--confirm", "Ben Ortiz"], ("POST", "humans/u2", {"left": True})),
+        (["human", "remove", "u2", "--preview"], ("GET", "humans/u2/leaving", {})),
         (
             ["usage", "show", "--group", "model", "--from", "2026-11-01"],
             ("GET", "usage", {"group": "model", "from": "2026-11-01"}),
@@ -383,8 +406,16 @@ def test_human_remove_without_confirm_is_a_usage_error():
         hubcli.parser().parse_args(["human", "remove", "u2"])
 
 
+def test_remove_with_preview_only_reads_even_beside_a_confirm():
+    argv, notice = hubcli.rename_argv(["human", "remove", "u2", "--confirm", "Ben Ortiz", "--preview", "--json"])
+    assert (argv, notice) == (["human", "leaving", "u2", "--json"], None)
+    assert hubcli.rename_argv(["human", "remove", "u2", "--confirm", "Ben Ortiz"])[0][:2] == ["human", "remove"]
+
+
 def test_new_tools_are_offered_to_people_and_agent_ops_not_the_assistant_or_bots():
     for name in (t["name"] for t in hubtools_org.TOOLS):
         kinds = hubtools.offered_to(hubtools.BY_NAME[name])
-        assert "assistant" not in kinds and "bot" not in kinds, name
+        assert "assistant" not in kinds, name
+        # The preview is a read a bot run for the owner or an admin may make (the server checks whose run it is).
+        assert ("bot" in kinds) == (name == "tico_human_leaving"), name
     assert "botops" not in hubtools.offered_to(hubtools.BY_NAME["tico_human_remove"])

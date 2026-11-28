@@ -7,6 +7,7 @@ import { desktopApp, tellDesktopSigningOut } from '@/desktop';
 import { agentsQuery, computersQuery, moveAgentWithFeedback, routeTo } from '@/features/team/routing';
 import { setMotionChoice } from '@/motion';
 import { setThemeChoice, type Theme } from '@/prefs';
+import { restoredText } from './leaving';
 import {
   addPerson,
   setAssistantOks,
@@ -1118,7 +1119,7 @@ export const restoreLeft = defineAction({
   // Gives someone their sign-in back.
   tico: false,
   run: (_ctx, { person: p }) => restorePerson(p),
-  did: () => 'Restored',
+  did: (_input, out) => restoredText(out, 'They'),
   target: ({ person: p }) => person(p),
 });
 

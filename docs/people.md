@@ -37,8 +37,15 @@ Cancel keeps the current access. Sign-in switches show **Saved** on success; a r
   (see [permissions](permissions.md)), and a ⋯ menu: **Send invite** (see [Invites](#invites)), **Can add bots** and **Can add humans** for a member, **Make owner** and
   **Mark as left** for the owner, and **Change my sign-in email** on the owner's own row ([below](#change-the-owners-sign-in-email)). Everything saves when it changes. Title and group are kept on the human but edited on
   their profile, not here.
-- **Mark as left.** They drop off the team chart, their API tokens are revoked, and they can no longer sign in. **Restore** (under
-  **Left**) brings them back (their old tokens stay revoked).
+- **Mark as left.** They drop off the team chart, their API tokens are revoked, and they can no longer sign in. The model
+  plans they connected are removed, so the bots on them lose that model, and their direct reports move up to their manager.
+  The dialog lists all of that before you press it: the plans and the bots on each, the reports and where they go, the open
+  tasks and asks that wait on them, their message bot and the groups they lead. Owners and admins (and a bot whose operator
+  is one) read the same list with `tico human remove <person> --preview` (or `tico human leaving <person>`) or
+  `GET /api/v2/humans/{id}/leaving`, which changes nothing. Remove waits until the list has loaded.
+  **Restore** (under **Left**) brings them back (their old tokens stay revoked), moves their reports back to them (except
+  anyone whose manager someone set by hand since), and names each plan that went: they reconnect it in Settings > Models, then the
+  bots it names are set to it again.
 - **Remove** (under **Left**, owner only) deletes someone added by mistake for good, with their unused tokens, sent invites
   and allow-list address. Only a left human with no history can be removed: nothing they did (an event, a message, a task, an
   answer, a used token) or that names them anywhere else, and not synced from a directory. A seat that reports to them
