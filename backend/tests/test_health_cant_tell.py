@@ -148,6 +148,29 @@ def test_the_backup_loop_keeps_when_its_failures_in_a_row_began_until_a_listing_
     assert json.loads(path.read_text())["listing_failing_since"].startswith("2023-11-15T00:14:20")
 
 
+def test_a_new_backup_generations_first_failed_listing_starts_its_own_failure_clock(tmp_path, monkeypatch):
+    from backend import replication
+
+    monkeypatch.delenv("TICO_BACKUP_SYNC_INTERVAL", raising=False)
+    monkeypatch.setattr(H, "now", lambda: "2023-11-15T00:14:20Z")
+    path = tmp_path / "status.json"
+
+    class Down:
+        def latest(self, levels):
+            raise ConnectionError("no route")
+
+    start = 1_700_000_000  # 22:13:20 UTC
+    replication.write_status(Down(), path, generation="", now=start)
+    replication.write_status(Down(), path, generation="", now=start + 3600)
+    replication.write_status(Down(), path, generation="gen-2", now=start + 7260)  # 00:14:20 UTC, a new generation
+    saved = json.loads(path.read_text())
+    assert saved["listing_failing_since"] == saved["listing_failed_at"]
+    assert saved["listing_failing_since"].startswith("2023-11-15T00:14:20")
+    env = {"TICO_BACKUP_MODE": "remote", "TICO_BACKUP_URL": "s3://acme-backups/db"}
+    check = health._backups({"backup": replication.status(env, path)}, REMOTE)
+    assert check["status"] == "unknown" and "22:13" not in check["summary"]
+
+
 def test_the_backup_loop_records_when_and_how_its_listing_failed(tmp_path):
     from backend import replication
 

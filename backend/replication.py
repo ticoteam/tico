@@ -71,6 +71,9 @@ NO_RECENT_COPY = "Litestream has not sent any copy of the database to the backup
 SYNC_INTERVAL_DEFAULT = 60
 # The replica fields write_status keeps when it has no mirror to read, and drops when the generation changes.
 REPLICA_FIELDS = ("last_replicated_at", "reason", "replica_txid", "behind_since", "pending_txid")
+# A failed listing's fields: they belong to the generation that was read, so a generation change drops them too and the
+# new generation's first failure starts its own run.
+LISTING_FIELDS = ("listing_error", "listing_failed_at", "listing_failing_since")
 _LTX_NAME = re.compile(r"([0-9a-f]{16})-([0-9a-f]{16})\.ltx")
 _SYNC_UNITS = {"s": 1, "m": 60, "h": 3600}
 FILES_PREFIX = "files"
@@ -1031,9 +1034,9 @@ def write_status(
     now = time.time() if now is None else now
     saved = _status_file({}, path)
     if (saved.get(GENERATION_FIELD) or "") != generation:
-        # Written for another backup generation: a reset may have moved the data to a new folder, so none of its lag or
-        # copy times apply here and they are dropped before anything is compared.
-        saved = {key: value for key, value in saved.items() if key not in REPLICA_FIELDS}
+        # Written for another backup generation: a reset may have moved the data to a new folder, so none of its lag,
+        # copy or listing failure times apply here and they are dropped before anything is compared.
+        saved = {key: value for key, value in saved.items() if key not in REPLICA_FIELDS + LISTING_FIELDS}
     data = {
         "unsent_files": unsent,
         "warn_after_s": warn_after,
