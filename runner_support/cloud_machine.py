@@ -393,7 +393,10 @@ def boot(m: Machine | None, environ: dict[str, str], unit_dir: Path = UNIT_DIR) 
     if m is None:
         print(f"no {MARKER}: not a Tico cloud machine, nothing to do")
         return 0
+    # The last boot's record goes first: a write that then fails leaves none, which the runner reports as not reported
+    # (never a stale "runner_support" after an old-module boot).
     try:
+        (m.etc / ENTRY_FILE).unlink(missing_ok=True)
         write_root_file(m.etc / ENTRY_FILE, ("runner" if environ.get(SHIM) else "runner_support") + "\n", 0o644)
     except OSError as exc:
         m.say(f"could not record how this boot started: {exc.strerror or type(exc).__name__}")

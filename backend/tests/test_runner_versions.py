@@ -509,6 +509,19 @@ def test_computers_show_which_start_through_the_old_runner_package(api):
         next(r for r in get(api, "computers")["computers"] if r["label"] == "New Mac")["update"]["starts"]
         == "not_reported"
     )
+    # A heartbeat with no release report at all (a runner that has not yet read runners/desired) is not reported either.
+    report(api, old, "0.3.0", entry="runner_support")
+    post(
+        api,
+        "runners/heartbeat",
+        {"version": "test", "platform": "test", "readiness": {"ops": True}},
+        token=old["token"],
+    )
+    assert next(r for r in get(api, "computers")["computers"] if r["label"] == "Old Mac")["update"]["starts"] == (
+        "not_reported"
+    )
+    # Only the exact clear value is clear: anything else stored (a value from a later release) is not reported.
+    assert runner_versions.starts({"entry": "x"}, True)["starts"] == "not_reported"
     # A value the server does not know is refused, not stored.
     refused = api.post(
         "/api/v2/runners/heartbeat",

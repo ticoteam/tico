@@ -348,11 +348,16 @@ def view(row, server=None):
     }
 
 
+def forget_entry(c, runner_id):
+    """A heartbeat that reported no release (so no `entry`): how this runner starts is not known now."""
+    c.execute("UPDATE runner_versions SET entry='' WHERE runner_id=? AND entry!=''", (runner_id,))
+
+
 def starts(row, online):
     """How this computer's runner starts, from its stored version row: old_package, runner_support or not_reported (no
     row, a report without `entry`, or offline now)."""
-    entry = (row or {}).get("entry") or ""
-    found = "not_reported" if not online or not entry else "old_package" if entry == "runner" else "runner_support"
+    entry = (row or {}).get("entry") if online else ""
+    found = {"runner": "old_package", "runner_support": "runner_support"}.get(entry or "", "not_reported")
     return {"starts": found, "starts_label": STARTS[found]}
 
 

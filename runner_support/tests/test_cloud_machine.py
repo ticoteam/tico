@@ -496,6 +496,17 @@ def test_each_boot_records_whether_it_came_through_the_old_runner_package(machin
     m, _ = machine()
     assert cm.boot(m, {}) == 0
     assert (machine.etc / "tico" / "boot-entry").read_text() == "runner_support\n"
+
+    # A boot that cannot write its record leaves none, never the last boot's: the runner then reports not reported.
+    def full(path, text, mode):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(cm, "write_root_file", full)
+    m, _ = machine()
+    assert cm.boot(m, {"TICO_RUNNER_SHIM": "1"}) == 0
+    assert not (machine.etc / "tico" / "boot-entry").exists()
+    assert any("could not record how this boot started" in line for line in machine.said)
+    monkeypatch.undo()
     # The boot service's own start hands the word to boot() and takes it out of what boot starts.
     monkeypatch.setenv("TICO_RUNNER_SHIM", "1")
     for key in (cm.TOKEN, cm.HUB, cm.FILE):
