@@ -129,7 +129,11 @@ pub fn entry() -> Option<&'static str> {
     }
     // Clear only with the unit's own word for it: a record left from before is no proof when the unit is gone,
     // unreadable or names something else.
-    let unit_clear = unit.contains("-m runner_support.cloud_machine");
+    // ... on the line systemd runs, never a comment.
+    let unit_clear = unit.lines().any(|line| {
+        line.trim_start().starts_with("ExecStart=")
+            && line.contains("-m runner_support.cloud_machine")
+    });
     match std::fs::read_to_string(etc.join("tico/boot-entry"))
         .as_deref()
         .map(str::trim)
@@ -2568,6 +2572,12 @@ scope['main'](sys.argv[1:])
         assert_eq!(said(&f), None);
         // ... nor with a unit that names neither module.
         std::fs::write(&unit, "[Service]\nExecStart=/bin/true\n").unwrap();
+        assert_eq!(said(&f), None);
+        std::fs::write(
+            &unit,
+            "[Service]\n# was: /py -m runner_support.cloud_machine boot\nExecStart=/bin/true\n",
+        )
+        .unwrap();
         assert_eq!(said(&f), None);
         std::fs::write(
             &unit,

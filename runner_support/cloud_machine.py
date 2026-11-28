@@ -399,8 +399,10 @@ OLD_EXEC, NEW_EXEC = "-m runner.cloud_machine", "-m runner_support.cloud_machine
 
 
 def unit_moved(text: str) -> bool:
-    """Whether a boot unit's next start goes through runner_support, never the old package."""
-    return NEW_EXEC in text and OLD_EXEC not in text
+    """Whether a boot unit's next start goes through runner_support, never the old package: an ExecStart= line names
+    it (systemd ignores a comment), and the old module appears nowhere."""
+    runs = (line.strip() for line in text.splitlines())
+    return OLD_EXEC not in text and any(line.startswith("ExecStart=") and NEW_EXEC in line for line in runs)
 
 
 def move_unit_now(m: Machine, unit_dir: Path | None = None) -> int:
