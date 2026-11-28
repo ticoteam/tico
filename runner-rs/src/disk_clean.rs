@@ -24,6 +24,7 @@
 //! their own) or for a person.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -168,12 +169,32 @@ pub trait Sessions: Send + Sync + 'static {
 
 /// Bytes removing `path` would free on the volume `workspace` is on; 0, so it is kept, for anything on another
 /// volume, a symlink, or a tree holding a mount point or a live file (socket, pipe, device): a recursive removal
-/// would reach into the mounted volume.
+/// would reach into the mounted volume. A mount point the volume check cannot see (a bind mount from the same
+/// volume) is found in the mount table, and a tree with a folder or entry that could not be read is kept too.
 pub fn size_on(path: &Path, workspace: &Path) -> u64 {
+    let table = if cfg!(target_os = "linux") {
+        std::fs::read_to_string("/proc/self/mountinfo").ok()
+    } else {
+        Some(String::new())
+    };
+    size_with_mounts(path, workspace, table.as_deref())
+}
+
+/// `size_on` with the mount table's text (`/proc/self/mountinfo` lines); None, when it could not be read, keeps it.
+fn size_with_mounts(path: &Path, workspace: &Path, table: Option<&str>) -> u64 {
+    let Some(table) = table else {
+        return 0;
+    };
     match (device(path), real_root(workspace).and_then(|w| device(&w))) {
         (Some(d), Some(w)) if d == w && !is_symlink(path) => {
+            let Ok(real) = path.canonicalize() else {
+                return 0;
+            };
+            if mount_points(table).any(|m| m.starts_with(&real)) {
+                return 0;
+            }
             let tree = walk(path, w);
-            if tree.mount || tree.special {
+            if tree.mount || tree.special || tree.unread {
                 0
             } else {
                 tree.bytes
@@ -181,6 +202,34 @@ pub fn size_on(path: &Path, workspace: &Path) -> u64 {
         }
         _ => 0,
     }
+}
+
+/// The mount point of each line of a `/proc/self/mountinfo` text (its fifth field, octal escapes undone).
+fn mount_points(table: &str) -> impl Iterator<Item = PathBuf> + '_ {
+    table.lines().filter_map(|line| {
+        let field = line.split(' ').nth(4)?;
+        let mut out = Vec::with_capacity(field.len());
+        let b = field.as_bytes();
+        let mut i = 0;
+        while i < b.len() {
+            let octal = b.get(i + 1..i + 4).and_then(|d| {
+                std::str::from_utf8(d)
+                    .ok()
+                    .and_then(|d| u8::from_str_radix(d, 8).ok())
+            });
+            match (b[i], octal) {
+                (b'\\', Some(c)) => {
+                    out.push(c);
+                    i += 4;
+                }
+                (c, _) => {
+                    out.push(c);
+                    i += 1;
+                }
+            }
+        }
+        Some(PathBuf::from(std::ffi::OsString::from_vec(out)))
+    })
 }
 
 /// Where the clean-up may look, and what it must leave.
@@ -225,6 +274,8 @@ struct Tree {
     mount: bool,
     /// A `.git` in it: a checkout, never a leftover.
     git: bool,
+    /// A folder or entry in it could not be read: what it holds is unknown.
+    unread: bool,
 }
 
 impl Tree {
@@ -269,11 +320,13 @@ fn walk(root: &Path, dev: u64) -> Tree {
             }
         } else if kind.is_dir() {
             let Ok(entries) = std::fs::read_dir(&path) else {
+                tree.unread = true;
                 continue;
             };
-            for entry in entries.flatten() {
-                if let Ok(m) = entry.path().symlink_metadata() {
-                    stack.push((entry.path(), m));
+            for entry in entries {
+                match entry.and_then(|e| e.path().symlink_metadata().map(|m| (e.path(), m))) {
+                    Ok(found) => stack.push(found),
+                    Err(_) => tree.unread = true,
                 }
             }
         }
@@ -1642,6 +1695,53 @@ mod tests {
             size_on(&root.join("ws/sessions/bot-qa/t1"), &root.join("ws")),
             0
         );
+    }
+
+    #[test]
+    fn a_size_keeps_a_tree_under_a_mount_point_of_the_same_volume_or_with_a_folder_it_cannot_read()
+    {
+        let (_g, root) = temp("bind");
+        let tree = root.join("ws/sessions/bot-qa/t1");
+        file(&tree.join("target/big.bin"), 8192);
+        let ws = root.join("ws");
+        let real = tree.canonicalize().unwrap();
+        let line =
+            |at: &str| format!("36 29 8:1 /src {at} rw,relatime shared:1 - ext4 /dev/sda1 rw\n");
+        // Elsewhere in the table, a sibling folder whose name starts the same included: counted.
+        let elsewhere = line("/") + &line(&format!("{}0/target", real.display()));
+        assert!(size_with_mounts(&tree, &ws, Some(&elsewhere)) >= 8192);
+        // A bind mount at a build folder in it, on the same volume so the device check cannot see it: kept.
+        let bound = line(&format!("{}/target", real.display()));
+        assert_eq!(size_with_mounts(&tree, &ws, Some(&bound)), 0);
+        // The table escapes a space in a path: a worktree whose name has one is still matched.
+        let spaced = root.join("ws/sessions/bot-qa/t 2");
+        file(&spaced.join("target/big.bin"), 8192);
+        let escaped = spaced
+            .canonicalize()
+            .unwrap()
+            .display()
+            .to_string()
+            .replace(' ', "\\040");
+        assert_eq!(
+            size_with_mounts(&spaced, &ws, Some(&line(&format!("{escaped}/target")))),
+            0
+        );
+        // A mount table that cannot be read keeps everything.
+        assert_eq!(size_with_mounts(&tree, &ws, None), 0);
+        // A folder it cannot open (unless this user reads everything anyway).
+        let locked = tree.join("locked");
+        std::fs::create_dir_all(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::os::unix::fs::PermissionsExt::from_mode(0o000))
+            .unwrap();
+        let readable = std::fs::read_dir(&locked).is_ok();
+        let size = size_with_mounts(&tree, &ws, Some(""));
+        std::fs::set_permissions(&locked, std::os::unix::fs::PermissionsExt::from_mode(0o700))
+            .unwrap();
+        if readable {
+            assert!(size >= 8192);
+        } else {
+            assert_eq!(size, 0);
+        }
     }
 
     #[test]

@@ -96,7 +96,7 @@ anyone. It removes only what nothing can still need, in this order, and stops on
 5. Session worktrees (`sessions/bot-<slug>/<task>`, [Sessions](sessions.md)) of open tasks whose bot has had no turn
    in that task's lane on this computer for 24 hours, other bots' tasks first, then the longest idle. One goes only
    when no turn of its bot is in its lane or on its task (checked again once its checkout's Git lock is held),
-   nothing in it is a mount point or a live socket, pipe or device, no file in it waits to upload (an upload queue
+   nothing in it is a mount point (a same-volume bind mount included) or a live socket, pipe or device, and every folder in it could be read, no file in it waits to upload (an upload queue
    that cannot be read counts as waiting), and Git shows no change, no commit that is on no remote on HEAD or on its
    `tico-session/<task>` branch, and no ignored file outside build folders; its branch goes with it. The next turn on
    the task checks it out again. A server that does not say a task's owner and last turn keeps them all.
