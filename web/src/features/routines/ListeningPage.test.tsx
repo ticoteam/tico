@@ -275,4 +275,25 @@ describe('One watch', () => {
     show('/company/listening?watch=w1&match=m120');
     expect(await screen.findByText('Text of post 120')).toBeTruthy();
   });
+
+  it('a later page that fails keeps the loaded matches, stops reading on, and Try again reads it', async () => {
+    const at = (n: number) => new Date(Date.now() - (n < 100 ? 3 : 0) * 86_400_000).toISOString();
+    const match = (n: number) => ({ id: `m${n}`, source: 'r1', site: 'Reddit', title: `Post ${n}`, text: `Text of post ${n}`, status: 'kept', created_at: at(n), posted_at: at(n) });
+    let second = 0;
+    record((u) => {
+      if (!u.includes('/listening/items')) return nothing();
+      if (!u.includes('cursor=c100')) return ok({ items: Array.from({ length: 100 }, (_, i) => match(i)), total: 150, counts: { kept: 150 }, next_cursor: 'c100' });
+      return second++ ? ok({ items: Array.from({ length: 50 }, (_, i) => match(100 + i)), total: 150, counts: { kept: 150 }, next_cursor: null }) : { status: 503, body: { error: { code: 'busy', detail: 'busy' } } };
+    });
+    queryClient.setQueryData(watchQuery('w1').queryKey, watch());
+    show('/company/listening?watch=w1&match=m120');
+    const retry = await screen.findByRole('button', { name: 'Try again' });
+    expect(screen.getByText('Post 5')).toBeTruthy();
+    expect(screen.getByText('Showing 100 of 150')).toBeTruthy();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(second).toBe(1);
+    fireEvent.click(retry);
+    expect(await screen.findByText('Text of post 120')).toBeTruthy();
+    expect(second).toBe(2);
+  });
 });

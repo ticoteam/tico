@@ -151,11 +151,12 @@ function WatchPage({ id, tab, match }: { id: string; tab?: 'sources'; match?: st
   const listed = useQuery(watchesQuery).data?.find((w) => w.id === id);
   const matches = useInfiniteQuery({ ...matchesQuery(id), enabled: tab !== 'sources' });
   // A link to a match past the loaded pages reads on, a page at a time, until that match is loaded or the list ends.
+  // A page that fails stops it: Try again under the list reads that page again.
   const unread = !!match && tab !== 'sources' && !matches.data?.pages.some((p) => p.items.some((m) => m.id === match));
-  const { hasNextPage, isFetching, fetchNextPage } = matches;
+  const { hasNextPage, isFetching, isFetchNextPageError, fetchNextPage } = matches;
   useEffect(() => {
-    if (unread && hasNextPage && !isFetching) void fetchNextPage();
-  }, [unread, hasNextPage, isFetching, fetchNextPage]);
+    if (unread && hasNextPage && !isFetching && !isFetchNextPageError) void fetchNextPage();
+  }, [unread, hasNextPage, isFetching, isFetchNextPageError, fetchNextPage]);
   const w = one.data ?? listed;
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -180,7 +181,7 @@ function WatchPage({ id, tab, match }: { id: string; tab?: 'sources'; match?: st
   return (
     <RecordPage
       {...head}
-      state={tab === 'sources' ? 'ready' : matches.isPending ? 'loading' : matches.isError ? 'fault' : found.length ? 'ready' : 'empty'}
+      state={tab === 'sources' ? 'ready' : matches.isPending ? 'loading' : matches.isError && !found.length ? 'fault' : found.length ? 'ready' : 'empty'}
       reads={[matches]}
       empty={{ title: 'No matches yet' }}
       actions={
@@ -229,7 +230,7 @@ function Matches({ id, list, open, read }: { id: string; list: Match[]; open?: s
     <>
       {groups.map(([d, ms]) => (
         <Section key={d} name={d} count={read.hasNextPage ? undefined : ms.length} target={`section:${d}`}>
-          <Rows label={d} items={ms} getKey={(m) => m.id} draw={(m) => (m.id === open ? <MatchOpen key={m.id} watch={id} m={m} /> : <MatchRow key={m.id} watch={id} m={m} />)} />
+          <Rows label={d} items={ms} getKey={(m) => m.id} at={open} draw={(m) => (m.id === open ? <MatchOpen key={m.id} watch={id} m={m} /> : <MatchRow key={m.id} watch={id} m={m} />)} />
         </Section>
       ))}
       {paged && (
