@@ -182,7 +182,8 @@ vi.mock('@/features/tasks/routing', async () => {
   };
 });
 vi.mock('@/features/team/exports', () => ({
-  TeammateChat: () => null,
+  TeammateChat: ({ who }: { who: string }) => <p>chat with {who}</p>,
+  ChatWindowChat: ({ who }: { who: string }) => <p>chat with {who}</p>,
   AddTeammate: ({ team }: { team: string }) => <p>add teammate onto {team}</p>,
   TeamAccess: () => null,
 }));
@@ -405,6 +406,30 @@ describe('the root', () => {
     expect(screen.queryByText('call bar')).toBeNull();
   });
 
+  it('draws an agent’s chat window as that chat alone, under its face and name: no Tico, menu or frame', async () => {
+    people(MAYA, QA);
+    show('/team/qa?window=1');
+    expect(await screen.findByText('chat with qa')).toBeTruthy();
+    expect(document.querySelector('.shell-chatwin>.side-head>b')?.textContent).toBe('QA Owner');
+    expect(document.querySelector('.shell-frame')).toBeNull();
+    expect(screen.queryByRole('navigation', { name: 'Main' })).toBeNull();
+    expect(screen.queryByRole('complementary', { name: 'Tico' })).toBeNull();
+    await waitFor(() => expect(document.title).toBe('QA Owner · Tico'));
+  });
+
+  it('in the desktop app, an agent’s chat window reports nothing for the company: its main window does', async () => {
+    const t = fakeDesktop();
+    people(MAYA, QA);
+    // the company is known already, so a main window reports it the moment who is signed in is read
+    queryClient.setQueryData(['config'], { company_name: 'Fernhill', app_name: 'Tico', visual_origin: 'https://files.example.com' });
+    show('/team/qa?window=1');
+    expect(await screen.findByText('chat with qa')).toBeTruthy();
+    await waitFor(() => expect(queryClient.getQueryState(['me'])?.status).toBe('success'));
+    await waitFor(() => expect(document.title).toBe('QA Owner · Tico'));
+    expect(t.companies.reportSelf).not.toHaveBeenCalled();
+    expect(t.setBadge).not.toHaveBeenCalled();
+  });
+
   it('draws a teammate’s chat as the second chat beside the page, from ?chat= @s1192', async () => {
     people(MAYA, QA);
     show('/?chat=bot:qa');
@@ -432,6 +457,23 @@ describe('the root', () => {
     expect(nav.getByRole('link', { name: 'Engineering Manager' }).getAttribute('href')).toBe('/');
     expect(await nav.findByRole('link', { name: 'QA Owner' })).toBeTruthy();
     expect(nav.queryByRole('link', { name: 'Assistant' })).toBeNull();
+    localStorage.clear();
+  });
+
+  // An older desktop app sends a new window to the system browser, which has no sign-in: no mark there at all.
+  it.each([
+    ['a browser', (): void => undefined, true],
+    ['the desktop app with chat windows', () => Object.assign(fakeDesktop(), { chatWindow: { open: vi.fn() } }), true],
+    ['an older desktop app without them', () => fakeDesktop(), false],
+  ] as const)('in %s, an agent’s menu row offers its chat in a new window only where one can open', async (_where, setUp, offered) => {
+    localStorage.clear();
+    setUp();
+    const qa = { ...QA, reportsTo: 'human:maya' };
+    queryClient.setQueryData(['directory'], { actors: [MAYA, qa], byId: { [MAYA.id]: MAYA, [qa.id]: qa }, teams: [] });
+    show('/');
+    const nav = within(await screen.findByRole('navigation', { name: 'Main' }));
+    expect(await nav.findByRole('link', { name: 'QA Owner' })).toBeTruthy();
+    expect(!!nav.queryByRole('button', { name: 'Open QA Owner in new window' })).toBe(offered);
     localStorage.clear();
   });
 

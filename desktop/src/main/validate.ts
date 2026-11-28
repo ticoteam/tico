@@ -20,6 +20,12 @@ export function callIdArg(v: unknown): string {
   return v;
 }
 
+/** An agent's slug, as its page address carries it: letters, digits, '-' and '_' only. */
+export function agentArg(v: unknown): string {
+  if (typeof v !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(v)) throw new BadArgument('agent');
+  return v;
+}
+
 export function countArg(v: unknown): number {
   if (typeof v !== 'number' || !Number.isInteger(v) || v < 0 || v > 99999) throw new BadArgument('count');
   return v;

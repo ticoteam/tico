@@ -99,6 +99,8 @@ export interface MenuProps {
   onCall?: () => void;
   /* the Threads tab's ⋯: its one item, Automations (filters are automations, in Routines) */
   onAutomations?: () => void;
+  /* an agent row's new-window mark, on hover: its chat opens in its own window and this page stays */
+  onPopOut?: (m: MenuMate) => void;
 }
 
 const ROWS: { id: MenuRowId; label: string; icon: IconName }[] = [
@@ -399,6 +401,11 @@ export function Menu(p: MenuProps) {
      chevron (with the count of everyone underneath while folded) opens or folds their reports. A team that has no
      row of its own to sit on is a row that opens and folds wherever it is pressed. A row that heads a team carries
      the team's Add teammate, Rules and Access on its ⋯, a right click or a long press. */
+  /* the phone has no windows: no mark there */
+  const pop = (m: MenuMate) =>
+    p.onPopOut && m.kind === 'agent' && !phone ? (
+      <IconButton icon="popout" label={`Open ${m.name} in new window`} size="sm" quiet className="tree-pop" onClick={() => p.onPopOut?.(m)} />
+    ) : null;
   const row = (n: MenuNode): ReactNode => {
     const open = n.kids.length > 0 && isOpen(n.key);
     // the team the address names: the rows that stand for it are lit
@@ -451,6 +458,7 @@ export function Menu(p: MenuProps) {
               {n.mate.needs ? <Asks /> : null}
             </Link>,
           )}
+          {pop(n.mate)}
           {more}
           {n.kids.length ? (
             <button

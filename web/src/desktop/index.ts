@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react';
+import { useSyncExternalStore, type MouseEvent } from 'react';
 
 /* Its own folder, below the shell, so a feature (Settings' rows, the call page) can read it too.
    The desktop app's bridge, `window.tico` (desktop/src/bridge.d.ts, mirrored here so web/ imports nothing from desktop/).
@@ -9,6 +9,8 @@ export type DesktopPlatform = 'mac' | 'windows' | 'linux';
 export type UpdateState = { state: 'none' | 'downloading' | 'ready' | 'error'; version?: string };
 /** 'return': the person closed the small window and chose to go back to the call in the main window. */
 export type CallWindowState = 'open' | 'closed' | 'return';
+/** 'full': the app already holds as many chat windows as it allows for this company; none opened. */
+export type ChatWindowResult = 'open' | 'full';
 export type CompanyRef = { id: string; origin: string; name: string; email: string; active: boolean; self: boolean; signedOut: boolean; needs: number };
 
 export interface TicoDesktop {
@@ -32,6 +34,11 @@ export interface TicoDesktop {
     onState(cb: (s: CallWindowState) => void): () => void;
     /** Optional: an older app has no such call (the page comes from the server, the shell updates on its own). */
     current?(): Promise<string | null>;
+  };
+  /** Optional: an older app has no such call. An agent's chat in its own window (one per agent; opening it again
+      brings it forward). */
+  chatWindow?: {
+    open(agent: string): Promise<ChatWindowResult>;
   };
   signingOut?(): Promise<void>;
   app: {
@@ -246,6 +253,68 @@ export async function followFromSmallWindow(link: SmallWindowLink): Promise<void
   const t = desktop();
   const me = t && (await t.companies.list()).find((c) => c.self);
   if (t && me) await t.companies.switchTo(me.id, link.url);
+}
+
+/** A small window's click handler (the call window's chat, an agent's chat window): a link never moves the window off
+    what it shows. A file chip opens as it does anywhere (a picture in the viewer, anything else in a new window). */
+export function keepInSmallWindow(e: MouseEvent<HTMLElement>): void {
+  const a = e.target instanceof Element ? e.target.closest('a[href]') : null;
+  if (!a || !e.currentTarget.contains(a)) return;
+  const link = smallWindowLink(a.getAttribute('href') ?? '', location.origin);
+  if (link.kind === 'file' && a.getAttribute('target') === '_blank') return;
+  e.preventDefault();
+  e.stopPropagation();
+  void followFromSmallWindow(link);
+}
+
+/* ---------------------------------------------------------------- an agent's chat in its own window */
+
+const CHAT_PATH = /^(?:\/next)?\/team\/([^/]+)\/?$/;
+
+/** This page is an agent's chat window: `/team/<agent>?window=1`. It draws that chat alone, with no menu or Tico. */
+export const isChatWindow = (pathname: string, search: string): boolean =>
+  CHAT_PATH.test(pathname) && new URLSearchParams(search).get('window') === '1';
+
+/** The agent a chat window's address names. */
+export const chatWindowWho = (pathname: string): string => decodeURIComponent(CHAT_PATH.exec(pathname)?.[1] ?? '');
+
+/** How the chat opened: the desktop app's own window, a browser window, a new tab (the browser blocked a window), or
+    not at all: the desktop app holds as many as it allows ('full'), the browser blocked the tab too ('blocked'), or an
+    older desktop app cannot ('unavailable', `canOpenChatWindow`). */
+export type ChatWindowOpened = 'desktop' | 'window' | 'tab' | 'full' | 'blocked' | 'unavailable';
+
+/** Inside the retired Tauri desktop app (app/, deleted from the code but maybe still installed): its bridge is
+    `window.ticoNative`, and it has no `window.tico`. */
+const inTauriApp = (): boolean => typeof window !== 'undefined' && !desktop() && (window as { ticoNative?: unknown }).ticoNative != null;
+
+/** Whether this page can open an agent's chat in its own window. A browser can; the desktop app only with its
+    chatWindow call. An older desktop app (Electron without the call, or the Tauri app) cannot: it sends a new window
+    to the system browser, which has none of the app's sign-in, so the control is hidden there. */
+export const canOpenChatWindow = (): boolean => {
+  const t = desktop();
+  return t ? !!t.chatWindow : !inTauriApp();
+};
+
+/** Opens an agent's chat in its own window. The desktop app opens and keeps its own; a browser gets one window per
+    agent, by name, so opening it again brings that window forward without loading it again. */
+export async function openChatWindow(agent: string): Promise<ChatWindowOpened> {
+  const t = desktop();
+  if (t?.chatWindow) return (await t.chatWindow.open(agent)) === 'full' ? 'full' : 'desktop';
+  if (!canOpenChatWindow()) return 'unavailable';
+  const url = `${window.location.origin}/team/${encodeURIComponent(agent)}?window=1`;
+  // An empty address finds the window of that name, or makes a blank one.
+  const win = window.open('', `tico-chat-${agent.replace(/[^\w-]/g, '_')}`, 'popup,width=420,height=720');
+  if (!win) return window.open(url, '_blank') ? 'tab' : 'blocked';
+  // A blank one, or one a link took away from the chat (another origin reads as unknown), is sent to the chat.
+  let at = '';
+  try {
+    at = win.location.href;
+  } catch {
+    /* another origin's page */
+  }
+  if (at !== url) win.location.href = url;
+  win.focus();
+  return 'window';
 }
 
 /* ---------------------------------------------------------------- sign-out */

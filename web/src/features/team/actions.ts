@@ -2,6 +2,7 @@ import * as z from 'zod/mini';
 import { defineAction, refusalFor, toldOf, type Ctx } from '@/actions';
 import { ApiError } from '@/api/client';
 import { directoryQuery } from '@/data';
+import { openChatWindow } from '@/desktop';
 import { toast } from '@/kit/Toast';
 import {
   addAgent,
@@ -100,6 +101,27 @@ export const openTeammate = defineAction({
       input: { who: a.kind === 'agent' && a.slug ? a.slug : a.id.slice(a.id.indexOf(':') + 1) },
       title: `Open ${a.name}`,
     })),
+});
+
+/** An agent's chat in its own window, apart from the main one, which stays where it is. The person's own press only:
+    a window opens on a click, and Tico never opens windows on someone's screen. */
+export const popOutChat = defineAction({
+  id: 'team.popOut',
+  title: "Open an agent's chat in a new window",
+  kind: 'view',
+  tico: false,
+  input: z.strictObject({ who: slug }),
+  run: async (_ctx, { who }) => {
+    const opened = await openChatWindow(who);
+    if (opened === 'tab') toast({ text: 'Your browser blocked a new window, so the chat opened in a new tab' });
+    if (opened === 'full') toast({ text: 'Close a chat window first: six are open', kind: 'failed' });
+    if (opened === 'blocked') toast({ text: 'Your browser blocked the new window. Allow pop-ups for Tico and try again', kind: 'failed' });
+    if (opened === 'unavailable') toast({ text: 'Update the desktop app to open a chat in its own window', kind: 'failed' });
+    // the usage event is the window's own, sent when it first loads (chatWindowUsage.ts): bringing one forward is no new window
+    return opened;
+  },
+  did: (_input, opened) =>
+    opened === 'desktop' || opened === 'window' || opened === 'tab' ? 'Opened the chat in a new window' : 'No new window opened',
 });
 
 export const ADD_STEPS = ['pick', 'new', 'template', 'person', 'cloud'] as const;
