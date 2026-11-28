@@ -1006,6 +1006,7 @@ def register_placement(
         # One pass for every computer's turn counts and load (not one summary and one load per computer).
         turn_counts = summaries(c, [r["id"] for r in runners], settings, limits)
         loads = load_statuses(c, [r["id"] for r in runners])
+        entries = runner_versions.entries(c)
         for r in runners:
             counts = turn_counts[r["id"]]
             turns = {"turn_counts": counts, "turn_summary": describe_turns(counts)}
@@ -1044,7 +1045,7 @@ def register_placement(
                     **turns,
                 }
             )
-            rows[-1]["update"].update(runner_versions.starts(runner_versions.load(c).get(r["id"]), r["id"] in online))
+            rows[-1]["update"].update(runner_versions.starts(entries.get(r["id"]), r["id"] in online))
         return rows
 
     register(

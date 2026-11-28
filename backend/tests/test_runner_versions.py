@@ -521,7 +521,7 @@ def test_computers_show_which_start_through_the_old_runner_package(api):
         "not_reported"
     )
     # Only the exact clear value is clear: anything else stored (a value from a later release) is not reported.
-    assert runner_versions.starts({"entry": "x"}, True)["starts"] == "not_reported"
+    assert runner_versions.starts("x", True)["starts"] == "not_reported"
     # A value the server does not know is refused, not stored.
     refused = api.post(
         "/api/v2/runners/heartbeat",

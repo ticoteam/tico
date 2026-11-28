@@ -105,9 +105,8 @@ def record(c, runner_id, body):
         moved = before["update_changed_at"] or before["update_since"] or now
     c.execute(
         "INSERT INTO runner_versions(runner_id,release,kind,update_state,update_target,update_error,reported_at,"
-        "commit_sha,update_since,update_running,update_handed_back,update_changed_at,entry) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) "
-        "ON CONFLICT(runner_id) DO UPDATE SET release=excluded.release,kind=excluded.kind,entry=excluded.entry,"
+        "commit_sha,update_since,update_running,update_handed_back,update_changed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(runner_id) DO UPDATE SET release=excluded.release,kind=excluded.kind,"
         "update_state=excluded.update_state,update_target=excluded.update_target,update_error=excluded.update_error,"
         "reported_at=excluded.reported_at,commit_sha=excluded.commit_sha,update_since=excluded.update_since,"
         "update_running=excluded.update_running,update_handed_back=excluded.update_handed_back,"
@@ -125,9 +124,16 @@ def record(c, runner_id, body):
             running,
             handed_back,
             moved,
-            body.entry or "",
         ),
     )
+    if body.entry:
+        c.execute(
+            "INSERT INTO runner_entries(runner_id,entry,reported_at) VALUES(?,?,?) ON CONFLICT(runner_id) DO UPDATE SET "
+            "entry=excluded.entry,reported_at=excluded.reported_at WHERE entry IS NOT excluded.entry",
+            (runner_id, body.entry, now),
+        )
+    else:
+        forget_entry(c, runner_id)
     nudge(c, runner_id)
 
 
@@ -349,15 +355,20 @@ def view(row, server=None):
 
 
 def forget_entry(c, runner_id):
-    """A heartbeat that reported no release (so no `entry`): how this runner starts is not known now."""
-    c.execute("UPDATE runner_versions SET entry='' WHERE runner_id=? AND entry!=''", (runner_id,))
+    """A heartbeat without `entry` (or without a release at all): how this runner starts is not known now."""
+    c.execute("DELETE FROM runner_entries WHERE runner_id=?", (runner_id,))
 
 
-def starts(row, online):
-    """How this computer's runner starts, from its stored version row: old_package, runner_support or not_reported (no
-    row, a report without `entry`, or offline now)."""
-    entry = (row or {}).get("entry") if online else ""
-    found = {"runner": "old_package", "runner_support": "runner_support"}.get(entry or "", "not_reported")
+def entries(c):
+    """{runner_id: entry} as each computer last reported it."""
+    return {r["runner_id"]: r["entry"] for r in c.execute("SELECT runner_id,entry FROM runner_entries")}
+
+
+def starts(entry, online):
+    """How a computer's runner starts, from its reported entry: old_package, runner_support or not_reported (no
+    report, or offline now)."""
+    found = {"runner": "old_package", "runner_support": "runner_support"}.get((entry or "") if online else "")
+    found = found or "not_reported"
     return {"starts": found, "starts_label": STARTS[found]}
 
 
