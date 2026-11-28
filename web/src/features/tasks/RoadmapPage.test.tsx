@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { keys, queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
+import { nearEnd, watchNear } from '@/test/near';
 import { listParams, pipelinesQuery, shelfParams, type Pipeline, type Requester, type TaskItem } from './queries';
 import { RequestersDialog } from './Requesters';
 import { RoadmapPage } from './RoadmapPage';
@@ -103,6 +104,27 @@ describe('Roadmap @s2', () => {
     fireEvent.click(within(shipped).getByRole('button', { name: 'Shipped' }));
     fireEvent.click(within(shipped).getByRole('button', { name: 'More tasks' }));
     expect(await within(shipped).findByRole('link', { name: /Export receipts/ })).toBeTruthy();
+  });
+
+  it('past 12 rows a horizon shows every feature, and the next page of open features comes in as its end nears @3535', async () => {
+    watchNear();
+    const reads: string[] = [];
+    serve((url) => {
+      if (!url.includes('after=next')) return { status: 200, body: {} };
+      reads.push(url);
+      return { status: 200, body: { tasks: [task('n1', 99, 'Feature from the next page', 'build')], cursor: 'c2' } };
+    });
+    seed([]);
+    const open = Array.from({ length: 20 }, (_, i) => task(`b${i}`, i + 1, `Feature ${i + 1}`, 'build'));
+    queryClient.setQueryData(keys.tasks.list(listParams('feat', {})), { tasks: open, cursor: 'c1', next_after: 'next' });
+    show(<RoadmapPage search={{}} />, '/roadmap');
+    await screen.findByText('Feature 20');
+    expect(screen.getAllByText(/^Feature \d+$/)).toHaveLength(20);
+    expect(screen.queryByRole('button', { name: /^\d+\+? more$|^More tasks$/ })).toBeNull();
+    expect(reads).toEqual([]);
+    await nearEnd();
+    expect(await screen.findByText('Feature from the next page')).toBeTruthy();
+    expect(reads).toHaveLength(1);
   });
 
   it('shows the Features pipeline as Now, Next and Later, with Shipped drawn shut', async () => {

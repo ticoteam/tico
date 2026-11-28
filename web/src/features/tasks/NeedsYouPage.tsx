@@ -10,7 +10,7 @@ import { Popover, useCards } from '@/kit/Popover';
 import { TaskRow } from '@/kit/Row';
 import { useFollow } from '@/live/follow';
 import { List, ReadFault, Section } from '@/pagekinds';
-import { Capped, LIST_CAP, LIST_SHOW, PHONE_ROW_H, RowMore, ROW_H } from './capped';
+import { AllRows, PHONE_ROW_H, ReadOn, ROW_H } from './capped';
 import { useNeedsYouDrawn } from './needs';
 import { Blocks, Face } from './parts';
 import { flowListParams, flowListQuery, flowOriginQuery, flowQuery, flowSnoozedAsksQuery, flowTask, unsnoozeFlowAsk, useContactNames, useNeedsYouSort, type Flow, type FlowItem, type FlowRequest } from './queries';
@@ -110,29 +110,24 @@ function TaskRows({ items, pages }: { items: readonly FlowItem[]; pages: readonl
   const names = useContactNames(pages);
   return (
     <Section name="Tasks" count={items.length}>
-      <Capped
+      <AllRows
         list={items}
-        cap={LIST_CAP}
-        show={LIST_SHOW}
         height={cards ? PHONE_ROW_H : ROW_H}
         measure={cards}
-        more={undefined}
         draw={(it) => <FlowRow key={it.id} it={it} mine={false} contact={it.entity_id ? names.get(it.entity_id) : undefined} />}
-        moreRow={(n, open) => <RowMore key="more" n={n} onClick={open} />}
       />
     </Section>
   );
 }
 
-function TaskSections({ read }: { read: ReturnType<typeof useFlowList> }) {
+/** `of`: which list `read` is (its query's params), so its end starts over when that changes. */
+function TaskSections({ read, of }: { read: ReturnType<typeof useFlowList>; of: Record<string, string | number> }) {
   const pages = read.data?.pages.map((page) => page.tasks);
   const items = new Map(pages?.flatMap((tasks) => tasks.map((task) => [task.id, flowTask(task)] as const)));
   return (
     <>
       <TaskRows items={[...items.values()]} pages={pages ?? []} />
-      {read.hasNextPage && <Button variant="quiet" disabled={read.isFetching} onClick={() => void read.fetchNextPage()}>
-        {read.isFetchingNextPage ? 'Loading' : read.isFetchNextPageError ? 'Try again' : 'Show more'}
-      </Button>}
+      <ReadOn of={of} more={read.hasNextPage ? () => read.fetchNextPage().then((r) => !r.isFetchNextPageError) : undefined} />
     </>
   );
 }
@@ -151,7 +146,7 @@ function FlowShelf({ owner, shelf }: { owner?: string; shelf: 'snoozed' | 'done'
       </p>
     );
   if (!read.data?.pages[0]?.tasks.length) return <p className="flow-shelf-state">{shelf === 'done' ? 'No done tasks' : 'No snoozed tasks'}</p>;
-  return <TaskSections read={read} />;
+  return <TaskSections read={read} of={flowListParams(owner, shelf)} />;
 }
 
 function SnoozedAsk({ id, title, href, until }: { id: string; title: string; href?: string; until: string }) {
@@ -191,12 +186,11 @@ function SnoozedAsks() {
     button. While Tico sorts it, rows past the top LIVE wait, dimmed. */
 function Mine({ sorting, bare = false }: { sorting: boolean; bare?: boolean }) {
   const flow = useSuspenseQuery(flowQuery).data;
-  const { rows, on, held } = useTicoOrder(flow);
+  const { rows, on } = useTicoOrder(flow);
   const names = useContactNames([flow.items]);
   const cards = useCards();
   const at = new Map(rows.map((row, i) => [row.id, i] as const));
   const firstCard = rows.find((row) => row.request || answersHere(row.task))?.id;
-  const shownTo = held ? (at.get(held) ?? -1) + 1 : 0; // the rows down to the one the person is on stay drawn
   const draw = (row: MineRow) => (
     <div key={row.id} className={sorting && rows.length > LIVE && (at.get(row.id) ?? 0) >= LIVE ? 'flow-item flow-wait' : 'flow-item'}
       onPointerDownCapture={on(row.id)} onFocusCapture={on(row.id)}>
@@ -212,8 +206,7 @@ function Mine({ sorting, bare = false }: { sorting: boolean; bare?: boolean }) {
   );
   // `bare`: inside a section of its own (Tasks' Needs you), with its head
   const list = (
-    <Capped list={rows} cap={Math.max(LIST_CAP, shownTo)} show={Math.max(LIST_SHOW, shownTo)} height={cards ? PHONE_ROW_H : ROW_H} measure more={undefined} draw={draw}
-      moreRow={(n, open) => <RowMore key="more" n={n} onClick={open} />} />
+    <AllRows list={rows} height={cards ? PHONE_ROW_H : ROW_H} measure draw={draw} />
   );
   return (
     <>
@@ -255,7 +248,7 @@ export function NeedsYouPage() {
       reads={[read]}
       className="tasks-page"
       sections={all
-        ? read.data?.pages[0]?.tasks.length ? <TaskSections read={read} /> : <Empty title="No work to claim" />
+        ? read.data?.pages[0]?.tasks.length ? <TaskSections read={read} of={flowListParams(undefined, 'open')} /> : <Empty title="No work to claim" />
         : <Mine sorting={waiting} />}
     />
   );

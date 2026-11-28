@@ -3,7 +3,7 @@
 // and clicks through the app's build as a person does. A journey fails on any page error, console error or API refusal
 // it did not expect. What a click wrote is read back from the server (/_e2e/sql, /_e2e/sent: only that test server has
 // them). Run: `npm run e2e` (builds first), `npm run e2e:repeat` (each journey three times).
-import { expect, test as base, type Browser, type BrowserContextOptions, type Locator, type Page } from '@playwright/test';
+import { expect, test as base, type Browser, type BrowserContext, type BrowserContextOptions, type Locator, type Page } from '@playwright/test';
 import { startSeeded, type Seeded } from './hub/seeded.ts';
 
 const DESKTOP: BrowserContextOptions = { viewport: { width: 1440, height: 900 } };
@@ -27,8 +27,9 @@ const test = base.extend<{ hub: Seeded }>({
 });
 
 /** A page signed in as Dana (the local owner link, as a loopback install signs in), watched from its first load. */
-async function open(browser: Browser, hub: Seeded, at: string, options: BrowserContextOptions = DESKTOP): Promise<Watched> {
+async function open(browser: Browser, hub: Seeded, at: string, options: BrowserContextOptions = DESKTOP, prep?: (context: BrowserContext) => Promise<void>): Promise<Watched> {
   const context = await browser.newContext(options);
+  await prep?.(context);
   const page = Object.assign(await context.newPage(), { problems: [] as string[] });
   page.on('pageerror', (e) => page.problems.push(`page error: ${e.message.slice(0, 300)}`));
   page.on('console', (m) => {
@@ -721,4 +722,102 @@ test("Library: an app page an agent made is marked App in Pages; it opens as a p
   await page.goBack();
   await expect(page.locator('.page-line').filter({ hasText: 'Creative library' })).toBeVisible();
   clean(page);
+});
+
+/* Long lists (task 3535): every task list runs on in its page's own scroll, with no "N more", and reads its next page
+   by itself as its end nears. The server pages these lists 500 at a time (tags too); here its reads are asked for
+   smaller pages, so a few hundred tasks make several pages. */
+/** Reads of the task list and of a tag's tasks, `limit` at a time; `reads` keeps each next page's address. */
+const smallPages = (limit: number, reads: string[]) => async (context: BrowserContext) => {
+  await context.route(/\/api\/v2\/(tasks\?|tags\/[^/?]+($|\?))/, (route) => {
+    const url = new URL(route.request().url());
+    const tasks = url.pathname === '/api/v2/tasks';
+    if (tasks ? url.searchParams.get('limit') !== '500' || url.searchParams.has('status', 'done') : url.searchParams.has('limit')) return route.continue();
+    if (url.searchParams.has('after') || url.searchParams.has('offset')) reads.push(url.pathname + url.search);
+    url.searchParams.set('limit', String(limit));
+    return route.continue({ url: url.toString() });
+  });
+};
+/** Scrolls `scroller` down a screen at a time, gathering each of `rows` drawn on the way (by its `attr`: a long list
+    draws only those near the screen), until it holds `n`: each one was reached. */
+const reachEvery = async (scroller: Locator, rows: Locator, n: number, attr = 'title') => {
+  const seen = new Set<string>();
+  await expect
+    .poll(
+      async () => {
+        for (const t of await rows.evaluateAll((els, a) => els.map((e) => e.getAttribute(a) ?? ''), attr)) seen.add(t);
+        await scroller.evaluate((el) => el.scrollBy(0, el.clientHeight * 0.8));
+        return seen.size;
+      },
+      { timeout: 60_000, intervals: [150] },
+    )
+    .toBe(n);
+};
+/** Nothing in `root` scrolls up and down by itself: a list runs on in its page's scroller, never a box of its own. */
+const noInnerScroll = (root: Locator) =>
+  root.evaluate((top) =>
+    [...top.querySelectorAll('*')]
+      .filter((el) => /auto|scroll/.test(getComputedStyle(el).overflowY) && el.scrollHeight > el.clientHeight + 1)
+      .map((el) => el.className),
+  );
+const MORE = /^\d+\+? more$|^More tasks$|^Show more$/;
+
+test('long lists run on: a stage of 300 in List view and on a phone board, a tag and the roadmap, each next page read by scrolling', async ({ browser, hub }) => {
+  await call(hub, `/_e2e/many?n=300&title=${encodeURIComponent('Long task')}&pipeline=launch`, 'POST');
+  const { tag } = await post<{ tag: { id: string } }>(hub, 'tags', { key: 'bulk', label: 'bulk' });
+  await call(hub, `/_e2e/many?n=30&title=${encodeURIComponent('Tagged task')}&label=bulk`, 'POST');
+  await post(hub, 'pipelines/product', { name: 'Product', prefix: 'PR', goal: 'Features ship.', stages: ['Spec', 'Build', 'QA'].map((name) => ({ name, owner: 'assignee' })) });
+  await call(hub, `/_e2e/many?n=130&title=${encodeURIComponent('Feature')}&pipeline=product`, 'POST');
+  const plan = 2 + 300; // the two the board starts with, and the 300
+
+  // A computer, List view: the 302 run on down the page in its body's scroll; pages two to four come in as it nears the end.
+  let reads: string[] = [];
+  const list = await open(browser, hub, '/tasks/launch?view=list', DESKTOP, smallPages(100, reads));
+  const body = list.locator('.pk-body');
+  await expect(list.locator('[title="Long task 1"]').first()).toBeVisible();
+  await expect(list.getByRole('button', { name: MORE })).toHaveCount(0);
+  await reachEvery(body, list.locator('a.row.task[title]'), plan);
+  expect(reads.filter((r) => r.includes('pipeline=launch')).length, 'pages two to four, each read by scrolling').toBe(3);
+  await expect(list.getByRole('button', { name: MORE })).toHaveCount(0);
+  expect(await noInnerScroll(body)).toEqual([]);
+  // Plan's count is the stage's whole count, not what was read first
+  await expect(list.getByRole('heading', { name: /Plan/ })).toContainText(String(plan));
+  clean(list);
+  await list.context().close();
+
+  // A phone, Board view: the long column fills the screen down to the bar, and scrolling the board shows card after card.
+  reads = [];
+  const phone = await open(browser, hub, '/tasks/launch?view=board', PHONE, smallPages(100, reads));
+  const board = phone.locator('.board');
+  const col = phone.locator('.col[data-target="stage:launch-plan"]');
+  await expect(col.locator('.tk-item[data-task]').first()).toBeVisible();
+  const [b, c, bar] = await Promise.all([board.boundingBox(), col.boundingBox(), phone.locator('.tabbar').boundingBox()]);
+  expect(bar!.y - (b!.y + b!.height), 'the board reaches the bar').toBeLessThanOrEqual(1);
+  expect(c!.y + c!.height, 'the column runs past the bottom of the board, with no empty room under it').toBeGreaterThan(b!.y + b!.height);
+  await phone.screenshot({ path: test.info().outputPath('long-board-390.png') });
+  expect(await noInnerScroll(board)).toEqual([]);
+  await reachEvery(board, col.locator('.tk-item[data-task]'), plan, 'data-task');
+  expect(reads.filter((r) => r.includes('pipeline=launch')).length).toBe(3);
+  await expect(phone.getByRole('button', { name: MORE })).toHaveCount(0);
+  clean(phone);
+  await phone.context().close();
+
+  // A tag's 30 tasks, read 20 at a time: all 30, the last 10 read by scrolling.
+  reads = [];
+  const tagged = await open(browser, hub, `/tags/${tag.id}`, DESKTOP, smallPages(20, reads));
+  await expect(tagged.locator('[title="Tagged task 1"]').first()).toBeVisible();
+  await expect(tagged.getByRole('button', { name: MORE })).toHaveCount(0);
+  await reachEvery(tagged.locator('.pk-body'), tagged.locator('a.row.task[title^="Tagged task "]'), 30);
+  expect(reads.filter((r) => r.startsWith(`/api/v2/tags/${tag.id}`))).toHaveLength(1);
+  clean(tagged);
+  await tagged.context().close();
+
+  // The roadmap's 130 features, read 50 at a time: Now, Next and Later run on, the rest read by scrolling.
+  reads = [];
+  const roadmap = await open(browser, hub, '/roadmap', DESKTOP, smallPages(50, reads));
+  await expect(roadmap.locator('[title="Feature 1"]').first()).toBeVisible();
+  await expect(roadmap.getByRole('button', { name: MORE })).toHaveCount(0);
+  await reachEvery(roadmap.locator('.pk-body'), roadmap.locator('a.row.task[title^="Feature "]'), 130);
+  expect(reads.filter((r) => r.includes('pipeline=product')).length).toBe(2);
+  clean(roadmap);
 });

@@ -15,7 +15,8 @@ Launch task on which the Engineering Lead asks Dana a ❓, two numbered question
 calls it, so the others' Needs you holds the two emails alone) and POST /_e2e/made (a task on which the Engineering Lead
 made a video, two pictures and a page; only the journey that looks at them calls it) and POST /_e2e/turn (an agent's
 next run, as the fake runner runs it: `step=start` claims and starts it and writes the first words of its reply,
-`step=done` completes it with the whole reply, or with none when `text` is empty).
+`step=done` completes it with the whole reply, or with none when `text` is empty) and POST /_e2e/many (a run of
+Dana's tasks in one pipeline, for the journey on long lists).
 """
 
 import base64
@@ -285,6 +286,23 @@ def turns(world):
     _route(world, "/_e2e/turn", turn, ["POST"])
 
 
+def many(world):
+    """POST /_e2e/many?n=...&title=...&pipeline=...&label=...: `n` of Dana's tasks in that pipeline's first stage
+    (General's when none is named), titled "<title> 1" to "<title> n" and tagged `label` when one is named, for the
+    journey on long lists."""
+
+    def make(n: int, title: str, pipeline: str = "", label: str = ""):
+        made = []
+        for i in range(1, n + 1):
+            body = {"title": f"{title} {i}", "owner": DANA_ID, "labels": [label] if label else []}
+            body.update({"pipeline": pipeline} if pipeline else {})
+            task = _ok(world.api("post", "/api/v2/tasks", body, who=DANA), body["title"])
+            made.append(task.get("task", task)["id"])
+        return JSONResponse({"ids": made})
+
+    _route(world, "/_e2e/many", make, ["POST"])
+
+
 def providers(world):
     _ok(
         world.api(
@@ -307,4 +325,5 @@ def seed(world):
     asks(world)
     made(world)
     turns(world)
+    many(world)
     return {"mail": mail(world), "board": board(world), "thread": thread(world)}

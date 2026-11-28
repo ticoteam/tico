@@ -4,7 +4,7 @@ import { Pill } from '@/kit/Pill';
 import { useCards } from '@/kit/Popover';
 import { Row } from '@/kit/Row';
 import { Section } from '@/pagekinds';
-import { Capped, LIST_CAP, LIST_SHOW, PHONE_ROW_H, RowMore, ROW_H } from './capped';
+import { AllRows, PHONE_ROW_H, ReadOn, ROW_H } from './capped';
 import { Face, taskHref } from './parts';
 import { loadMoreOf, shelfParams, shelfQuery, shelfTotal, type Filters, type Pipeline, type Shelf, type TaskItem, type TaskPage } from './queries';
 
@@ -30,19 +30,15 @@ export function ArchivedSections({ p, filters, shelves }: { p: Pipeline; filters
   return SHELVES.map(([shelf, name]) => {
     const page = shelves[shelf];
     if (!page.tasks.length) return null;
-    const cut = !!page.next_after;
     return (
       <Section key={shelf} name={name} count={shelfTotal(page)} target={`archived:${shelf}`}>
-        <Capped
+        <AllRows
           list={page.tasks}
-          cap={LIST_CAP}
-          show={LIST_SHOW}
           height={cards ? PHONE_ROW_H : ROW_H}
           measure={cards}
-          more={cut ? () => void loadMoreOf(shelfParams(p.id, shelf, filters)) : undefined}
           draw={(t) => <ArchRow key={t.id} t={t} p={p} stage={t.stage_id ? names.get(t.stage_id) : undefined} />}
-          moreRow={(n, open) => <RowMore key="more" n={n} cut={cut} onClick={open} />}
         />
+        <ReadOn of={shelfParams(p.id, shelf, filters)} more={page.next_after ? () => loadMoreOf(shelfParams(p.id, shelf, filters)) : undefined} />
       </Section>
     );
   });
