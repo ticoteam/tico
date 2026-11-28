@@ -106,9 +106,10 @@ describe('QuestionCard', () => {
     show(['Yes']);
     fireEvent.click(within(card()).getByRole('button', { name: 'Yes' }));
     expect(await within(card()).findByText('Held')).toBeTruthy();
-    // read again only at the five-minute backstop while it waits (no push carries a hold's decision)
-    const read = queryClient.getQueryCache().find({ queryKey: ['rules', 'holds', 'one', 'h1'] });
-    expect(read?.observers[0]?.options.refetchInterval).toBe(5 * 60_000);
+    // read again only at the five-minute backstop while it waits (no push carries a hold's decision). The card's read
+    // subscribes in an effect after the Held mark is drawn, so wait for it.
+    const interval = () => queryClient.getQueryCache().find({ queryKey: ['rules', 'holds', 'one', 'h1'] })?.observers[0]?.options.refetchInterval;
+    await waitFor(() => expect(interval()).toBe(5 * 60_000));
     expect(HELD_EVERY_MS).toBe(5 * 60_000);
     await heldRead();
     hold = { id: 'h1', state: 'kept' };

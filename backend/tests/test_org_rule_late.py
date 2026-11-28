@@ -90,8 +90,9 @@ def test_writes_under_a_warn_rule_answer_without_waiting_for_the_judge(ruled, mo
     assert sql(api, "SELECT count(*) AS n FROM org_rule_late")[0]["n"] == 0
 
 
-def test_a_broken_warn_rule_puts_todays_line_on_the_saved_comment_and_tells_the_bot(ruled):
-    """AC-2: the line lands on the saved words, the bot gets today's note, and the comment is saved once."""
+def test_a_broken_warn_rule_puts_todays_line_on_the_saved_comment_and_saves_the_break_for_a_person(ruled):
+    """AC-2: the line lands on the saved words and the comment is saved once. The bot gets no note: the break is saved
+    for a person to answer, and their "Yes, block" is what it hears (backend/rule_breaks.py)."""
     api, judge = ruled
     color_rule(api, if_broken="warn")
     task = task_for_ops(api)
@@ -101,8 +102,8 @@ def test_a_broken_warn_rule_puts_todays_line_on_the_saved_comment_and_tells_the_
     mid = made["comment"]["id"]
     assert body_of(api, mid).startswith("Warning:") and body_of(api, mid).endswith(BROKEN)
     assert len(sql(api, "SELECT id FROM messages WHERE body LIKE ?", (f"%{BROKEN}%",))) == 1
-    notes = sql(api, "SELECT body FROM notes WHERE to_actor='bot:ops'")
-    assert any("was delivered with a warning" in n["body"] for n in notes)
+    assert sql(api, "SELECT body FROM notes WHERE to_actor='bot:ops'") == []
+    assert [b["message_id"] for b in sql(api, "SELECT message_id FROM org_rule_breaks")] == [mid]
     assert detail(events(api, "rules.warned"))[-1]["late"] is True
     assert len(judge.calls) == 1
 

@@ -35,6 +35,7 @@ from . import (
     events,
     flight,
     org_rule_check,
+    rule_breaks,
     page_owners,
     reach,
     secret_drop,
@@ -1249,7 +1250,11 @@ def install(app, store, auth, mutate, rule_check):
         )
 
         def work(c):
-            threads._own_say(c, *threads._actor_of(viewer), message_id)
+            own = threads._own_say(c, *threads._actor_of(viewer), message_id)
+            if body.text in (own.get("body"), org_rule_check.unwarned(own.get("body") or "")):
+                # Unchanged words (a warned message's own, without its warning line) are no edit: nothing is checked,
+                # saved or asked again, and the message stays as it is.
+                return _pages_as_read(c, auth, who, _thread_message(own))
             gate = org_rule_check.apply(
                 c,
                 rc,
@@ -1266,6 +1271,7 @@ def install(app, store, auth, mutate, rule_check):
             reach.check_edit(c, who, message_id, body.text, viewer)
             edited = threads.edit_message(c, viewer, message_id, body.text)
             assert edited is not None  # the message just edited
+            rule_breaks.link(c, gate, message=message_id)  # an edit that breaks a Warn rule is asked too
             return {**_pages_as_read(c, auth, who, _thread_message(edited)), **org_rule_check.answer(gate)}
 
         return mutate(request, body, work)
@@ -1801,6 +1807,7 @@ def register_messages(
             return org_rule_check.held_answer(c, who, rule, auth=auth)
         sent = body.model_copy(update={"text": org_rule_check.warned_text(rule, body.text)}) if rule else body
         message = send(c, who, sent)
+        rule_breaks.link(c, rule, message=str(message.get("id") or ""))
         return {**message, **org_rule_check.answer(rule)}
 
     def message_checks(who, body, retry=False, place=None, operation="message"):

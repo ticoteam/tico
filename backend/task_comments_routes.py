@@ -13,6 +13,7 @@ from . import bot_to_bot
 from . import counsel
 from . import delivery
 from . import org_rule_check
+from . import rule_breaks
 from . import question_marks
 from . import task_privacy as privacy
 from . import teammate_access
@@ -290,6 +291,7 @@ def register(
         if named and not question_marks.cleared_by(c, named, msg["id"]):
             raise Problem("answered", question_marks.ANSWERED, 409)  # not cleared by it: write nothing
         org_rule_check.late_on(c, rule, "message", message=msg["id"], task=task_id)
+        rule_breaks.link(c, rule, message=msg["id"], task=task_id)
         if answers and asker:
             # The asker's own delivery was deferred with the rest: its run starts now and carries it.
             delivery.now(c, asker, row["conversation_id"])
