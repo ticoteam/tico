@@ -32,7 +32,7 @@ Done when: usage.md is updated and committed, each new finding below has its one
      A bot at Read refused an MCP tool its server does not mark read-only ("is not marked read-only by its server"):
      when the tool's name and description only read (`get_`, `list_`, `search_`, nothing it creates, changes or
      sends), ask a credential administrator to mark it Only reads (Tools > the tool > What it can do, or `tico tool
-     edit <tool> --only-reads <names>`), naming the tool. Ask for Read and write only when the bot's job writes. Never
+     edit <tool> --only-reads-on <names>`), naming the tool. Ask for Read and write only when the bot's job writes. Never
      mark it yourself.
    - **One bot keeps getting the same vendor 4xx on one endpoint** (3 or more in a day, no 2xx on it since): tell
      that bot how to call it right. Find the cause in the vendor's guide or the vendor's docs, then file it to the bot

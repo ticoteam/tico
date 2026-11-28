@@ -377,6 +377,12 @@ def test_an_administrator_marks_an_unhinted_read_only_reads_and_a_read_bot_calls
     post(api, "api-tools/acme-errors/check", {})
     assert shown() == [("human:ana", True, False)]
     assert count().status_code == 403
+    # Changing a different mark, or a whole-list save that carries it forward now it is listed, never restores it.
+    assert api.patch(path, json={"only_reads_on": ["resolve_error"]}, headers=headers("ana-test")).status_code == 200
+    assert mark(["count_errors", "resolve_error"]).status_code == 200
+    assert mark(["count_errors"]).status_code == 200
+    assert shown() == [("human:ana", True, False)]
+    assert count().status_code == 403
     with api.app.state.store.read() as c:
         rows = c.execute("SELECT actor, detail FROM events WHERE action='tool.only_reads_changed'").fetchall()
     assert ("system", {"added": [], "removed": [], "suspended": ["count_errors"]}) in [
@@ -426,7 +432,10 @@ def test_a_mark_shows_in_the_tools_activity_and_tool_show_and_a_name_over_200_ch
         ("Acme Errors", "count_errors", "human:ana")
     ]
     text = integration_text(shown)
-    assert "## Only reads (1; marked by an administrator, `tico tool edit <tool> --only-reads` sets them)" in text
+    assert (
+        "## Only reads (1; marked by an administrator, `tico tool edit <tool> --only-reads-on` or `--only-reads-off` changes one)"
+        in text
+    )
     assert "  Acme Errors  count_errors  marked by human:ana" in text
 
 

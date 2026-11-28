@@ -701,8 +701,8 @@ def set_only_reads(
     whole list (the CLI); else `on` and `off` mark and unmark just those names, so a page loaded before another
     administrator's change never undoes it (the Tools switch). A new mark needs the name in the last check's listing; a
     vendor-hinted name is already a read and is not stored. A suspended mark (`active`) kept in a whole list stays
-    suspended unless its name is listed again, when the list marks it afresh. One `tool.only_reads_changed` event with
-    what was added and removed."""
+    suspended even once its name is listed again: only naming it in `on` marks it afresh, so no unrelated edit restores
+    it. One `tool.only_reads_changed` event with what was added and removed."""
     if not tool["mcp_url"]:
         raise Problem(
             "only_reads", f"{tool['name']} is not an MCP server: only its tools can be marked Only reads", 422
@@ -713,9 +713,7 @@ def set_only_reads(
     before = {m["name"]: m for m in only_reads(tool)}
     if names is None:
         names = [n for n in before if n not in off] + [n for n in on if n not in before and n not in off]
-        asked = set(on)
-    else:
-        asked = set(names)
+    asked = set(on)  # a whole list reapproves nothing: a suspended mark it keeps stays suspended
     after: dict[str, Json] = {}
     now = H.now()
     for name in names:

@@ -969,10 +969,13 @@ def integration_text(page):
     if marks:
         out += [
             "",
-            f"## Only reads ({len(marks)}; marked by an administrator, `tico tool edit <tool> --only-reads` sets them)",
+            f"## Only reads ({len(marks)}; marked by an administrator, `tico tool edit <tool> --only-reads-on` or "
+            "`--only-reads-off` changes one)",
         ]
         out += [
-            f"  {m['tool']}  {m['name']}  marked by {m['by']}" + (f" {m['at'][:10]}" if m.get("at") else "")
+            f"  {m['tool']}  {m['name']}  marked by {m['by']}"
+            + (f" {m['at'][:10]}" if m.get("at") else "")
+            + ("" if m.get("active", True) else "  (suspended: the vendor dropped it; mark it again to use it)")
             for m in marks
         ]
     notes = page.get("learnings") or []

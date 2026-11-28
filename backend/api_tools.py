@@ -892,6 +892,7 @@ def only_reads_named(c, who, name, admins, auth=None):
     ):
         if kind_of(tool) != "api" or not visible(c, who, tool, admins, auth):
             continue
+        used = mcp_connect.marked(tool)
         out += [
             {
                 "tool": tool["name"],
@@ -899,6 +900,8 @@ def only_reads_named(c, who, name, admins, auth=None):
                 "name": m["name"],
                 "by": str(m.get("by") or ""),
                 "at": str(m.get("at") or ""),
+                # False once a check dropped it (or the vendor no longer lists it): shown, never used for Read.
+                "active": m["name"] in used,
             }
             for m in mcp_connect.only_reads(tool)
         ]
