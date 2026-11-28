@@ -620,7 +620,8 @@ pub fn prepare(
     Ok((queued, refused))
 }
 
-/// Whether a file under `root` still waits to be uploaded.
+/// Whether a file under `root` still waits to be uploaded. When the outbox cannot be read it says yes: every caller
+/// keeps a folder while this holds, and a folder removed under a queued file loses the file.
 #[allow(dead_code)] // the task worktrees keep a folder until its files have gone
 pub fn pending_under(state: &State, root: &Path) -> bool {
     let resolved = root
@@ -638,7 +639,7 @@ pub fn pending_under(state: &State, root: &Path) -> bool {
             )
             .optional()
         })
-        .is_ok_and(|r| r.is_some())
+        .map_or(true, |r| r.is_some())
 }
 
 struct Row {
@@ -973,6 +974,21 @@ mod tests {
             "{found:?}"
         );
         assert!(!found.iter().any(|rel| rel.contains(".cache")), "{found:?}");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn an_outbox_that_cannot_be_read_counts_as_a_file_still_waiting() {
+        let dir = checkout();
+        let state = State::open(&dir.join("state")).unwrap();
+        assert!(!pending_under(&state, &dir));
+        // A broken outbox (here one without its `phase` column) cannot say nothing waits: the folder is kept.
+        state
+            .with(|c| {
+                c.execute_batch("DROP TABLE file_outbox; CREATE TABLE file_outbox(root TEXT);")
+            })
+            .unwrap();
+        assert!(pending_under(&state, &dir));
         std::fs::remove_dir_all(dir).ok();
     }
 

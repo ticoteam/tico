@@ -95,8 +95,10 @@ anyone. It removes only what nothing can still need, in this order, and stops on
    partial packs when stopped, and holds the clone while other bots' worktree steps wait.
 5. Session worktrees (`sessions/bot-<slug>/<task>`, [Sessions](sessions.md)) of open tasks whose bot has had no turn
    in that task's lane on this computer for 24 hours, other bots' tasks first, then the longest idle. One goes only
-   when no turn of its bot is in its lane or on its task, no file in it waits to upload, and Git shows no change, no
-   commit that is on no remote and no ignored file outside build folders; its branch goes with it. The next turn on
+   when no turn of its bot is in its lane or on its task (checked again once its checkout's Git lock is held), no file
+   in it waits to upload (an upload queue that cannot be read counts as waiting), and Git shows no change, no commit
+   that is on no remote on HEAD or on its `tico-session/<task>` branch, and no ignored file outside build folders; its
+   branch goes with it. The next turn on
    the task checks it out again. A server that does not say a task's owner and last turn keeps them all.
 
 It never touches an open task's folder under `tasks/`, package caches in the home folder, a git checkout itself, a bot's repository,

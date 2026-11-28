@@ -1040,7 +1040,7 @@ async fn a_low_disk_takes_an_open_tasks_idle_worktree_only_when_nothing_in_it_is
     sh(&main, &["push", "-q", "origin", "HEAD:main"]);
     let env = turn_env(&tmp.0, &[]);
     let make = |task: &str| sessions::path_for(&projects, "qa", task);
-    for task in ["clean", "built", "changed", "ahead", "draft"] {
+    for task in ["clean", "built", "changed", "ahead", "draft", "detached"] {
         assert_eq!(
             sessions::ensure(&main, &make(task), task, &env)
                 .await
@@ -1059,12 +1059,24 @@ async fn a_low_disk_takes_an_open_tasks_idle_worktree_only_when_nothing_in_it_is
     sh(&make("ahead"), &["commit", "-qm", "unpushed"]);
     std::fs::create_dir_all(make("draft").join("notes")).unwrap();
     std::fs::write(make("draft").join("notes/plan.md"), "half done\n").unwrap();
+    // Its branch holds a commit no remote has while HEAD sits, detached, on what origin has: it stays.
+    std::fs::write(make("detached").join("work.md"), "w\n").unwrap();
+    sh(&make("detached"), &["add", "work.md"]);
+    sh(
+        &make("detached"),
+        &["commit", "-qm", "unpushed on the branch"],
+    );
+    sh(
+        &make("detached"),
+        &["checkout", "-q", "--detach", "origin/main"],
+    );
     for (task, goes) in [
         ("clean", true),
         ("built", true),
         ("changed", false),
         ("ahead", false),
         ("draft", false),
+        ("detached", false),
     ] {
         assert_eq!(
             sessions::remove_idle(&main, &make(task), task, &env).await,
@@ -1087,6 +1099,64 @@ async fn a_low_disk_takes_an_open_tasks_idle_worktree_only_when_nothing_in_it_is
         ""
     );
     assert!(make("clean").join("AGENT.md").is_file());
+}
+
+#[tokio::test]
+async fn an_idle_worktree_stays_when_a_turn_claims_its_task_while_git_is_busy() {
+    let tmp = Tmp::new();
+    let (bare, _seed) = remote(&tmp.0, "bot-qa");
+    let projects = tmp.0.join("projects");
+    std::fs::create_dir_all(&projects).unwrap();
+    let main = projects.join("bot-qa");
+    sh(
+        &projects,
+        &[
+            "clone",
+            "-q",
+            bare.to_str().unwrap(),
+            main.to_str().unwrap(),
+        ],
+    );
+    let env = turn_env(&tmp.0, &[]);
+    let (raced, idle) = (
+        sessions::path_for(&projects, "qa", "raced"),
+        sessions::path_for(&projects, "qa", "idle"),
+    );
+    for (path, task) in [(&raced, "raced"), (&idle, "idle")] {
+        assert_eq!(
+            sessions::ensure(&main, path, task, &env).await.unwrap().1,
+            ""
+        );
+    }
+    let client = crate::client::Client::new("http://127.0.0.1:9", "t", 1, 0).unwrap();
+    let lanes = sessions::Lanes::new(std::sync::Arc::new(crate::repositories::Repositories::new(
+        &tmp.0, &tmp.0, client,
+    )));
+    let state = crate::state::State::open(&tmp.0.join("state")).unwrap();
+    // Another Git step holds the checkout; the removal waits for it with its first checks passed.
+    let busy = lanes.git_lock(&main).lock_owned().await;
+    let removal = sessions::evict_one(
+        &lanes, &state, &main, &raced, "qa", "raced", &projects, &env,
+    );
+    tokio::pin!(removal);
+    tokio::select! {
+        biased;
+        _ = &mut removal => panic!("the removal did not wait for the git lock"),
+        _ = std::future::ready(()) => {}
+    }
+    // Meanwhile a main-lane turn of the bot claims the task: the worktree stays.
+    lanes.attempts.lock().unwrap().insert(
+        "a1".into(),
+        sessions::LiveTurn::of(&json!({"bot": "qa", "lane": "main", "task": {"id": "raced"}})),
+    );
+    drop(busy);
+    assert_eq!(removal.await, None);
+    assert!(raced.join("AGENT.md").is_file());
+    // With no turn on it, an idle one goes and its size is counted.
+    let freed =
+        sessions::evict_one(&lanes, &state, &main, &idle, "qa", "idle", &projects, &env).await;
+    assert!(freed.is_some_and(|b| b > 0), "{freed:?}");
+    assert!(!idle.exists());
 }
 
 #[tokio::test]
