@@ -29,7 +29,9 @@ and the answer is saved on the rule. The stored setting stays `warn`; its label 
 
 import json
 import os
-from typing import Any
+import sqlite3
+from contextlib import AbstractContextManager
+from typing import Any, cast
 
 from fastapi import Request
 from pydantic import Field
@@ -399,7 +401,8 @@ router = api_routing.router()
     ),
 )
 def rule_breaks(request: Request, rule_id: str, deps: Injected) -> Row:
-    with deps.store.read() as c:
+    # Store.read is unannotated; it yields a sqlite3 connection (as browser_commands.py reads it).
+    with cast(AbstractContextManager[sqlite3.Connection], deps.store.read()) as c:
         return of_rule(c, deps.auth, request.state.identity, rule_id)
 
 
