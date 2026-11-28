@@ -52,6 +52,42 @@ def listen_save(api, args):
     return api.post("listening/sources/" + quote(args["source"], safe="") + "/items", body, key=_key(args))
 
 
+ITEM_STATUSES = ["new", "duplicate", "kept", "dropped", "sending", "sent", "failed", "expired"]
+
+
+@tool(
+    "tico_listening_items",
+    "Listening: what one listening gathered, newest first, with the total and the counts by status for the same "
+    "filters. One page is at most 500; pass next_cursor as cursor for the next, or all to read every page.",
+    {
+        "automation": _s("The listening's id"),
+        "status": _s("Only items with this status", enum=ITEM_STATUSES),
+        "source": _s("Only this source's items: a source id, from tico_listening_sources"),
+        "since": _s("Only items gathered at or after this ISO time"),
+        "until": _s("Only items gathered before this ISO time"),
+        "cursor": _s("The next_cursor of the page before"),
+        "limit": {"type": "integer", "minimum": 1, "maximum": 500, "description": "Items on a page (default 100)"},
+        "all": {"type": "boolean", "description": "Follow the cursor to the end and answer every item at once"},
+    },
+    required=("automation",),
+)
+def listen_items(api, args):
+    query = {k: args.get(k) for k in ("automation", "status", "source", "since", "until", "cursor", "limit")}
+    query = {k: v for k, v in query.items() if v is not None and v != ""}
+    if not args.get("all"):
+        return api.get("listening/items", **query)
+    query["limit"] = 500
+    page = api.get("listening/items", **query)
+    items = list(page["items"])
+    while page.get("next_cursor"):
+        if page["next_cursor"] == query.get("cursor"):
+            raise ValueError("listening items: the next cursor did not move; stopped instead of reading the page again")
+        query["cursor"] = page["next_cursor"]
+        page = api.get("listening/items", **query)
+        items += page["items"]
+    return {"total": page["total"], "counts": page["counts"], "items": items, "next_cursor": None}
+
+
 # ----------------------------------------------------------------------------- company inbound messages
 INBOUND_SCOPE = {
     'inbox_ids': {
@@ -247,6 +283,11 @@ INBOUND = (
 
 # `tico listening ...`: every leaf but save, which reads its JSON from a file or stdin (clients/remotecli.py).
 LISTENING = (
-    Group("listening", "Listening's sources: the ones due a read, and saving what a read found"),
+    Group("listening", "Listening: the sources due a read, saving what a read found, and what was gathered"),
     Command("listening sources", "the Search sources due a read", example="tico listening sources --automation a1"),
+    Command(
+        "listening items",
+        "what a listening gathered, with the total",
+        example="tico listening items a1 --status dropped --since 2026-11-20 --all",
+    ),
 )

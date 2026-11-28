@@ -241,4 +241,59 @@ describe('One watch', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
     expect(await screen.findByText('No matches yet')).toBeTruthy();
   });
+
+  it('with more matches than a page says how many of how many, and Show more reads on until all are shown', async () => {
+    const at = new Date(Date.now() - 3 * 86_400_000).toISOString();
+    const match = (n: number) => ({ id: `m${n}`, source: 'r1', site: 'Reddit', title: `Post ${n}`, text: '', status: 'kept', created_at: at, posted_at: at });
+    const asked: string[] = [];
+    record((u) => {
+      if (!u.includes('/listening/items')) return nothing();
+      asked.push(u);
+      const from = u.includes('cursor=c100') ? 100 : 0;
+      const items = Array.from({ length: from ? 50 : 100 }, (_, i) => match(from + i));
+      return ok({ items, total: 150, counts: { kept: 150 }, next_cursor: from ? null : 'c100' });
+    });
+    queryClient.setQueryData(watchQuery('w1').queryKey, watch());
+    show('/company/listening?watch=w1');
+    expect(await screen.findByText('Showing 100 of 150')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+    expect(await screen.findByText('Showing 150 of 150')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Show more' })).toBeNull();
+    expect(asked.map((u) => new URL(u, 'http://x').searchParams.get('cursor'))).toEqual([null, 'c100']);
+  });
+
+  it('a link to a match past the first page reads on until that match opens', async () => {
+    // Each day group stays at 100 or fewer, so all its rows are drawn (a longer group scrolls in a virtual list).
+    const at = (n: number) => new Date(Date.now() - (n < 100 ? 3 : 0) * 86_400_000).toISOString();
+    const match = (n: number) => ({ id: `m${n}`, source: 'r1', site: 'Reddit', title: `Post ${n}`, text: `Text of post ${n}`, status: 'kept', created_at: at(n), posted_at: at(n) });
+    record((u) => {
+      if (!u.includes('/listening/items')) return nothing();
+      const from = u.includes('cursor=c100') ? 100 : 0;
+      return ok({ items: Array.from({ length: from ? 50 : 100 }, (_, i) => match(from + i)), total: 150, counts: { kept: 150 }, next_cursor: from ? null : 'c100' });
+    });
+    queryClient.setQueryData(watchQuery('w1').queryKey, watch());
+    show('/company/listening?watch=w1&match=m120');
+    expect(await screen.findByText('Text of post 120')).toBeTruthy();
+  });
+
+  it('a later page that fails keeps the loaded matches, stops reading on, and Try again reads it', async () => {
+    const at = (n: number) => new Date(Date.now() - (n < 100 ? 3 : 0) * 86_400_000).toISOString();
+    const match = (n: number) => ({ id: `m${n}`, source: 'r1', site: 'Reddit', title: `Post ${n}`, text: `Text of post ${n}`, status: 'kept', created_at: at(n), posted_at: at(n) });
+    let second = 0;
+    record((u) => {
+      if (!u.includes('/listening/items')) return nothing();
+      if (!u.includes('cursor=c100')) return ok({ items: Array.from({ length: 100 }, (_, i) => match(i)), total: 150, counts: { kept: 150 }, next_cursor: 'c100' });
+      return second++ ? ok({ items: Array.from({ length: 50 }, (_, i) => match(100 + i)), total: 150, counts: { kept: 150 }, next_cursor: null }) : { status: 503, body: { error: { code: 'busy', detail: 'busy' } } };
+    });
+    queryClient.setQueryData(watchQuery('w1').queryKey, watch());
+    show('/company/listening?watch=w1&match=m120');
+    const retry = await screen.findByRole('button', { name: 'Try again' });
+    expect(screen.getByText('Post 5')).toBeTruthy();
+    expect(screen.getByText('Showing 100 of 150')).toBeTruthy();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(second).toBe(1);
+    fireEvent.click(retry);
+    expect(await screen.findByText('Text of post 120')).toBeTruthy();
+    expect(second).toBe(2);
+  });
 });

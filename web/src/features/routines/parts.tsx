@@ -1,5 +1,5 @@
 import { Link } from '@tanstack/react-router';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { refusal, run } from '@/actions';
 import { useActor } from '@/data';
 import { Avatar } from '@/kit/Avatar';
@@ -14,7 +14,7 @@ import { Menu, MenuItem } from '@/kit/Menu';
 import { SkeletonRows } from '@/kit/Skeleton';
 import { Switch } from '@/kit/Switch';
 import { toast } from '@/kit/Toast';
-import { VirtualList } from '@/kit/VirtualList';
+import { VirtualList, type VirtualListHandle } from '@/kit/VirtualList';
 import { ReadFault, type FailedRead } from '@/pagekinds';
 import { endAfter, lastDay } from './words';
 
@@ -79,10 +79,16 @@ export function PanelRead({ q, what }: { q: FailedRead & { isPending: boolean; i
   return q.isPending ? <SkeletonRows rows={4} /> : null;
 }
 
-/** A section's rows; past 100 only what is on screen is drawn, in a scroller of its own. */
-export function Rows<T>({ items, getKey, draw, label }: { items: readonly T[]; getKey: (x: T) => string; draw: (x: T) => ReactNode; label: string }) {
-  if (items.length <= 100) return items.map(draw);
-  return <VirtualList className="rr-long" label={label} items={items} getKey={getKey} estimateSize={34} measure renderItem={draw} />;
+/** A section's rows; past 100 only what is on screen is drawn, in a scroller of its own, brought to the row `at` names. */
+export function Rows<T>({ items, getKey, draw, label, at }: { items: readonly T[]; getKey: (x: T) => string; draw: (x: T) => ReactNode; label: string; at?: string }) {
+  const long = useRef<VirtualListHandle>(null);
+  const many = items.length > 100;
+  const here = !!at && many && items.some((x) => getKey(x) === at);
+  useEffect(() => {
+    if (here && at) long.current?.scrollToKey(at);
+  }, [here, at]);
+  if (!many) return items.map(draw);
+  return <VirtualList ref={long} className="rr-long" label={label} items={items} getKey={getKey} estimateSize={34} measure renderItem={draw} />;
 }
 
 /** Their face, 22 unless asked; a gap the same size when the directory does not know them. */

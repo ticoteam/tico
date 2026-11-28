@@ -14,6 +14,7 @@
 .rr .is-off .row-title{color:var(--muted)}
 .rr .set-name{width:var(--set-w,calc(var(--s-18) + var(--s-5)));flex:none;color:var(--muted);font-size:var(--t-sm)}
 .rr .rr-none{padding:var(--s-1h) 0 var(--s-2) var(--s-8)}
+.rr .rr-more{display:flex;align-items:center;gap:var(--s-2);padding:var(--s-1h) 0 var(--s-2) var(--s-8)}
 
 /* ---------- the rule row (pages/1-tasks/more.css) ---------- */
 .rr .rule{height:calc(var(--row) - var(--s-1));grid-template-columns:var(--ico) minmax(0,1fr) auto var(--ctl-sm);column-gap:var(--s-2h);margin:0;padding:0 var(--s-0) 0 var(--s-1h)}
@@ -164,7 +165,7 @@
   .rr .sets{--set-w:calc(var(--s-18) + var(--s-8))}
 
   /* a phone's page edge is the section name's: no margin for a mark to hang in, so a row starts at the row's own 8 */
-  .rr :is(.auto,.watch,.hook,.set,.rr-none){padding-left:var(--s-2)}
+  .rr :is(.auto,.watch,.hook,.set,.rr-none,.rr-more){padding-left:var(--s-2)}
   .rr .auto{grid-template-columns:minmax(0,1fr) auto var(--av-sm) var(--s-8);column-gap:var(--s-2h)}
   .rr :is(.auto,.watch,.hook) .row-sub{display:none}
   .rr .brow{grid-template-columns:minmax(0,1fr)}

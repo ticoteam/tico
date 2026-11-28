@@ -170,7 +170,7 @@ below contain fictional data.
 | `GET /api/v2/listening/sources?due=1` (`tico_listening_sources`) | a bot holding the Listening tool | the sources the caller may read, overdue first |
 | `POST /api/v2/listening/sources/{id}/items` (`tico_listening_save`) | a bot holding the Listening tool | saves one read of one source |
 | `POST /api/v2/listening/in/<token>` | whoever has a push source's address | the same body, with no sign-in |
-| `GET /api/v2/listening/items?automation=&status=&limit=` | | items, for a run's page and for debugging |
+| `GET /api/v2/listening/items?automation=&status=&source=&since=&until=&cursor=&limit=` (`tico_listening_items`, `tico listening items`) | whoever may see the listening | items, newest gathered first, at most 500 a page, with `total` for the filters, `counts` by status for the same filters but status, and `next_cursor` (null on the last page). `since` is included, `until` is not; a cursor, range or source that is not this listening's is refused with a 422 naming it |
 | `GET /api/v2/listening/stats` | | `daily` and `recent`, built from sent items, which Market's What are buyers saying? draws |
 
 A read is saved as its status and up to 200 items:

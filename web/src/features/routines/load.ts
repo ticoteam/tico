@@ -102,5 +102,5 @@ export function loadListening(qc: QueryClient, search: ListeningSearch): Promise
     void qc.prefetchQuery(sourcesQuery(search.watch));
     return watch;
   }
-  return Promise.all([watch, qc.prefetchQuery(matchesQuery(search.watch))]);
+  return Promise.all([watch, qc.prefetchInfiniteQuery(matchesQuery(search.watch))]);
 }

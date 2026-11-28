@@ -549,7 +549,7 @@ def test_the_old_routes_and_tools_are_gone(api):
     from clients import hubtools
 
     names = {t["name"] for t in hubtools.TOOLS if "listening" in t["name"]}
-    assert names == {"tico_listening_sources", "tico_listening_save"}
+    assert names == {"tico_listening_sources", "tico_listening_save", "tico_listening_items"}
 
 
 def test_ten_small_posts_with_three_rules_take_one_call_and_each_is_decided_as_alone(api, monkeypatch):

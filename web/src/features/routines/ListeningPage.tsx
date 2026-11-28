@@ -1,5 +1,5 @@
-import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useInfiniteQuery, useQuery, useSuspenseQuery, type InfiniteData, type UseInfiniteQueryResult } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
@@ -17,7 +17,7 @@ import { fmtDate } from '@/lib';
 import { List, PageMore, Record as RecordPage, Section, type PageTab } from '@/pagekinds';
 import { LISTENING } from './actions';
 import { Ends, Face, Find, HeadSwitch, press, pressOut, RemoveItem, Rows, RuleRow, useConfirmRemove, Verb, Word } from './parts';
-import { matchesQuery, runsQuery, sourcesQuery, useEndRefresh, watchesQuery, watchQuery } from './queries';
+import { matchesQuery, type MatchPage, runsQuery, sourcesQuery, useEndRefresh, watchesQuery, watchQuery } from './queries';
 import type { ListenSource, Match, Routine, WatchSource } from './types';
 import { agentWords, cap, endedWords, isOn, limitsWords, runLink } from './words';
 import './routines.css';
@@ -149,7 +149,14 @@ function AddWatch({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boo
 function WatchPage({ id, tab, match }: { id: string; tab?: 'sources'; match?: string }) {
   const one = useQuery(watchQuery(id));
   const listed = useQuery(watchesQuery).data?.find((w) => w.id === id);
-  const matches = useQuery({ ...matchesQuery(id), enabled: tab !== 'sources' });
+  const matches = useInfiniteQuery({ ...matchesQuery(id), enabled: tab !== 'sources' });
+  // A link to a match past the loaded pages reads on, a page at a time, until that match is loaded or the list ends.
+  // A page that fails stops it: Try again under the list reads that page again.
+  const unread = !!match && tab !== 'sources' && !matches.data?.pages.some((p) => p.items.some((m) => m.id === match));
+  const { hasNextPage, isFetching, isFetchNextPageError, fetchNextPage } = matches;
+  useEffect(() => {
+    if (unread && hasNextPage && !isFetching && !isFetchNextPageError) void fetchNextPage();
+  }, [unread, hasNextPage, isFetching, isFetchNextPageError, fetchNextPage]);
   const w = one.data ?? listed;
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -170,11 +177,11 @@ function WatchPage({ id, tab, match }: { id: string; tab?: 'sources'; match?: st
     return <RecordPage {...head} state={one.isPending ? 'loading' : 'fault'} reads={one.isError ? [one] : undefined} />;
   }
   const on = isOn(w);
-  const found = matches.data ?? [];
+  const found = [...new Map(matches.data?.pages.flatMap((p) => p.items.map((m) => [m.id, m] as const))).values()];
   return (
     <RecordPage
       {...head}
-      state={tab === 'sources' ? 'ready' : matches.isPending ? 'loading' : matches.isError ? 'fault' : found.length ? 'ready' : 'empty'}
+      state={tab === 'sources' ? 'ready' : matches.isPending ? 'loading' : matches.isError && !found.length ? 'fault' : found.length ? 'ready' : 'empty'}
       reads={[matches]}
       empty={{ title: 'No matches yet' }}
       actions={
@@ -197,7 +204,7 @@ function WatchPage({ id, tab, match }: { id: string; tab?: 'sources'; match?: st
           <RemoveItem disabled={tmp} onSelect={() => remove.confirm(w.name || 'this watch', () => void press('listening.remove', { watch: id }))} />
         </PageMore>
       }
-      sections={tab === 'sources' ? <Sources w={w} /> : <Matches id={id} list={found} open={match} />}
+      sections={tab === 'sources' ? <Sources w={w} /> : <Matches id={id} list={found} open={match} read={matches} />}
     />
   );
 }
@@ -210,14 +217,34 @@ function dayOf(iso: string): 'Today' | 'Yesterday' | 'Earlier' {
   return t >= start.getTime() ? 'Today' : t >= start.getTime() - DAY ? 'Yesterday' : 'Earlier';
 }
 
-/** The watch's matches by day; the page draws loading, fault and none. */
-function Matches({ id, list, open }: { id: string; list: Match[]; open?: string }) {
+type MatchesRead = Pick<UseInfiniteQueryResult<InfiniteData<MatchPage>>, 'data' | 'hasNextPage' | 'isFetching' | 'isFetchingNextPage' | 'isFetchNextPageError' | 'fetchNextPage'>;
+
+/** The watch's matches by day; the page draws loading, fault and none. Past one page, a line under the list says how
+   many of how many are shown and Show more reads the next page; a day's count is given only once all are loaded. */
+function Matches({ id, list, open, read }: { id: string; list: Match[]; open?: string; read: MatchesRead }) {
+  const pages = read.data?.pages ?? [];
+  const paged = pages.length > 1 || read.hasNextPage;
+  const total = pages.at(-1)?.total ?? list.length;
   const groups = (['Today', 'Yesterday', 'Earlier'] as const).map((d) => [d, list.filter((m) => dayOf(m.posted_at ?? m.created_at) === d)] as const).filter(([, ms]) => ms.length);
-  return groups.map(([d, ms]) => (
-    <Section key={d} name={d} count={ms.length} target={`section:${d}`}>
-      <Rows label={d} items={ms} getKey={(m) => m.id} draw={(m) => (m.id === open ? <MatchOpen key={m.id} watch={id} m={m} /> : <MatchRow key={m.id} watch={id} m={m} />)} />
-    </Section>
-  ));
+  return (
+    <>
+      {groups.map(([d, ms]) => (
+        <Section key={d} name={d} count={read.hasNextPage ? undefined : ms.length} target={`section:${d}`}>
+          <Rows label={d} items={ms} getKey={(m) => m.id} at={open} draw={(m) => (m.id === open ? <MatchOpen key={m.id} watch={id} m={m} /> : <MatchRow key={m.id} watch={id} m={m} />)} />
+        </Section>
+      ))}
+      {paged && (
+        <p className="row-sub rr-more">
+          <span>{`Showing ${list.length.toLocaleString('en-US')} of ${total.toLocaleString('en-US')}`}</span>
+          {read.hasNextPage && (
+            <Button variant="quiet" disabled={read.isFetching} onClick={() => void read.fetchNextPage()}>
+              {read.isFetchingNextPage ? 'Loading' : read.isFetchNextPageError ? 'Try again' : 'Show more'}
+            </Button>
+          )}
+        </p>
+      )}
+    </>
+  );
 }
 
 const srcOf = (m: Match) => m.source || m.site || '';
