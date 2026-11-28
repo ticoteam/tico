@@ -97,6 +97,21 @@ def test_the_never_stuck_pass_catches_what_no_write_changed(company, c):
     assert spans(c, task_id)[-1] == ("snoozed", ANA, True)
 
 
+def test_a_ladder_reset_in_the_pass_leaves_the_span_on_whose_turn_it_is_after_it(c):
+    """The pass read the task at the manager's level, then found it changed (its progress mark moved, nothing announced
+    it) and started the ladder again at its owner: the span it keeps is the owner's turn it handed back, not the
+    manager's turn it read before."""
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    NS.check(c)
+    assert spans(c, task_id) == [("bot", BUILDER, True)]
+    c.execute(
+        "UPDATE visits SET level='manager', progress_mark='before' WHERE task_id=? AND left_at IS NULL", (task_id,)
+    )
+    NS.check(c)
+    assert E.task(c, task_id)["visit"]["level"] == "owner"
+    assert spans(c, task_id)[-1] == ("bot", BUILDER, True)
+
+
 def test_a_pass_with_every_span_current_stays_in_its_read_snapshot(company, time_machine):
     time_machine.move_to(START, tick=False)
     with company.transaction() as c:

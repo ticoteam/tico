@@ -344,7 +344,7 @@ def open_work(api, slugs):
 
 
 def list_statements(api, monkeypatch, token="ana-test", path="bots"):
-    """The bot list as `token` gets it, and the statements it took. Each request starts from cold roster and row caches."""
+    """The bot list as `token` gets it, and the statements it ran. Each request starts from cold roster and row caches."""
     import contextlib
 
     from backend.tests.helpers.statement_scope import measuring, recorder
@@ -371,7 +371,7 @@ def list_statements(api, monkeypatch, token="ana-test", path="bots"):
         with measuring(seen):
             response = api.get("/api/v2/" + path, headers=T.headers(token))
     assert response.status_code == 200, response.text
-    return response.json(), len(seen)
+    return response.json(), seen
 
 
 def old_rows(c, rows):
@@ -483,13 +483,13 @@ def test_fields_keeps_the_named_fields_and_reads_no_activity_it_leaves_out(api, 
                 [(k, v) for k, v in row.items() if k in wanted] for row in full
             ], (token, fields)
             if "status" not in wanted:
-                assert read < everything, (token, fields, read, everything)
+                assert len(read) < len(everything), (token, fields, len(read), len(everything))
     assert T.get(api, "bots?fields=", token="ana-test") == T.get(api, "bots", token="ana-test")
 
 
 def test_bot_list_reads_each_open_task_and_bot_row_once(api, monkeypatch):
-    """The bots' open tasks are read once from the covering partial index (without body/title), and waiting_on_many
-    reuses those slim rows without reading SELECT * FROM tasks; every bot is read once."""
+    """The bots' open tasks are read once from the covering partial index (without body/title), never as SELECT * FROM
+    tasks; every bot is read once."""
     import contextlib
 
     from backend import waiting_on as W
@@ -563,3 +563,45 @@ def test_task_flow_open_tasks_query_uses_covering_partial_index(api):
             )
         ]
     assert any("COVERING INDEX tasks_open_owner_flow" in line for line in plan), plan
+    # Whose turn each is: a seek per task on the open-span index, never a scan of every span ever kept.
+    with store.read_transaction() as c:
+        plan = [row[3] for row in c.execute("EXPLAIN QUERY PLAN " + bot_rows.TURNS_SQL, ("bot", "[]"))]
+    assert any("USING INDEX index_task_wait_spans_on_task_id_open" in line for line in plan), plan
+
+
+def test_task_flow_counts_a_bots_turn_from_its_open_wait_span(api, monkeypatch):
+    """A bot's `waiting` count is its readable open tasks whose open wait span is its own turn (backend/wait_spans.py),
+    the headline each engine write keeps and each never-stuck pass checks: a task waiting on a person is not counted
+    until the person's answer reaches its span, and the count agrees with the waits worked out in full."""
+    from backend import never_stuck
+    from backend import task_engine as E
+    from backend import waiting_on as W
+    from backend.tests.helpers import engine as X
+
+    store = api.app.state.store
+    with store.transaction() as c:
+        bot = X.bot(c, "w1")
+        X.pipeline(c)
+        mine = X.new_task(c, X.ANA, "Its turn", assignee=bot)
+        asked = X.ok_ask(c, X.new_task(c, X.ANA, "Waits on Ana", assignee=bot)["id"], bot, X.ANA, "OK the plan")
+        X.settled(c)
+
+    def flow():
+        return {row["slug"]: row for row in T.get(api, "bots", token="ana-test")}["w1"]["task_flow"]
+
+    # The list reads the spans, and never works out a task's waits (no read of its open visit).
+    rows, seen = list_statements(api, monkeypatch)
+    assert {row["slug"]: row for row in rows}["w1"]["task_flow"] == {"going": 0, "waiting": 1}
+    assert [sql for sql in seen if "task_wait_spans" in sql]
+    assert not [sql for sql in seen if "FROM visits WHERE task_id" in sql], seen
+
+    def worked_out():
+        with store.read() as c:
+            waits = W.waiting_on_many(c, [mine["id"], asked["id"]])
+        return sum(1 for found in waits.values() if found and found[0].state == W.BOT and found[0].who == bot)
+
+    assert flow() == {"going": 0, "waiting": 1} and worked_out() == 1
+    with store.transaction() as c:
+        X.answer(c, E.task(c, asked["id"]), asked["requirement_id"], "ok", X.ANA)  # a row no engine write synced
+        never_stuck.check(c)
+    assert flow() == {"going": 0, "waiting": 2} and worked_out() == 2

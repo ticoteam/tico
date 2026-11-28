@@ -936,11 +936,6 @@ _TASK_READS = (
 )
 
 
-def prime_slim_tasks(conn: "sqlite3.Connection", rows: Iterable[Any]) -> None:
-    """Seed SLIM_TASK_SQL in this snapshot without putting partial rows into SELECT * caches."""
-    read_cache.prime(conn, SLIM_TASK_SQL, {(str(row["id"]),): row for row in rows})
-
-
 def _engine_task(conn: "sqlite3.Connection", raw: Any) -> Row | None:
     """Assemble an engine task dict from an already-read task row (full or slim) using the primed visit/stage/pipeline/snooze."""
     if not raw or not raw["pipeline_id"]:
