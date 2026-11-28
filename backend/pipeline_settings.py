@@ -1334,17 +1334,27 @@ def check(conn: "sqlite3.Connection", record: Row) -> list[str]:
 
 
 # ----------------------------------------------------------------------------- rights
+OWNER_ADMINS_ONLY = "Only the company's owner and Admins choose who owns a board."
+PRIVACY_ADMINS_ONLY = "Only the company's owner and Admins make a board private or company-wide."
+
+
+def company_admin(conn: "sqlite3.Connection", by: str) -> bool:
+    """The company's owner or an Admin (or the engine itself): who makes a pipeline and chooses who owns one."""
+    if by == SYSTEM:
+        return True
+    if not is_human(by):
+        return False
+    found: Row = _h().human(conn, by) or {}
+    email = str(found.get("email") or "").strip().lower()
+    return bool(email) and email in set(Access.owner_and_admin_emails(conn))
+
+
 def may_change(conn: "sqlite3.Connection", by: str, pipeline_row: Row | None) -> bool:
     """Who may change a pipeline: the company's owner and Admins, the pipeline's owner and its manager (a manager bot
     included: "Customers and manager bots can edit all of it"). Only the company's owner and Admins make a new one. The
     engine itself may do both."""
-    if by == SYSTEM:
+    if company_admin(conn, by):
         return True
-    if is_human(by):
-        found: Row = _h().human(conn, by) or {}
-        email = str(found.get("email") or "").strip().lower()
-        if email and email in set(Access.owner_and_admin_emails(conn)):
-            return True
     if not pipeline_row:
         return False
     me = pipeline_rights.canonical(conn, by)
@@ -1592,14 +1602,19 @@ def _write_stages(conn: "sqlite3.Connection", by: str, pid: str, record: Row, ts
 
 
 LOOSENS = "This change loosens the person's OK on {}. A person must make it."
+LOOSENS_NAMED = "This change loosens the person's OK on {}. Only the person it names or an Admin can make it."
 
 
-def _loosens_people_only(conn: "sqlite3.Connection", pipeline_id: str, parsed: Row) -> str | None:
+def _loosens_people_only(
+    conn: "sqlite3.Connection", pipeline_id: str, parsed: Row, named: str | None = None
+) -> str | None:
     """The stage whose people-only OK the record would loosen, or None when it keeps every one. Loosening is: removing
     the OK (or its stage), moving it to another stage, changing what it checks, opening it to bots or giving it to a
     bot, or letting work run ahead of it: a stage that came after it now before it, or an on-enter action (filing a
     linked task, queueing the PRs) added or changed on its stage or one before it. A bot that manages a pipeline may
-    change the rest of it, never a person's sign-off."""
+    change the rest of it, never a person's sign-off. A board owner or manager who is a person and not an Admin is held
+    the same way, except on an OK that names them (`named`)."""
+    me = pipeline_rights.canonical(conn, named) if named else ""
     old = [s for s in task_engine.stages(conn, pipeline_id) if s["kind"] == "work"]
     new: list[Row] = parsed["stages"]
     placed = {req["id"]: (stage, req) for stage in new for req in stage["requirements"] if req["id"]}
@@ -1607,6 +1622,8 @@ def _loosens_people_only(conn: "sqlite3.Connection", pipeline_id: str, parsed: R
     for at, stage in enumerate(old):
         for req in R.on_stage(conn, stage["id"]):
             if not R.people_only(req):
+                continue
+            if me and me in _named_on(conn, req):
                 continue
             found = placed.get(req["id"])
             if not found or found[0]["id"] != stage["id"]:
@@ -1619,6 +1636,10 @@ def _loosens_people_only(conn: "sqlite3.Connection", pipeline_id: str, parsed: R
             person: object = now.get("person_id")
             if person != req.get("person_id") and not is_human(person):
                 return str(stage["name"])
+            if me and _named_on(conn, now) != _named_on(conn, req):
+                # A person held here takes no OK off the people it names, even to give it to someone else: the next
+                # save could then remove it under the new name.
+                return str(stage["name"])
             later = {s["id"] for s in old[at + 1 :]}
             upto = new[: next(i for i, s in enumerate(new) if s["id"] == stage["id"]) + 1]
             for ahead in upto:
@@ -1627,6 +1648,11 @@ def _loosens_people_only(conn: "sqlite3.Connection", pipeline_id: str, parsed: R
                 if ahead["on_enter"] and ahead["on_enter"] != was_enter.get(ahead["id"] or "", {}):
                     return str(stage["name"])
     return None
+
+
+def _named_on(conn: "sqlite3.Connection", req: Row) -> set[str]:
+    """Everyone a requirement names to answer it, as one id each (`pipeline_rights.canonical`)."""
+    return {pipeline_rights.canonical(conn, p) for p in R.approvers(req)}
 
 
 # How a release is cut and which releases count (In a release's settings): a person's call. A bot that could set
@@ -1746,6 +1772,16 @@ def save(
     parsed, problems = _parse(record)
     existing = task_engine.pipeline(conn, parsed["id"]) if parsed["id"] else None
     _may_change(conn, by, existing, seen_version)
+    if (
+        existing
+        and pipeline_rights.canonical(conn, parsed["owner_id"]) != pipeline_rights.canonical(conn, existing["owner_id"])
+        and not company_admin(conn, by)
+    ):
+        _refuse(conn, by, "task_settings", OWNER_ADMINS_ONLY)
+    if existing and is_human(by) and not company_admin(conn, by):
+        sign_off = _loosens_people_only(conn, str(existing["id"]), parsed, named=by)
+        if sign_off:
+            _refuse(conn, by, "task_settings", LOOSENS_NAMED.format(sign_off))
     if existing and existing.get("private") and not parsed["private"] and is_bot(by):
         _refuse(conn, by, "task_settings", "Only a person makes a private pipeline company-wide.")
     if existing and is_bot(by):
@@ -1767,6 +1803,9 @@ def save(
         raise Problem("invalid_request", malformed, 422)
     if problems:
         _refuse(conn, by, "task_settings", problems[0])
+    # After what the record itself gets wrong (a private board needs a manager), so that is said first.
+    if existing and bool(existing.get("private")) != bool(parsed["private"]) and not company_admin(conn, by):
+        _refuse(conn, by, "task_settings", PRIVACY_ADMINS_ONLY)
     if is_bot(by):
         # Who a stage picks from is a person's to set: a bot reads it and cannot change it.
         had = _picks(conn, str(existing["id"])) if existing else {}
@@ -1800,18 +1839,80 @@ def save(
         _h().number_pipeline(conn, by, pid, f"Numbered when {parsed['name']} got the prefix {parsed['prefix']}")
     after = read(conn, pid)
     assert after is not None
+    changes = _changes(before, after)
     _h().event(
         conn,
         by,
         "pipeline.save",
         pid,
-        {"version": after["settings_version"], "made": existing is None, "changes": _changes(before, after)},
+        {"version": after["settings_version"], "made": existing is None, "changes": changes},
     )
+    if existing and changes:
+        from . import pipeline_changes
+
+        _tell_owner_and_manager(conn, by, after, pipeline_changes.sentence(conn, by, pid, {"changes": changes})[0])
     if existing and loosened:
         task_engine.fill_open_slots(conn, [s["id"] for s in after["stages"]])
         after = read(conn, pid)
         assert after is not None
     return after
+
+
+RULE_FIELDS = ("name", "stages", "event", "timer", "cond", "jev", "then", "then_params", "reason")
+
+
+def rule_changed(conn: "sqlite3.Connection", by: str, before: Row | None, after: Row | None) -> None:
+    """A person's change to a rule in force on a pipeline (stage_rules: add, edit, retire, accept), such as a stage's
+    Late time: the pipeline's Log records it (`pipeline.rule`, {path: [old, new]} as a save does) and its owner and
+    manager are told, as for a save. A company rule, Tico's own write and a change that changed nothing say nothing."""
+    from . import pipeline_changes
+
+    rule = after or before
+    pid = str((rule or {}).get("pipeline_id") or "")
+    if by == SYSTEM or not rule or not pid:
+        return
+    live = [r if r and r.get("status") == "active" and not r.get("retired_at") else None for r in (before, after)]
+    if live[0] is None and live[1] is None:
+        return
+    changes: Row = {
+        key: [old, new] for key in RULE_FIELDS if (old := (live[0] or {}).get(key)) != (new := (live[1] or {}).get(key))
+    }
+    if live[0] is None or live[1] is None:
+        changes = {"added" if live[0] is None else "retired": [None, True]}
+    if not changes:
+        return
+    detail: Row = {"rule": rule["id"], "name": rule.get("name"), "stages": rule.get("stages") or [], "changes": changes}
+    _h().event(conn, by, "pipeline.rule", pid, detail)
+    board = task_engine.pipeline(conn, pid)
+    if board:
+        _tell_owner_and_manager(conn, by, board, pipeline_changes.rule_sentence(conn, by, pid, detail)[0])
+
+
+def _tell_owner_and_manager(conn: "sqlite3.Connection", by: str, after: Row, text: str) -> None:
+    """A change by someone else tells the board's owner and its manager, once each, its Log line and where the Log is.
+    Whoever changed it is told nothing, nor is anyone for Tico's own changes. A bot reads it on its next run (quiet):
+    a board change is news, not work."""
+    if by == SYSTEM:
+        return
+    pid, name = str(after["id"]), str(after["name"])
+    me = pipeline_rights.canonical(conn, by)
+    told: set[str] = set()
+    for ref in (after.get("owner_id"), after.get("manager_id")):
+        to = pipeline_rights.canonical(conn, ref)
+        if not to or to == me or to in told:
+            continue
+        told.add(to)
+        try:
+            _h().say(
+                conn,
+                SYSTEM,
+                to,
+                f"{text} on {name}. [See {name}](/tasks/{pid})",
+                kind="notice",
+                refs={"quiet": True} if is_bot(to) else None,
+            )
+        except _h().Refused:  # pragma: no cover - one who can't be reached (left, retired) never stops the save
+            continue
 
 
 NEAR_BAR = (

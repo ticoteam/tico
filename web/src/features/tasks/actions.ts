@@ -14,6 +14,7 @@ import {
   moveTask,
   pipelinesQuery,
   removeRequester,
+  renameStage as renameStageOn,
   savePipeline,
   snoozeMany,
   updateRequester,
@@ -258,6 +259,8 @@ const stageDraft = z.strictObject({
 const pipelineFacts = {
   goal: z.optional(z.string().check(z.maxLength(300))),
   manager_id: clearable(actor),
+  // Who owns the pipeline: the server lets only the company's owner and Admins change it.
+  owner_id: clearable(actor),
   factory_id: clearable(z.string().check(z.minLength(1), z.maxLength(100), z.describe('a factory id'))),
   prefix: clearable(z.string().check(z.regex(/^[A-Za-z]{1,2}$/), z.describe('one or two letters'))),
 };
@@ -281,6 +284,18 @@ export const savePipelineStages = defineAction({
   can: ({ via }, { move_to }) => !(via === 'tico' && move_to),
   run: (_ctx, { pipeline, stages, version, move_to, ...facts }) => savePipeline(pipeline, { stages, facts, version, moveTo: move_to }),
   did: () => 'Saved the pipeline',
+  target: ({ pipeline }) => ({ kind: 'page', id: where(pipeline) }),
+});
+
+/** Renames one stage of a pipeline, as its column's Rename does: only the name changes; the stage keeps its id, so its
+    tasks, rules and moves stay as they were. */
+export const renameStage = defineAction({
+  id: 'tasks.renameStage',
+  title: 'Rename a stage',
+  kind: 'change',
+  input: z.strictObject({ pipeline, stage: z.string().check(z.minLength(1), z.maxLength(100)), name: z.string().check(z.minLength(1), z.maxLength(80)) }),
+  run: (_ctx, { pipeline, stage, name }) => renameStageOn(pipeline, stage, name),
+  did: ({ name }) => `Renamed the stage to ${name}`,
   target: ({ pipeline }) => ({ kind: 'page', id: where(pipeline) }),
 });
 

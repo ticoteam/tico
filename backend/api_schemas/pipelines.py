@@ -49,7 +49,21 @@ SCHEMAS.update(
         "PipelineSettingsList": obj({"pipelines": items(ref("PipelineSettings"))}),
         "PipelineLog": obj(
             {
-                "log": items(obj({"at": "s", "text": "s", "task_id": "n", "by": "n", "why": "s"})),
+                "log": items(
+                    obj(
+                        {
+                            "at": "s",
+                            "text": "s",
+                            "task_id": "n",
+                            "by": "n",
+                            "why": "s",
+                            # A pipeline save's line: the settings_version it made and every change, one line each.
+                            "version": {"type": ["integer", "null"]},
+                            "changes": items("s"),
+                        },
+                        required=["at", "text", "task_id", "by", "why"],
+                    )
+                ),
                 "learned": items(obj({"at": "s", "text": "s"})),
             }
         ),
