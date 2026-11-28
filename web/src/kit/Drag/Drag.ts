@@ -45,6 +45,8 @@ export function useDrag(options: DragOptions) {
   return useCallback((el: HTMLElement | null) => {
     if (!el) return;
     let over: Element | null = null;
+    /** A drag has begun and not yet finished. */
+    let active = false;
     const mark = (zone: Element | null) => {
       if (over === zone) return;
       over?.removeAttribute('data-drop');
@@ -53,10 +55,12 @@ export function useDrag(options: DragOptions) {
       latest.current.over?.(zone);
     };
     const begin = () => {
+      active = true;
       latest.current.start?.(el);
       el.classList.add('is-drag');
     };
     const finish = (zone: Element | null) => {
+      active = false;
       el.classList.remove('is-drag');
       mark(null);
       latest.current.end?.();
@@ -90,6 +94,7 @@ export function useDrag(options: DragOptions) {
       el.draggable = false;
       let state: 'waiting' | 'held' | 'dragging' = 'waiting';
       let lifted: HTMLElement | null = null;
+      let last = { x: first.clientX, y: first.clientY };
       const timer = setTimeout(() => (state = 'held'), hold);
       const stop = (zone: Element | null) => {
         clearTimeout(timer);
@@ -119,10 +124,13 @@ export function useDrag(options: DragOptions) {
           begin();
           lifted = liftOf(el, first.clientY);
         }
+        last = { x: e.clientX, y: e.clientY };
         if (lifted) lifted.style.translate = `${e.clientX - first.clientX}px ${e.clientY - first.clientY}px`;
         mark(zoneAt(e.clientX, e.clientY));
         latest.current.move?.(e.clientX, e.clientY);
       });
+      // the board slid under a still finger: what it is over now is another zone
+      on('scroll', () => state === 'dragging' && mark(zoneAt(last.x, last.y)));
       // once held, the finger drags rather than scrolls
       on(
         'touchmove',
@@ -162,7 +170,9 @@ export function useDrag(options: DragOptions) {
       off();
       zones();
       stopTouch();
-      mark(null);
+      // the element went (its card left the board) mid-drag: the drag ends, so its strip and edge slide go too
+      if (active) finish(null);
+      else mark(null);
       el.removeEventListener('pointerdown', down);
     };
   }, []);

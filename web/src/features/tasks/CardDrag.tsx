@@ -3,7 +3,8 @@ import { createPortal, flushSync } from 'react-dom';
 import { useAction } from '@/actions';
 import { announce, useDrag } from '@/kit/Drag';
 import { toast } from '@/kit/Toast';
-import type { Stage } from './queries';
+import { BOARD_STEP } from './BoardFit';
+import { stageOfTask, type Stage } from './queries';
 
 /** Where a board card lands: a stage's column, or its chip in the strip a drag brings up. */
 const ZONES = '.col[data-target^="stage:"], .stage-strip [data-stage]';
@@ -38,6 +39,13 @@ export function useCardDrag(stages: readonly Stage[]): CardDrag {
   const slide = useRef<EdgeSlide | null>(null);
   const nameOf = (id: string | null) => stages.find((s) => s.id === id)?.name ?? '';
 
+  /** Take a drag's move back, only while the task is still where that move put it: a later move stands. */
+  const undo = (task: string, to: string, back: string) => {
+    const at = stageOfTask(task);
+    if (at !== undefined && at !== to) return void toast({ text: `Not moved back: it's in ${nameOf(at) || 'another stage'} now`, kind: 'failed' });
+    void move.run({ task, to: back }).then((b) => b.ok && toast({ text: `Moved back to ${nameOf(back)}` }));
+  };
+
   const ref = useDrag({
     zones: ZONES,
     controls: '.tk-more',
@@ -68,7 +76,7 @@ export function useCardDrag(stages: readonly Stage[]): CardDrag {
         toast({
           text: `Moved to ${name}`,
           timeout: UNDO_MS,
-          action: { label: 'Undo', run: () => void move.run({ task, to: back }).then((b) => b.ok && toast({ text: `Moved back to ${nameOf(back)}` })) },
+          action: { label: 'Undo', run: () => undo(task, to, back) },
         });
       });
     },
@@ -98,17 +106,16 @@ interface EdgeSlide {
   stop: () => void;
 }
 
-/** Slide `board` a column at a time while a drag stays near its left or right edge. A computer's board moves by its
-    own arrows (BoardFit pages whole columns); a phone's, which has none, scrolls a column's width. */
+/** Slide `board` a column at a time while a drag stays near its left or right edge. A computer's board, which BoardFit
+    fits to whole columns, brings in one more stage from that side; a phone's, which has no arrows, scrolls a column's
+    width. */
 function edgeSlide(board: HTMLElement | null): EdgeSlide {
   let dir = 0;
   let timer: ReturnType<typeof setInterval> | undefined;
   const step = () => {
     if (!board) return;
     const wrap = board.parentElement;
-    const arrow = wrap?.querySelector<HTMLButtonElement>(`:scope > .board-more.${dir > 0 ? 'is-next' : 'is-prev'} button`);
-    if (arrow) return arrow.click();
-    if (wrap?.classList.contains('has-more')) return;
+    if (wrap?.classList.contains('has-more')) return void wrap.dispatchEvent(new CustomEvent(BOARD_STEP, { detail: dir }));
     const col = board.querySelector<HTMLElement>('.col:not(.is-fold)');
     const gap = parseFloat(getComputedStyle(board.firstElementChild ?? board).columnGap) || 0;
     board.scrollBy({ left: dir * ((col?.offsetWidth || board.clientWidth) + gap), behavior: 'smooth' });

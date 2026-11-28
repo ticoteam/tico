@@ -398,6 +398,24 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
       expect(await screen.findByText('Moved back to Inbox')).toBeTruthy();
     });
 
+    it('Undo leaves a task that has moved again since where it is now', async () => {
+      serve((url, method) => (method === 'POST' && url.endsWith('/move') ? moved('a1', 's2', 2) : { status: 404, body: {} }));
+      seed([task('a1', 7, 'Fix the export', 's1')]);
+      show(<TasksPage pipeline="eng" search={{}} />, '/tasks/eng');
+      await screen.findByTitle('Fix the export');
+      lift(card('Fix the export'));
+      over(chip('Doing'));
+      fireEvent.drop(chip('Doing'), { dataTransfer: data });
+      expect(await screen.findByText('Moved to Doing')).toBeTruthy();
+      await waitFor(() => expect(stageOf('a1')).toBe('s2'));
+      // someone moves it on before Undo is pressed
+      act(() => queryClient.setQueryData(listKey, { tasks: [task('a1', 7, 'Fix the export', 'sd', { version: 3 })], cursor: 'c1' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+      expect(await screen.findByText("Not moved back: it's in another stage now")).toBeTruthy();
+      expect(posts.length).toBe(1);
+      expect(stageOf('a1')).toBe('sd');
+    });
+
     it("over another stage's column it reads Move to that stage; over its own column nothing lights up and nothing is saved", async () => {
       serve(() => ({ status: 404, body: {} }));
       seed([task('a1', 7, 'Fix the export', 's1')]);
@@ -493,6 +511,26 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
         expect(await screen.findByText('Moved to Doing')).toBeTruthy();
       });
 
+      it('when the board slides under a still finger, the stage it is over now lights up and takes the drop', async () => {
+        await board();
+        const c = card('Fix the export');
+        touch('pointerDown', c, 100, 200);
+        act(() => vi.advanceTimersByTime(500));
+        // over its own column: nothing lights up
+        under = screen.getByRole('region', { name: 'Inbox' });
+        touch('pointerMove', c, 300, 260);
+        expect(document.querySelector('[data-drop]')).toBeNull();
+        // the board scrolls; the finger has not moved, but Doing lies under it now
+        under = screen.getByTitle('Write the notes');
+        fireEvent.scroll(screen.getByRole('region', { name: 'Stages' }));
+        const doing = screen.getByRole('region', { name: 'Doing' });
+        expect(doing.hasAttribute('data-drop')).toBe(true);
+        expect(within(doing).getByText('Move to Doing')).toBeTruthy();
+        touch('pointerUp', c, 300, 260);
+        vi.useRealTimers();
+        await waitFor(() => expect(posts).toEqual([{ url: '/api/v2/tasks/a1/move', body: { to: 's2', version: 1 } }]));
+      });
+
       it('a swipe before the half second scrolls and a tap opens the task: neither lifts the card', async () => {
         await board();
         const c = card('Fix the export');
@@ -540,6 +578,42 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
         expect(slides).toEqual([1, 1, -1]);
         expect(posts).toEqual([]);
         expect(strip()).toBeNull();
+      });
+
+      it("on a computer's paged board, each second at the edge brings in one more stage, not a whole page", async () => {
+        const width = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(470);
+        try {
+          serve(() => ({ status: 404, body: {} }));
+          const stages = ['Inbox', 'Doing', 'Review', 'Ship'].map((name, i) => ({ id: `s${i + 1}`, name }));
+          queryClient.setQueryData(pipelinesQuery.queryKey, [{ ...PIPE, stages }]);
+          // a task in every stage, so none folds
+          const tasks = [task('a1', 7, 'Fix the export', 's1'), ...['s2', 's3', 's4'].map((st, i) => task(`b${i}`, 20 + i, `Task ${i}`, st))];
+          queryClient.setQueryData(listKey, { tasks, cursor: 'c1' });
+          queryClient.setQueryData(['flow'], { count: 0, items: [] });
+          show(<TasksPage pipeline="eng" search={{ view: 'board' }} />, '/tasks/eng?view=board');
+          await screen.findByRole('button', { name: 'Later stages' });
+          const more = (cls: string) => document.querySelector(`.board-more.${cls} .more-n`)?.textContent;
+          expect(more('is-next')).toBe('+2');
+          vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+          const scroller = screen.getByRole('region', { name: 'Stages' });
+          scroller.getBoundingClientRect = () => DOMRect.fromRect({ x: 0, y: 100, width: 470, height: 600 });
+          const c = card('Fix the export');
+          touch('pointerDown', c, 100, 200);
+          act(() => vi.advanceTimersByTime(500));
+          touch('pointerMove', c, 465, 300);
+          act(() => vi.advanceTimersByTime(1000));
+          expect(more('is-prev')).toBe('+1');
+          expect(more('is-next')).toBe('+1');
+          act(() => vi.advanceTimersByTime(1000));
+          expect(more('is-prev')).toBe('+2');
+          expect(more('is-next')).toBeUndefined();
+          // nothing more past the edge: it stays
+          act(() => vi.advanceTimersByTime(2000));
+          expect(more('is-prev')).toBe('+2');
+          touch('pointerUp', c, 465, 300);
+        } finally {
+          width.mockRestore();
+        }
       });
     });
   });

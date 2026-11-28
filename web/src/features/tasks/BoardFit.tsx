@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { IconButton } from '@/kit/IconButton';
 import { FlowMark } from '@/kit/FlowMark';
@@ -24,6 +24,10 @@ const stageOf = (c: Element) => c.getAttribute('data-target')?.slice('stage:'.le
 /** The column's own count of tasks that wait on you, from its head: the number beside the mark (the mark has a `b` of
     its own, an empty one). */
 const waitsIn = (c: Element) => Number(c.querySelector(':scope > .col-head > .col-flow > b')?.textContent || 0);
+/** Sent to `.board-wrap` (detail: -1 or 1) to bring one more stage in from that side, as a drag held at the board's
+    edge does; the arrows page whole screens. */
+export const BOARD_STEP = 'board-step';
+
 const edge = (list: Element[]): Edge | null =>
   list.length ? { stages: list.map(stageOf), waits: list.reduce((n, c) => n + waitsIn(c), 0) } : null;
 
@@ -90,6 +94,22 @@ export function BoardFit({ shape }: { shape: string }) {
       ro.disconnect();
     };
   }, [shape, start]);
+
+  const shown = useRef(edges);
+  useLayoutEffect(() => {
+    shown.current = edges;
+  });
+  useEffect(() => {
+    const wrap = ref.current?.parentElement?.parentElement?.parentElement;
+    if (!wrap) return;
+    const step = (e: Event) => {
+      const dir = (e as CustomEvent<number>).detail;
+      const at = shown.current;
+      if (dir > 0 ? at?.next : at?.prev) setStart((s) => Math.max(0, s + dir));
+    };
+    wrap.addEventListener(BOARD_STEP, step);
+    return () => wrap.removeEventListener(BOARD_STEP, step);
+  }, []);
 
   const arrow = (e: Edge | null, cls: string, label: string, to: number) =>
     e && (

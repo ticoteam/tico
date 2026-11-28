@@ -319,6 +319,12 @@ function stageIn(pipelineId: string | null, to: string): Stage | null {
   return p?.stages.find((s) => s.id === to || s.name.toLowerCase() === to.toLowerCase()) ?? null;
 }
 
+/** The stage the task is in (null: none, as when done), or undefined while it is not on screen. */
+export function stageOfTask(id: string): string | null | undefined {
+  const t = findTask(id);
+  return t ? t.stage_id : undefined;
+}
+
 /** The name of the stage `to` names in the task's own pipeline, while the task is on screen. */
 export function stageNameOf(id: string, to: string): string | undefined {
   const t = findTask(id);
