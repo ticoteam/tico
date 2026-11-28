@@ -325,10 +325,18 @@ export function stageOfTask(id: string): string | null | undefined {
   return t ? t.stage_id : undefined;
 }
 
-/** The name of the stage `to` names in the task's own pipeline, while the task is on screen. */
+/**
+ * The name of the stage `to` names: in the task's own pipeline while the task is on screen, else (off the board, as for
+ * an Undo after it moved away) the stage with that id in any pipeline. Stage ids are unique; names are not.
+ */
 export function stageNameOf(id: string, to: string): string | undefined {
   const t = findTask(id);
-  return t ? stageIn(t.pipeline_id, to)?.name : undefined;
+  if (t) return stageIn(t.pipeline_id, to)?.name;
+  for (const p of queryClient.getQueryData<Pipeline[]>(pipelinesQuery.queryKey) ?? []) {
+    const s = p.stages.find((x) => x.id === to);
+    if (s) return s.name;
+  }
+  return undefined;
 }
 
 /**

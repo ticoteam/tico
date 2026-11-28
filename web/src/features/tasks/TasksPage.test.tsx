@@ -449,7 +449,8 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
       act(() => queryClient.setQueryData(listKey, { tasks: [task('a2', 8, 'Write the notes', 's2')], cursor: 'c1' }));
       fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
       await waitFor(() => expect(posts[1]).toEqual({ url: '/api/v2/tasks/a1/move', body: { to: 's1', version: 2 } }));
-      expect(await screen.findByText(/The task changed since/)).toBeTruthy();
+      // the refusal still names where it was going back to, though the card is off the board
+      expect(((await screen.findByText('The task changed since')).closest('.toast') as HTMLElement).textContent).toBe("Couldn't move to Inbox: The task changed since");
       expect(screen.queryByText('Moved back to Inbox')).toBeNull();
     });
 
