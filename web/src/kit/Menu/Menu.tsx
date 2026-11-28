@@ -1,4 +1,4 @@
-import { Children, Fragment, isValidElement, useRef, type ComponentProps, type ReactElement, type ReactNode } from 'react';
+import { Children, Fragment, isValidElement, useRef, useState, type ComponentProps, type TouchEvent, type ReactElement, type ReactNode } from 'react';
 import { ContextMenu as BaseContextMenu } from '@base-ui/react/context-menu';
 import { Menu as BaseMenu } from '@base-ui/react/menu';
 import { Icon } from '@/kit/Icon';
@@ -47,6 +47,9 @@ export type ContextMenuProps = {
   children: ReactElement;
   /** `MenuItem`s and `MenuRule`s. */
   items: ReactNode;
+  /** The row also drags after a long press (a board card): a press that moves on past the long press closes the
+      menu, so the finger drags the row instead. */
+  drags?: boolean;
 };
 
 /* After a long press, lifting the finger is still the press that opened the menu: Chrome sends a mouseup and a click
@@ -55,11 +58,15 @@ export type ContextMenuProps = {
 const LIFT_MS = 400;
 const KEEPS = new Set(['item-press', 'escape-key']);
 
+/** How far a finger moves past a long press before it is a drag (Base UI's own long press gives up past 10px). */
+const DRAG_PX = 10;
+
 /** The same menu, opened by a right click or a long press on a row. */
-export function ContextMenu({ children, items }: ContextMenuProps) {
+export function ContextMenu({ children, items, drags = false }: ContextMenuProps) {
   const at = usePlacement();
+  const [open, setOpen] = useState(false);
   const pressing = useRef(false);
-  const press = () => {
+  const press = (e: TouchEvent) => {
     pressing.current = true;
     const done = new AbortController();
     const lift = () => {
@@ -68,11 +75,22 @@ export function ContextMenu({ children, items }: ContextMenuProps) {
     };
     document.addEventListener('touchend', lift, { signal: done.signal });
     document.addEventListener('touchcancel', lift, { signal: done.signal });
+    const first = e.touches[0];
+    if (drags && first) {
+      const { clientX: x, clientY: y } = first;
+      const moved = (m: globalThis.TouchEvent) => {
+        const t = m.touches[0];
+        if (t && (Math.abs(t.clientX - x) > DRAG_PX || Math.abs(t.clientY - y) > DRAG_PX)) setOpen(false);
+      };
+      document.addEventListener('touchmove', moved, { signal: done.signal, passive: true });
+    }
   };
   return (
     <BaseContextMenu.Root
-      onOpenChange={(open, details) => {
-        if (!open && pressing.current && !KEEPS.has(details.reason)) details.cancel();
+      open={open}
+      onOpenChange={(next, details) => {
+        if (!next && pressing.current && !KEEPS.has(details.reason)) return details.cancel();
+        setOpen(next);
       }}
     >
       <BaseContextMenu.Trigger render={children} data-long-press="" onTouchStart={press} />

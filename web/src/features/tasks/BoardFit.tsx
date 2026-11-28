@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { IconButton } from '@/kit/IconButton';
 import { FlowMark } from '@/kit/FlowMark';
@@ -24,6 +24,10 @@ const stageOf = (c: Element) => c.getAttribute('data-target')?.slice('stage:'.le
 /** The column's own count of tasks that wait on you, from its head: the number beside the mark (the mark has a `b` of
     its own, an empty one). */
 const waitsIn = (c: Element) => Number(c.querySelector(':scope > .col-head > .col-flow > b')?.textContent || 0);
+/** Sent to `.board-wrap` (detail: -1 or 1) to bring one more stage in from that side, as a drag held at the board's
+    edge does; the arrows page whole screens. */
+export const BOARD_STEP = 'board-step';
+
 const edge = (list: Element[]): Edge | null =>
   list.length ? { stages: list.map(stageOf), waits: list.reduce((n, c) => n + waitsIn(c), 0) } : null;
 
@@ -34,7 +38,7 @@ const edge = (list: Element[]): Edge | null =>
 export function BoardFit({ shape }: { shape: string }) {
   const ref = useRef<HTMLSpanElement>(null);
   const [start, setStart] = useState(0);
-  const [edges, setEdges] = useState<{ wrap: HTMLElement; prev: Edge | null; next: Edge | null; end: number } | null>(null);
+  const [edges, setEdges] = useState<{ wrap: HTMLElement; prev: Edge | null; next: Edge | null; from: number; end: number } | null>(null);
 
   useLayoutEffect(() => {
     const inn = ref.current?.parentElement;
@@ -69,7 +73,7 @@ export function BoardFit({ shape }: { shape: string }) {
         inn.style.paddingRight = `${Math.max(0, avail - need(cols.slice(from), w))}px`;
         board.scrollLeft = (cols[from] as HTMLElement).offsetLeft - (cols[0] as HTMLElement).offsetLeft;
       } else board.scrollLeft = 0;
-      setEdges(more ? { wrap, prev: edge(cols.slice(0, from)), next: edge(cols.slice(end)), end } : null);
+      setEdges(more ? { wrap, prev: edge(cols.slice(0, from)), next: edge(cols.slice(end)), from, end } : null);
     };
     fit();
     if (typeof ResizeObserver === 'undefined') return;
@@ -91,6 +95,23 @@ export function BoardFit({ shape }: { shape: string }) {
     };
   }, [shape, start]);
 
+  const shown = useRef(edges);
+  useLayoutEffect(() => {
+    shown.current = edges;
+  });
+  useEffect(() => {
+    const wrap = ref.current?.parentElement?.parentElement?.parentElement;
+    if (!wrap) return;
+    const step = (e: Event) => {
+      const dir = (e as CustomEvent<number>).detail;
+      // from the stage the board shows first now, not the one asked for: fewer stages may have clamped it
+      const at = shown.current;
+      if (at && (dir > 0 ? at.next : at.prev)) setStart(Math.max(0, at.from + dir));
+    };
+    wrap.addEventListener(BOARD_STEP, step);
+    return () => wrap.removeEventListener(BOARD_STEP, step);
+  }, []);
+
   const arrow = (e: Edge | null, cls: string, label: string, to: number) =>
     e && (
       <div className={`board-more ${cls}`}>
@@ -111,7 +132,7 @@ export function BoardFit({ shape }: { shape: string }) {
       {edges &&
         createPortal(
           <>
-            {arrow(edges.prev, 'is-prev', 'Earlier stages', Math.max(0, start - Math.max(1, edges.end - start)))}
+            {arrow(edges.prev, 'is-prev', 'Earlier stages', Math.max(0, edges.from - Math.max(1, edges.end - edges.from)))}
             {arrow(edges.next, 'is-next', 'Later stages', edges.end)}
           </>,
           edges.wrap,

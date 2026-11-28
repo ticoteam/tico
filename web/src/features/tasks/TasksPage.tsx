@@ -7,7 +7,6 @@ import { CardFix, lineFor, StatusLine, TaskSend } from '@/features/task/exports'
 import { useFollow } from '@/live/follow';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
-import { announce, useDrag } from '@/kit/Drag';
 import { Empty } from '@/kit/Empty';
 import { FlowMark } from '@/kit/FlowMark';
 import { Icon } from '@/kit/Icon';
@@ -22,6 +21,7 @@ import { Board, BoardColumn, List, PageMore, Section } from '@/pagekinds';
 import { usePref, writePref } from '@/prefs';
 import { ArchivedSections, useShelves } from './Archived';
 import { BoardFit } from './BoardFit';
+import { useCardDrag } from './CardDrag';
 import { Capped, CARD_H, COL_CAP, COL_SHOW, LIST_CAP, LIST_SHOW, moreText, PHONE_ROW_H, RowMore, ROW_H } from './capped';
 import { FilterItems, FilterMenu } from './FilterMenu';
 import { SelectBar, StageMenu } from './many';
@@ -395,23 +395,9 @@ function Card({ t, p, me, waits, picked, onPick }: { t: TaskItem; p: Pipeline; m
   );
 }
 
-/** Where a board card lands: a stage's column. */
-const COLUMN = '.col[data-target^="stage:"]';
-
 function Columns({ p, rows, me, needs, folds, fold, more, cut, countOf, picking, toggle }: BodyProps) {
-  const move = useAction('tasks.move');
-  // Dragging only moves: a card let go over another stage's column moves there.
-  const drag = useDrag({
-    zones: COLUMN,
-    controls: '.tk-more',
-    drop: (zone, card) => {
-      if (zone.contains(card)) return;
-      const task = card.getAttribute('data-task') ?? '';
-      const to = zone.getAttribute('data-target')?.slice('stage:'.length) ?? '';
-      const name = p.stages.find((s) => s.id === to)?.name;
-      void move.run({ task, to }).then((r) => r.ok && announce(`${r.did} to ${name}`));
-    },
-  });
+  // Dragging only moves: a card let go over another stage's column, or its chip in the strip, moves there.
+  const drag = useCardDrag(p.stages);
   const groups = byStage(p.stages, rows);
   // what the fit counts: each column's cards, its fold and what of it waits on you (the arrows say so when it lies past
   // the edge), so Needs you read late or changed fits the board again
@@ -436,12 +422,16 @@ function Columns({ p, rows, me, needs, folds, fold, more, cut, countOf, picking,
             onToggle={list.length ? () => fold(s.id, folded) : undefined}
             target={`stage:${s.id}`}
             waits={
-              waits > 0 && (
-                <span className="col-flow" title={`${waits} wait${waits === 1 ? 's' : ''} on you`}>
-                  <FlowMark />
-                  <b>{waits}</b>
-                </span>
-              )
+              <>
+                {waits > 0 && (
+                  <span className="col-flow" title={`${waits} wait${waits === 1 ? 's' : ''} on you`}>
+                    <FlowMark />
+                    <b>{waits}</b>
+                  </span>
+                )}
+                {/* in the head, so a folded (empty) column says it too */}
+                {drag.over === s.id && <span className="col-drop">Move to {s.name}</span>}
+              </>
             }
           >
             <Capped
@@ -456,7 +446,7 @@ function Columns({ p, rows, me, needs, folds, fold, more, cut, countOf, picking,
                   key={t.id}
                   task={t}
                   stages={p.stages}
-                  wrap={picking ? undefined : { 'data-task': t.id, ref: drag }}
+                  wrap={picking ? undefined : { 'data-task': t.id, 'data-stage': t.stage_id ?? undefined, ref: drag.ref }}
                   after={!picking && <CardFix t={t} me={me} />}
                 >
                   <Card t={t} p={p} me={me} waits={waitsOnMe(t, needs)} picked={picking?.has(t.id)} onPick={picker(toggle, t.id)} />
@@ -472,6 +462,7 @@ function Columns({ p, rows, me, needs, folds, fold, more, cut, countOf, picking,
         );
       })}
       <BoardFit shape={shape} />
+      {drag.strip}
     </>
   );
 }

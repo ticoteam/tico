@@ -319,11 +319,32 @@ function stageIn(pipelineId: string | null, to: string): Stage | null {
   return p?.stages.find((s) => s.id === to || s.name.toLowerCase() === to.toLowerCase()) ?? null;
 }
 
+/** The stage the task is in (null: none, as when done), or undefined while it is not on screen. */
+export function stageOfTask(id: string): string | null | undefined {
+  const t = findTask(id);
+  return t ? t.stage_id : undefined;
+}
+
+/**
+ * The name of the stage `to` names: in the task's own pipeline while the task is on screen, else (off the board, as for
+ * an Undo after it moved away) the stage with that id in any pipeline. Stage ids are unique; names are not.
+ */
+export function stageNameOf(id: string, to: string): string | undefined {
+  const t = findTask(id);
+  if (t) return stageIn(t.pipeline_id, to)?.name;
+  for (const p of queryClient.getQueryData<Pipeline[]>(pipelinesQuery.queryKey) ?? []) {
+    const s = p.stages.find((x) => x.id === to);
+    if (s) return s.name;
+  }
+  return undefined;
+}
+
 /**
  * Move a task to a stage: it shows there at once and is taken back if the server refuses (a requirement not met, a
- * newer version). The refusal's words are the error's message.
+ * newer version). The refusal's words are the error's message. `version` is the one the task must still be at (by
+ * default, the one on screen).
  */
-export async function moveTask(id: string, to: string): Promise<TaskItem> {
+export async function moveTask(id: string, to: string, version?: number): Promise<TaskItem> {
   const before = findTask(id);
   const stage = before ? stageIn(before.pipeline_id, to) : null;
   const shown = listsHolding(id);
@@ -333,7 +354,7 @@ export async function moveTask(id: string, to: string): Promise<TaskItem> {
     optimistic: (cur: TaskPage | undefined) =>
       stage && cur?.tasks ? patchRow(cur, id, (t) => ({ ...t, stage_id: stage.id, stage_since: now })) : cur,
     send: (idempotencyKey) =>
-      api.post<{ task: TaskItem }>(`/api/v2/tasks/${encodeURIComponent(id)}/move`, { to: stage?.id ?? to, version: before?.version }, { idempotencyKey }),
+      api.post<{ task: TaskItem }>(`/api/v2/tasks/${encodeURIComponent(id)}/move`, { to: stage?.id ?? to, version: version ?? before?.version }, { idempotencyKey }),
     settle: (cur: TaskPage | undefined, answer) =>
       cur?.tasks ? patchRow(cur, id, (t) => (answer.task.status === t.status ? { ...t, ...answer.task } : null)) : cur,
     revert: (cur: TaskPage | undefined) =>

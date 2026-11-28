@@ -110,6 +110,27 @@ describe('ContextMenu on a phone', () => {
     fireEvent.click(reply);
     expect(onReply).toHaveBeenCalledOnce();
   });
+
+  it('on a row that drags, a long press that moves on closes the menu; held still it stays open', async () => {
+    document.documentElement.dataset.layout = 'cards';
+    render(
+      <ContextMenu drags items={<MenuItem label="Doing" onSelect={() => {}} />}>
+        <div>Launch plan</div>
+      </ContextMenu>,
+    );
+    const row = screen.getByText('Launch plan');
+    const wait = (ms: number) => act(() => new Promise((r) => setTimeout(r, ms)));
+    fireEvent.touchStart(row, { touches: [{ clientX: 40, clientY: 40 }] });
+    await wait(520);
+    await screen.findByRole('menuitem', { name: 'Doing' });
+    // a finger that wobbles within the long press's own slack keeps the menu
+    fireEvent.touchMove(document, { touches: [{ clientX: 46, clientY: 44 }] });
+    await wait(50);
+    expect(screen.getByRole('menuitem', { name: 'Doing' })).toBeTruthy();
+    // past it, the finger drags the row: the menu goes
+    fireEvent.touchMove(document, { touches: [{ clientX: 40, clientY: 90 }] });
+    await waitFor(() => expect(screen.queryByRole('menuitem', { name: 'Doing' })).toBeNull());
+  });
 });
 
 describe('Menu on a phone', () => {

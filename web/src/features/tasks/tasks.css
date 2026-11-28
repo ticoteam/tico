@@ -18,7 +18,23 @@ button.row-more{width:100%;border:0;background:none;font:inherit;font-size:var(-
 .tk-item:hover>.tk-more,.tk-item>.tk-more:focus-visible,.tk-item>.tk-more[aria-expanded="true"]{opacity:1}
 .tk-item:hover>.row{--surface:var(--hover);background:var(--hover)}
 .tk-item>.tk-more:not(:hover){background:var(--surface)}
-.col[data-drop]{border-radius:var(--r-ctl);background:var(--well)}
+.col[data-drop]{border-radius:var(--r-ctl);background:var(--well);outline:2px solid var(--focus);outline-offset:-2px}
+
+/* a card being dragged: its place stays, faint; a finger drags a lifted copy of it */
+.tk-item.is-drag>.card{opacity:.35}
+.drag-lift{z-index:var(--z-toast);rotate:-2deg;box-shadow:var(--lift-2);border-radius:var(--r-card)}
+.tk-item,.drag-lift{-webkit-user-select:none;user-select:none}
+/* the column under a dragged card says where it goes */
+.col-drop{margin-left:auto;padding-right:var(--s-2);color:var(--ink);font-size:var(--t-xs);font-weight:var(--w-strong);white-space:nowrap}
+.col.is-fold .col-drop{margin:0;padding:0;writing-mode:vertical-rl}
+
+/* while a card drags: every stage along the bottom, its own dimmed, the one under the pointer outlined */
+.stage-strip{position:fixed;left:0;right:0;bottom:0;z-index:var(--z-overlay);display:grid;gap:var(--s-1);padding:var(--s-2) var(--s-3) calc(var(--s-3) + env(safe-area-inset-bottom));background:var(--raised);box-shadow:var(--lift-2)}
+.stage-strip-line{padding:0 var(--s-1);color:var(--muted);font-size:var(--t-xs)}
+.stage-strip ul{display:flex;flex-wrap:wrap;gap:var(--s-1h);margin:0;padding:0;list-style:none}
+.stage-strip li{min-height:40px;display:flex;align-items:center;padding:0 var(--s-3);border:1px solid var(--line);border-radius:var(--r-pill);background:var(--surface);font-size:var(--t-sm)}
+.stage-strip li[aria-disabled="true"]{opacity:.4}
+.stage-strip li[data-drop]{outline:2px solid var(--focus);outline-offset:-1px;font-weight:var(--w-strong)}
 
 /* an age of a date ("Nov 16") is wider than the mock's "2d": the column grows, it never runs into the card's edge */
 .card-foot .row-age{min-width:32px;flex:none;line-height:var(--av-sm)}

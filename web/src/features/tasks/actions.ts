@@ -16,6 +16,7 @@ import {
   removeRequester,
   savePipeline,
   snoozeMany,
+  stageNameOf,
   updateRequester,
   type Pipeline,
   type Skipped,
@@ -159,8 +160,15 @@ export const move = defineAction({
   id: 'tasks.move',
   title: 'Move a task to a stage',
   kind: 'change',
-  input: z.strictObject({ task, to: z.string().check(z.minLength(1), z.maxLength(100), z.describe('a stage id or name, or next, done or closed')) }),
-  run: (_ctx, { task, to }) => said(() => moveTask(task, to), "Couldn't move the task"),
+  input: z.strictObject({
+    task,
+    to: z.string().check(z.minLength(1), z.maxLength(100), z.describe('a stage id or name, or next, done or closed')),
+    version: z.optional(z.int().check(z.minimum(0), z.describe('move only if the task is still at this version'))),
+  }),
+  run: (_ctx, { task, to, version }) => {
+    const name = stageNameOf(task, to);
+    return said(() => moveTask(task, to, version), name ? `Couldn't move to ${name}` : "Couldn't move the task");
+  },
   did: (_input, out) => (out ? `Moved #${out.number ?? out.id}` : 'Moved the task'),
   target: ({ task }, out) => ({ kind: 'task', id: out?.number ?? task }),
 });
