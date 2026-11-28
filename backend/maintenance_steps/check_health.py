@@ -58,6 +58,7 @@ TAGS = {
     "worktree_fallback": "urgent",
     "cannot_fetch": "urgent",
     "event_stream": "urgent",
+    "worker_died": "urgent",  # a server's background worker is dead until a restart: nothing comes back on its own
     "readiness_403": "urgent",
     "local_busy": "urgent",
     "lease_overdue": "urgent",
@@ -113,6 +114,11 @@ FIX_PAGE = (
     "check or the page where they fix it."
 )
 FIX_RUN = "Agent Ops: nothing to do by hand; the check clears when the next run no longer finds it."
+# A production check whose fix is a person's, not the next run's: what Agent Ops does instead of FIX_RUN.
+FIX_PERSON = {
+    "worker_died": "Agent Ops: only a restart of the server starts the worker again, and the check clears then. One ❓ on "
+    "this task to the person who runs the server, naming the worker and the time.",
+}
 
 
 def tag_of(check_id):
@@ -165,6 +171,22 @@ def run(c, ctx):
         store, ctx["auth"], ctx["settings"], support, result["details"].get("reports_due", [])
     )
     return result
+
+
+def file_check_now(store, check_id):
+    """One production check read and filed now, outside the Maintenance run, for a check whose cause can stop that run
+    itself: a dead scheduler (`worker_died`, filed by backend/lifespan_workers.py when a worker dies). Every other
+    reader counts as unread, so nothing else is filed, pended or cleared. Returns the step result, or None on a rehearsal
+    or demo copy."""
+    settings = store.settings
+    if settings.rehearsal or settings.demo:
+        return None
+    check = invariants.BY_ID[check_id]
+    ctx = context(None, settings, store)
+    notes = {"unread": ["code", "busy", "page", "inv"]}
+    with store.transaction() as c:
+        _, found = _invariant_findings(c, _now(ctx), _at(ctx), notes, checks=[check])
+        return apply(c, ctx, 1, found, notes)
 
 
 def run_once(store, auth, settings):
@@ -238,11 +260,12 @@ def _busy_findings(c, now):
     return out
 
 
-def _invariant_findings(c, now, at, notes):
-    """Each production check's readers' hits. The check is one finding: its count and examples are in its detail."""
+def _invariant_findings(c, now, at, notes, checks=None):
+    """Each production check's readers' hits (`checks`, all of them by default). The check is one finding: its count and
+    examples are in its detail."""
     ictx = invariants.Ctx(now=now, at=at)
     out, read = [], 0
-    for check in invariants.CHECKS:
+    for check in invariants.CHECKS if checks is None else checks:
         read += 1
         try:
             hits = check.read(c, ictx)
@@ -260,7 +283,7 @@ def _invariant_findings(c, now, at, notes):
                     MH.SETUP,
                     f"Production check: {check.label}",
                     detail,
-                    f"{check.look} {FIX_RUN}",
+                    f"{check.look} {FIX_PERSON.get(check.id, FIX_RUN)}",
                     severity=MH.WARN,
                 )
             )

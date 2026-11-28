@@ -159,16 +159,16 @@ ENTRIES = TEAM_RULES + [
         for page, spec in PAGE_OWNER_PAGES.items()
     ),
     S(
-        "me.assistant.decides_approvals",
-        "My Assistant decides my approvals",
+        "me.assistant.gives_oks",
+        "Give OKs for me when I tell you to",
         GENERAL + " > Assistant",
         "self",
         "person",
         "POST",
         "assistant/settings",
-        "decides_approvals",
+        "gives_oks",
         card=_card("general", "settings-assistant-pane"),
-        why="Who decides your approvals is yours to choose, in Settings",
+        why="Whether your Assistant gives OKs for you is yours to choose, in Settings",
     ),
     S(
         "assistant.on",
@@ -1299,7 +1299,6 @@ ENTRIES = TEAM_RULES + [
         for source, name in (
             ("webhook", "Webhooks"),
             ("mail", "Mail"),
-            ("idea", "Ideas"),
             ("watcher", "Watchers"),
             ("document", "Documents"),
         )
@@ -1450,18 +1449,6 @@ ENTRIES = TEAM_RULES + [
         card=HOOKS_OUT_CARD,
     ),
     # Tasks
-    S(
-        "roadmap.public",
-        "Public roadmap",
-        TASKS + " > Public roadmap",
-        "admin",
-        "confirm",
-        "POST",
-        "roadmaps/settings",
-        value="json",
-        card=_card("tasks", "settings-roadmaps"),
-        words="publish public",
-    ),
     S(
         "tasks.tag.create",
         "New task tag",
@@ -1742,8 +1729,8 @@ NOT_SETTINGS = {
     ("POST", "screening/test"): "runs screening's built-in samples; nothing is kept",
     ("POST", "{x}/deliveries/{x}/replay"): "replays one delivery",
     ("POST", "{x}/sends/{x}/retry"): "retries one send",
-    ("POST", "tasks/{x}/comments/{x}/moderate"): "moderates one comment on a public roadmap task",
-    ("POST", "tasks/{x}/requesters/{x}/delete"): "removes one requester from a public roadmap task",
-    ("POST", "tasks/{x}/requesters{x}"): "adds one requester to a public roadmap task",
+    ("POST", "tasks/{x}/comments/{x}/moderate"): "moderates one comment on a public task",
+    ("POST", "tasks/{x}/requesters/{x}/delete"): "removes one requester from a task",
+    ("POST", "tasks/{x}/requesters{x}"): "adds one requester to a task",
     ("POST", "postal/items/{x}/retry"): "tries one failed letter again",
 }

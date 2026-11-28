@@ -768,3 +768,70 @@ def test_choices_or_context_on_an_ok_are_refused_not_dropped():
         with pytest.raises(ValueError, match="go with a question"):
             hubtools.task_ask(api, {"id": "T1", "to": "chris", "line": "OK the plan?", "kind": "ok", **extra})
         assert api.writes() == []
+
+
+def test_approve_sends_a_document_approvals_whole_key_and_its_visit():
+    """A document approval with several pages is OK'd by its whole submission key (`approval.page_version`, every page
+    at its version) and the visit it was asked on: one page's `<file>@<version>` is refused by the engine as stale."""
+    entry = {
+        "requirement_id": "r1",
+        "line": "Spec",
+        "may": ["ok", "no"],
+        "page": {"file_id": "f1", "version": 2, "ref": "page:f1@2"},
+        "approval": {
+            "document": "Spec",
+            "visit_id": "v1",
+            "file_id": "f1",
+            "version": 2,
+            "pages": [{"file_id": "f1", "version": 2}, {"file_id": "f2", "version": 1}],
+            "page_version": "f1@2,f2@1",
+        },
+    }
+    api = Recorder({"id": "T1", "version": 3, "to_leave": [entry]})
+    hubtools.BY_NAME["tico_task_approve"]["fn"](api, {"id": "T1", "version": 3})
+    assert api.writes() == [
+        (
+            "POST",
+            "tasks/T1/asks/r1/answer",
+            {"value": "ok", "version": 3, "page_version": "f1@2,f2@1", "visit_id": "v1"},
+        )
+    ]
+    # One page on a document approval: its key and visit too.
+    entry["approval"] = {"document": "Spec", "visit_id": "v1", "file_id": "f1", "version": 2}
+    api = Recorder({"id": "T1", "version": 3, "to_leave": [entry]})
+    hubtools.BY_NAME["tico_task_approve"]["fn"](api, {"id": "T1", "version": 3})
+    assert api.writes()[0][2] == {"value": "ok", "version": 3, "page_version": "f1@2", "visit_id": "v1"}
+
+
+def test_agent_ops_approves_as_the_person_with_the_whole_key():
+    """Agent Ops' `tico task approve` reads the task and answers as the person whose own chat asked it (the run's
+    turn, `delegate`), so it finds the OK waiting on them and sends a document's whole submission key and visit."""
+
+    class AgentOps(Recorder):
+        def __init__(self, task):
+            super().__init__(task)
+            self.__dict__["_tico_is_agent_ops"] = True
+            self.delegated = []
+
+        def call(self, method, path, body=None, key=None, query=None, delegate=False):
+            self.delegated.append((method, path, delegate))
+            if method == "GET":
+                return {"task": self.task}
+            return super().call(method, path, body, key, query, delegate)
+
+    entry = {
+        "requirement_id": "r1",
+        "line": "Spec",
+        "may": ["ok", "no"],
+        "approval": {"document": "Spec", "visit_id": "v1", "file_id": "f1", "version": 2, "page_version": "f1@2,f2@1"},
+    }
+    api = AgentOps({"id": "T1", "version": 3, "to_leave": [entry]})
+    hubtools.BY_NAME["tico_task_approve"]["fn"](api, {"id": "T1", "version": 3})
+    assert api.writes() == [
+        (
+            "POST",
+            "tasks/T1/asks/r1/answer",
+            {"value": "ok", "version": 3, "page_version": "f1@2,f2@1", "visit_id": "v1"},
+        )
+    ]
+    assert api.delegated == [("GET", "tasks/T1", True), ("POST", "tasks/T1/asks/r1/answer", True)]

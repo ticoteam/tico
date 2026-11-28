@@ -808,9 +808,8 @@ def test_hqs_starting_chart_starts_one_manager_per_team_running_its_teams_pipeli
         "success-manager": ("success-manager", "human:owner"),
     }
     assert first["seats"].count("corporate-manager") == 1
-    expected = {"product": "product-manager", **more.MANAGERS}
+    expected = {"product": "product-manager", "engineering": "engineering-manager", **more.MANAGERS}
     assert {pid: first["pipelines"][pid] for pid in expected} == expected
-    assert "engineering" not in first["pipelines"]  # Product replaced the pair
     lines = {template: above for template, above in first["bots"].values()}
     assert lines["feature-owner"] == "product-manager"
 
@@ -1926,6 +1925,7 @@ def test_a_new_company_set_up_with_the_default_chart_on_a_fresh_database_has_its
     with store.read() as c:
         assert [r[0] for r in c.execute("SELECT id FROM pipelines ORDER BY id")] == [
             "customer",
+            "engineering",  # with Product: the pair a company that builds software gets
             "finance",  # the default chart's Bookkeeper is live: Finance (private) with it
             "general",
             "growth-experiments",

@@ -16,6 +16,7 @@ from backend.tests.helpers.strategy_bot_level import level
 from backend.tests.helpers.kpis import goal_with_kpi
 from backend import bot_settings as BS
 from backend import mailbox_access
+from backend import roadmaps
 from backend import strategy_acts as SA
 from backend import strategy_bot
 
@@ -599,13 +600,13 @@ def test_a_decision_never_creates_a_task_for_a_bot_that_keeps_its_tasks_private(
         assert not c.execute("SELECT 1 FROM tasks WHERE owner_id='bot:finance'").fetchone()
 
 
-def test_the_strategy_bot_publishes_only_with_a_real_approval_whatever_the_team_setting(api):
-    """With bot approvals for public changes off, any approval id once let the Strategy Owner publish: the id is
-    checked."""
+def test_the_strategy_bot_publishes_only_with_a_real_approval_whatever_the_team_setting(api, monkeypatch):
+    """With bot approvals for public changes off (roadmaps.BOTS_NEED_A_PUBLISH_OK, once a team setting), any approval id
+    once let the Strategy Owner publish: the id is checked."""
     strategy_token = with_strategy_bot(api)
     bot(api, "ops")
     level(api, 3)
-    post(api, "roadmaps/settings", {"bot_public_approval": False})
+    monkeypatch.setattr(roadmaps, "BOTS_NEED_A_PUBLISH_OK", False)  # bots publish without an OK
     with api.app.state.store.transaction() as c:
         mine = H.task_create(c, STRATEGY_BOT, "Write the onboarding email", "Work it.", "bot:ops", lint=False)["id"]
     r = api.post(

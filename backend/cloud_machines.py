@@ -874,6 +874,8 @@ def asked_again(c, bot):
     machine = home(c, bot)
     if machine and machine["wake_key"] and machine["state"] not in ON and machine["problem"] in ("", "stuck"):
         save(c, machine["bot"], wake_key=None, problem="", problem_at=None)
+        return True
+    return False
 
 
 def cloud_runners(c, but=None):
@@ -1222,11 +1224,31 @@ def enrolled(c, execution, runner_id, key):
     burst = burst_key(key)
     if old and old != runner_id:
         mark_revoked(c, old, execution=execution if burst else None)
+    gone = [] if burst else replaced(c, key, old, runner_id)
     if not burst:
-        replaced(c, key, old, runner_id)
+        from . import performance
+
+        # Its overloads, points and turns follow the machine, newest computer first: a minute both reported keeps
+        # the newer reading. Not a computer a bot merely was assigned to (a person's own, removed).
+        for source in dict.fromkeys([old, *were(c, key)]):
+            if source and source != runner_id:
+                performance.carry_over(c, source, runner_id)
     save(c, key, runner_id=runner_id, enroll_by=0, enroll_fails=0)
     checked_in(c, runner_id)
     H.event(c, H.TICO_ACTOR, "cloud_machine.enrolled", key, {"runner": runner_id})
+    if gone:
+        from .worktrees import follow_replacement
+
+        # The old disk is gone: its task checkouts are rebuilt here, not left for each bot to add again (#3448).
+        moved, closed = follow_replacement(c, gone, runner_id, hosted(c, key))
+        if moved or closed:
+            H.event(
+                c,
+                H.TICO_ACTOR,
+                "cloud_machine.checkouts_moved",
+                key,
+                {"runner": runner_id, "from": gone, "moved": moved, "closed": closed},
+            )
     if not burst:
         c.execute("DELETE FROM registry_metadata WHERE key=?", (REPLACES_KEY + key,))
     for bot in hosted(c, key):
@@ -1296,6 +1318,14 @@ def unplaced(c, bot):
     target = machine.get("runner_id")
     if not target:
         return False
+    # Its own machine's computer was revoked: `bind` deletes that machine once no turn is out on it, a return from a
+    # burst computer pending or not (that return resumes when the new machine enrolls and binds it).
+    if (
+        machine.get("bot") == bot
+        and not machine.get("deleting")
+        and not c.execute("SELECT 1 FROM runners WHERE id=? AND revoked_at IS NULL", (target,)).fetchone()
+    ):
+        return True
     placed_on = c.execute(PLACED_ON, (bot,)).fetchone()
     if placed_on and placed_on["return_pending"]:
         return machine["state"] not in DEAD and bool(
@@ -1319,6 +1349,25 @@ def bind(c, execution, bot, lasting=False):
         moving(c, bot, False)
         return False
     target = machine.get("runner_id")
+    if target and not c.execute("SELECT 1 FROM runners WHERE id=? AND revoked_at IS NULL", (target,)).fetchone():
+        # A machine whose computer was revoked since (a person removed it in Settings > Computers) is no computer to
+        # go to (#3587: binding to it was refused "Computer is not registered"), and it can never check in again. The
+        # bot waits where it is; its own such machine is deleted, and its want makes a new one. Not while a turn is
+        # still out on that computer: its work is on that disk, so the deletion waits for a later look, as a person's
+        # removal waits (`remove`). Never when that computer last said the bot's history is not on GitHub
+        # (`stranded`): the disk is its only copy, so it stays for a person to recover.
+        from .execution import stranded
+
+        if (
+            machine["bot"] == bot
+            and machine.get("machine_id")
+            and not c.execute(
+                "SELECT 1 FROM attempts WHERE runner_id=? AND state IN ('leased','running') LIMIT 1", (target,)
+            ).fetchone()
+            and not stranded(c, execution.store.settings, bot, target, None)
+        ):
+            intend_delete(c, machine, "computer_revoked")
+        target = None
     placed_on = c.execute(PLACED_ON, (bot,)).fetchone()
     if placed_on and placed_on["return_pending"] is not None:
         from .compute_pool import resume_return
@@ -2514,7 +2563,9 @@ class Manager:
             return False
         if machine["state"] == "deleted":
             self.deletion_done(c, intent)
-        elif "pending" in machine and machine["pending"] != "delete":
+        elif "pending" in machine and machine["pending"] != "delete" and intent["next_try_at"] is not None:
+            # HQ is not deleting a machine it was asked to delete. A DELETE never sent yet (no retry clock: every
+            # answer sets one, `deletion_retry`) is kept for the sweep to send (#3587).
             c.execute("DELETE FROM cloud_machine_deletions WHERE machine_id=?", (intent["machine_id"],))
             current = row(c, intent["bot"])
             if current and current["machine_id"] == intent["machine_id"] and current["state"] != "deleted":
@@ -3423,6 +3474,8 @@ PROBLEMS = {
     OFFLINE_RESTARTING: "Restarting",
 }
 ASLEEP = "asleep; starts when work can run"
+# How a stopped machine's wait starts when a wake for this work ran nothing (`waiting`): the chat offers Wake now.
+WAKE_SPENT = "its cloud machine was woken at"
 
 
 def problem_words(problem):
@@ -3485,6 +3538,12 @@ def waiting(c, bot):
         return f"its cloud machine didn't start ({machine['problem'][3:]}); trying again"
     if machine["problem"].startswith("error:"):
         return f"its cloud machine couldn't be made or started ({machine['problem'][6:]}); trying again"
+    spent = machine["state"] in GOING and _wake_spent(c, bot, machine)
+    if spent:
+        # Woken for this work once and nothing ran, stuck or not: it is not woken for the same work again
+        # (`wake_for`), so the words say so rather than promise a start, and the chat offers Wake now (#3967).
+        when = datetime.fromtimestamp(machine["woke_at"], timezone.utc).strftime("%H:%M UTC")
+        return f"{WAKE_SPENT} {when} and ran nothing; it is not woken again for this work"
     if machine["problem"] == "stuck":
         return "its cloud machine started, but this did not run there"
     if machine["problem"] == "no_enroll":
@@ -3492,6 +3551,27 @@ def waiting(c, bot):
     if machine["state"] in GOING:
         return "its cloud machine is " + ASLEEP
     return "starting its cloud machine"
+
+
+def _wake_spent(c, bot, machine):
+    """Whether `wake_for` will not wake the machine for `bot`'s work again: it is not Always on, it was woken for the
+    bot's current want (`bot_want` keys it to the newest unheld queued job, so newer work is woken for afresh), and no
+    turn has started or ended on its computer since."""
+    if machine["always_on"] or not (machine["wake_key"] and machine["woke_at"]):
+        return False
+    newest = c.execute(
+        "SELECT id FROM jobs WHERE bot_id=? AND state='queued' AND held=0 ORDER BY created_at DESC,id DESC LIMIT 1",
+        (bot,),
+    ).fetchone()
+    if not newest or not covers(machine["wake_key"], "job:" + newest["id"]):
+        return False
+    if not machine["runner_id"]:
+        return True
+    found = c.execute(
+        "SELECT max(coalesce(finished_at,started_at,created_at)) FROM attempts WHERE runner_id=?",
+        (machine["runner_id"],),
+    ).fetchone()
+    return (epoch(found[0]) or 0 if found and found[0] else 0) <= machine["woke_at"]
 
 
 # A machine whose computer has not enrolled yet, as `coming` says it: on its way by itself, or held until a person acts.
@@ -4410,6 +4490,18 @@ def install(app, settings, store, auth, execution, mutate):
             if not (auth.bot_admin(who) or auth.bot_manager(c, who, bot)):
                 raise Problem("forbidden", "You do not manage this bot's computer", 403)
         return remove(service, who, auth, bot, request, mutate)
+
+    @app.post("/api/v2/bots/{bot}/cloud-machine/wake")
+    def cloud_machine_wake(bot: str, request: Request):
+        """Wake now: wake the bot's stopped cloud machine once more for work a wake already ran nothing for (#3967).
+        Those who manage the bot only. `woken` false: there was no spent wake to forget (it is up, or held for
+        another reason the status names)."""
+        who = request.state.identity
+        auth.domain(who)
+        with store.transaction() as c:
+            bot = _known(c, bot)
+            manage(c, auth, who, bot)
+            return {"woken": asked_again(c, bot)}
 
     @app.post("/api/v2/bots/{bot}/cloud-machine/replace")
     def cloud_machine_replace(bot: str, request: Request):

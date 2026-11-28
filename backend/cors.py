@@ -43,6 +43,10 @@ def parse(value):
     return tuple(origins)
 
 
+# A requester's withdrawal link (backend/roadmaps.py withdraw_requester): it answers no website, so this adds nothing.
+WITHDRAW_PATH = re.compile(r"/public/roadmaps/[^/]+/tasks/[^/]+/requesters/[^/]+")
+
+
 class Cors:
     """ASGI middleware for the allowlist. Starlette's CORSMiddleware also answers credential and
     expose headers to origins it refuses; this adds nothing at all for them, and never `*`."""
@@ -52,7 +56,8 @@ class Cors:
         self.headers = {h.lower() for h in HEADERS}
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or scope.get("path", "").startswith("/public/roadmaps/"):
+        if scope["type"] != "http" or WITHDRAW_PATH.fullmatch(scope.get("path", "")):
+            # A requester's withdrawal link (backend/roadmaps.py) answers no website: no preflight, no CORS headers.
             return await self.app(scope, receive, send)
         request = Headers(scope=scope)
         origin = request.get("origin")

@@ -130,10 +130,21 @@ rust_fmt() {  # CRATE: cargo fmt --check as rust_checks.sh runs it
 # 1. Python lint, as lint.sh runs it in CI: the ruff baseline (counts only go down, against origin/main), the pytest
 # ignore count, and ruff format over the whole repository. The ruff settings and the pytest config are inputs too.
 # lint.sh also runs pr_checks.py smoke-check, which reads the smoke set and the browser runner's core scripts.
-if touched '\.pyi?$|^ruff\.toml$|^baselines/ruff/|^pytest\.ini$|^baselines/landmines/|^skills/honest-code/|^scripts/(lint|lint_baseline|landmines|pytest_warning_ignores|baseline_files)\.(sh|py)$|^scripts/queue-smoke\.json$'; then
+lint_inputs='\.pyi?$|^runner_support/|^ruff\.toml$|^baselines/ruff/|^pytest\.ini$|^baselines/landmines/|^skills/honest-code/|^scripts/(lint|lint_baseline|landmines|pytest_warning_ignores|baseline_files)\.(sh|py)$|^scripts/queue-smoke\.json$'
+if touched "$lint_inputs"; then
   job "lint (ruff baseline, format)" env LINT_BASE_REF="$ratchet" bash scripts/lint.sh
 else
   skip "lint (ruff baseline, format)" "no Python, ruff or pytest config changed"
+fi
+
+# 1, continued. Two landmine bans read more than Python: no-flight-in-hub reads SQL files; no-tauri reads Markdown,
+# workflows, Cargo.toml, package.json, app/, desktop/, web/, scripts/ and files named for Tauri. lint.sh runs
+# landmines.py only when the lint job above runs, so a change to those files alone is checked here.
+if ! touched "$lint_inputs" \
+  && touched '\.(sql|md)$|^\.github/workflows/|(^|/)(Cargo\.toml|package\.json)$|^(app|desktop|web|scripts)/|(^|[^a-zA-Z])[Tt][Aa][Uu][Rr][Ii]'; then
+  job "landmines (SQL, docs and build files)" python3 scripts/landmines.py --check --base "$ratchet"
+else
+  skip "landmines (SQL, docs and build files)" "the lint job runs it, or no file its bans read changed"
 fi
 
 # 1a. No Python file imports a test module (scripts/check_test_imports.py): shared names live in the tests' helpers/.

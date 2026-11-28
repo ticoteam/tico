@@ -63,7 +63,13 @@ export function foldPhoneCard(sheet: string, folded?: boolean): void {
   foldHand?.(sheet, folded);
 }
 
-const EDITABLE = 'input,textarea,select,[contenteditable]:not([contenteditable="false"])';
+/* A field the keyboard types into. A checkbox, a radio or a select takes focus too, but brings no keys up, so the bar
+   stays for them. An input's `type` property is the normalized one: an empty or unknown attribute reads as "text". */
+const TEXT_INPUTS = new Set(['text', 'search', 'email', 'url', 'tel', 'password', 'number']);
+const typedIn = (f: HTMLElement) =>
+  f instanceof HTMLTextAreaElement ||
+  (f instanceof HTMLInputElement && TEXT_INPUTS.has(f.type)) ||
+  f.matches('[contenteditable]:not([contenteditable="false"])');
 
 /** A chat's scroller to its newest message. A virtual list draws and measures the rows it comes to, and grows as it
     does, so it is put at its end again on each frame until it stays there. */
@@ -165,19 +171,30 @@ export function PhoneCards({ page, tico, menu, chat, faces = {}, labels = {}, tu
     const el = root.current;
     if (!el) return;
     let keys: Keys = { kb: 0, top: 0, up: false };
+    // the field a keyboard was measured up for: once those keys go down with the field still focused, typing is over
+    let raisedFor: Element | null = null;
     let blur = 0;
     let frame = 0;
     const update = () => {
       const active = document.activeElement;
-      const inside = active instanceof HTMLElement && el.contains(active) && active.matches(EDITABLE);
-      const ly = inside && keys.up ? active.closest<HTMLElement>('.ly[data-slot], .ph-dock') : null;
-      const where = !inside || !keys.up ? null : (ly?.dataset.slot ?? 'page');
+      const focused = active instanceof HTMLElement && el.contains(active) && typedIn(active);
+      if (!focused) raisedFor = null;
+      else if (keys.up) raisedFor = active;
+      else if (raisedFor !== active) raisedFor = null;
+      // typing is the focus alone: some iPhones never report the keyboard through visualViewport (#3562), and the bar
+      // must still go. Where the keyboard was measured up for this field, its closing ends typing even though the field
+      // keeps the focus. The measurement only lifts what is typed in above the keys.
+      const closed = focused && raisedFor === active && !keys.up;
+      const inside = focused && !closed;
+      const ly = inside ? active.closest<HTMLElement>('.ly[data-slot], .ph-dock') : null;
+      const where = inside ? (ly?.dataset.slot ?? 'page') : null;
+      const lift = where && keys.up;
       const holder = where === 'page' ? el.querySelector(':scope > .pg') : ly;
       const stuck = stuckToBottom(holder);
       if (where) el.dataset.typing = where;
       else delete el.dataset.typing;
-      el.style.setProperty('--kb', `${where ? keys.kb : 0}px`);
-      el.style.setProperty('--vv-top', `${where ? keys.top : 0}px`);
+      el.style.setProperty('--kb', `${lift ? keys.kb : 0}px`);
+      el.style.setProperty('--vv-top', `${lift ? keys.top : 0}px`);
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => stuck.forEach((s) => (s.scrollTop = s.scrollHeight)));
     };
@@ -186,6 +203,7 @@ export function PhoneCards({ page, tico, menu, chat, faces = {}, labels = {}, tu
       update();
     });
     const later = () => {
+      raisedFor = null; // a field focused again starts a new session, whatever its last keyboard did
       clearTimeout(blur);
       blur = window.setTimeout(update, 50);
     };

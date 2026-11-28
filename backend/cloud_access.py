@@ -3,8 +3,8 @@
 HQ (tico-services billing/cloud.py `signals`) answers `GET <Gateway URL>/cloud` with the install's gateway key, and puts
 the same object under `cloud` on `GET <Gateway URL>/billing` (backend/company_billing.py passes it through):
 
-    {plan, access: open|frozen|locked, reason: null|out_of_credit|trial_over|unpaid, balance_micros, trial_ends,
-     trial_days_left, card, auto_recharge, period_end, price_micros, billing_url}
+    {plan, access: open|frozen|locked, reason: null|out_of_credit|unpaid, balance_micros, card, auto_recharge,
+     period_end, price_micros, billing_url}
 
 Every other install (self-hosted, EC2-hosted) gets 404 (`not_cloud`), or no `cloud` on its billing answer: nothing is
 kept, and nothing here changes anything. What each access does:
@@ -14,7 +14,7 @@ kept, and nothing here changes anything. What each access does:
              a bot on its own subscription or keys still runs), routines' schedules pass (automations.tick), and every
              page shows "Out of credit · Add credit" to `billing_url` (ui/app/cloud-access.ts). Chat, history and
              settings stay usable.
-    locked   the trial ended without a card, or the month is unpaid: no bot turn at all (a claim answers `paused`),
+    locked   the month is unpaid: no bot turn at all (a claim answers `paused`),
              routines pass, and people's API calls are refused 402 `locked` (`gate`) except OPEN_PATHS: who is signed
              in, the status poll, this state, Settings > Billing and Download all files. The app shows Pay to continue.
 
@@ -32,6 +32,11 @@ audit event as it starts). A machine HQ refused for credit (its 402) is out of c
 
 Until HQ has answered, a Tico Cloud cell (TICO_CELL=1, which `setup cell` sets) is asked every SYNC too, not every
 UNKNOWN: its first ask can run before its Gateway key is enrolled. A new or changed key asks at once (`sync_later`).
+
+Tico Cloud has no trial (Nov 27, 2026): a company runs on its credit and freezes at $0 like any other. Nothing locks a
+company for time: a lock for `trial_over`, in an answer from an HQ that still sends it or kept from before, is read as
+what its balance says (`untrial`): open with credit left, frozen (out of credit) at $0. Everything else in the answer
+stands, so the company stays a cloud one with its balance and billing page.
 """
 
 import json
@@ -46,7 +51,8 @@ log = logging.getLogger(__name__)
 
 KEY = "cloud-access"
 ACCESS = ("open", "frozen", "locked")
-REASONS = (None, "out_of_credit", "trial_over", "unpaid")
+REASONS = (None, "out_of_credit", "unpaid")
+TRIAL_OVER = "trial_over"  # the reason a trial once locked a company for; never a lock now (`untrial`)
 SYNC = timedelta(seconds=60)  # how often HQ is asked while the company is a cloud one
 UNKNOWN = timedelta(hours=1)  # and while it is not (or HQ has not said yet, off a Tico Cloud cell)
 OPEN_PATHS = ("/api/me", "/api/v2/me", "/api/status", "/api/v2/cloud-access", "/api/v2/system/storage/export")
@@ -83,35 +89,52 @@ def _int(value):
     return value
 
 
+def untrial(value):
+    """A lock for TRIAL_OVER read as its balance says: frozen (out of credit) at $0 or less, else open. Any other
+    answer as it is, and so is a balance that is not a whole number (`parse` then refuses the retired reason)."""
+    if not isinstance(value, dict) or value.get("access") != "locked" or value.get("reason") != TRIAL_OVER:
+        return value
+    balance = value.get("balance_micros")
+    if balance is not None and type(balance) is not int:
+        return value
+    if (balance or 0) <= 0:
+        return {**value, "access": "frozen", "reason": "out_of_credit"}
+    return {**value, "access": "open", "reason": None}
+
+
 def parse(value):
     """HQ's `cloud` object, field by field, or None for a company that is not a cloud one. Raises ValueError for any
     other shape, so nothing odd decides whether people can work."""
     if value is None:
         return None
+    value = untrial(value)
     if not isinstance(value, dict) or value.get("access") not in ACCESS or value.get("reason") not in REASONS:
         raise ValueError("not a cloud access answer")
-    trial_ends = value.get("trial_ends")
     return {
         "access": value["access"],
         "reason": value["reason"],
         "plan": str(value.get("plan") or "")[:20],
         "balance_micros": _int(value.get("balance_micros")) or 0,
-        "trial_ends": trial_ends if isinstance(trial_ends, str) and len(trial_ends) <= 40 else None,
-        "trial_days_left": _int(value.get("trial_days_left")),
         "billing_url": _url(value.get("billing_url")),
     }
 
 
 def state(c):
-    """The kept state, or None (not a cloud company, or HQ has not said)."""
+    """The kept state, or None (not a cloud company, or HQ has not said). A trial lock kept from before reads as its
+    balance says (`untrial`)."""
+    found = untrial(_kept(c))
+    return found if isinstance(found, dict) and found.get("access") in ACCESS else None
+
+
+def _kept(c):
+    """The kept row as written, or None."""
     from .read_cache import metadata
 
     row = metadata(c, KEY)
     try:
-        found = json.loads(row[0]) if row else None
+        return json.loads(row[0]) if row else None
     except (ValueError, TypeError):
         return None
-    return found if isinstance(found, dict) and found.get("access") in ACCESS else None
 
 
 def access(c):
@@ -214,7 +237,7 @@ def apply(store, cloud, at=None):
     `at`: when HQ answered (ISO), now by default. Returns the state."""
     at = at or H.now()
     with store.transaction() as c:
-        before = state(c)
+        before, held = state(c), _kept(c)
         kept = None
         if cloud is None:
             c.execute("DELETE FROM registry_metadata WHERE key=?", (KEY,))
@@ -234,7 +257,8 @@ def apply(store, cloud, at=None):
                 "company",
                 {"from": was, "to": now, "reason": (cloud or {}).get("reason")},
             )
-        if recovered(before, kept):
+        # `held`: a trial lock kept from before reads open in `before`, but was a lock when the machines were refused.
+        if recovered(before, kept) or recovered(held if isinstance(held, dict) else None, kept):
             # HQ took credit (its word went back to open, or the balance rose): every machine it refused for credit
             # may start now, a stopped one with no bot wanting it included, so no page keeps saying out of credit.
             c.execute(
@@ -322,7 +346,7 @@ def view(found):
     left while that is under LOW_DAYS (`days_left`, else None). None off cloud."""
     if not found:
         return None
-    out = {key: found.get(key) for key in ("access", "reason", "plan", "trial_days_left", "billing_url")}
+    out = {key: found.get(key) for key in ("access", "reason", "plan", "billing_url")}
     return {**out, "days_left": days_left(found)}
 
 
@@ -333,7 +357,7 @@ def shown(c, found):
 
     out = view(found)
     if (out is None or out["access"] == "open") and cloud_machines.credit_refused(c):
-        base = out or {"plan": "", "trial_days_left": None, "billing_url": None}
+        base = out or {"plan": "", "billing_url": None}
         return {**base, "access": "frozen", "reason": "out_of_credit", "days_left": None}
     return out
 

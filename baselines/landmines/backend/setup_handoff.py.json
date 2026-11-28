@@ -1,0 +1,5 @@
+{
+  "backend/setup_handoff.py": {
+    "no-install-closure": 1
+  }
+}

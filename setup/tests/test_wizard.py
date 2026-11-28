@@ -304,7 +304,7 @@ def test_invalid_or_credential_runtime_choices_stop_before_any_mutation(monkeypa
                 '--visual-origin',
                 'https://old.example.com',
             ],
-            'restricted runner, visual and reader',
+            'restricted runner and visual hosts',
         ),
     ]
     for extra, reason in cases:

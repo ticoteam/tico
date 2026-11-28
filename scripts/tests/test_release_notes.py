@@ -184,7 +184,6 @@ def test_a_commit_citing_a_ticket_number_that_is_no_pull_request_is_skipped():
 @pytest.mark.parametrize(
     "path, area",
     [
-        ("app/main.swift", "app"),
         ("runner_support/x.py", "runner"),
         ("templates/catalog/x.md", "templates"),
         (".github/workflows/train.yml", "ci"),
@@ -205,7 +204,6 @@ def test_each_file_belongs_to_one_area(path, area):
         (dict(risk="high", areas=("docs",)), "high"),
         (dict(risk="medium", areas=("docs",)), "internal"),
         (dict(areas=("web", "backend")), "user"),
-        (dict(areas=("app",)), "user"),
         (dict(areas=("runner", "docs")), "backend"),
         (dict(areas=("docs",)), "internal"),
         (dict(areas=()), "internal"),

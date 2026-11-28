@@ -101,8 +101,8 @@ function Roadmap({ p, pipes, search }: { p: Pipeline; pipes: readonly Pipeline[]
   );
 }
 
-/** Filter and New feature (the pipeline's agent is in the Agent bar). Share is left out: the public roadmap pages are
-    off on the server. A phone's head keeps New feature; Filter moves into the "⋯". */
+/** Filter and New feature (the pipeline's agent is in the Agent bar). Share is left out: there is no public roadmap
+    page. A phone's head keeps New feature; Filter moves into the "⋯". */
 function HeadActions({ search, onNew, none }: { search: RoadmapSearch; onNew: () => void; none: boolean }) {
   return (
     <>

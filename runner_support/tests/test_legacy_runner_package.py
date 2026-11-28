@@ -1,5 +1,6 @@
-"""The three `runner` entry points still in use: installed units run `python -m runner` (runner/__main__.py), saved cloud
-machine images run `python -m runner.cloud_machine boot` (runner/cloud_machine.py), and runner/__init__.py is the package."""
+"""The three `runner` entry points kept until every installed unit has moved to runner_support: units written before
+it run `python -m runner` (runner/__main__.py), cloud machine images saved before it run `python -m runner.cloud_machine
+boot` (runner/cloud_machine.py), and runner/__init__.py is the package."""
 
 import importlib
 import subprocess
@@ -52,3 +53,55 @@ def test_the_retired_connectors_job_waits_idle_until_stopped(monkeypatch, tmp_pa
     stop = {signal.SIGTERM, signal.SIGINT}
     assert blocked == [(signal.SIG_BLOCK, stop)] and waited == [stop]
     assert "retired" in capsys.readouterr().out
+
+
+def started_with(monkeypatch, module, *, shim_env=None):
+    """The environment `python -m <module> run` hands the Rust runner (engine.exec_binary's execve, stood in for)."""
+    import os
+    import runpy
+
+    from runner_support import engine, release_update
+
+    monkeypatch.delenv("TICO_RUNNER_ENTRY", raising=False)
+    monkeypatch.delenv("TICO_RUNNER_SHIM", raising=False)
+    for key, value in (shim_env or {}).items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(release_update, "move_at_start", lambda: None)
+    monkeypatch.setattr(engine, "prepare", lambda root, env: (Path("/stand-in/tico-runner"), ""))
+    seen = {}
+    real = engine.exec_binary
+    monkeypatch.setattr(engine, "exec_binary", lambda argv: real(argv, execv=lambda b, a, env: seen.update(env)))
+    monkeypatch.setattr(sys, "argv", [module, "run"])
+    monkeypatch.delitem(sys.modules, "runner_support.__main__", raising=False)  # as a fresh `python -m` finds it
+    try:
+        runpy.run_module(module, run_name="__main__", alter_sys=True)
+    except SystemExit:
+        pass
+    assert "TICO_RUNNER_SHIM" not in os.environ  # never handed on: a process the runner starts is not "through runner/"
+    return seen
+
+
+def test_python_dash_m_runner_tells_the_rust_runner_it_started_through_the_old_package(monkeypatch):
+    assert started_with(monkeypatch, "runner")["TICO_RUNNER_ENTRY"] == "runner"
+
+
+def test_python_dash_m_runner_support_tells_the_rust_runner_it_started_through_runner_support(monkeypatch):
+    assert started_with(monkeypatch, "runner_support")["TICO_RUNNER_ENTRY"] == "runner_support"
+
+
+def test_a_start_through_runner_support_from_a_runner_the_old_package_started_says_runner_support(monkeypatch):
+    # A runner the old package started passes its word down to what it starts (an updater that restarts it): a start
+    # through runner_support from there still says runner_support.
+    inherited = started_with(monkeypatch, "runner_support", shim_env={"TICO_RUNNER_ENTRY": "runner"})
+    assert inherited["TICO_RUNNER_ENTRY"] == "runner_support"
+
+
+def test_python_dash_m_runner_cloud_machine_tells_the_boot_it_came_through_the_old_package(monkeypatch):
+    import os
+    import runpy
+
+    monkeypatch.delenv("TICO_RUNNER_SHIM", raising=False)
+    seen = []
+    monkeypatch.setattr(runpy, "run_module", lambda name, **kw: seen.append((name, os.environ.get("TICO_RUNNER_SHIM"))))
+    runpy.run_path(str(ROOT / "runner" / "cloud_machine.py"), run_name="__main__")
+    assert seen == [("runner_support.cloud_machine", "1")]

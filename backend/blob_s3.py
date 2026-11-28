@@ -1,19 +1,16 @@
-"""S3 settings shared by attachments and desktop downloads."""
+"""S3 settings for attachments."""
 
 import os
 import threading
 import time
 
 CLIENT_BUILD_TIMEOUT = 5
-# A failed bucket-region lookup is not repeated for this long, so an S3 outage does not add the
-# lookup's timeouts to every download.
-REGION_RETRY = 300
 # Where an S3 call's own errors come from (`write_error`), besides OSError for the network.
 S3_MODULES = ("botocore", "boto3", "s3transfer", "urllib3")
 
 
 class Sources:
-    """One process's selected attachment identity, shared with desktop downloads."""
+    """One process's selected attachment identity."""
 
     def __init__(self, settings):
         self.settings = settings
@@ -21,8 +18,6 @@ class Sources:
         self._clients = {}
         self._building = {}
         self._generation = 0  # forget() moves it on: a build started before then caches nothing
-        self._regions = {}
-        self._region_misses = {}
         self._lock = threading.Lock()
 
     @property
@@ -88,26 +83,6 @@ class Sources:
             **options,
         )
 
-    def presign_get(self, s3, bucket, key, expires):
-        """A GET URL signed by `s3`'s identity for the bucket's own region. SigV4 signs one region,
-        and a client with none configured signs for us-east-1, which S3 refuses for other buckets."""
-        signer = s3
-        if not self.settings.blob_endpoint and not region(self.settings):
-            with self._lock:
-                kind = next((cache_key[0] for cache_key, made in self._clients.items() if made is s3), None)
-                known = self._regions.get(bucket)
-                missed = self._region_misses.get(bucket)
-            if kind is not None and known is None and (missed is None or time.monotonic() - missed >= REGION_RETRY):
-                known = bucket_region(s3, bucket)
-                with self._lock:
-                    if known:
-                        self._regions[bucket] = known
-                    else:
-                        self._region_misses[bucket] = time.monotonic()
-            if kind is not None and known and known != s3.meta.region_name:
-                signer = self.client_for(kind, reads=True, region_name=known)
-        return signer.generate_presigned_url("get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=expires)
-
 
 def region(settings, env=None):
     env = os.environ if env is None else env
@@ -143,29 +118,11 @@ def kinds(settings, env=None, reads=False):
     return candidates + ["role"]
 
 
-def bucket_region(s3, bucket):
-    """The bucket's region from HeadBucket, which S3 names even when it refuses the request."""
-    from botocore.exceptions import ClientError
-
-    try:
-        response = s3.head_bucket(Bucket=bucket)
-    except ClientError as exc:
-        response = exc.response
-    except Exception:
-        return None
-    return (
-        response.get("ResponseMetadata", {}).get("HTTPHeaders", {}).get("x-amz-bucket-region")
-        or response.get("BucketRegion")
-        or None
-    )
-
-
 def client(settings, config=None, kind=None, region_name=None):
     import boto3
     from botocore.config import Config
 
-    # botocore presigns S3 URLs with SigV2 unless SigV4 is chosen explicitly. The desktop app
-    # follows a download redirect only to a SigV4 URL (app/src/hub.rs has_s3_signature).
+    # botocore signs with SigV2 unless SigV4 is chosen explicitly.
     signing = Config(signature_version="s3v4")
     options = {
         "region_name": region_name or region(settings),

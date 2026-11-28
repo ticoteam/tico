@@ -1,0 +1,294 @@
+{
+ "full": {
+  "get": {
+   "description": "A manager's direct reports, humans and the bots the caller may see, in the team chart's order.",
+   "operationId": "getReportOrder",
+   "parameters": [
+    {
+     "in": "path",
+     "name": "manager",
+     "required": true,
+     "schema": {
+      "title": "Manager",
+      "type": "string"
+     }
+    }
+   ],
+   "responses": {
+    "200": {
+     "content": {
+      "application/json": {
+       "schema": {}
+      }
+     },
+     "description": "Successful Response"
+    },
+    "422": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/HTTPValidationError"
+       }
+      }
+     },
+     "description": "Validation Error"
+    }
+   },
+   "summary": "A manager's direct reports (a bot's id or slug, or a human's id), humans and the bots the caller can see, in the chart's order",
+   "tags": [
+    "Team chart"
+   ],
+   "x-tico-v2": {
+    "answer": "ReportOrderView"
+   }
+  },
+  "put": {
+   "operationId": "setReportOrder",
+   "parameters": [
+    {
+     "in": "path",
+     "name": "manager",
+     "required": true,
+     "schema": {
+      "title": "Manager",
+      "type": "string"
+     }
+    }
+   ],
+   "requestBody": {
+    "content": {
+     "application/json": {
+      "schema": {
+       "$ref": "#/components/schemas/ReportOrder"
+      }
+     }
+    },
+    "required": true
+   },
+   "responses": {
+    "200": {
+     "content": {
+      "application/json": {
+       "schema": {}
+      }
+     },
+     "description": "Successful Response"
+    },
+    "422": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/HTTPValidationError"
+       }
+      }
+     },
+     "description": "Validation Error"
+    }
+   },
+   "summary": "Put a manager's reports in this order; the ones left out keep their places (whoever may put reports under that manager, and a bot for its own)",
+   "tags": [
+    "Team chart"
+   ],
+   "x-tico-v2": {
+    "answer": "ReportOrderView"
+   }
+  }
+ },
+ "schemas": {
+  "ReportOrder": {
+   "additionalProperties": false,
+   "description": "A manager's direct reports in the order the team chart shows them: bot slugs and human ids (`bot:` or `human:`\nin front when one could be either). Reports left out keep their places.",
+   "properties": {
+    "reports": {
+     "items": {
+      "maxLength": 200,
+      "minLength": 1,
+      "type": "string"
+     },
+     "maxItems": 200,
+     "minItems": 1,
+     "title": "Reports",
+     "type": "array"
+    }
+   },
+   "required": [
+    "reports"
+   ],
+   "title": "ReportOrder",
+   "type": "object"
+  },
+  "ReportOrderView": {
+   "additionalProperties": true,
+   "properties": {
+    "can_order": {
+     "type": "boolean"
+    },
+    "kind": {
+     "type": "string"
+    },
+    "manager": {
+     "type": "string"
+    },
+    "name": {
+     "type": "string"
+    },
+    "reports": {
+     "items": {
+      "additionalProperties": true,
+      "properties": {
+       "id": {
+        "type": "string"
+       },
+       "kind": {
+        "type": "string"
+       },
+       "name": {
+        "type": "string"
+       },
+       "saved": {
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "id",
+       "kind",
+       "name",
+       "saved"
+      ],
+      "type": "object"
+     },
+     "type": "array"
+    }
+   },
+   "required": [
+    "can_order",
+    "kind",
+    "manager",
+    "name",
+    "reports"
+   ],
+   "type": "object"
+  }
+ },
+ "v2": {
+  "get": {
+   "operationId": "getReportOrder",
+   "parameters": [
+    {
+     "in": "path",
+     "name": "manager",
+     "required": true,
+     "schema": {
+      "title": "Manager",
+      "type": "string"
+     }
+    }
+   ],
+   "responses": {
+    "200": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ReportOrderView"
+       }
+      }
+     },
+     "description": "OK"
+    },
+    "401": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/Problem"
+       }
+      }
+     },
+     "description": "Not signed in"
+    },
+    "422": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/Problem"
+       }
+      }
+     },
+     "description": "Invalid request or rule: error.code and field-specific error.detail"
+    }
+   },
+   "summary": "A manager's direct reports (a bot's id or slug, or a human's id), humans and the bots the caller can see, in the chart's order",
+   "tags": [
+    "Team chart"
+   ]
+  },
+  "put": {
+   "operationId": "setReportOrder",
+   "parameters": [
+    {
+     "in": "path",
+     "name": "manager",
+     "required": true,
+     "schema": {
+      "title": "Manager",
+      "type": "string"
+     }
+    },
+    {
+     "description": "1-200 characters. Reusing a key with the same body replays the first answer.",
+     "in": "header",
+     "name": "Idempotency-Key",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    }
+   ],
+   "requestBody": {
+    "content": {
+     "application/json": {
+      "schema": {
+       "$ref": "#/components/schemas/ReportOrder"
+      }
+     }
+    },
+    "required": true
+   },
+   "responses": {
+    "200": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ReportOrderView"
+       }
+      }
+     },
+     "description": "OK"
+    },
+    "401": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/Problem"
+       }
+      }
+     },
+     "description": "Not signed in"
+    },
+    "422": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/Problem"
+       }
+      }
+     },
+     "description": "Invalid request or rule: error.code and field-specific error.detail"
+    }
+   },
+   "summary": "Put a manager's reports in this order; the ones left out keep their places (whoever may put reports under that manager, and a bot for its own)",
+   "tags": [
+    "Team chart"
+   ]
+  }
+ }
+}

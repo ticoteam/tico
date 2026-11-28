@@ -481,3 +481,56 @@ def test_a_stuck_computers_full_disk_still_shows(api):
     _, stored = check_health(api)
     assert "update_stuck:" + r["runner_id"] in present(stored)
     assert "page:disk:" + r["runner_id"] in present(stored)
+
+
+def test_computers_show_which_start_through_the_old_runner_package(api):
+    """R-2 deletes runner/ only once no computer starts through it: each computer says which package started it, and a
+    computer that cannot say (a release from before the report, or offline now) is never counted as clear."""
+    old, new, before, gone = (runner(api, label=name) for name in ("Old Mac", "New Mac", "Before", "Gone"))
+    assert get(api, "runners/desired", token=old["token"])["features"]["runner_entry"] is True
+    report(api, old, "0.3.0", entry="runner")
+    report(api, new, "0.3.0", entry="runner_support")
+    report(api, before, "0.3.0")  # a runner from before this change sends no entry
+    report(api, gone, "0.3.0", entry="runner_support")
+    ago(api, "runner_states", "last_seen_at", 10, gone["runner_id"])
+    starts = {
+        row["label"]: (row["update"]["starts"], row["update"]["starts_label"])
+        for row in get(api, "computers")["computers"]
+    }
+    assert starts == {
+        "Old Mac": ("old_package", "Starts through the old runner package"),
+        "New Mac": ("runner_support", "Starts through runner_support"),
+        "Before": ("not_reported", "Not reported"),
+        "Gone": ("not_reported", "Not reported"),
+    }
+    # The Computers page reads the operations list: it says the same.
+    assert {
+        row["label"]: (row["update"]["starts"], row["update"]["starts_label"])
+        for row in get(api, "operations")["computers"]
+    } == starts
+    # A later report without the field (the runner went back to an older release) is not reported again, not stale.
+    report(api, new, "0.3.0")
+    assert (
+        next(r for r in get(api, "computers")["computers"] if r["label"] == "New Mac")["update"]["starts"]
+        == "not_reported"
+    )
+    # A heartbeat with no release report at all (a runner that has not yet read runners/desired) is not reported either.
+    report(api, old, "0.3.0", entry="runner_support")
+    post(
+        api,
+        "runners/heartbeat",
+        {"version": "test", "platform": "test", "readiness": {"ops": True}},
+        token=old["token"],
+    )
+    assert next(r for r in get(api, "computers")["computers"] if r["label"] == "Old Mac")["update"]["starts"] == (
+        "not_reported"
+    )
+    # Only the exact clear value is clear: anything else stored (a value from a later release) is not reported.
+    assert runner_versions.starts("x", True)["starts"] == "not_reported"
+    # A value the server does not know is refused, not stored.
+    refused = api.post(
+        "/api/v2/runners/heartbeat",
+        json={"version": "test", "platform": "test", "readiness": {}, "release": "0.3.0", "kind": "mac", "entry": "x"},
+        headers={"Authorization": f"Bearer {old['token']}"},
+    )
+    assert refused.status_code == 422

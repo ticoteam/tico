@@ -18,7 +18,7 @@ from backend.store import H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import get, headers, post, unrelated_task_managers
 from backend.tests.helpers.page_requirement import _page
-from backend.tests.helpers.product_engineering_presets import _answers, _team
+from backend.tests.helpers.product_engineering_presets import _answers, _team, features
 
 ANA, BEN, CARA = "human:ana", "human:ben", "human:cara"  # owner, bot administrator, everyone else
 GOOD = {"pick": "approve", "line": "Approve. QA shows the cart kept after a restart.", "note": "", "score": 60}
@@ -230,7 +230,7 @@ def test_a_page_with_its_own_audience_stays_out_of_the_shared_opinion(api, monke
     assert "The cart is kept" not in writer.prompts[0] and "earlier stage" not in writer.prompts[0]
 
 
-# ---- the default Product pipeline ----------------------------------------------------------------------------------
+# ---- Features (the default Product pipeline from 0.6 to Nov 26) ----------------------------------------------------------------------------------
 def test_product_ok_release_approves_the_release_report_and_names_no_page(company):
     """A stage's requirement cannot name a page (`shows` is not one of its fields: pipeline_settings.REQUIREMENT_FIELDS).
     Product's OK release approves the Release report, a task document: the QA report is a tab beside it on the task, so
@@ -239,6 +239,7 @@ def test_product_ok_release_approves_the_release_report_and_names_no_page(compan
     with company.transaction() as c:
         _team(c)
         _answers(c, software="yes")
+        features(c)
         PS.ensure_presets(c)
         ok = next(s for s in PS.read(c, "product")["stages"] if s["id"] == "product-ok-release")
         assert [(r["kind"], R.document_of(r), r.get("shows")) for r in ok["requirements"]] == [

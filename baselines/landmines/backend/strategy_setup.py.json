@@ -1,0 +1,5 @@
+{
+  "backend/strategy_setup.py": {
+    "no-install-closure": 1
+  }
+}

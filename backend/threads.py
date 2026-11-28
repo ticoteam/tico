@@ -3156,6 +3156,8 @@ def _post(
     from .file_metadata import MAX_BYTES, derives
 
     for item in attachments or ():
+        if item.get("file_id"):
+            continue  # a page's version, named and checked per reader (thread_api.shared_files): no blob of its own
         c.execute("INSERT OR IGNORE INTO message_assets VALUES(?,?)", (message["id"], item["id"]))
         if derives(item.get("content_type"), item.get("name")) and (item.get("size") or 0) <= MAX_BYTES:
             c.execute("INSERT OR IGNORE INTO blob_media(blob_id) VALUES(?)", (item["id"],))

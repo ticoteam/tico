@@ -1,0 +1,5 @@
+{
+  "backend/settings_catalog.py": {
+    "no-install-closure": 1
+  }
+}

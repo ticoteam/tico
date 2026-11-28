@@ -1108,6 +1108,8 @@ struct Inner {
     full_prompts: HashMap<String, String>,
     /// What a shortened turn's prompt left out, written into the turn if Claude compacts the session during it.
     refresh: HashMap<String, String>,
+    /// Threads whose running turn was given its `refresh` after a compaction, since the runner last asked.
+    refreshed: HashSet<String>,
     /// Each thread's context size after its last turn (Host::context_tokens).
     context: HashMap<String, i64>,
     /// The process the last turn ended in and kept running, or the one the keeper gave back for the next turn
@@ -1586,6 +1588,11 @@ impl ClaudeHost {
     /// Whether Claude compacted `thread_id`'s session since this was last asked.
     pub fn compacted(&self, thread_id: &str) -> bool {
         self.inner().compacted.remove(thread_id)
+    }
+
+    /// Whether a turn on `thread_id` was given its `refresh` after a compaction since the runner last asked.
+    pub fn refreshed(&self, thread_id: &str) -> bool {
+        self.inner().refreshed.remove(thread_id)
     }
 
     pub fn context_tokens(&self, thread_id: &str) -> Option<i64> {
@@ -2830,6 +2837,7 @@ impl ClaudeHost {
                         .filter(|p| p.open && p.limit_at.is_none())
                     {
                         p.follow_up(&text, None);
+                        inner.refreshed.insert(tid.into());
                     }
                 }
             }

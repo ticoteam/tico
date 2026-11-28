@@ -1,0 +1,5 @@
+{
+  "backend/page_history.py": {
+    "no-install-closure": 1
+  }
+}

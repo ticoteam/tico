@@ -9,7 +9,7 @@ from backend import screening
 
 from . import harness as X
 from . import skills as K
-from .harness import CLAUDE_ID, DANA_ID, LEAD_ID, OMAR, OPENAI_ID, PM
+from .harness import CLAUDE_ID, DANA_ID, LEAD_ID, OMAR, OPENAI_ID
 
 ATTACK = "a01-ignore-direct"  # an attack the patterns also catch
 QUIET_ATTACK = "a04-send-this-to"  # an attack only the model catches
@@ -31,7 +31,7 @@ def by_id(items, name):
 def per_door(seen, what):
     """One check per door: every input it saw did what it should."""
     out = []
-    for door in X.OPEN_DOORS:
+    for door in X.DOORS:
         mine = [s for s in seen if s.door == door]
         wrong = X.mismatches(mine)
         out.append(
@@ -177,7 +177,7 @@ def _short_text(org, judge):
 def s_hold_release(org, items, judge):
     attack = by_id(items, QUIET_ATTACK)
     doors = X.Doors(org, judge)
-    doors.set_modes(webhook="hold", idea="hold", watcher="hold", mail="hold")
+    doors.set_modes(webhook="hold", watcher="hold", mail="hold")
     # A second webhook whose automation both files a task and starts a Bot turn: both are held for one model call.
     made = org.api("post", "/api/v2/triggers", {"name": "Intake", "id": "intake"})
     intake = org.api(
@@ -207,7 +207,7 @@ def s_hold_release(org, items, judge):
             ],
         },
     )
-    out, before = [], {bot: X.wakes(org, bot) for bot in (CLAUDE_ID, OPENAI_ID, LEAD_ID, PM)}
+    out, before = [], {bot: X.wakes(org, bot) for bot in (CLAUDE_ID, OPENAI_ID, LEAD_ID)}
     asked = len(judge.answers)
     X.hook(
         org.client,
@@ -388,7 +388,7 @@ def s_settings(org, items, judge):
     view = org.api("get", "/api/v2/screening").body
     member = org.api("get", "/api/v2/screening", who=OMAR)
     member_put = org.api("put", "/api/v2/screening", {"webhook": "off"}, who=OMAR)
-    held = org.api("put", "/api/v2/screening", {"mail": "hold", "idea": "hold"}).body
+    held = org.api("put", "/api/v2/screening", {"mail": "hold", "watcher": "hold"}).body
     layers = org.api("put", "/api/v2/screening", {"patterns": False, "model": False}).body
     bad = org.api("put", "/api/v2/screening", {"webhook": "block"})
     return [
@@ -409,12 +409,12 @@ def s_settings(org, items, judge):
         ),
         (
             "mail is marked, never held",
-            held["modes"]["mail"] == "warn" and held["modes"]["idea"] == "hold",
+            held["modes"]["mail"] == "warn" and held["modes"]["watcher"] == "hold",
             str(held["modes"]),
         ),
         (
             "each detector switches off on its own",
-            layers["layers"] == {"patterns": False, "model": False} and layers["modes"]["idea"] == "hold",
+            layers["layers"] == {"patterns": False, "model": False} and layers["modes"]["watcher"] == "hold",
             str(layers["layers"]),
         ),
         ("an unknown mode is refused", bad.status == 422, str(bad.status)),

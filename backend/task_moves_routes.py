@@ -352,6 +352,8 @@ def register(
         return checked(request, tid, body, "task_done")
 
     def move_call(c: Any, who: Any, task_id: str, body: Any, gate: Any, params: Any, ingest: Any) -> Any:
+        if body.undo and (body.to_pipeline or body.let_see or str(body.to or "").strip().lower() != "reopen"):
+            raise Problem("bad_request", "Undo takes back a close: to is reopen, alone", 422)
         if body.to_pipeline:
             if body.let_see:
                 raise Problem(
@@ -377,7 +379,9 @@ def register(
 
             H.task_let_see(c, who.actor, task_id, body.let_see, version, mover=mover(c, who) or None, check=check)
             return
-        H.task_move(c, who.actor, task_id, body.to, why, version, mover=mover(c, who) or None)
+        H.task_move(
+            c, who.actor, task_id, body.to, why, version, mover=mover(c, who) or None, undo_close=bool(body.undo)
+        )
 
     says("task_move", M.TaskMove, lambda body: [("Why", body.why)], move_call)
 
@@ -947,7 +951,7 @@ def register(
         in this write: an approver's own click is a direct human action, which no rule gates (True: the write skips
         the rule gate), and Send anyway never replays a person's answer to one."""
         asked = requirement_on(c, task_id, params["requirement_id"])
-        refused = task_asks.refuses_ok_by(c, who, asked, body.value)
+        refused = task_asks.refuses_ok_by(c, who, asked, body.value, task_id=task_id)
         if refused:
             raise Problem("ok_not_yours", refused, 403)
         if not task_asks.shared_page(c, asked):

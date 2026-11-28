@@ -1,0 +1,6 @@
+{
+  "backend/flow_opinions.py": {
+    "core-imports-app": 1,
+    "no-install-closure": 1
+  }
+}

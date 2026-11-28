@@ -1,0 +1,5 @@
+{
+  "backend/model_subscriptions.py": {
+    "no-install-closure": 1
+  }
+}

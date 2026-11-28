@@ -265,6 +265,8 @@ EARLIER: dict[str, tuple[str, ...]] = {
         ("building/page/rubric", (_GO_LIVE_RC6, _GO_LIVE_NOV11, _GO_LIVE_BEFORE_BOUNDS)),
         # Nov 16: the stage approves the Release report, a task document, not a page attached by hand.
         ("building/page/line", ("Go-live page",)),
+        # Nov 18: Results is a document; its line read "Results page" before.
+        ("running/page/line", ("Results page",)),
         (
             "building/purpose",
             (

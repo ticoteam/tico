@@ -1,10 +1,11 @@
 import { keepPreviousData, queryOptions, type QueryKey } from '@tanstack/react-query';
 import { answered, ApiError, api, toError } from '@/api/client';
+import type { HistoryEvent } from './Delegated';
 import type { OkPreview, PagePublished, PageShown, PipelineSettingsResult, PublishPageBody, TaskDetail, TaskDetailChild, TaskFileList, TaskLinkView, TaskRequirement, TaskResult } from '@/api/schema';
 import { asksGone, keys, meQuery, queryClient, quietRoot, write } from '@/data';
 import { newId } from '@/lib/ids';
 import { timelineQuery } from '@/conversation';
-import { flowQuery, leaveNeedsYou, pipelinesQuery, settleNeedsYou } from '@/features/tasks/routing';
+import { flowQuery, flowSnoozedAsksQuery, leaveNeedsYou, pipelinesQuery, settleNeedsYou } from '@/features/tasks/routing';
 import type { FileLibrary, FileSearch, ReconcileTaskShotsBody, ReconcileTaskShotsResponse, TaskFileResult, TaskFileView } from '@/api/schema';
 
 /* One open task: its detail (GET /api/v2/tasks/{tid}, kept current by the stream under keys.tasks.detail), the files
@@ -29,10 +30,14 @@ export type TaskData = TaskDetail['task'] & {
   /** One row per agent on the task, the holder first: each opens its session view (`session=` on the timeline). */
   sessions: TaskSession[];
   mover: boolean;
+  /** Whether the reader may close it now, as the server's close decides (task_calls.can_work). */
+  can_close: boolean;
   /** The agent Tico stopped that this task is the notice for, when the person may release it; else null. */
   stopped_agent: NonNullable<TaskDetail['stopped_agent']> | null;
   /** The task's note (a legal matter's case in brief): the task read carries it, the schema does not name it yet. */
   note?: string | null;
+  /** Its history as the task read gives it (Details draws the OKs given via the person's Assistant from it). */
+  events?: HistoryEvent[];
 };
 
 /** An agent on the task with its session view; `last_seq`, the newest message that view shows (null before one). */
@@ -51,7 +56,9 @@ function flat(d: TaskDetail): TaskData {
     can_direct: d.can_direct ?? false,
     sessions: d.sessions ?? [],
     mover: d.mover ?? false,
+    can_close: d.can_close ?? false,
     stopped_agent: d.stopped_agent ?? null,
+    events: d.events ?? [],
   };
 }
 
@@ -180,8 +187,9 @@ export function setTaskDue(id: string, due: string | null) {
 
 export const tagTask = (id: string, labels: string[]) => change(id, { labels }, (idem) => post(taskPath(id), { labels }, idem));
 
-/** `to`: a stage's id, or next, done, closed or reopen. `why` moves it past what is missing. */
-export function moveTask(id: string, to: string, why?: string) {
+/** `to`: a stage's id, or next, done, closed or reopen. `why` moves it past what is missing. `undo` with reopen: a
+ *  Close's own Undo, which gets the closed visit back (backend task_engine.move). */
+export function moveTask(id: string, to: string, why?: string, undo?: boolean) {
   const pipelines = queryClient.getQueryData(pipelinesQuery.queryKey);
   const shown = (t: TaskData): Fields => {
     const stages = pipelines?.find((p) => p.id === t.pipeline_id)?.stages ?? queryClient.getQueryData(retiredStagesQuery(t.pipeline_id ?? '').queryKey);
@@ -192,7 +200,23 @@ export function moveTask(id: string, to: string, why?: string) {
     if (to === 'reopen') return { status: 'open' };
     return {};
   };
-  return change(id, shown, (idem) => post(`${taskPath(id)}/move`, why ? { to, why } : { to }, idem));
+  return change(id, shown, (idem) => post(`${taskPath(id)}/move`, { to, ...(why && { why }), ...(undo && { undo }) }, idem));
+}
+
+/** Snooze one ask for the person alone until `until` (POST /api/v2/needs-you/snooze, backend/ask_snoozes.py): it leaves
+    their Needs you and its count at once, and comes back then; the task, its stage and its bot do not change. The ask's
+    id in Needs you is its task's visit and the requirement (waiting_on.ask_id). */
+export async function snoozeAsk(id: string, rid: string, visit: string, until: string): Promise<void> {
+  const undo = leaveNeedsYou(id, rid);
+  try {
+    await api.post('/api/v2/needs-you/snooze', { id: `${visit}:${rid}`, until }, { idempotencyKey: newId() });
+  } catch (e) {
+    undo(); // refused: back as it was, then read again
+    settleNeedsYou();
+    throw e;
+  }
+  settleNeedsYou({ task: id, wait: rid });
+  void queryClient.invalidateQueries({ queryKey: flowSnoozedAsksQuery.queryKey });
 }
 
 export const giveTask = (id: string, owner: string, setAnyway?: boolean) =>
@@ -275,7 +299,7 @@ export interface BoundRule {
   rule: string;
   version: number;
   text: string;
-  who: { everyone?: boolean; all_bots?: boolean; outside_editions?: boolean; groups?: Named[]; bots?: Named[]; people?: Named[] };
+  who: { everyone?: boolean; all_bots?: boolean; groups?: Named[]; bots?: Named[]; people?: Named[] };
   with: { groups?: Named[]; bots?: Named[]; people?: Named[] };
   where: string[];
   if_broken: 'block' | 'escalate' | 'warn';
@@ -301,14 +325,16 @@ export interface BoundAction {
 export const decisionShownQuery = (task: string, rid: string, version: number, send?: string | null, outbound = false) =>
   queryOptions({
     queryKey: [...keys.tasks.detail(task), 'shown', rid, version, send ?? null, outbound] as const,
-    queryFn: async ({ signal }): Promise<{ hash: string | null; complete: boolean; rule?: BoundRule; action?: BoundAction }> => {
+    queryFn: async ({ signal }): Promise<{ hash: string | null; complete: boolean; stage?: boolean; rule?: BoundRule; action?: BoundAction }> => {
       const shown = await api.get<OkPreview>(`/api/v2/oks/${enc(rid)}`, { signal }).catch((e: unknown) => {
         if (e instanceof ApiError && e.status === 404) return null;
         throw e;
       });
       if (!shown) {
         if (outbound) return { hash: null, complete: false };
-        if (!send) return { hash: null, complete: true };
+        // no grant: a stage's own OK, about the task itself (a letter's, a webhook's, a rule's or any OK bound to one
+        // thing has a grant and is read above)
+        if (!send) return { hash: null, complete: true, stage: true };
         const mail = await queryClient.fetchQuery({ ...emailSendQuery(task, send), staleTime: 0 });
         return { hash: null, complete: mail.preview_complete };
       }
@@ -504,7 +530,7 @@ import type { GoalResult, TaskMeeting, TaskMeetings } from '@/api/schema';
 /** The detail's task as Details reads its facts: its goal, which the schema's task leaves out. */
 export type TaskFacts = TaskData & { goal_id?: string | null };
 
-/** Who may see it: its team, the public roadmap too, or only its people. */
+/** Who may see it: its team, its team with its public text cleared to go outside, or only its people. */
 export type Visible = 'team' | 'public' | 'private';
 export const visibleOf = (t: Pick<TaskData, 'private' | 'visibility'>): Visible => (t.private ? 'private' : t.visibility === 'public' ? 'public' : 'team');
 
@@ -547,10 +573,10 @@ export function setTaskRoles(id: string, role: string, people: string[]) {
   return edit(id, shown, { roles: { [role]: people } });
 }
 
-/** The public roadmap's title or summary. */
+/** A task's public title or summary: its words for people outside the team. */
 export const setTaskPublic = (id: string, field: 'public_title' | 'public_summary', text: string) => edit(id, { [field]: text }, { [field]: text });
 
-/** Team, Public roadmap or Private (ui/app/task-props.ts, Visible to). Out of private, then onto the roadmap, is two saves. */
+/** Team, Public or Private (ui/app/task-props.ts, Visible to). Out of private, then public, is two saves. */
 export async function setTaskVisible(id: string, to: Visible) {
   const held = queryClient.getQueryData<TaskData>(keys.tasks.detail(id));
   const now = held ? visibleOf(held) : 'team';

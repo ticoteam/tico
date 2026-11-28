@@ -1,0 +1,5 @@
+{
+  "backend/website_tools.py": {
+    "no-install-closure": 1
+  }
+}

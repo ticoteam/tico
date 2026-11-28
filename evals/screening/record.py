@@ -4,7 +4,7 @@ and keeps each answer as recordings/<key>.json, which the replay reads back (and
     python -m evals.screening.record [--force]
 
 A call's key is a hash of what the model was asked (the source and the fenced text) and the level, so each (input, door)
-pair is one recording: a webhook's payload, a mail's subject and body, an idea's title and summary and a watcher's title
+pair is one recording: a webhook's payload, a mail's subject and body and a watcher's title
 and body are different text. A recording that is there is kept unless --force. It needs live credentials (HUB_API_URL
 and HUB_TOKEN, or TYPESAFE_API_KEY); without them nothing is sent and the exit code is 2."""
 

@@ -4,7 +4,8 @@ import { ApiError, api } from '@/api/client';
 import type { Problem } from '@/api/schema';
 import { queryClient } from '@/data';
 
-/* A locked Tico Cloud company (backend/cloud_access.py): the trial ended without a card, or the month is unpaid. The
+/* A locked Tico Cloud company (backend/cloud_access.py): the month is unpaid (a company out of credit is frozen, not
+   locked). The
    server then refuses every person's call 402 `locked`, with HQ's word under `cloud` (reason, billing page), except who
    is signed in, billing and the files download. So the lock is read from the refusals already in the cache: the first
    page's reads (the directory, at least) meet it, and no other read is needed. */
@@ -17,7 +18,7 @@ export const SUPPORT_URL = 'https://app.tico.dev/support';
 export const EXPORT_PATH = '/api/v2/system/storage/export';
 
 export interface PlanLockState {
-  /** HQ's reason: `trial_over`, `unpaid`, or another word; null when it gave none. */
+  /** HQ's reason: `unpaid`, or another word; null when it gave none. */
   reason: string | null;
   /** Where to pay: HQ's https page. */
   billingUrl: string;
@@ -109,7 +110,7 @@ export async function checkPlan(): Promise<boolean> {
   return held === null;
 }
 
-/* ---------------------------------------------------------------- the new desktop app, for the older one */
+/* ---------------------------------------------------------------- the desktop app's download */
 
 export type DesktopSystem = 'mac' | 'windows' | 'linux';
 
@@ -120,8 +121,18 @@ export const RELEASES_URL = 'https://github.com/ticoteam/tico/releases/latest';
 export interface DesktopDownload {
   available: boolean;
   url?: string;
-  /** `generic`: from the running GitHub release (the new app when the release has it); `company`: the company's own build. */
-  app_kind?: 'generic' | 'company';
+  /** `generic`: the desktop app's installer from the running GitHub release, the only kind the server offers. */
+  app_kind?: string;
+}
+
+/** Which installer to offer, from the platform, and from the user agent only when there is no platform. Never used to
+    decide what the page does. */
+export function systemOf(nav: Pick<Navigator, 'platform' | 'userAgent'> & { userAgentData?: { platform?: string } }): DesktopSystem | null {
+  const s = `${nav.userAgentData?.platform || nav.platform || nav.userAgent || ''}`.toLowerCase();
+  if (/mac/.test(s)) return 'mac';
+  if (/\bwin/.test(s)) return 'windows';
+  if (/linux|x11/.test(s)) return 'linux';
+  return null;
 }
 
 export const desktopDownloadQuery = (system: DesktopSystem) =>
@@ -132,7 +143,7 @@ export const desktopDownloadQuery = (system: DesktopSystem) =>
     retry: false,
   });
 
-/** Where Download goes: the server's generic installer, else the release page. A company build is the older app. */
+/** Where Download goes: the server's generic installer, else the release page. */
 export function downloadHref(answer: DesktopDownload | undefined): string {
   const url = answer?.available && answer.app_kind === 'generic' ? answer.url : undefined;
   return url && /^https:\/\/\S+$/.test(url) ? url : RELEASES_URL;

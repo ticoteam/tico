@@ -535,6 +535,17 @@
      ],
      "default": null
     },
+    "notes": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/RunNotes"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
     "outcome": {
      "enum": [
       "completed",
@@ -1167,6 +1178,22 @@
      "default": null,
      "title": "Device Id"
     },
+    "entry": {
+     "anyOf": [
+      {
+       "enum": [
+        "runner",
+        "runner_support"
+       ],
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Entry"
+    },
     "kind": {
      "anyOf": [
       {
@@ -1570,6 +1597,48 @@
     "state"
    ],
    "title": "RepositoryStatus",
+   "type": "object"
+  },
+  "RunNotes": {
+   "additionalProperties": false,
+   "description": "What the turn's prompt did with each notes list its claim offered (backend/pipeline_notes.py, runner-rs/src/prompt.rs\nnotes_sent): `given` in full, `held` left out because the session already holds it, `retracted` an earlier list\nsaid to no longer apply. A list neither offered nor retracted is left out.",
+   "properties": {
+    "pipeline": {
+     "anyOf": [
+      {
+       "enum": [
+        "given",
+        "held",
+        "retracted"
+       ],
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Pipeline"
+    },
+    "stage": {
+     "anyOf": [
+      {
+       "enum": [
+        "given",
+        "held",
+        "retracted"
+       ],
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Stage"
+    }
+   },
+   "title": "RunNotes",
    "type": "object"
   },
   "RunPush": {
@@ -2420,6 +2489,55 @@
    "title": "ScreenReadiness",
    "type": "object"
   },
+  "SessionWorktreesBot": {
+   "additionalProperties": false,
+   "description": "One bot's session worktrees on the computer: how many and their size on disk.",
+   "properties": {
+    "bytes": {
+     "maximum": 9223372036854775807,
+     "minimum": 0,
+     "title": "Bytes",
+     "type": "integer"
+    },
+    "count": {
+     "maximum": 1000000,
+     "minimum": 0,
+     "title": "Count",
+     "type": "integer"
+    }
+   },
+   "required": [
+    "count",
+    "bytes"
+   ],
+   "title": "SessionWorktreesBot",
+   "type": "object"
+  },
+  "SessionWorktreesReadiness": {
+   "additionalProperties": false,
+   "description": "Each bot's session worktrees (sessions/bot-<bot>/<task>) and their size, measured at `at`\n(runner-rs/src/session_sizes.rs), so Health shows a pile-up before the disk fills.",
+   "properties": {
+    "at": {
+     "maxLength": 40,
+     "title": "At",
+     "type": "string"
+    },
+    "bots": {
+     "patternProperties": {
+      "^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$": {
+       "$ref": "#/$defs/SessionWorktreesBot"
+      }
+     },
+     "title": "Bots",
+     "type": "object"
+    }
+   },
+   "required": [
+    "at"
+   ],
+   "title": "SessionWorktreesReadiness",
+   "type": "object"
+  },
   "SlashCommand": {
    "additionalProperties": false,
    "properties": {
@@ -2774,6 +2892,17 @@
      "anyOf": [
       {
        "$ref": "#/$defs/ScreenReadiness"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
+    },
+    "session_worktrees": {
+     "anyOf": [
+      {
+       "$ref": "#/$defs/SessionWorktreesReadiness"
       },
       {
        "type": "null"
@@ -3163,6 +3292,32 @@
      "minimum": 0,
      "title": "Ahead",
      "type": "integer"
+    },
+    "backed_up": {
+     "anyOf": [
+      {
+       "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Backed Up"
+    },
+    "backup_error": {
+     "anyOf": [
+      {
+       "maxLength": 300,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Backup Error"
     },
     "behind": {
      "default": 0,

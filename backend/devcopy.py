@@ -148,6 +148,7 @@ EMPTY = (
     "subscription_assignments",
     "runner_harness_actions",
     "runner_harness_choices",
+    "runner_entries",
     "runner_versions",
     "start_places",
     "org_turn_waits",
@@ -247,7 +248,6 @@ EMPTY = (
     "bills_inbound",  # emailed bills: senders, subjects and HQ delivery ids
     "usage_alerts",
     "task_requesters",
-    "roadmap_actions",
     # raw provider streams: customer text, and whatever the secret scrub missed
     "attempt_captures",
     "attempt_capture_drops",
@@ -298,26 +298,6 @@ EMPTY = (
     "slack_link_members",
     "slack_message_links",
     "slack_inbound_events",
-    # The Company page: the readers (their addresses, sessions and invite hashes, the messages they wrote, what they read,
-    # what was mailed to them), and the company's published statements and rules. A copy is rehearsal data, so none of it.
-    "readers",
-    "audience_readers",
-    "reader_sessions",
-    "reader_invites",
-    "reader_messages",
-    "reader_notices",
-    "edition_views",
-    "company_page_settings",
-    "audiences",
-    "audience_sources",
-    "disclosure_revisions",
-    "disclosure_rules",
-    "editions",
-    "edition_sources",
-    "edition_checks",
-    "page_stats",
-    "stat_board_approvals",
-    "page_releases",
     # The Heartbeat's step stats, beat log and counts (backend/heartbeat.py): the copy's own beats start them again.
     "heartbeat_steps",
     "heartbeat_beats",
@@ -407,6 +387,7 @@ KEEP = (
             "attempt_event_briefs",  # an event's status-line fields: its triggers drop it with its event
             "attempt_load_snapshots",
             "attempt_inputs",
+            "attempt_notes",  # which notes lists a run was offered and what its prompt did with them
             "backup_verified_blobs",
             "batches",
             "blob_locations",
@@ -510,6 +491,8 @@ KEEP = (
             "learned_entries",
             "assistant_shares",  # who a person lets view their Assistant chat: a choice, it sends nothing
             "assistant_share_settings",
+            "assistant_ok_settings",  # whether a person lets their Assistant give OKs for them: a choice
+            "assistant_ok_uses",  # which of a person's messages lent an OK: ids, it sends nothing
             "linked_docs",
             "live_meeting_chat",
             "live_meeting_chat_routes",
@@ -588,6 +571,8 @@ KEEP = (
             "rule_reads",
             "rules",
             "stage_rules",
+            "pipeline_notes",  # a pipeline's and its stages' notes: settings, nothing in them acts
+            "pipeline_note_changes",  # each note's edit history, kept with its note
             "stage_pick_turns",
             # Keep-warm's old per-stage setting (removed): unread, left until every install ran the migration that made it.
             "stage_keep_warm",
@@ -723,7 +708,9 @@ KEEP = (
 )
 # Work still to do: a job or attempt in any other state is finished and kept as history.
 # Rows that belong to their attempt: they go with it and never hold an old attempt back.
-OWNED = frozenset(("attempt_events", "attempt_conversations", "attempt_inputs", "attempt_load_snapshots"))
+OWNED = frozenset(
+    ("attempt_events", "attempt_conversations", "attempt_inputs", "attempt_load_snapshots", "attempt_notes")
+)
 OPEN_JOBS = ("queued", "leased", "running", "input", "uncertain")
 OPEN_ATTEMPTS = ("queued", "leased", "running", "input")
 
@@ -903,12 +890,8 @@ def prune(c, days, keep_automations=False):
             if isinstance(rows, dict) and set(rows) & gone_all:
                 snapshot["rows"] = {t: r for t, r in rows.items() if t not in gone_all}
                 c.execute("UPDATE task_trash SET rows=? WHERE task_id=?", (json.dumps(snapshot), task_id))
-    # The secret that keys visitors' hashed addresses is the live install's; the copy gets its own.
     if "registry_metadata" in present:
-        c.execute(
-            "UPDATE registry_metadata SET value=? WHERE key='roadmap_ip_secret'", (json.dumps(secrets.token_hex(32)),)
-        )
-        # The Web Push key pair is the live install's too; the copy makes its own on first need.
+        # The Web Push key pair is the live install's; the copy makes its own on first need.
         c.execute("DELETE FROM registry_metadata WHERE key='web_push_vapid'")
     # Finance makes its tables inert itself: pending actions, undrained events, links to emptied holds, and the rows that
     # move money or call a provider (DEV_COPY_EMPTIED). Any Finance table present means the scrub runs: a copy missing one

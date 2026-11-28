@@ -28,10 +28,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::{oneshot, watch};
 
+use super::acp::{self, Line, Message};
 use super::{event, failed, is_limit, Events, HostError, Settings};
 use crate::env::Env;
 use crate::keeper::{Held, Inputs, Keeper, Session};
@@ -177,7 +177,7 @@ fn ca_bundle(env: &Env) -> Option<String> {
 
 /// `initialize`'s parameters: Tico reads and writes files itself and runs no terminal for agy.
 pub fn initialize_params() -> Value {
-    json!({"protocolVersion": 1,
+    json!({"protocolVersion": acp::PROTOCOL_VERSION,
            "clientCapabilities": {"fs": {"readTextFile": false, "writeTextFile": false}, "terminal": false},
            "clientInfo": {"name": "tico", "title": "Tico", "version": env!("CARGO_PKG_VERSION")}})
 }
@@ -272,7 +272,7 @@ fn servers(settings: &Settings, init: &Value) -> Value {
         .filter(|s| caps[text_of(&s["transport"]).as_str()] == true)
         .cloned()
         .collect();
-    json!(crate::mcp::grok_config(&taken, &settings.env))
+    json!(crate::mcp::acp_config(&taken, &settings.env))
 }
 
 /// A sign-in agy has not got (T3 Code's isAntigravitySignInRequiredError): `Authentication required` (-32000), or the
@@ -516,12 +516,12 @@ impl Proc {
 }
 
 /// agy's input, which a stop of the turn writes to as well as its reader.
-type Stdin = Arc<tokio::sync::Mutex<Option<ChildStdin>>>;
+type Stdin = Arc<acp::Input<ChildStdin>>;
 
 /// The two ends of agy's protocol stream.
 struct Io {
     stdin: Stdin,
-    stdout: Lines<BufReader<ChildStdout>>,
+    stdout: acp::Reader<ChildStdout>,
     next: i64,
 }
 
@@ -615,24 +615,17 @@ async fn between(mut agent: Agent, mut wanted: oneshot::Receiver<()>) -> Agent {
     loop {
         let line = tokio::select! {
             _ = &mut wanted => return agent,
-            line = agent.io.stdout.next_line() => line,
+            line = agent.io.stdout.next() => line,
         };
         let Ok(Some(line)) = line else {
             agent.closed = true;
             return agent;
         };
-        let Ok(msg) = serde_json::from_str::<Value>(line.trim()) else {
+        let Line::Message(msg) = line else {
             continue;
         };
-        if let (Some(id), Some(method)) = (
-            msg.get("id").filter(|i| !i.is_null()),
-            msg["method"].as_str(),
-        ) {
-            let reply = if method == "session/request_permission" {
-                json!({"jsonrpc": "2.0", "id": id, "result": {"outcome": {"outcome": "cancelled"}}})
-            } else {
-                json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": "unsupported client request"}})
-            };
+        if let Message::Request { id, method, params } = acp::classify(&msg) {
+            let reply = acp::answer(id, &method, &params, acp::Permission::Refuse);
             // agy may have stopped reading: the write is given up when the agent is wanted back or after a while, and
             // a stream left mid-line is not used again.
             let sent = tokio::select! {
@@ -1082,7 +1075,7 @@ impl AntigravityHost {
             proc: Proc { stopper, exited },
             io: Io {
                 stdin: Arc::new(tokio::sync::Mutex::new(stdin)),
-                stdout: BufReader::new(stdout).lines(),
+                stdout: acp::Reader::new(stdout),
                 next: 0,
             },
             stderr,
@@ -1413,20 +1406,12 @@ impl AntigravityHost {
         let saved = self.inner().provider.clone();
         let mut resumed = None;
         if let Some(saved) = saved {
-            let caps = &init["agentCapabilities"];
             // Resumed, as T3 Code does: a load would replay the conversation's history as updates.
-            let method = if caps["sessionCapabilities"]["resume"].is_object() {
-                "session/resume"
-            } else if caps["loadSession"] == true {
-                "session/load"
-            } else {
-                ""
-            };
+            let method = acp::resume_method(&init).unwrap_or_default();
             let answer = if method.is_empty() {
                 Answer::Err(json!({"message": "this agy cannot resume a conversation"}))
             } else {
-                let params =
-                    json!({"sessionId": saved, "cwd": settings.cwd, "mcpServers": servers});
+                let params = acp::open_session(&saved, &settings.cwd, servers.clone());
                 match self.call(c, method, params, Some(REQUEST_WAIT)).await {
                     Ok(a) => a,
                     Err(why) => return Err(End::Closed(why)),
@@ -1450,7 +1435,7 @@ impl AntigravityHost {
         let (session, setup) = match resumed {
             Some(resumed) => resumed,
             None => {
-                let params = json!({"cwd": settings.cwd, "mcpServers": servers});
+                let params = acp::new_session(&settings.cwd, servers);
                 let v = match self
                     .call(c, "session/new", params, Some(REQUEST_WAIT))
                     .await
@@ -1505,7 +1490,7 @@ impl AntigravityHost {
                 .flatten(),
             None => None,
         };
-        let params = json!({"sessionId": session, "prompt": [{"type": "text", "text": prompt}]});
+        let params = acp::prompt(session, &prompt);
         let answer = match self.call(c, "session/prompt", params, None).await {
             // An answer with neither a result nor an error is no answer.
             Ok(Answer::Ok(result)) if !result.is_object() => {
@@ -1625,11 +1610,7 @@ impl AntigravityHost {
             return Err(None);
         }
         let prompted = (method == "session/prompt").then(|| text_of(&params["sessionId"]));
-        write(
-            &c.agent.io,
-            &json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}),
-        )
-        .await?;
+        write(&c.agent.io, &acp::request(id, method, params)).await?;
         // The prompt went: updates from here on are the turn's, and a stop of the turn is agy's `session/cancel`, which
         // agy reads only after the prompt.
         if let Some(session) = prompted {
@@ -1640,25 +1621,17 @@ impl AntigravityHost {
         let by = wait.map(|w| tokio::time::Instant::now() + w);
         loop {
             let next = match by {
-                Some(by) => {
-                    match tokio::time::timeout_at(by, c.agent.io.stdout.next_line()).await {
-                        Ok(next) => next,
-                        Err(_) => return Ok(Answer::Late),
-                    }
-                }
-                None => c.agent.io.stdout.next_line().await,
+                Some(by) => match tokio::time::timeout_at(by, c.agent.io.stdout.next()).await {
+                    Ok(next) => next,
+                    Err(_) => return Ok(Answer::Late),
+                },
+                None => c.agent.io.stdout.next().await,
             };
-            let line = match next {
-                Ok(Some(l)) => l,
+            let msg = match next {
+                Ok(Some(Line::Message(v))) => v,
                 Ok(None) => return Err(None),
                 Err(e) => return Err(Some(e.to_string())),
-            };
-            if line.trim().is_empty() {
-                continue;
-            }
-            let msg: Value = match serde_json::from_str(line.trim()) {
-                Ok(v) => v,
-                Err(_) => {
+                Ok(Some(Line::Text(line))) => {
                     // Its link is never passed on or kept: no person is there to open it.
                     if line.starts_with(AUTH_LINK) {
                         if !c.oauth {
@@ -1687,28 +1660,27 @@ impl AntigravityHost {
             if !self.inner().up {
                 return Err(None);
             }
-            let asked = msg.get("id").filter(|i| !i.is_null()).cloned();
-            match (asked, msg["method"].as_str()) {
-                (Some(asked), None) => {
+            match acp::classify(&msg) {
+                Message::Response { id: asked, reply } => {
                     if asked.as_i64() == Some(id) {
-                        return Ok(match msg.get("error") {
-                            Some(e) => Answer::Err(e.clone()),
-                            None => Answer::Ok(msg.get("result").cloned().unwrap_or(Value::Null)),
+                        return Ok(match reply {
+                            Err(e) => Answer::Err(e),
+                            Ok(result) => Answer::Ok(result),
                         });
                     }
                 }
                 // agy asks its client: a tool's permission is given, as the turn runs with every permission (T3 Code
                 // keeps such a session in its `default` mode and answers; the CLI refuses `yolo`).
-                (Some(asked), Some(m)) => {
-                    let reply = if m == "session/request_permission" {
-                        json!({"jsonrpc": "2.0", "id": asked, "result": super::grok::permission(&msg["params"])})
-                    } else {
-                        json!({"jsonrpc": "2.0", "id": asked, "error": {"code": -32601, "message": "unsupported client request"}})
-                    };
+                Message::Request {
+                    id: asked,
+                    method,
+                    params,
+                } => {
+                    let reply = acp::answer(asked, &method, &params, acp::Permission::Give);
                     write(&c.agent.io, &reply).await?;
                 }
-                (None, Some("session/update")) => {
-                    let p = &msg["params"];
+                Message::Notification { method, params } if method == "session/update" => {
+                    let p = &params;
                     if c.stream.prompting && text_of(&p["sessionId"]) == c.stream.session {
                         let done = {
                             let mut inner = self.inner();
@@ -1963,12 +1935,10 @@ impl AntigravityHost {
             return;
         }
         if let Some((stdin, session)) = live {
-            let cancel = json!({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": session}});
             // One deadline for the cancel and the prompt's end: agy may have stopped reading while the reader's own
             // write holds its input.
             let by = tokio::time::Instant::now() + CANCEL_WAIT;
-            let sent = tokio::time::timeout_at(by, write_to(&stdin, &cancel)).await;
-            if matches!(sent, Ok(Ok(()))) {
+            if acp::cancel_by(&stdin, &session, by).await {
                 // Lent while waited on, and given back however the wait ends (this future dropped too), so `stop`
                 // still joins it.
                 let mut lent = Lent(self, self.inner().reader.take());
@@ -2037,17 +2007,7 @@ impl Drop for Lent<'_> {
 
 /// One protocol line to agy. A write that fails is agy gone: its exit says why.
 async fn write(io: &Io, msg: &Value) -> Result<(), Option<String>> {
-    write_to(&io.stdin, msg).await
-}
-
-async fn write_to(stdin: &Stdin, msg: &Value) -> Result<(), Option<String>> {
-    let mut stdin = stdin.lock().await;
-    let Some(s) = stdin.as_mut() else {
-        return Err(None);
-    };
-    let line = msg.to_string() + "\n";
-    s.write_all(line.as_bytes()).await.map_err(|_| None)?;
-    s.flush().await.map_err(|_| None)
+    acp::write(&io.stdin, msg).await.map_err(|_| None)
 }
 
 /// `tokens`' lease-token file holding `token`; when it cannot be written, `tokens` goes and agy does not start, as

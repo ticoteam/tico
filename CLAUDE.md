@@ -2,7 +2,7 @@
 
 Tico is a source-available operating system for a team of humans and bots (PolyForm Perimeter 1.0.1): a FastAPI
 server in `backend/`, the web app in `web/` (React, built by Vite into build/web and served at `/`), the runner in `runner-rs/` (Python helpers in `runner_support/`), the `tico`
-CLI and MCP tool table in `clients/`, and a Tauri desktop shell in `app/`. `README.md` says how to
+CLI and MCP tool table in `clients/`, and the Electron desktop shell in `desktop/`. `README.md` says how to
 run it and `docs/how-it-works.md` describes the system.
 
 ## Work queue
@@ -16,13 +16,13 @@ A Tico bot working a task on this repository follows these where the rest of thi
 - Run `scripts/dev_setup.sh` once in each clone or worktree, and again after a pull that changes a lock file.
 - While you work, test only what the change can break, one file at a time: `.venv/bin/python -m pytest -q -n 2 <file>`.
   Never the whole suite by hand.
-- Check before CI does: push the draft (a draft runs no CI), then run `python3 scripts/pr_checks.py local --ready` at
-  that head. It runs the tests the PR checks would select for the diff in the computer's shared slots
-  (`scripts/heavy.sh`; prefix `TICO_HEAVY_REMOTE=1` to run them on a RunsOn VM, which takes a Tico permit) and marks the
-  PR ready only after they pass. Never mark it ready with `gh pr ready` before a pass. Before each later push to a ready
-  PR, commit and run `python3 scripts/pr_checks.py local` first, and push only after it passes. Put its last line (the
-  receipt) in your reply on the task. A red result is fixed before the push, never left for CI to find; a check it could
-  not run is "not checked", with the reason.
+- PR checks run in CI; never wait for a local test slot. Push the finished draft (a draft runs no CI) and mark it ready
+  with `gh pr ready`: the ready PR's checks run the light plan's tests for the diff. `python3 scripts/pr_checks.py local`
+  applies the same narrowing rules, but CI caps with recent queue timings and diffs from the PR's merge base, so the
+  files each keeps can differ when the time cap applies. That local run (in the computer's shared slots, `scripts/heavy.sh`) is optional: run it only when it starts at
+  once, and never hold the PR back for it. When `checks` is green at the head, put
+  `CI checks passed at head <full sha> (<run link>)` in your reply on the task. A red run is fixed before review; a
+  check that did not run is "not checked", with the reason.
 - Never skip the pre-push hook. If it cannot run, say on the task what is missing.
 - Never enqueue or merge: Tico queues the PR when the task reaches Merge. Never tag, and never cut or change a release.
 - Never edit `.github/workflows/`: the push is refused. Say so on the task; a person lands that part.
@@ -86,9 +86,10 @@ when the branch would not merge into origin/main and names the files. A person m
 
 ## How we work
 Trunk-based: branches are `<who>/<topic>` (a Tico bot's: `tico/...`), one ticket per PR. Draft PRs run no CI. The flow: open the PR as a draft
-(`gh pr create --draft`) and push freely; when done, a person runs `python3 scripts/pr_checks.py local --ready`, which runs the
-tests the PR checks select for your diff on this computer, prints a receipt line with the head sha for the ticket, and
-marks the PR ready after a pass. A Tico bot runs it too (see "A Tico bot on a Tico task"). Mark ready once: each push to a ready PR runs CI again, so batch later fixes. Wait for
+(`gh pr create --draft`) and push freely; when done, mark it ready with `gh pr ready`: its checks run the tests the PR
+checks select for your diff (a fork's pull request runs the cheap checks only). `python3 scripts/pr_checks.py local --ready`
+applies the same selection rules on this computer first and prints a receipt line with the head sha; when the time cap
+applies, the files it keeps can differ from CI's. It is optional, for when a heavy slot is free, and never waited for. Mark ready once: each push to a ready PR runs CI again, so batch later fixes. Wait for
 green `checks` on that run (not skipped), and once it is reviewed, enqueue it with
 `gh pr merge <N> --merge`: the merge queue tests the PR merged onto current main before it lands. Enqueue once. No bot
 enqueues: Tico queues a bot's PR at the checked head when its task reaches Merge, and a queue removal goes to the
@@ -107,11 +108,13 @@ reviewed work through the merge queue.
 ## Hit every surface
 The commonest defect in Tico is a change that works where it was tested and is missing everywhere else. Before
 calling a change done, walk this list and say in the PR which entries applied:
-- **Clients**: the web app at desktop and phone widths, the Tauri app, Slack, the `tico` CLI and the MCP tool table
+- **Clients**: the web app at desktop and phone widths, the Electron desktop app, Slack, the `tico` CLI and the MCP tool table
   (`clients/hubtools.py`), API v2 and its spec (`backend/openapi_v2.py`).
 - **Runners**: the Rust runner, on a Mac and in the Docker image.
 - **Harnesses**: every harness, through the capabilities in its `runner-rs/harnesses/*.toml`, never by comparing names.
   A capability is on only when the harness really does it; unknown is reported as unknown.
+  A CLI that speaks ACP runs on the generic host (`runner-rs/src/hosts/acp_host.rs`) from its manifest's `[acp]`
+  table (`protocol = "acp"`, docs/harnesses.md): add a manifest, not a Rust host. Claude, Codex and Antigravity keep their own.
 - **Who acts**: a human, a bot, Agent Ops acting for a human, and an external agent over MCP.
 - **Reverse states**: a way in needs a way out and a way to see it. Snooze needs unsnooze, close needs reopen,
   grant needs revoke.
@@ -130,6 +133,23 @@ calling a change done, walk this list and say in the PR which entries applied:
 When the server is slow or stuck, read `python -m backend.flight summary --since 30m` before guessing: it reads the
 flight file, not the database.
 
+## Refactor rules
+- `desktop/` (Electron) is the single desktop shell.
+- New routes use `api_routing.router()` with `deps.Injected` services and `api_routing.include(app, router)`; no new
+  `install(app, ...)` closures, and no `APIRouter(` or `include_router` outside `backend/api_routing.py`.
+- New background work registers in the lifespan workers (`backend/lifespan_workers.py`); no `asyncio.create_task` in
+  `backend/app.py`.
+- `runner_support/` is frozen: no new file in it outside its tests, and no new import of it from `backend/` or
+  `clients/`. Prefer `runner-rs`.
+- Core never imports a Non-Core module (Finance, Growth, Market, Calendar, Calls, Meetings, Mail, Letters, Slack,
+  Granola, lenses); `finance.actions` is the one bridge.
+- Never add `flight_*` tables to `hub.db`.
+
+`scripts/landmines.py` enforces the `runner_support/`, Core, `flight_*` and desktop rules (`skills/honest-code/LESSONS.md`
+L35 to L39), the lifespan, install-closure and router rules (L40 to L42), and the `backend/hubdb.py` function
+ratchet (L43: a new database helper goes in a `backend/hubdb_<domain>.py` module). The new-file rule needs a base: run
+`python3 scripts/landmines.py --check --base origin/main` (`scripts/lint.sh` passes `LINT_BASE_REF`, as CI does).
+
 ## Conventions
 - Create persistent schema changes with `python3 scripts/new_migration.py name` (`--py` for `up(conn)`):
   `YYYYMMDDHHMMSS_name.sql|py`, UTC. Keep applied files and checksums unchanged; never edit `baseline.sql`. Each migration
@@ -146,5 +166,8 @@ flight file, not the database.
   them: their source is `backend/openapi_v2.py`, where a rebase conflict is resolved. A route joins the stable API on its
   own decorator, `@app.get(path, **api_v2(tag, operationId, summary, answer))` (backend/api_contract.py), which also
   takes what FastAPI cannot see in the handler (a body read by hand, extra errors, no sign-in, an optional key).
+- Web calls to a route in that spec use `operation('METHOD /path', { path, query, body }, opts)` from
+  `web/src/api/client.ts`: schema.d.ts's ApiOperations types it from the spec, so a wrong path, parameter, body or
+  answer field fails `npm run typecheck`. Use it for new calls and move a feature's calls to it when you next touch them.
 - Comments say why in the present tense; they do not name who asked or when. No divider lines, no narration of the
   change, no commented-out code. A suppression (`noqa`, `type: ignore`, `#[allow]`) says why on the same line.

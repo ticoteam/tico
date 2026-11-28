@@ -1,0 +1,5 @@
+{
+  "backend/mailboxes.py": {
+    "no-install-closure": 1
+  }
+}

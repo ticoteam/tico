@@ -1,0 +1,5 @@
+{
+  "backend/vault_rotate.py": {
+    "core-imports-app": 2
+  }
+}

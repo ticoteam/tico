@@ -158,8 +158,9 @@ def test_health_flags_runner_p95_and_clears_after_the_window(api):
         rec.request("POST /api/v2/attempts/{aid}/renew", "runner", 200, 1500)
         rec.request("POST /api/v2/attempts/{aid}/inputs", "runner", 200, 10)
     rec.drain(now)
-    with store.transaction() as c:
+    with flight.tables(store, write=True) as c:
         flight.write(c, rec.take(now // 60 * 60))
+    with store.read() as c:  # Health holds the server's connection; the recorder's rows are in their own file
         assert "renew" in health.runner_route_latency(c, now)["summary"]
         assert any(row["key"] == "runner_route_latency" for row in maintenance_health._server_checks(c))
         assert health.runner_route_latency(c, now + 16 * 60) is None

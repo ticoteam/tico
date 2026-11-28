@@ -150,20 +150,10 @@ class Blobs:
     def s3(self):
         return self._s3 if self._s3 is not None else self._sources.s3
 
-    @property
-    def server_storage(self):
-        """The server's own credentials, whatever bucket company files use: for the desktop app's builds."""
-        return ServerStorage(self)
-
     def read_s3(self, operation, **options):
         if self._s3 is not None:
             return getattr(self._s3, operation)(**options), self._s3
         return self._sources.read_s3(operation, **options)
-
-    def presign_get(self, s3, bucket, key, expires):
-        if self._s3 is not None:
-            return s3.generate_presigned_url("get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=expires)
-        return self._sources.presign_get(s3, bucket, key, expires)
 
     @staticmethod
     def key(digest):
@@ -914,25 +904,3 @@ class Location:
 
     def __repr__(self):
         return f"Location({location_of(self)!r})"
-
-
-class ServerStorage:
-    """A Blobs' read access with the server's own credentials (backend/downloads.py), shared with its write probe
-    while no company bucket is set."""
-
-    def __init__(self, blobs):
-        self.blobs = blobs
-
-    @property
-    def s3(self):
-        return self.blobs._s3 if self.blobs._s3 is not None else self.blobs._server_sources.s3
-
-    def read_s3(self, operation, **options):
-        if self.blobs._s3 is not None:
-            return getattr(self.blobs._s3, operation)(**options), self.blobs._s3
-        return self.blobs._server_sources.read_s3(operation, **options)
-
-    def presign_get(self, s3, bucket, key, expires):
-        if self.blobs._s3 is not None:
-            return s3.generate_presigned_url("get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=expires)
-        return self.blobs._server_sources.presign_get(s3, bucket, key, expires)

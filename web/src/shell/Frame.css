@@ -62,7 +62,21 @@ body.is-dragging .shell-place{pointer-events:none}
    the company and the open page share what is left. */
 .shell-trail{display:flex;align-items:center;gap:var(--s-1);min-width:0;font-size:var(--t-sm);line-height:1;color:var(--muted);white-space:nowrap}
 .shell-trail>:is(a,span){flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;border-radius:var(--r-chip);transition:color var(--dur-fast) var(--ease)}
-.shell-trail>:is(a,span):not(:first-child,:last-child){flex-shrink:100;min-width:var(--s-4)}
+.shell-trail>:is(a,span):not(.shell-recent+*,:last-child){flex-shrink:100;min-width:var(--s-4)}
+/* Recent views (shell/Recent.tsx): left of the first part, always full size */
+.shell-recent{flex:none;display:grid;place-items:center;width:var(--s-6);height:var(--s-6);margin-right:var(--s-1);padding:0;border:0;border-radius:var(--r-chip);background:none;color:var(--muted);cursor:pointer;transition:color var(--dur-fast) var(--ease),background var(--dur-fast) var(--ease)}
+.shell-recent:hover,.shell-recent[data-popup-open]{color:var(--ink);background:var(--raised-hover)}
+.shell-recent:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap)}
+.shell-recent>.ico{width:14px;height:14px}
+/* .menu sets 200px in styles/parts.css, which loads later: two classes so the list sizes to its rows, up to 420px */
+.menu.shell-recent-list{width:max-content;min-width:200px;max-width:min(420px,calc(100vw - var(--s-6)))}
+.shell-recent-list>a{min-width:0}
+.shell-recent-none{margin:0;padding:var(--s-1) var(--s-2) var(--s-2);color:var(--muted);font-size:var(--t-sm)}
+/* a row reads like the trail: the middle parts shorten first */
+.shell-recent-trail{display:flex;align-items:center;gap:var(--s-1);min-width:0;white-space:nowrap}
+.shell-recent-trail>span{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.shell-recent-trail>span:not(:first-child,:last-child){flex-shrink:100;min-width:var(--s-4)}
+.shell-recent-trail>.ico{flex:none;width:12px;height:12px;stroke-width:2;color:var(--faint)}
 .shell-trail>a:hover{color:var(--ink)}
 .shell-trail>a:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap)}
 .shell-trail>[aria-current]{color:var(--ink-2)}

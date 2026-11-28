@@ -1,0 +1,5 @@
+{
+  "backend/team_build.py": {
+    "no-install-closure": 1
+  }
+}

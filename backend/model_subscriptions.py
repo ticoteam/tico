@@ -1068,6 +1068,8 @@ def _usage(c, sub, ctx=None):
     capacity = hold.get("capacity")
     if spec.get("billing") == "api":
         usage = {"window": None, "used_pct": None, "cost_usd_month": round(float(ctx["costs"].get(sub["id"]) or 0), 2)}
+    elif hold and not capacity and (fresh := _fresh_usage(c, sub, spec.get("runtime", ""), ctx, hold)):
+        usage = fresh
     elif active and not capacity:
         kind = login_holds.window(hold.get("error"))
         window = "week" if "weekly" in kind else "5h" if "5-hour" in kind else None
@@ -1082,6 +1084,54 @@ def _usage(c, sub, ctx=None):
     if active:
         usage["capacity_until" if capacity else "quota_hold_until"] = until
     return usage
+
+
+def _fresh_usage(c, sub, runtime, ctx, hold):
+    """A held plan's usage from readings taken since its hold began, when every one is below the limit
+    (login_holds.FULL_PCT) and the window it was held on is among them: its window reset early or the plan was
+    upgraded, so the view shows the reading rather than the hold's 100%. None when no such reading says so; an older
+    reading, from before the limit was met, says nothing."""
+    from . import login_holds
+
+    start = H.parse_ts(hold.get("since"))
+    if start is None:
+        return None
+    windows = []
+    _plan_usage(c, sub, runtime, ctx, windows)
+    fresh = [w for w in windows if w[4] >= start]
+    shown = [w for w in fresh if w[0] != "model"]
+    kind = login_holds.window(hold.get("error"))
+    held = "week" if "weekly" in kind else "5h" if "5-hour" in kind else None
+    if not shown or max(w[2] for w in fresh) >= login_holds.FULL_PCT:
+        return None
+    if held and not any(w[0] == held for w in shown):
+        return None
+    label, _, used, ends, _ = max(shown, key=lambda w: (w[2], w[4]))
+    weeks = [w for w in shown if w[0] == "week"]
+    week = max(weeks, key=lambda w: w[4]) if weeks else None
+    return {
+        "window": label,
+        "used_pct": used,
+        "cost_usd_month": None,
+        "resets_at": ends.isoformat(),
+        **({"weekly_resets_at": week[3].isoformat(), "weekly_used_pct": week[2]} if week else {}),
+    }
+
+
+def try_now(c, actor, sub):
+    """A person asked to try a held plan now (Try now on its row): its hold ends as Try now ends any login's
+    (login_holds.try_now): one probe turn, and the cut-short window back if it meets the limit again. Returns the plan's
+    view; a plan with no hold standing is left as it is."""
+    from . import login_holds
+
+    runtime = (KINDS.get(sub["kind"]) or {}).get("runtime")
+    if not runtime:
+        raise Problem("unavailable", "Only a plan is held on its usage limit", 409)
+    login = login_holds.subscription_login(sub["id"])
+    if (login_holds.get(c, "", login, runtime).get("until") or "") > H.now():
+        login_holds.try_now(c, "", login, runtime)
+        H.event(c, actor, "subscription.try_now", sub["id"], {"runtime": runtime})
+    return view(c, row(c, sub["id"]))
 
 
 def _reason(text):
@@ -3598,6 +3648,17 @@ def install(app, store, auth, mutate, settings):
         def work(c):
             _manage_provider(c, auth, who, sid)
             return SR.request_plan_read(c, sid, who.actor)
+
+        return mutate(request, Empty(), work)
+
+    # End a held plan's usage-limit hold now, as Reconnect does (try_now): one probe turn decides.
+    @app.post("/api/v2/model-subscriptions/{sid}/try-now")
+    def try_plan_now(request: Request, sid: str):
+        who = request.state.identity
+
+        def work(c):
+            sub = _manage_provider(c, auth, who, sid)
+            return try_now(c, who.actor, sub)
 
         return mutate(request, Empty(), work)
 

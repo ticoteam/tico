@@ -456,6 +456,9 @@ def test_a_clear_between_admission_and_history_is_not_cleared_again(chat, monkey
     """A Clear that commits after the gate admitted the old three-turn session but before history and the marker are
     read: the check reads the chat as admitted, so its decision no longer matches and nothing is cleared twice."""
     api, machine, conversation, _, _ = chat
+    # The budget is how long a send may wait, which this test does not measure. The gate here also commits a Clear, so
+    # on a loaded computer the check can pass BUDGET before it asks; the send then goes on undecided and nothing is kept.
+    monkeypatch.setattr(T, "BUDGET", 30)
     store = api.app.state.store
     real = T.gate
 

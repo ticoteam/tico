@@ -1,0 +1,6 @@
+{
+  "backend/hubdb.py": {
+    "core-imports-app": 3,
+    "no-new-hubdb-def": 311
+  }
+}

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from backend import automations, cloud_access, company_billing, routines
+from backend import automations, cloud_access, cloud_machines, company_billing, routines
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner  # noqa: F401
 from backend.tests.helpers.company_billing import ANSWER, KEY, URL, FakeHQ
@@ -55,8 +55,7 @@ def test_billing_passes_cloud_through_and_keeps_it(api, hq):  # noqa: F811
     assert status["cloud_access"] == {
         "access": "frozen",
         "reason": "out_of_credit",
-        "plan": "trial",
-        "trial_days_left": 14,
+        "plan": "starter",
         "billing_url": BILLING_URL,
         "days_left": None,
     }
@@ -69,11 +68,19 @@ def test_billing_passes_cloud_through_and_keeps_it(api, hq):  # noqa: F811
 
 def test_an_odd_cloud_answer_is_refused_and_the_last_word_kept(api, hq):  # noqa: F811
     say(api, hq, "frozen", "out_of_credit")
-    for odd in ({**signals("open"), "access": "closed"}, {**signals("open"), "balance_micros": 1.5}, ["open"]):
+    trial_text_balance = {**signals("locked", "trial_over"), "balance_micros": "5000000"}
+    for odd in (
+        {**signals("open"), "access": "closed"},
+        {**signals("open"), "balance_micros": 1.5},
+        ["open"],
+        trial_text_balance,
+    ):
         hq.answers["/cloud"] = (200, odd, "application/json")
         assert sync(api)["access"] == "frozen"
     hq.answers["/billing"] = (200, {**ANSWER, "cloud": {"access": "open", "reason": "gift"}}, "application/json")
     assert get(api, "billing")["state"] == "unreachable"
+    with pytest.raises(ValueError):  # a retired trial lock with a balance that is not a whole number: refused, no crash
+        cloud_access.parse(trial_text_balance)
     hq.answers["/cloud"] = (503, {"error": "down"}, "")
     assert sync(api)["access"] == "frozen"  # HQ down keeps the last word
     # A billing page that is not https is dropped, never linked.
@@ -99,7 +106,7 @@ def test_locked_refuses_people_except_billing_and_the_download_and_opens_again_b
     assign(api, r, "ops")
     ready(api, r, ["ops"])
     post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
-    say(api, hq, "locked", "trial_over")
+    say(api, hq, "locked", "unpaid")
     refused = api.get("/api/v2/tasks", headers=headers())
     assert refused.status_code == 402, refused.text
     error = refused.json()["error"]
@@ -134,12 +141,63 @@ def test_the_access_and_the_locked_refusal_answer_their_declared_shapes_and_a_bo
     assert conforms(get(api, "cloud-access"), schema, document) is None  # off cloud: null
     refused = api.get("/api/v2/cloud-access", headers=headers(bot(api, "ops")))
     assert (refused.status_code, refused.json()["error"]["code"]) == (403, "identity")
-    say(api, hq, "locked", "trial_over")
+    say(api, hq, "locked", "unpaid")
     assert conforms(get(api, "cloud-access", "cara-test"), schema, document) is None
     locked = api.get("/api/v2/tasks", headers=headers())
     assert locked.status_code == 402
     assert conforms(locked.json(), document["components"]["schemas"]["Problem"], document) is None
     assert conforms(locked.json()["error"]["cloud"], document["components"]["schemas"]["CloudAccess"], document) is None
+
+
+def test_no_answer_locks_a_company_for_a_trial(api, hq):  # noqa: F811
+    # Tico Cloud has no trial (Nov 27): a company runs on its credit and freezes at $0. An HQ still saying "locked,
+    # trial over" is read as what the balance says: open with credit left, frozen at $0. People work, bots run, and
+    # Settings > Billing keeps its balance and payment links.
+    r = runner(api)
+    assign(api, r, "ops")
+    ready(api, r, ["ops"])
+    post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
+    kept = say(api, hq, "locked", "trial_over")
+    assert (kept["access"], kept["reason"], kept["balance_micros"]) == ("frozen", "out_of_credit", 0)
+    hq.answers["/cloud"] = (200, {**signals("locked", "trial_over"), "balance_micros": 5_000_000}, "application/json")
+    kept = sync(api)
+    assert (kept["access"], kept["reason"], kept["balance_micros"]) == ("open", None, 5_000_000)
+    hq.answers["/billing"] = (200, {**ANSWER, "cloud": signals("locked", "trial_over")}, "application/json")
+    shown = get(api, "billing")
+    assert shown.get("state") != "unreachable" and shown["balance_micros"] == ANSWER["balance_micros"]
+    assert (shown["cloud"]["access"], shown["cloud"]["billing_url"]) == ("frozen", BILLING_URL)  # its balance is $0
+    assert api.get("/api/v2/tasks", headers=headers()).status_code == 200
+    say(api, hq, "open")
+    assert claim(api, r, "ops") is not None
+
+
+def test_a_trial_lock_kept_from_before_is_open_and_still_a_cloud_company(api, hq):  # noqa: F811
+    # A company locked for its trial before the trial went away opens at once, before HQ answers again, and stays a
+    # Tico Cloud company (its machines are still managed, its billing page still linked).
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO registry_metadata VALUES(?,?)",
+            (
+                cloud_access.KEY,
+                json.dumps(
+                    {
+                        "access": "locked",
+                        "reason": "trial_over",
+                        "plan": "trial",
+                        "balance_micros": 9,
+                        "billing_url": BILLING_URL,
+                    }
+                ),
+            ),
+        )
+        found = cloud_access.state(c)
+        assert (found["access"], found["reason"], found["billing_url"]) == ("open", None, BILLING_URL)
+        assert not cloud_access.locked(c) and not cloud_access.frozen(c) and cloud_machines.cloud_company(c)
+    store = api.app.state.store
+    store.__dict__.pop("_cloud_access", None)
+    assert cloud_access.current(store)["access"] == "open"
+    assert api.get("/api/v2/tasks", headers=headers()).status_code == 200
+    assert get(api, "cloud-access")["cloud"]["billing_url"] == BILLING_URL
 
 
 def test_a_restart_keeps_the_lock_until_hq_answers(api, hq):  # noqa: F811

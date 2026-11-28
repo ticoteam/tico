@@ -50,9 +50,8 @@ def post(client, token, timings):
 
 def stored(app):
     rec = app.state.flight
-    with app.state.store.transaction() as c:
+    with flight.tables(app.state.store, write=True) as c:
         flight.write(c, rec.take(int(time.time() // 60 * 60)))
-    with app.state.store.read() as c:
         return [dict(r) for r in c.execute("SELECT * FROM flight_web ORDER BY metric, route")]
 
 
@@ -152,7 +151,7 @@ def test_people_only_gives_their_own_p99_and_ranks_by_their_requests(tmp_path):
         ("GET /api/v2/needs-you", "human", 150, _hist(*([20] * 150))),
         ("POST /api/v2/attempts/{aid}/inputs", "runner", 9000, _hist(*([50] * 9000))),
     ]
-    with store.transaction() as c:
+    with flight.tables(store, write=True) as c:
         for route, caller, n, hist in rows:
             total = sum(flight.EDGES[i] * k for i, k in hist.items())
             c.execute(
@@ -190,7 +189,7 @@ def test_browser_minutes_become_hours_and_go_after_14_days(tmp_path):
     store.initialize(seed_market=False)
     now = 1_800_000_000
     hour = (now - 3 * 86400) // 3600 * 3600
-    with store.transaction() as c:
+    with flight.tables(store, write=True) as c:
         for i, ms in enumerate((100, 2000)):
             c.execute(
                 "INSERT INTO flight_web VALUES(?,?,?,?,?,?)",
@@ -201,7 +200,7 @@ def test_browser_minutes_become_hours_and_go_after_14_days(tmp_path):
             "INSERT INTO flight_web VALUES(?,?,?,?,?,?)", (now - 60, 60, "inp", "/chat", 2, json.dumps(_hist(30, 30)))
         )
     flight.sweep(store, now)
-    with store.read() as c:
+    with flight.tables(store) as c:
         rows = [dict(r) for r in c.execute("SELECT * FROM flight_web ORDER BY created_at")]
         web = flight.view(c, minutes=14 * 1440, sections=("web",), now=now)["web"]
     assert [(r["created_at"], r["span"], r["metric"], r["n"]) for r in rows] == [
@@ -230,7 +229,7 @@ def test_people_only_lists_the_browsers_timing_sends_apart(tmp_path):
     store = Store(Settings(db_path=tmp_path / "hub.db", registry_dir=tmp_path), flight.Recorder())
     store.initialize(seed_market=False)
     now = 1_800_000_000
-    with store.transaction() as c:
+    with flight.tables(store, write=True) as c:
         for route, n in ((flight.WEB_TIMINGS_ROUTE, 500), ("GET /api/v2/tasks/{tid}", 100)):
             c.execute(
                 "INSERT INTO flight_requests VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",

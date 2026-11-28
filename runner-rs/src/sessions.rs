@@ -48,12 +48,20 @@ const WORKTREE_WAIT_S: u64 = 120;
 pub const PRIVATE_COPY_FAILED: &str = "A private meeting's turn runs in a copy of the bot's repository kept for that meeting alone, and none could be made here";
 const WORKTREE_RETRY_S: u64 = 10;
 
+/// Session worktrees a bot may hold on one computer. Each is a full checkout of the bot's repository, and a bot that
+/// touches many tasks (a QA bot) kept one per open task until the disk was full.
+pub const SESSION_CAP: usize = 30;
+/// Free space a new session worktree needs, as for a code worktree (worktrees::disk_floor).
+const SESSION_FLOOR: u64 = 5 * 1024 * 1024 * 1024;
+
 #[cfg(test)]
 thread_local! {
     pub(crate) static WORKTREE_WAIT: std::cell::Cell<Option<(Duration, Duration)>> = const { std::cell::Cell::new(None) };
+    /// Free bytes a test says the session folder's volume has.
+    pub(crate) static FREE_BYTES: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
 }
 
-fn slug_ok(name: &str) -> bool {
+pub(crate) fn slug_ok(name: &str) -> bool {
     static SLUG: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     SLUG.get_or_init(|| Regex::new(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$").unwrap())
         .is_match(name)
@@ -563,6 +571,58 @@ async fn upstream_or_none(path: &Path, env: &Env) -> Result<String, Fault> {
     }
 }
 
+/// Free bytes on the volume `path` will be made on (it may not exist yet); u64::MAX when unreadable.
+#[cfg(not(test))]
+fn free_bytes(path: &Path) -> u64 {
+    let mut probe = path;
+    while !probe.exists() {
+        match probe.parent() {
+            Some(up) => probe = up,
+            None => break,
+        }
+    }
+    crate::readiness::disk_usage(probe)
+        .map(|d| d.1)
+        .unwrap_or(u64::MAX)
+}
+
+/// A test sees only the free space it sets (FREE_BYTES), never its machine's: that volume may be nearly full.
+#[cfg(test)]
+fn free_bytes(_: &Path) -> u64 {
+    FREE_BYTES.with(|v| v.get()).unwrap_or(u64::MAX)
+}
+
+/// Why no new session worktree may be made at `path` now, or "": the bot's folder already holds SESSION_CAP worktrees on
+/// this computer, or its volume has under SESSION_FLOOR free. Nothing is removed to make room.
+fn room_for(path: &Path) -> String {
+    let held = path
+        .parent()
+        .and_then(|folder| std::fs::read_dir(folder).ok())
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|e| e.path() != path && e.file_type().is_ok_and(|t| t.is_dir()))
+                // A worktree has its .git file from the start of `git worktree add`; an empty folder a stopped runner
+                // left before git ran (checkout_groups::prepare) holds no checkout and takes no place.
+                .filter(|e| e.path().join(".git").symlink_metadata().is_ok())
+                .count()
+        })
+        .unwrap_or(0);
+    if held >= SESSION_CAP {
+        return format!(
+            "this bot already holds {held} session worktrees on this computer, and the limit is {SESSION_CAP}; one frees when its task is finished"
+        );
+    }
+    let free = free_bytes(path);
+    if free < SESSION_FLOOR {
+        return format!(
+            "only {:.1} GB free on this computer, and a new session worktree needs 5 GB",
+            free as f64 / crate::repositories::GB
+        );
+    }
+    String::new()
+}
+
 /// Make or reuse the task's worktree: (upstream ref, problem). A path refusal stops the turn; other problems
 /// let it run in the main checkout.
 pub async fn ensure(
@@ -674,6 +734,10 @@ pub async fn ensure(
                     path.display()
                 ),
             ));
+        }
+        let full = room_for(path);
+        if !full.is_empty() {
+            return Ok((String::new(), full));
         }
         g(main, &env, &["worktree", "prune"], 15).await?;
         if let Some(parent) = path.parent() {

@@ -156,6 +156,13 @@ describe('Org @s309', () => {
     ]);
   });
 
+  it('takes a person out of their group, and only that group, when moved to no group', async () => {
+    const sent = serve((_url, method) => (method === 'PATCH' ? { status: 200, body: {} } : nothing()));
+    queryClient.setQueryData(groupsQuery.queryKey, [g('sales', 'Sales', { people: ['ana', 'lee'] }), g('east', 'East', { people: ['bo'] })]);
+    await moveTeammate('human:ana', 'sales', '');
+    expect(sent).toEqual([{ url: '/api/v2/groups/sales', method: 'PATCH', body: { remove: { people: ['ana'] } } }]);
+  });
+
   it('says so when there are no teams, and offers Try again when the groups are refused', async () => {
     serve(nothing);
     queryClient.setQueryData(groupsQuery.queryKey, []);

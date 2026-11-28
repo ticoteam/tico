@@ -315,7 +315,6 @@ text at the doors it comes in by, before a bot reads it. Change it in **Settings
 |---|---|---|
 | Webhooks | A call whose automation opens a task for a bot or starts a bot's turn, and a rule's `create_task` on `webhook.received`. In a JSON body, only its strings of three words or more, not ids, numbers or links | Warn |
 | Mail | An inbound message a bot reads (`tico inbound read`): the subject and body | Warn |
-| Ideas | The public roadmap's suggestion form: the title and summary | Warn |
 | Watchers | A watcher's new task, except the Support Agent's HQ tickets, which [support triage](support.md#support-triage) checks | Warn |
 | Documents | A document or a link that the Rules Owner reads to suggest rules (Rules › External): the file's text, or the page the link fetches | Warn |
 | Slack | A message a person sends a bot in Slack (a DM or an @mention), and a message in a channel linked to a thread, with its edits | Warn |
@@ -323,8 +322,8 @@ text at the doors it comes in by, before a bot reads it. Change it in **Settings
 Each door is **Off**, **Warn** or **Hold**. Mail is only ever marked, so it offers Off and Warn. Slack's row in Settings
 offers all three, but Tico does not save a Slack mode yet: Slack stays at Warn, and a change to it is refused. Only the
 decision model's score can hold an item: the pattern check only warns. Every door defaults to Warn, which only observes:
-nothing is held until you set a door to Hold. The six defaults are one constant,
-`DEFAULTS` in `backend/screening.py`; Hold becomes the default for webhooks, ideas and watchers once the live eval
+nothing is held until you set a door to Hold. The five defaults are one constant,
+`DEFAULTS` in `backend/screening.py`; Hold becomes the default for webhooks and watchers once the live eval
 (`python -m evals.screening.run --live`) and a week of `screening.warned` rows show the hold line is safe.
 
 The check has four layers. Two of them can be switched off in the same card:
@@ -339,13 +338,13 @@ The check has four layers. Two of them can be switched off in the same card:
   every item, free. A match only warns, never holds, and counts only when the decision model did not answer: they
   misfire on code and on writing about attacks.
 - **The decision model** reads text of 200 characters or more against the `injection-screen` question set
-  (`questions/injection-screen.json`). A webhook, watcher, idea or automation turn at or over the hold line (85%), on a
+  (`questions/injection-screen.json`). A webhook, watcher or automation turn at or over the hold line (85%), on a
   door set to Hold, becomes a task for a person titled `Held: ...`: the bot is not woken and nothing is deleted. Hand the
   task to the bot to release it; close it if it is an attack. With no person to hold it, it goes to its bot with the
   warning line instead. A document at or over the hold line, on a door set to Hold, becomes a read task for the Rules Owner,
   labelled held, with its text left out. Slack stays at Warn for now, so no Slack message is held; at Warn it gets no
   line. At or over `warn` (50%), the bot's copy starts with a line saying the text looks like a prompt injection and is
-  data. That covers mail, Documents, webhooks, watchers, ideas and automation turns, not Slack. Mail is never held: its
+  data. That covers mail, Documents, webhooks, watchers and automation turns, not Slack. Mail is never held: its
   read carries the verdict in a `screening` field as well. A held automation turn is recorded as step `held`.
 - **Who gets a held item.** Whoever made the webhook's automation or rule, else the automation's owner, else the bot's
   operator, else the default person.
@@ -914,23 +913,18 @@ and tasks follow the rule above ([Tico SQL](hub-sql.md)).
 
 Task movers (the team owner and humans on the leadership, product or engineering teams) attach
 and remove tags on any task. A bot attaches and removes a classification tag (`qa`, an area, a
-priority) on a task it manages: one it owns, one it asked for, or one whose pipeline it manages,
-and only when it can already read the task. Two kinds of tag keep their gate for a bot, both to add
-and to remove: a tag on a public roadmap (Settings → Public roadmap) needs an OK of exactly that
-publication, given by a person from its preview, as public text does ([Roadmaps](roadmaps.md)), or
-a mover when the team does not ask bots for one; `goal:on` and `goal:off` change how Tico runs the
-task, so only a mover changes them. The same holds when a bot creates a task: it may give the new
-task classification tags, but a task created with `goal:on`, `goal:off` or a public roadmap tag is
-refused and nothing is created. A publication OK is for a task that exists, so the bot creates the
-task without the roadmap tag and then adds it with the OK, or asks a mover. A refusal says which
-tags need a person or an OK and why; an OK that is not given yet, already used or for other tags is
-the same refusal. It counts toward the bot's quarantine once per task an hour, so retrying it
+priority) on a task it manages: one it owns, one it asked for, or one whose pipeline it manages or owns,
+and only when it can already read the task. `goal:on` and `goal:off` keep their gate for a bot, both
+to add and to remove: they change how Tico runs the task, so only a mover changes them. The same holds
+when a bot creates a task: it may give the new task classification tags, but a task created with
+`goal:on` or `goal:off` is refused and nothing is created. A refusal says which tags need a person and
+why. It counts toward the bot's quarantine once per task an hour, so retrying it
 cannot quarantine the bot. A mover may also grant a bot one tag (the tag's bot writers,
 `tico tag update <tag> --version <n> --bot-writers <bot>`): that bot then attaches and removes that tag,
 and only that tag, on any task it can read, such as a test bot marking tickets passed or failed. The
 rest of the task stays out of its reach, and a change that touches any other tag is refused whole.
 Only a mover sets the list, so a bot that owns a tag cannot grant it to itself; `goal:on` and
-`goal:off` are never granted, a public roadmap tag keeps its gate, and an empty list
+`goal:off` are never granted, and an empty list
 (`--bot-writers ''`) revokes. The tag's page names the bots it is granted to. Nothing here makes a
 bot a mover. Creating and editing a tag is for
 those movers or that tag's owner, including a bot owner. A teammate may create a tag they own.

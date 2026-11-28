@@ -127,11 +127,14 @@ pub(crate) fn speaker(msg: &Value) -> String {
     actor
 }
 
-/// What a prompt line is: the same every turn of a thread (Standing), the assigned task (Task), or this turn's own.
+/// What a prompt line is: the same every turn of a thread (Standing), the assigned task (Task), the task's pipeline
+/// notes and its stage's (each sent once per session, `Seen`), or this turn's own.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Part {
     Standing,
     Task,
+    PipelineNotes,
+    StageNotes,
     Turn,
 }
 
@@ -153,12 +156,14 @@ const TASK_HIDDEN: &[&str] = &[
     "goal",
 ];
 
-/// What a resumed thread was last given in full (`Built::standing` and `Built::task`), each empty when it may not
-/// hold it any more.
+/// What a resumed thread was last given in full (`Built::standing`, `Built::task` and the notes' digests), each empty
+/// when it may not hold it any more.
 #[derive(Default, Clone, Debug)]
 pub struct Seen {
     pub standing: String,
     pub task: String,
+    pub pipeline_notes: String,
+    pub stage_notes: String,
 }
 
 /// A turn's prompt: `text` is what is sent, `full` the whole prompt (the same unless `Seen` let parts out), and the
@@ -171,9 +176,16 @@ pub struct Built {
     pub full: String,
     pub standing: String,
     pub task: String,
+    pub pipeline_notes: String,
+    pub stage_notes: String,
     pub restore: String,
     pub rules: bool,
 }
+
+/// Said once to a session that was given the pipeline's notes when none are in force any more.
+pub const NOTES_RETIRED_PIPELINE: &str = "The pipeline notes you were given earlier in this session are retired: none are in force now, so stop following them.";
+/// Said once to a session that was given a stage's notes when the task's stage now has none (retired, or a new stage).
+pub const NOTES_RETIRED_STAGE: &str = "The stage notes you were given earlier in this session no longer apply: this stage has none in force now.";
 
 /// Heads what a shortened turn's prompt left out when the harness compacts the session during that turn.
 pub const RESTORED: &str = "Your context was compacted during this turn; here again is what this turn's prompt left out because you already had it.";
@@ -229,6 +241,36 @@ fn assemble(
     seen: &Seen,
     context: &str,
 ) -> Built {
+    // A list the session was given and that is now empty (its last note retired, or a stage with none) is retracted
+    // in one line, so the bot stops following it; a session never given one is told nothing.
+    let given = |part: Part| lines.iter().any(|(p, _)| *p == part);
+    let retracted: Vec<&str> = [
+        (
+            &seen.pipeline_notes,
+            Part::PipelineNotes,
+            NOTES_RETIRED_PIPELINE,
+        ),
+        (&seen.stage_notes, Part::StageNotes, NOTES_RETIRED_STAGE),
+    ]
+    .into_iter()
+    .filter(|(digest, part, _)| !digest.is_empty() && !given(*part))
+    .map(|(_, _, line)| line)
+    .collect();
+    let owned: Vec<(Part, String)>;
+    let lines = if retracted.is_empty() {
+        lines
+    } else {
+        let at = lines
+            .iter()
+            .position(|(p, l)| *p == Part::Turn && l.starts_with("Current message from"))
+            .unwrap_or(lines.len());
+        let mut with = lines.to_vec();
+        for (i, line) in retracted.into_iter().enumerate() {
+            with.insert(at + i, (Part::Turn, line.to_string()));
+        }
+        owned = with;
+        &owned[..]
+    };
     let pick = |part: Part| {
         lines
             .iter()
@@ -273,13 +315,34 @@ fn assemble(
         && !seen.standing.is_empty()
         && seen.standing == standing;
     let short_task = !seen.task.is_empty() && seen.task == task_digest;
+    // A notes list the thread was given in this form is left out with no line in its place: the bot already holds it.
+    let notes_digest = |part: Part| {
+        let text = pick(part);
+        if text.is_empty() {
+            String::new()
+        } else {
+            crate::gitrun::sha256_hex(text.as_bytes())
+        }
+    };
+    let (pipeline_notes, stage_notes) = (
+        notes_digest(Part::PipelineNotes),
+        notes_digest(Part::StageNotes),
+    );
+    let short_pipeline_notes =
+        !seen.pipeline_notes.is_empty() && seen.pipeline_notes == pipeline_notes;
+    let short_stage_notes = !seen.stage_notes.is_empty() && seen.stage_notes == stage_notes;
+    let left_out = |part: Part| match part {
+        Part::Standing => short_standing,
+        Part::Task => short_task,
+        Part::PipelineNotes => short_pipeline_notes,
+        Part::StageNotes => short_stage_notes,
+        Part::Turn => false,
+    };
     let repo_rules = s(&attempt["_repo_rules"]);
     let rules = !repo_rules.is_empty() && lines.iter().any(|(_, l)| *l == repo_rules);
     let mut left: Vec<&str> = lines
         .iter()
-        .filter(|(p, _)| {
-            (*p == Part::Standing && short_standing) || (*p == Part::Task && short_task)
-        })
+        .filter(|(p, _)| left_out(*p))
         .map(|(_, l)| l.as_str())
         .collect();
     if !repo_rules.is_empty() && !rules {
@@ -290,7 +353,7 @@ fn assemble(
     } else {
         format!("{RESTORED}\n\n{}", left.join("\n\n"))
     };
-    let text = if short_standing || short_task {
+    let text = if short_standing || short_task || short_pipeline_notes || short_stage_notes {
         let mut out: Vec<String> = vec![];
         let (mut said_standing, mut said_task) = (false, false);
         for (part, line) in lines {
@@ -308,6 +371,7 @@ fn assemble(
                         out.push(format!("Assigned task {id}: {} (unchanged since your last turn; `tico task show {id}` has it)", s(&task["title"])));
                     }
                 }
+                Part::PipelineNotes | Part::StageNotes if left_out(*part) => {}
                 _ => out.push(line.clone()),
             }
         }
@@ -320,9 +384,44 @@ fn assemble(
         full,
         standing,
         task: task_digest,
+        pipeline_notes,
+        stage_notes,
         restore,
         rules,
     }
+}
+
+/// What `text`, the prompt a turn sent, did with each notes list (backend/pipeline_notes.py), for the run's result
+/// (`notes`, feature `run_notes`): `given` when the list the claim offered is in it, `held` when it was left out because
+/// the session already holds it, `retracted` when the text says an earlier list no longer applies. None when the
+/// claim offered no list and nothing was retracted, so such a run reports nothing, and for a command, whose prompt is
+/// only what the person wrote (`build`), or a goal control, which sends the harness its objective and not the prompt
+/// (execute.rs `start_turn`): neither gives nor holds a list.
+pub fn notes_sent(attempt: &Value, text: &str) -> Option<Value> {
+    let refs = &attempt["message"]["refs"];
+    if crate::util::truthy(refs.get("command")) || crate::util::truthy(refs.get("goal_action")) {
+        return None;
+    }
+    let mut out = Map::new();
+    for (key, retired) in [
+        ("pipeline", NOTES_RETIRED_PIPELINE),
+        ("stage", NOTES_RETIRED_STAGE),
+    ] {
+        let offered = attempt["pipeline_notes"][key].as_str().unwrap_or_default();
+        let what = if !offered.trim().is_empty() {
+            if text.contains(offered) {
+                "given"
+            } else {
+                "held"
+            }
+        } else if text.contains(retired) {
+            "retracted"
+        } else {
+            continue;
+        };
+        out.insert(key.into(), Value::from(what));
+    }
+    (!out.is_empty()).then_some(Value::Object(out))
 }
 
 /// `text` (a built prompt) with `notes` (the runner's own lines for this turn, each led by a blank line: a new
@@ -668,6 +767,16 @@ fn parts(
             );
         }
     }
+    // The task's pipeline and stage notes (backend/pipeline_notes.py), just before the message they bear on.
+    for (key, part) in [
+        ("pipeline", Part::PipelineNotes),
+        ("stage", Part::StageNotes),
+    ] {
+        let text = attempt["pipeline_notes"][key].as_str().unwrap_or_default();
+        if !text.trim().is_empty() {
+            put(&mut lines, part, text.to_string());
+        }
+    }
     let who = if truthy(&message["from_actor"]) {
         speaker(message)
     } else if truthy(&attempt["principal"]) {
@@ -744,9 +853,16 @@ fn parts(
     {
         put(&mut lines, Part::Standing, "Plain English in chat: your reply goes to a person. Answer first, in plain words a busy person reads in seconds, then only what they must decide or do. Leave out task IDs, commit hashes, message IDs, s3:// URIs, file paths, tool names and how you checked; that evidence belongs in the task note or a report. Offer it instead of pasting it. Name things as the person would: the vendor, the amount, the date. When you correct an earlier answer, say what changed in one sentence.".into());
     }
+    // The length a person reads at a glance, for a reply to a person's own written words. It is this turn's own line: a
+    // bot's hand-off on the same task gets no length rule, a spoken turn keeps its own (the "Spoken turn" line), and the
+    // standing part a resumed session holds stays the same across all three.
+    let spoken = truthy(&message["refs"]["voice"]);
+    if (kind == "chat" || kind == "task") && !setup && person && !spoken {
+        put(&mut lines, Part::Turn, "Reply length: put the answer in the first sentence and keep the reply to about 90 words, unless the person asked for more (a full list, a draft, every open task) or it quotes a draft they must read whole; then give all of it. A fact they need beats the word count. On a spoken turn the spoken rule wins over this one.".into());
+    }
     // The Assistant's replies and lookups follow its rulebook (templates/catalog/assistant/AGENTS.md), not this contract.
     if kind == "chat" && !setup && person && !assistant {
-        put(&mut lines, Part::Standing, "Human chat response contract: lead with the answer or outcome. Use enough explanation, comparison rows or list items to fulfill the request. If the person asks for one thing, focus on that thing; do not substitute the standing backlog or add unrelated tasks. For a next-priority question, first run `tico health check` and use its current open, doing, waiting, and needs-human state; never repeat an item that current state shows is done merely because it appears in conversation history. Check the current external source, such as a PR's actual state, when the Hub note may be stale. Use the task's attached URL for that check; do not guess a repository from its title. If the first lookup fails, inspect the attached URL and retry the exact source. Never call work blocked until you verify the missing permission or dependency. Carry forward the person's scoped authorization instead of asking again.".into());
+        put(&mut lines, Part::Standing, "Human chat response contract: lead with the answer or outcome. Give the whole list, comparison or draft when the person asks for it in writing; a spoken turn keeps its own rule. If the person asks for one thing, focus on that thing; do not substitute the standing backlog or add unrelated tasks. For a next-priority question, first run `tico health check` and use its current open, doing, waiting, and needs-human state; never repeat an item that current state shows is done merely because it appears in conversation history. Check the current external source, such as a PR's actual state, when the Hub note may be stale. Use the task's attached URL for that check; do not guess a repository from its title. If the first lookup fails, inspect the attached URL and retry the exact source. Never call work blocked until you verify the missing permission or dependency. Carry forward the person's scoped authorization instead of asking again.".into());
     }
     // The card (and the person's snapshot), read as the run starts (backend/run_header.py), at the turn's tail: after
     // the room and the current message, last of all. It changes from turn to turn, so it is this turn's own part: the
@@ -1272,6 +1388,70 @@ mod tests {
     }
 
     #[test]
+    fn a_reply_to_a_persons_written_words_is_the_answer_first_in_about_90_words_unless_they_asked_for_more(
+    ) {
+        let names = Names {
+            company: "Acme".into(),
+            app: "Tico".into(),
+            assistant: "assistant".into(),
+        };
+        let said = |from: &str, refs: Value| json!({"id": "m1", "from_actor": from, "body": "Every open task, please", "refs": refs});
+        let chat = |bot: &str, message: Value| json!({"id": "a1", "bot": bot, "conversation": {"id": "c1", "kind": "chat"}, "message": message, "history": [message]});
+        let task = |message: Value| {
+            json!({"id": "a2", "bot": "ops", "conversation": {"id": "c2", "kind": "task"},
+                "task": {"id": "t2", "title": "Ship v1"}, "message": message, "history": [message]})
+        };
+        let ana = said("human:ana", json!({}));
+        // Every bot a person writes to, on a task or in a chat, the Assistant included, gets the one number.
+        for (who, attempt) in [
+            ("chat", chat("ops", ana.clone())),
+            ("task", task(ana.clone())),
+            ("assistant", chat("assistant", ana.clone())),
+        ] {
+            let text = prompt(&attempt, &names, None, false);
+            for rule in [
+                "the answer in the first sentence",
+                "about 90 words",
+                "unless the person asked for more",
+                "quotes a draft",
+            ] {
+                assert!(text.contains(rule), "{who}: {rule} is missing: {text}");
+            }
+            // No line asks for "enough" in a reply to a person without the "unless they asked" condition.
+            assert!(!text.contains("Use enough explanation"), "{who}: {text}");
+        }
+        // A bot's hand-off on a task sets no length: bot-to-bot messages are not limited.
+        let handoff = prompt(&task(said("bot:qa", json!({}))), &names, None, false);
+        assert!(!handoff.contains("about 90 words"), "{handoff}");
+        // A spoken request keeps the spoken rule alone, even for a whole list.
+        for (who, attempt) in [
+            (
+                "chat",
+                chat("ops", said("human:ana", json!({"voice": true}))),
+            ),
+            (
+                "assistant",
+                chat(
+                    "assistant",
+                    said("human:ana", json!({"assistant": true, "voice": true})),
+                ),
+            ),
+        ] {
+            let text = prompt(&attempt, &names, None, false);
+            assert!(
+                text.contains("one to three short plain sentences"),
+                "{who}: {text}"
+            );
+            assert!(!text.contains("about 90 words"), "{who}: {text}");
+            assert!(
+                !text.contains("Give the whole list")
+                    || text.contains("a spoken turn keeps its own rule"),
+                "{who}: {text}"
+            );
+        }
+    }
+
+    #[test]
     fn only_the_assistant_assists_a_person_and_its_rulebook_routes_the_work() {
         let names = Names {
             company: "Acme".into(),
@@ -1369,7 +1549,159 @@ mod tests {
         Seen {
             standing: b.standing.clone(),
             task: b.task.clone(),
+            pipeline_notes: b.pipeline_notes.clone(),
+            stage_notes: b.stage_notes.clone(),
         }
+    }
+
+    const ENG_NOTES: &str = "Notes for Engineering (what we learned; follow them):\n- Heavy checks run one at a time per machine. Why: a type check took the shared machine offline. Since 2026-11-18 (#4232).";
+    const QA_NOTES: &str = "Notes for QA (what we learned; follow them):\n- A pending approval is the ask. Why: approvers got two cards for one decision. Since 2026-11-18 (#4237). A guard refuses it.";
+    const MERGE_NOTES: &str = "Notes for Merge (what we learned; follow them):\n- Never enqueue by hand. Why: the queue tests the checked head. Since 2026-11-20 (#4300).";
+
+    #[test]
+    fn a_turn_reports_each_notes_list_as_given_held_or_retracted() {
+        let names = Names {
+            company: "Acme".into(),
+            app: "Tico".into(),
+            assistant: "assistant".into(),
+        };
+        let ctx = "claude opus agent-1";
+        let (mut first, mut next) = task_turns();
+        // No notes offered and none to retract: nothing to report, so the result reads as before.
+        let plain = build(&first, &names, None, false, "", &Seen::default(), ctx);
+        assert_eq!(notes_sent(&first, &plain.text), None);
+        // First turn in QA: both lists in the prompt.
+        first["pipeline_notes"] = json!({"pipeline": ENG_NOTES, "stage": QA_NOTES});
+        let given = build(&first, &names, None, false, "", &Seen::default(), ctx);
+        assert_eq!(
+            notes_sent(&first, &given.text),
+            Some(json!({"pipeline": "given", "stage": "given"}))
+        );
+        // The next turn of the same session holds both.
+        next["pipeline_notes"] = first["pipeline_notes"].clone();
+        let again = build(&next, &names, Some("m1"), true, "", &seen(&given), ctx);
+        assert_eq!(
+            notes_sent(&next, &again.text),
+            Some(json!({"pipeline": "held", "stage": "held"}))
+        );
+        // A move to Merge: the pipeline's list held, the new stage's given.
+        next["pipeline_notes"] = json!({"pipeline": ENG_NOTES, "stage": MERGE_NOTES});
+        let moved = build(&next, &names, Some("m1"), true, "", &seen(&given), ctx);
+        assert_eq!(
+            notes_sent(&next, &moved.text),
+            Some(json!({"pipeline": "held", "stage": "given"}))
+        );
+        // A command's prompt is only what the person wrote: it reports no list, not one held.
+        let mut command = next.clone();
+        command["message"]["refs"] = json!({"command": "compact"});
+        command["message"]["body"] = json!("/compact");
+        let typed = build(
+            &command,
+            &names,
+            Some("m1"),
+            false,
+            "",
+            &Seen::default(),
+            ctx,
+        );
+        assert!(!typed.text.contains("Notes for"), "{}", typed.text);
+        assert_eq!(notes_sent(&command, &typed.text), None);
+        // A goal control sends the harness its objective, never the prompt: it reports no list either.
+        let mut control = next.clone();
+        control["message"]["refs"] =
+            json!({"goal_action": "set", "goal_objective": "Ship the export"});
+        let full = build(&control, &names, None, false, "", &Seen::default(), ctx);
+        assert!(full.text.contains("Notes for"), "{}", full.text);
+        assert_eq!(notes_sent(&control, &full.text), None);
+        // A stage with none: the session's earlier stage list is retracted.
+        next["pipeline_notes"] = json!({"pipeline": ENG_NOTES});
+        let bare = build(&next, &names, Some("m1"), true, "", &seen(&moved), ctx);
+        assert_eq!(
+            notes_sent(&next, &bare.text),
+            Some(json!({"pipeline": "held", "stage": "retracted"}))
+        );
+    }
+
+    #[test]
+    fn notes_come_on_entering_a_pipeline_or_stage_once_a_session_and_never_touch_the_cached_prefix()
+    {
+        let names = Names {
+            company: "Acme".into(),
+            app: "Tico".into(),
+            assistant: "assistant".into(),
+        };
+        let ctx = "claude opus agent-1";
+        let (mut first, mut next) = task_turns();
+        let plain = build(&first, &names, None, false, "", &Seen::default(), ctx);
+        first["pipeline_notes"] = json!({"pipeline": ENG_NOTES, "stage": QA_NOTES});
+        let given = build(&first, &names, None, false, "", &Seen::default(), ctx);
+        let t = &given.text;
+        // First turn in QA, new to the pipeline too: both lists, pipeline first, just before the message.
+        let (eng, qa, msg) = (
+            t.find(ENG_NOTES),
+            t.find(QA_NOTES),
+            t.find("Current message from"),
+        );
+        assert!(eng.is_some() && eng < qa && qa < msg, "{t}");
+        // The standing part, which a resumed thread keeps as its cached prefix, is the same with notes or without.
+        assert_eq!(given.standing, plain.standing);
+        assert!(!given.pipeline_notes.is_empty() && !given.stage_notes.is_empty());
+        assert!(plain.pipeline_notes.is_empty() && plain.stage_notes.is_empty());
+        // The next turn in QA, same session: no notes, and a compaction during it gives them back.
+        next["pipeline_notes"] = first["pipeline_notes"].clone();
+        let again = build(&next, &names, Some("m1"), true, "", &seen(&given), ctx);
+        assert!(!again.text.contains("Notes for"), "{}", again.text);
+        assert!(again.full.contains(ENG_NOTES) && again.full.contains(QA_NOTES));
+        assert!(
+            again.restore.contains(ENG_NOTES) && again.restore.contains(QA_NOTES),
+            "{}",
+            again.restore
+        );
+        // A move to Merge, same session: Merge's notes only, not Engineering's again.
+        next["pipeline_notes"] = json!({"pipeline": ENG_NOTES, "stage": MERGE_NOTES});
+        let moved = build(&next, &names, Some("m1"), true, "", &seen(&given), ctx);
+        assert!(
+            moved.text.contains(MERGE_NOTES) && !moved.text.contains(ENG_NOTES),
+            "{}",
+            moved.text
+        );
+        assert!(moved.restore.contains(ENG_NOTES) && !moved.restore.contains(MERGE_NOTES));
+        // A fresh session holds nothing: both lists again.
+        let fresh = build(&next, &names, Some("m1"), false, "", &Seen::default(), ctx);
+        assert!(fresh.text.contains(ENG_NOTES) && fresh.text.contains(MERGE_NOTES));
+        // A stage with no notes (or its last note retired): Merge's list is retracted in one line, once, just before
+        // the message, and the stage digest is empty, so a later stage's list is sent.
+        next["pipeline_notes"] = json!({"pipeline": ENG_NOTES});
+        let bare = build(&next, &names, Some("m1"), true, "", &seen(&moved), ctx);
+        assert!(
+            !bare.text.contains("Notes for") && bare.stage_notes.is_empty(),
+            "{}",
+            bare.text
+        );
+        let (gone, msg) = (
+            bare.text.find(NOTES_RETIRED_STAGE),
+            bare.text.find("Current message from"),
+        );
+        assert!(gone.is_some() && gone < msg, "{}", bare.text);
+        assert!(!bare.text.contains(NOTES_RETIRED_PIPELINE));
+        let after = build(&next, &names, Some("m1"), true, "", &seen(&bare), ctx);
+        assert!(!after.text.contains(NOTES_RETIRED_STAGE), "{}", after.text);
+        // The pipeline's last note retired: retracted once too.
+        next.as_object_mut().unwrap().remove("pipeline_notes");
+        let none = build(&next, &names, Some("m1"), true, "", &seen(&after), ctx);
+        assert!(
+            none.text.contains(NOTES_RETIRED_PIPELINE) && none.pipeline_notes.is_empty(),
+            "{}",
+            none.text
+        );
+        // A session never given notes is told nothing: a pipeline without notes keeps its prompt byte for byte.
+        let never = build(&next, &names, Some("m1"), true, "", &Seen::default(), ctx);
+        assert!(!never.text.contains("notes you were given"));
+        let (bare_first, _) = task_turns();
+        assert_eq!(
+            build(&bare_first, &names, None, false, "", &Seen::default(), ctx).text,
+            plain.text
+        );
     }
 
     #[test]

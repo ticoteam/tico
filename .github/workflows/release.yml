@@ -6,10 +6,9 @@
 # did not change, and published with it. When they did change they are built here, after the publication, and added to
 # the published release with the checksum files rewritten after them; until then a Mac checkout's update waits
 # (runner_support/release_update.py) instead of failing.
-# The desktop app follows: built only when the shell changed since the previous release, otherwise the previous release's
-# desktop files and updater manifest are carried forward. Either way they are added to the published release afterwards,
-# and a desktop failure leaves the server release in place. The Electron app (desktop/) follows the same way beside the
-# Tauri one: built when desktop/ changed, otherwise carried forward, its update feeds (latest*.yml) uploaded last. See
+# The desktop app (desktop/, Electron) follows: built only when desktop/ changed since the previous release, otherwise
+# the previous release's files and update feeds are carried forward. Either way they are added to the published release
+# afterwards, its update feeds (latest*.yml) uploaded last, and a desktop failure leaves the server release in place. See
 # docs/releasing.md.
 # Linux jobs run on RunsOn Spot VMs in Tico's own AWS account: an interrupted job is rerun automatically, and every upload
 # uses --clobber with the manifest last, so a rerun finishes the same release. The three jobs between the tag and the
@@ -21,12 +20,12 @@ name: Release
 on:
   push:
     tags: ['v[0-9]+.[0-9]+.[0-9]+*']
-  # From a tag: rebuild its desktop apps (a new company, a failed build). From a branch with validation_run: a dry
-  # run of the publication from that Release validation run, which downloads and checks everything and publishes nothing.
+  # From a tag: rebuild its desktop app (a failed build). From a branch with validation_run: a dry run of the
+  # publication from that Release validation run, which downloads and checks everything and publishes nothing.
   workflow_dispatch:
     inputs:
       desktop:
-        description: Build the desktop apps even if the shell did not change
+        description: Build the desktop app even if desktop/ did not change
         type: boolean
         default: true
       validation_run:
@@ -401,108 +400,6 @@ jobs:
           gh release upload "$VERSION" -R "$GITHUB_REPOSITORY" dist/mac/*.gz --clobber
           gh release upload "$VERSION" -R "$GITHUB_REPOSITORY" dist/tico-runner-SHA256SUMS dist/tico-screen-relay-SHA256SUMS --clobber
 
-  # Does this tag need new desktop apps? Only when what the shell is built from changed since the previous release.
-  desktop-changes:
-    needs: [validated, release]
-    if: >-
-      ${{ !cancelled() && needs.validated.result == 'success'
-      && (needs.release.result == 'success' || needs.release.result == 'skipped')
-      && needs.validated.outputs.dry_run != 'true' }}
-    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64
-    permissions:
-      contents: read
-    outputs:
-      build: ${{ steps.diff.outputs.build }}
-      previous: ${{ steps.diff.outputs.previous }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - id: diff
-        env:
-          GH_TOKEN: ${{ github.token }}
-          FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.desktop }}
-        run: |
-          previous="$(git tag -l 'v[0-9]*' --sort=-v:refname | grep -vx "$GITHUB_REF_NAME" \
-            | while read -r tag; do git merge-base --is-ancestor "$tag" "$GITHUB_SHA" && { echo "$tag"; break; }; done)"
-          echo "previous=$previous" >> "$GITHUB_OUTPUT"
-          build=true
-          # Tests, fixtures and Markdown docs do not enter the desktop bundle.
-          if [ "$FORCE" != true ] && [ -n "$previous" ] \
-             && git diff --quiet "$previous" "$GITHUB_SHA" -- app scripts/app_release.py scripts/company_apps.py \
-                  .github/workflows/app.yml .github/workflows/company-app.yml \
-                  ':!app/tests/**' ':!app/src/testdata/**' ':!app/vendor/glib/tests/**' \
-                  ':!app/vendor/glib/benches/**' ':!app/*.md' \
-             && gh release view "$previous" --json assets -q '.assets[].name' | grep -qx latest.json; then
-            build=false
-          fi
-          echo "build=$build" >> "$GITHUB_OUTPUT"
-          echo "Desktop build: $build (previous release $previous)"
-
-  desktop:
-    needs: desktop-changes
-    if: >-
-      ${{ !cancelled() && needs.desktop-changes.result == 'success'
-      && needs.desktop-changes.outputs.build == 'true' }}
-    uses: ./.github/workflows/app.yml
-    # app.yml declares no secrets, so it inherits them. It uses no OIDC, so it gets no id-token.
-    secrets: inherit
-    permissions:
-      contents: read
-
-  # Adds the desktop files and latest.json to the already published release: new builds, or the previous release's
-  # files carried forward. latest.json goes last, so a desktop updater never sees a manifest whose files are missing.
-  desktop-assets:
-    needs: [release, desktop-changes, desktop]
-    if: >-
-      ${{ !cancelled() && needs.desktop-changes.result == 'success'
-      && (needs.release.result == 'success' || needs.release.result == 'skipped')
-      && (needs.desktop.result == 'success' || needs.desktop.result == 'skipped') }}
-    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64
-    permissions:
-      contents: write   # uploads the desktop files to the published release
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        if: needs.desktop-changes.outputs.build == 'true'
-        with:
-          pattern: app-*
-          path: dist/desktop
-          merge-multiple: true
-      - name: Build the desktop updater manifest
-        if: needs.desktop-changes.outputs.build == 'true'
-        env:
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-        run: |
-          flags=()
-          [ -n "$APPLE_SIGNING_IDENTITY" ] && flags+=(--signed)
-          [ -n "$APPLE_ID" ] && flags+=(--notarized)
-          python3 scripts/app_release.py --github --version "${GITHUB_REF_NAME#v}" --tag "$GITHUB_REF_NAME" \
-            --output dist/desktop/latest.json --notes "Built from ${GITHUB_SHA::7}" "${flags[@]}" dist/desktop
-      # The app keeps its earlier version, so installed apps see no update; the files sit on this release so the
-      # download links and the hub's download page find them on the release they look at.
-      - name: Carry the previous release's desktop files forward
-        if: needs.desktop-changes.outputs.build != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PREVIOUS: ${{ needs.desktop-changes.outputs.previous }}
-        run: |
-          mkdir -p dist/desktop
-          # Tauri's own names (Tico_<version>_...): the Electron app's Tico-<version>-... files are electron-assets'.
-          bash scripts/ci/retry.sh -- gh release download "$PREVIOUS" --dir dist/desktop --clobber --pattern 'Tico_*.dmg' --pattern '*.app.tar.gz' --pattern '*.app.tar.gz.sig' \
-            --pattern 'Tico_*-setup.exe' --pattern 'Tico_*-setup.exe.sig' --pattern 'Tico_*.AppImage' --pattern 'Tico_*.AppImage.sig' --pattern 'Tico_*.deb' --pattern latest.json
-          sed -i "s#/releases/download/$PREVIOUS/#/releases/download/$GITHUB_REF_NAME/#g" dist/desktop/latest.json
-      - name: Add the desktop files to the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          find dist/desktop -type f ! -name latest.json -print0 | xargs -0 gh release upload "$GITHUB_REF_NAME" --clobber
-          gh release upload "$GITHUB_REF_NAME" dist/desktop/latest.json --clobber
-
   # Does this tag need a new Electron app? Only when desktop/ or its build workflow changed since the previous release,
   # or that release has no Electron update feed. Tests and Markdown under desktop/ do not enter the app.
   electron-changes:
@@ -611,44 +508,3 @@ jobs:
           find dist/electron -type f ! -name 'latest*.yml' -print0 \
             | xargs -0 bash scripts/ci/retry.sh -- gh release upload "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --clobber
           bash scripts/ci/retry.sh -- gh release upload "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" "${feeds[@]}" --clobber
-
-  # A prerelease (any '-' in the tag, as the release job marks it) builds no company app: a company's installed apps
-  # update from its own bucket's latest.json, which a prerelease must never move (scripts/company_apps.py refuses too).
-  company-matrix:
-    needs: desktop-changes
-    if: >-
-      ${{ !cancelled() && needs.desktop-changes.result == 'success'
-      && needs.desktop-changes.outputs.build == 'true' && !contains(github.ref_name, '-') }}
-    runs-on: runs-on=${{ github.run_id }}/volume=30gb:gp3:125mbs:3000iops/runner=2cpu-linux-x64
-    permissions:
-      contents: read
-    outputs:
-      matrix: ${{ steps.matrix.outputs.matrix }}
-      enabled: ${{ steps.matrix.outputs.enabled }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Read private company list
-        id: matrix
-        env:
-          # Use a secret: variables can be printed in the runner's pre-step env banner.
-          TICO_COMPANY_APPS: ${{ secrets.TICO_COMPANY_APPS }}
-        run: python3 scripts/company_apps.py matrix
-  # Company apps build beside the generic one, not after it. When the shell did not change, each company's bucket
-  # keeps its current latest.json, so installed company apps stay on their version.
-  companies:
-    needs: company-matrix
-    if: >-
-      ${{ !cancelled() && needs.company-matrix.result == 'success'
-      && needs.company-matrix.outputs.enabled == 'true' }}
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.company-matrix.outputs.matrix) }}
-    uses: ./.github/workflows/company-app.yml
-    with:
-      company: ${{ matrix.company }}
-    secrets: inherit   # company-app.yml on main declares no secrets; narrowing waits for it (see the desktop job)
-    permissions:
-      contents: read
-      id-token: write   # company-app.yml's publish job assumes each company's AWS role

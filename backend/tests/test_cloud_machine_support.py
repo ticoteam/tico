@@ -378,9 +378,8 @@ def test_full_app_support_cannot_enable_its_own_machine_access(api, hq, monkeypa
     assert hq.calls == [] and audit(api) == []
 
 
-@pytest.mark.parametrize("reason", ["trial_over", "unpaid"])
-def test_locked_owner_can_read_and_revoke_but_cannot_enable(api, hq, reason):
-    cloud_access.apply(api.app.state.store, cloud_access.parse({"access": "locked", "reason": reason}))
+def test_locked_owner_can_read_and_revoke_but_cannot_enable(api, hq):
+    cloud_access.apply(api.app.state.store, cloud_access.parse({"access": "locked", "reason": "unpaid"}))
     assert api.get(PATH).status_code == 401
     assert api.put(PATH, json={"on": False}).status_code == 401
     for token in ("ben-test", "cara-test"):

@@ -1,0 +1,5 @@
+{
+  "clients/docs_qa.py": {
+    "no-runner-support-import": 1
+  }
+}

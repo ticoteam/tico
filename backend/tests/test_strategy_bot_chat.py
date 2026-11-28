@@ -13,6 +13,7 @@ from backend.tests.helpers.api import as_member, assign, get, headers, post, rea
 from backend.tests.helpers.assistant import asked, say, turn_message
 from backend import bot_settings as BS
 from backend.tests.helpers.strategy_bot_chat import personal, strategy_bot, turn
+from backend.tests.helpers.visuals import media_settled
 
 
 def helper(api, slug, name):
@@ -449,6 +450,10 @@ def test_an_assistant_upload_retried_with_its_key_is_stored_once(api):
     picture = png() + uuid.uuid4().bytes
     first = send("Look", picture)
     assert first.status_code == 200, first.text
+    # The media worker adds the picture's thumbnail as a blob of its own, in the background (run 45828874348 counted it
+    # between the two reads): let it land first, so the counts below see only what the retries store.
+    api.app.state.file_metadata.wake.set()
+    media_settled(api)
     after = stored()
     again = send("Look", picture)  # the response was lost: the same request again
     assert again.status_code == 200 and again.json()["message"]["id"] == first.json()["message"]["id"]

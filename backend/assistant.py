@@ -284,9 +284,8 @@ NEVER = [
         ("PATCH", r"/api/v2/messages/[^/]+"),
         ("DELETE", r"/api/v2/messages/[^/]+"),
         ("POST", r"/api/v2/messages/[^/]+/redact"),
-        # A person's password and a reader's invite link: each carries a credential the chat would hold.
+        # A person's password and an invite link: each carries a credential the chat would hold.
         ("POST", r"/api/v2/access/(people|humans)/[^/]+/password"),
-        (None, r"/api/v2/audiences/[^/]+/invites(/.*)?"),
         (None, r"/api/v2/setup/company/people/[^/]+/invite"),
         (None, r"/api/v2/access/(humans|people)/[^/]+/invite"),
         # A computer's adoption and removal (its enrolment is the person's own tap, and a removal ends its sign-ins).
@@ -774,7 +773,6 @@ _PROPOSABLE_AGENT_OPS = [
         ("POST", r"/api/v2/tasks/[^/]+/requesters/[^/]+/delete"),
         ("POST", r"/api/v2/tasks/[^/]+/links"),
         ("DELETE", r"/api/v2/tasks/[^/]+/links/[^/]+"),
-        ("POST", r"/api/v2/roadmaps/settings"),
         ("POST", r"/api/v2/inbound/inboxes/[^/]+/release"),
         ("POST", r"/api/v2/inbound/phone-requests(/[^/]+/accept)?"),
         # Who reads an inbox (backend/inbound.py `set_audience`): owner and admins, on their own click.
@@ -1239,6 +1237,10 @@ def describe(c, method, path, body, viewer=None, admins=()):
         ),
         (r"/api/v2/bots/([^/]+)/cloud-machine", lambda g: f"Change bot {bot(g[0])}'s cloud machine: " + values(body)),
         (
+            r"/api/v2/bots/([^/]+)/cloud-machine/wake",
+            lambda g: f"Wake bot {bot(g[0])}'s cloud machine again for its waiting work.",
+        ),
+        (
             r"/api/v2/bots/([^/]+)/cloud-machine/replace",
             lambda g: f"Replace bot {bot(g[0])}'s cloud machine and delete its disk. The next task starts a fresh one.",
         ),
@@ -1271,7 +1273,6 @@ def describe(c, method, path, body, viewer=None, admins=()):
             r"/api/v2/github/product-repos",
             lambda g: f"Create the private, empty GitHub repository {body.get('org', '')}/{body.get('name', '')}",
         ),
-        (r"/api/v2/roadmaps/settings", lambda g: "Change the public roadmap: " + values(body)),
         (
             r"/api/v2/inbound/inboxes/([^/]+)/release",
             lambda g: (

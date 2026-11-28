@@ -15,6 +15,7 @@ import pytest
 from backend import bot_settings as BS
 from backend import call_slots as CS
 from backend import org_rule_check as K
+from backend import roadmaps
 from backend import thread_attention, threads, updates
 from backend.auth import Identity
 from backend.names import SUPPORT_ACTOR, SUPPORT_NAME
@@ -86,7 +87,11 @@ def ruled(api):
     org(api)
     judge = Judge(api.app.state.store)
     api.app.state.judge = judge
-    return api, judge
+    yield api, judge
+    # A write a rule holds starts its part call on its own thread once the hold commits, and that thread holds a pooled
+    # read while it asks. A test ending right after a held write left it running, on a busy runner past the connection
+    # guard's 2 s join (release validation run 45889585966). Wait for it before the guard checks.
+    K.settle_parts()
 
 
 def color_rule(api, if_broken="block", **more):
@@ -1481,32 +1486,6 @@ def test_a_draft_matching_45_rules_is_checked_in_2_calls_each_rule_once(ruled):
     assert [json.loads(e["detail"])["questions"] for e in events(api, "judge.call")] == [40, 5]
 
 
-def test_an_outside_edition_with_45_rules_is_checked_in_2_calls_not_refused(ruled):
-    api, judge = ruled
-    for n in range(44):
-        rule(api, {"kind": "internal", "text": f"Keep note {n} short.", "who": {"outside_editions": True}})
-    rule(api, {"kind": "internal", "text": COLOR, "who": {"outside_editions": True}})
-    store = api.app.state.store
-    clean = K.outside_edition(store, judge, "Our launch went well.", to="press@example.com")
-    assert clean["outcome"] == "pass" and len(clean["rules"]) == 45
-    assert [len(call["questions"]) for call in judge.calls] == [40, 5]
-    texts = [r["text"] for call in judge.calls for r in call["state"]["rules"]]
-    assert len(texts) == len(set(texts)) == 45
-    broken = K.outside_edition(store, judge, "Our favorite color is red.", to="press@example.com")
-    assert broken["outcome"] == "held" and broken["reason"] == "broken"
-    color = next(r["id"] for r in broken["rules"] if r["text"] == COLOR)
-    assert broken["broken"] == [color] and len(judge.calls) == 4
-    again = K.outside_edition(store, judge, "Our favorite color is red.", to="press@example.com")
-    assert again["broken"] == [color] and len(judge.calls) == 4, "the verdict is cached"
-    audit = [json.loads(e["detail"]) for e in events(api, "judge.call")]
-    assert [(a["operation"], a["questions"], a["broken"]) for a in audit] == [
-        ("outside_edition", 40, 0),
-        ("outside_edition", 5, 0),
-        ("outside_edition", 40, 0),
-        ("outside_edition", 5, 1),
-    ]
-
-
 def test_rule_checks_and_ask_ingest_count_their_own_daily_calls(ruled):
     api, _ = ruled
     from backend import judge as B
@@ -1752,7 +1731,7 @@ def test_a_breaking_final_text_after_a_safe_tool_reply_is_still_held(ruled):
 # ---- where a warning goes -----------------------------------------------------------------------------------------
 
 
-def test_a_warning_goes_on_each_field_a_task_write_sets_and_never_on_a_title(ruled):
+def test_a_warning_goes_on_each_field_a_task_write_sets_and_never_on_a_title(ruled, monkeypatch):
     api, _ = ruled
     color_rule(api, if_broken="warn")
     task = task_for_ops(api)
@@ -1764,7 +1743,7 @@ def test_a_warning_goes_on_each_field_a_task_write_sets_and_never_on_a_title(rul
     row = sql(api, "SELECT title, note FROM tasks WHERE id=?", (task["id"],))[0]
     assert row["title"] == title and asked(api, task["id"]) == "Draft it."
     assert row["note"].startswith("Warning:") and row["note"].endswith("Waiting on the vendor.")
-    post(api, "roadmaps/settings", {"bot_public_approval": False})
+    monkeypatch.setattr(roadmaps, "BOTS_NEED_A_PUBLISH_OK", False)  # bots publish without an OK
     made = post(
         api,
         "tasks",
@@ -1782,7 +1761,7 @@ def test_a_warning_goes_on_each_field_a_task_write_sets_and_never_on_a_title(rul
     assert made["public_title"] == "Our favorite color is red" and made["title"] == "Ship the palette"
     words = asked(api, made_id)
     assert words.startswith("Warning:") and words.endswith("Internal draft.")
-    # Published with no summary, the public roadmap shows the line as its summary, the title kept whole.
+    # Published with no summary, the line is its public summary, the title kept whole.
     assert made["public_summary"].startswith("Warning:")
 
 
@@ -2039,15 +2018,15 @@ def test_with_no_rule_in_force_bot_writes_resolve_no_audience(ruled, monkeypatch
 
 
 def public_output(api, task_id):
-    """The task's public title and summary as stored: what a public roadmap shows once it is back."""
+    """The task's public title and summary as stored."""
     [row] = sql(api, "SELECT public_title AS title, public_summary AS summary FROM tasks WHERE id=?", (task_id,))
     return row
 
 
-def test_a_warned_publish_puts_its_line_on_the_public_summary_the_roadmap_shows(ruled):
+def test_a_warned_publish_puts_its_line_on_the_public_summary(ruled, monkeypatch):
     api, _ = ruled
     color_rule(api, if_broken="warn")
-    post(api, "roadmaps/settings", {"bot_public_approval": False})
+    monkeypatch.setattr(roadmaps, "BOTS_NEED_A_PUBLISH_OK", False)  # bots publish without an OK
     drafted = post(
         api,
         "tasks",
@@ -2082,10 +2061,10 @@ def test_a_warned_publish_puts_its_line_on_the_public_summary_the_roadmap_shows(
     assert shown["title"] == "Our favorite color is red" and shown["summary"].startswith("Warning:")
 
 
-def test_publishing_while_clearing_a_summary_judges_only_what_is_published(ruled):
+def test_publishing_while_clearing_a_summary_judges_only_what_is_published(ruled, monkeypatch):
     api, judge = ruled
     color_rule(api)
-    post(api, "roadmaps/settings", {"bot_public_approval": False})
+    monkeypatch.setattr(roadmaps, "BOTS_NEED_A_PUBLISH_OK", False)  # bots publish without an OK
     drafted = post(
         api,
         "tasks",
@@ -2125,10 +2104,10 @@ def test_a_warned_daily_with_slides_carries_its_line_on_the_stored_bullets(ruled
     assert "Ship the palette" not in judge.calls[-1]["state"]["output"]
 
 
-def test_a_warned_summary_at_the_cap_publishes_with_its_line(ruled):
+def test_a_warned_summary_at_the_cap_publishes_with_its_line(ruled, monkeypatch):
     api, _ = ruled
     color_rule(api, if_broken="warn")
-    post(api, "roadmaps/settings", {"bot_public_approval": False})
+    monkeypatch.setattr(roadmaps, "BOTS_NEED_A_PUBLISH_OK", False)  # bots publish without an OK
     summary = ("Our favorite color is red. " * 400)[:7999] + "Z"
     drafted = post(
         api,
@@ -2175,10 +2154,10 @@ def upload(api, name, text="# Draft", token="ops-test"):
     return r.json()["file"]
 
 
-def test_a_second_warned_publish_of_a_summary_at_the_cap_keeps_one_line(ruled):
+def test_a_second_warned_publish_of_a_summary_at_the_cap_keeps_one_line(ruled, monkeypatch):
     api, _ = ruled
     color_rule(api, if_broken="warn")
-    post(api, "roadmaps/settings", {"bot_public_approval": False})
+    monkeypatch.setattr(roadmaps, "BOTS_NEED_A_PUBLISH_OK", False)  # bots publish without an OK
     summary = ("Our favorite color is red. " * 400)[:7999] + "Z"
     drafted = post(
         api,

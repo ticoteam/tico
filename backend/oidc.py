@@ -500,8 +500,7 @@ class Oidc:
         return email
 
     def _verified_email(self, claims):
-        """The address the ID token vouches for, lowercased. Who may join the team is `_email`'s to add: a Company page
-        reader (backend/company_page/reader_app.py) comes from anywhere and takes only this."""
+        """The address the ID token vouches for, lowercased. Who may join the team is `_email`'s to add."""
         microsoft = _microsoft(self.issuer)
         email = claims.get("email")
         if microsoft and not (isinstance(email, str) and "@" in email):

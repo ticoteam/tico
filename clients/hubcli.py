@@ -486,7 +486,7 @@ def parser():
     from clients.commands import mail as mail_commands, rules as rule_commands, strategy as strategy_commands
     from clients.commands import risk as risk_commands
     from clients.commands import market as market_commands
-    from clients.commands import company_page, finance, listening as listening_commands, threads as thread_commands
+    from clients.commands import finance, listening as listening_commands, threads as thread_commands
     from clients.commands import calls, outbound, webhooks
     from clients.commands import contacts as contacts_commands
     from clients.commands import products as products_commands
@@ -518,8 +518,6 @@ def parser():
     cli_spec.add(sub, mail_commands.LETTER)  # tico letter and tico mail: clients/commands/mail.py
     cli_spec.add(sub, mail_commands.MAIL)
     cli_spec.add(sub, mail_commands.CLI)  # tico email: clients/commands/mail.py
-
-    cli_spec.add(sub, company_page.CLI)  # tico company-page, audiences, editions, readers
 
     cli_spec.add(sub, calls.MEETING)  # tico meeting: clients/commands/calls.py (all but `import`)
     meeting = _group_subparsers(sub, "meeting")  # hand-built: it reads the transcript and notes files on this computer
@@ -693,8 +691,12 @@ def parser():
         s.set_defaults(fn="task worktree " + operation)
     s = task.add_parser("create")
     s.add_argument("--visibility", choices=["public", "private"])
-    s.add_argument("--public-title", dest="public_title", help="public roadmap title (needed with --visibility public)")
-    s.add_argument("--public-summary", dest="public_summary", help="public roadmap summary")
+    s.add_argument(
+        "--public-title",
+        dest="public_title",
+        help="public title, for people outside the team (needed with --visibility public)",
+    )
+    s.add_argument("--public-summary", dest="public_summary", help="public summary, for people outside the team")
     s.add_argument("--private", action="store_true", default=None, help="only its requester, owner and readers see it")
     s.add_argument(
         "--share-with",
@@ -1442,7 +1444,7 @@ def parser():
     cli_spec.add(sub, task_work_commands.GENERAL_MANAGER)  # tico general-manager: clients/commands/task_work.py
     cli_spec.add(sub, computers.MAINTENANCE)  # tico maintenance: clients/commands/computers.py
     roadmap = sub.add_parser(
-        "roadmap", help="public roadmaps: ranking and company settings (docs/roadmaps.md)"
+        "roadmap", help="the Roadmap: the Product pipeline's tasks ranked by who asked for them"
     ).add_subparsers(dest="sub")
     s = roadmap.add_parser("tasks", help="roadmap tasks ranked by requests, organization or size")
     s.add_argument("--sort", choices=["requester_count", "external_requesters", "important", "organization", "size"])
@@ -1450,37 +1452,6 @@ def parser():
     s.add_argument("--limit", type=int)
     s.add_argument("--offset", type=int)
     s.set_defaults(fn="roadmap tasks")
-    s = roadmap.add_parser(
-        "settings", help="read the company's roadmap settings; any flag changes those named (owners and admins)"
-    )
-    s.add_argument(
-        "--label", dest="labels", action="append", help="a label shown publicly; repeat for more, '' for none"
-    )
-    s.add_argument(
-        "--cors-origin",
-        dest="cors_origins",
-        action="append",
-        help="an exact website origin; repeat for more, '' for none",
-    )
-    s.add_argument("--action-limit", dest="action_limit", type=int, help="visitor writes per address per day")
-    s.add_argument("--suggestion-limit", dest="suggestion_limit", type=int, help="visitor suggestions waiting at once")
-    s.add_argument(
-        "--bot-public-approval",
-        dest="bot_public_approval",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="bots need an approval to publish",
-    )
-    who = s.add_mutually_exclusive_group()
-    who.add_argument(
-        "--suggestions-bot", dest="suggestions_bot", metavar="SLUG", help="the bot that receives visitor suggestions"
-    )
-    who.add_argument(
-        "--automatic",
-        action="store_true",
-        help="suggestions go to the Automatic bot (the Product Owner, then the Product Lead)",
-    )
-    s.set_defaults(fn="roadmap settings")
     keys = sub.add_parser(
         "service-key", help="keys another system uses to file tasks, or to update this install (owner and admins)"
     ).add_subparsers(dest="sub")

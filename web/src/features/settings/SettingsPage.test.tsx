@@ -20,8 +20,6 @@ import {
   contactTypesQuery,
   historyQuery,
   humansQuery,
-  labelsQuery,
-  roadmapQuery,
   screeningQuery,
   settingsCatalogQuery,
   sleepQuery,
@@ -122,13 +120,6 @@ const serveFull = (reply: (url: string, method: string) => Reply | undefined = (
 function Opened({ section }: { section: 'contacts' }) {
   const { open } = useSearch({ strict: false }) as { open?: string };
   return <SettingsPage section={section} open={open} />;
-}
-
-async function pick(box: HTMLElement, name: RegExp) {
-  fireEvent.click(box);
-  const option = await screen.findByRole('option', { name });
-  fireEvent.pointerDown(option, { pointerType: 'mouse' });
-  fireEvent.click(option);
 }
 
 const unfold = async (name: string) => {
@@ -247,6 +238,73 @@ describe('Settings', () => {
     show(<SettingsPage section="account" />, '/settings/account');
     expect(await screen.findByRole('heading', { name: 'No tokens' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Make token' })).toBeTruthy();
+  });
+});
+
+describe('Settings › General › Assistant', () => {
+  /** The server: the setting as GET /api/v2/assistant/settings answers it, and POST takes {gives_oks}. */
+  const serveOks = (view: { gives_oks: boolean; may_change: boolean }) =>
+    serve((url, method) => {
+      if (method === 'POST' && url === '/api/v2/assistant/settings') view = { ...view, ...(sent.at(-1)?.body as object) };
+      if (url === '/api/v2/assistant/settings') return ok(view);
+      if (url.startsWith('/api/v2/access')) return ok(ACCESS);
+      return ok({ pages: {} });
+    });
+  const theSwitch = () => screen.findByRole('switch', { name: 'Give OKs for me when I tell you to' });
+
+  it('turns on Give OKs for me with the person’s own click', async () => {
+    serveOks({ gives_oks: false, may_change: true });
+    show(<SettingsPage section="general" />, '/settings/general');
+    const sw = await theSwitch();
+    expect(sw.getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(sw);
+    await waitFor(() => expect(sent).toContainEqual({ url: '/api/v2/assistant/settings', method: 'POST', body: { gives_oks: true } }));
+    await waitFor(async () => expect((await theSwitch()).getAttribute('aria-checked')).toBe('true'));
+  });
+
+  it('is shown but cannot be changed by anyone acting for the person', async () => {
+    serveOks({ gives_oks: true, may_change: false });
+    show(<SettingsPage section="general" />, '/settings/general');
+    const sw = await theSwitch();
+    expect(sw.getAttribute('aria-checked')).toBe('true');
+    expect(sw.hasAttribute('disabled') || sw.getAttribute('aria-disabled') === 'true' || sw.hasAttribute('data-disabled')).toBe(true);
+    fireEvent.click(sw);
+    expect(sent.filter((x) => x.url === '/api/v2/assistant/settings')).toEqual([]);
+  });
+
+  it('sends one change at a time: the switch waits for the server before it takes another', async () => {
+    let answer!: () => void;
+    serve((url, method) => {
+      if (method === 'POST' && url === '/api/v2/assistant/settings') return new Promise<Reply>((r) => (answer = () => r(ok({ gives_oks: true, may_change: true }))));
+      if (url === '/api/v2/assistant/settings') return ok({ gives_oks: false, may_change: true });
+      if (url.startsWith('/api/v2/access')) return ok(ACCESS);
+      return ok({ pages: {} });
+    });
+    show(<SettingsPage section="general" />, '/settings/general');
+    fireEvent.click(await theSwitch());
+    await waitFor(() => expect(sent.filter((x) => x.url === '/api/v2/assistant/settings')).toHaveLength(1));
+    fireEvent.click(await theSwitch());
+    expect(sent.filter((x) => x.url === '/api/v2/assistant/settings')).toHaveLength(1);
+    await act(async () => answer());
+    await waitFor(async () => expect((await theSwitch()).hasAttribute('disabled') || (await theSwitch()).hasAttribute('data-disabled')).toBe(false));
+  });
+
+  it('says so when the setting does not load', async () => {
+    serve((url) => {
+      if (url === '/api/v2/assistant/settings') return { status: 403, body: { error: { code: 'forbidden', detail: 'Not yours' } } };
+      if (url.startsWith('/api/v2/access')) return ok(ACCESS);
+      return ok({ pages: {} });
+    });
+    show(<SettingsPage section="general" />, '/settings/general');
+    expect(await screen.findByText(/Assistant didn.t load/)).toBeTruthy();
+  });
+
+  it('Tico cannot turn it on or off: the action is the person’s own press only', async () => {
+    serveOks({ gives_oks: false, may_change: true });
+    show(<SettingsPage section="general" />, '/settings/general');
+    await theSwitch();
+    expect(await run('settings.assistantGivesOks', { on: true }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
+    expect(sent.filter((x) => x.url === '/api/v2/assistant/settings')).toEqual([]);
   });
 });
 
@@ -496,12 +554,12 @@ describe('Settings › Security', () => {
   });
 
   it('When caught sets every door but mail, which has its own row @s1079', async () => {
-    const SCREEN = { modes: { webhook: 'warn', idea: 'warn', mail: 'warn' }, layers: { patterns: true, model: true }, sources: [] };
+    const SCREEN = { modes: { webhook: 'warn', watcher: 'warn', mail: 'warn' }, layers: { patterns: true, model: true }, sources: [] };
     serve(() => ({ status: 200, body: SCREEN }));
     queryClient.setQueryData(screeningQuery.queryKey, SCREEN as never);
     show(<SettingsPage section="security" />, '/settings/security');
     fireEvent.click(within(await screen.findByRole('group', { name: 'When caught' })).getByRole('button', { name: 'Hold' }));
-    await waitFor(() => expect(sent.map((x) => x.body)).toEqual([{ webhook: 'hold' }, { idea: 'hold' }]));
+    await waitFor(() => expect(sent.map((x) => x.body)).toEqual([{ webhook: 'hold' }, { watcher: 'hold' }]));
     expect(within(screen.getByRole('group', { name: 'In mail' })).queryByRole('button', { name: 'Hold' })).toBeNull();
   });
 
@@ -863,33 +921,11 @@ describe('Settings › People: joining, left and adds @s1073', () => {
 });
 
 describe('Settings › Tasks @s1077', () => {
-  const ROAD = { labels: ['feature'], bot_public_approval: true };
   const RULES = { mode: 'on', budget: 10, criteria: ['Spending', 'Hiring'], own: false };
-
-  it('lists the public roadmap labels with their address, adds one; Tico may only take one off', async () => {
-    serve((url) => (url === '/api/v2/roadmaps/settings' ? ok({ labels: ['feature', 'idea'], bot_public_approval: true }) : undefined));
-    queryClient.setQueryData(roadmapQuery.queryKey, { labels: ['feature'], bot_public_approval: true });
-    queryClient.setQueryData(labelsQuery.queryKey, [
-      { id: '1', key: 'feature', label: 'Feature' },
-      { id: '2', key: 'idea', label: 'Idea' },
-    ] as never);
-    show(<SettingsPage section="tasks" />, '/settings/tasks');
-    const road = await screen.findByRole('region', { name: /Public roadmap/ });
-    expect(within(road).getByText(/\/public\/roadmaps\/feature$/)).toBeTruthy();
-    expect(within(road).getByRole('switch', { name: "Ask before an agent's words go public" })).toBeTruthy();
-    await pick(within(road).getByRole('combobox', { name: 'Add a label' }), /^Idea$/);
-    await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/roadmaps/settings', method: 'POST', body: { labels: ['feature', 'idea'] } }));
-    // Tico may take a label off, but not put one on.
-    expect(await run('settings.roadmapLabels', { labels: ['feature', 'idea', 'secret'] }, { via: 'tico' })).toMatchObject({ ok: false, error: 'not_allowed' });
-    expect(await run('settings.roadmapLabels', { labels: [] }, { via: 'tico' })).toMatchObject({ ok: true });
-    expect(sent.at(-1)).toMatchObject({ url: '/api/v2/roadmaps/settings', body: { labels: [] } });
-  });
 
   it('what agents may ask: Screen asks saves your own rules, Everyone saves the team default', async () => {
     const ASK = { settings: RULES, team: { ...RULES, own: true }, may_edit_team: true };
-    serve((url, method) => (method === 'GET' && url === '/api/v2/ask-ingest/settings' ? ok(ASK) : url === '/api/v2/roadmaps/settings' ? ok(ROAD) : undefined));
-    queryClient.setQueryData(roadmapQuery.queryKey, ROAD);
-    queryClient.setQueryData(labelsQuery.queryKey, [{ id: '1', key: 'feature', label: 'Feature' }] as never);
+    serve((url, method) => (method === 'GET' && url === '/api/v2/ask-ingest/settings' ? ok(ASK) : undefined));
     queryClient.setQueryData(askQuery.queryKey, ASK);
     show(<SettingsPage section="tasks" />, '/settings/tasks');
     const ask = await screen.findByRole('region', { name: 'What agents may ask' });
@@ -941,7 +977,7 @@ describe('Settings › Contacts @s1078', () => {
 describe('Search settings @s1130', () => {
   const HITS = {
     settings: [
-      { key: 'a', name: 'Public roadmap labels', who: 'admin', card: '#/settings/tasks/settings-roadmaps', where: 'Tasks' },
+      { key: 'a', name: 'Screening', who: 'admin', card: '#/settings/security/set-screening-card', where: 'Security' },
       { key: 'b', name: 'Theme', who: 'person', card: '#/settings/general', where: 'General' },
     ],
   };
@@ -952,8 +988,8 @@ describe('Search settings @s1130', () => {
     show(<SettingsPage section="general" />, '/settings/general');
     const box = await screen.findByRole('textbox', { name: 'Search settings' });
     fireEvent.change(box, { target: { value: 'the' } });
-    const first = await screen.findByRole('link', { name: 'Public roadmap labels' });
-    expect(first.getAttribute('href')).toBe('/settings/tasks');
+    const first = await screen.findByRole('link', { name: 'Screening' });
+    expect(first.getAttribute('href')).toBe('/settings/security');
     fireEvent.keyDown(box, { key: 'ArrowDown' });
     expect(first.getAttribute('aria-current')).toBe('true');
     fireEvent.keyDown(box, { key: 'ArrowDown' });
@@ -965,14 +1001,14 @@ describe('Search settings @s1130', () => {
 
   it('a result opens the setting itself: its part of the section takes the focus', async () => {
     serve((url) => (url.startsWith('/api/v2/settings/catalog') ? ok(HITS) : undefined));
-    queryClient.setQueryData(roadmapQuery.queryKey, { labels: ['feature'], bot_public_approval: true });
-    queryClient.setQueryData(labelsQuery.queryKey, [{ id: '1', key: 'feature', label: 'Feature' }] as never);
-    show(<SettingsPage section="tasks" />, '/settings/tasks');
+    queryClient.setQueryData(accessQuery.queryKey, FULL);
+    queryClient.setQueryData(screeningQuery.queryKey, { modes: { webhook: 'warn' }, layers: { patterns: true, model: true }, sources: [], recent: [] } as never);
+    show(<SettingsPage section="security" />, '/settings/security');
     const box = await screen.findByRole('textbox', { name: 'Search settings' });
-    fireEvent.change(box, { target: { value: 'road' } });
-    await screen.findByRole('link', { name: 'Public roadmap labels' });
+    fireEvent.change(box, { target: { value: 'scr' } });
+    await screen.findByRole('link', { name: 'Screening' });
     fireEvent.keyDown(box, { key: 'Enter' });
-    const road = await screen.findByRole('region', { name: /Public roadmap/ });
-    await waitFor(() => expect(road.contains(document.activeElement)).toBe(true));
+    const part = await screen.findByRole('region', { name: 'Screening' });
+    await waitFor(() => expect(part.contains(document.activeElement)).toBe(true));
   });
 });

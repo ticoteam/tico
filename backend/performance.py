@@ -7,9 +7,11 @@ turns ran at the time comes from this server's own attempts, not from the runner
 
 Samples land as one-minute points, kept 48 hours, then ten-minute points, kept 14 days. A computer that stays very
 loaded for ten minutes (CPU or memory over 90%, swapping, or a nearly full disk) records an overload with what was
-running. That is diagnostics only: Health shows it and nothing acts on it. Every person and bot may read a
-computer's performance; the data stays on this server and reaches Tico only when a person attaches a window to a
-support ticket (backend/diagnostics.py), redacted like the rest of the bundle.
+running. Health shows it, and starts act on it: a computer that is overloaded, has stopped reporting, or whose
+memory is held (`runner_states.memory_hold`, set here) holds new starts (start_places.computer_hold), so the perf_
+tables stay in the server's database beside the scheduling that reads them. Every person and bot may read a computer's
+performance; the data stays on this server and reaches Tico only when a person attaches a window to a support ticket
+(backend/diagnostics.py), redacted like the rest of the bundle.
 """
 
 import json
@@ -95,6 +97,7 @@ def ingest(c, runner_id, samples, now=None):
     stored = (
         c.execute("SELECT max(sampled_at) FROM runner_load_samples WHERE runner_id=?", (runner_id,)).fetchone()[0] or 0
     )
+    replaced = c.execute("SELECT 1 FROM runners WHERE id=? AND replaces IS NOT NULL", (runner_id,)).fetchone()
     for s in sorted(samples, key=lambda s: s.at):
         at = min(int(s.at), now)
         if now - at > 86400:
@@ -109,6 +112,17 @@ def ingest(c, runner_id, samples, now=None):
         # box with many agent turns idling on I/O reads far above its cores while it still has room to start more.
         # A retry replaces its minute, never duplicates it; delayed older samples cannot replace a newer one.
         cpu_pct = round(s.cpu, 1)
+        if (
+            replaced
+            and not c.execute(
+                "SELECT 1 FROM runner_load_samples WHERE runner_id=? AND created_at=?", (runner_id, ts)
+            ).fetchone()
+        ):
+            # This computer's first report for the minute: a reading already there was carried over from the computer
+            # it replaced (`carry_over`), and its own reading wins, process usage too (raw minutes live 48 hours in
+            # both tables, and only this computer's own reports write its load samples).
+            for table in ("perf_points", "perf_usage"):
+                c.execute(f"DELETE FROM {table} WHERE runner_id=? AND span=? AND created_at=?", (runner_id, MINUTE, ts))
         c.execute(
             "INSERT INTO runner_load_samples VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(runner_id,created_at) DO UPDATE SET "
             "sampled_at=excluded.sampled_at,cpu_pct=excluded.cpu_pct,mem_used=excluded.mem_used,"
@@ -461,7 +475,8 @@ def detect(c, runner_id, upto):
         return
     loaded = reasons(latest)
     # The minute that ended it can fill in later (its samples split across posts): loaded after all, it carries on.
-    if newest and latest["created_at"] == newest["ended_at"]:
+    # Not one carried over from a computer this one replaced: that one ended where the old computer stopped.
+    if newest and latest["created_at"] == newest["ended_at"] and not newest["carried_from"]:
         if not loaded:
             return
         c.execute("UPDATE perf_overloads SET ended_at=NULL WHERE id=?", (newest["id"],))
@@ -476,6 +491,8 @@ def detect(c, runner_id, upto):
         return
     if len(points) < SUSTAINED or points[0]["created_at"] - points[-1]["created_at"] > (SUSTAINED - 1) * MINUTE:
         return
+    if newest and points[-1]["created_at"] < newest["ended_at"]:
+        return  # a new overload starts where the last one ended, never inside it
     all_reasons = [reasons(p) for p in points]
     if all(all_reasons):
         started = points[-1]["created_at"]
@@ -524,17 +541,19 @@ def _iso(ts):
 
 def _runs(c, runner_id, start, end, limit=500):
     """The turns this computer ran that overlap [start, end), oldest first: this server's own record. A busy window
-    keeps its newest `limit`."""
+    keeps its newest `limit`. `runner_id` may be a list: the computer and the ones it replaced (`earlier`)."""
     # A leased turn counts from its lease: the runner reports `started_at` once its harness is up. Only the turns still
     # open or finished since `start` are read (attempts_runner_finished, two index ranges): an open overload runs this
     # under the write lock on every post, and visiting each turn the computer ever ran held that lock ~100 s on a slow
     # disk (Dev 249).
+    ids = [runner_id] if isinstance(runner_id, str) else list(runner_id)
+    marks = ",".join("?" * len(ids))
     return c.execute(
         "SELECT a.id,a.bot_id,coalesce(a.started_at,a.created_at) started_at,a.finished_at,a.state,a.usage_model AS model "
-        "FROM attempts a WHERE a.rowid IN (SELECT rowid FROM attempts WHERE runner_id=? "
-        "AND finished_at>=? UNION ALL SELECT rowid FROM attempts WHERE runner_id=? AND finished_at IS NULL) AND "
-        "coalesce(a.started_at,a.created_at)<? ORDER BY coalesce(a.started_at,a.created_at) DESC LIMIT ?",
-        (runner_id, _iso(start), runner_id, _iso(end), limit),
+        f"FROM attempts a WHERE a.rowid IN (SELECT rowid FROM attempts WHERE runner_id IN ({marks}) "
+        f"AND finished_at>=? UNION ALL SELECT rowid FROM attempts WHERE runner_id IN ({marks}) AND finished_at IS NULL) "
+        "AND coalesce(a.started_at,a.created_at)<? ORDER BY coalesce(a.started_at,a.created_at) DESC LIMIT ?",
+        (*ids, _iso(start), *ids, _iso(end), limit),
     ).fetchall()[::-1]
 
 
@@ -841,8 +860,9 @@ def view(c, runner_id, hours, now=None, label=lambda b: b, access=None):
         (runner_id,),
     ).fetchone()
     seen = lambda slug, right="see": access is None or bool((access.get(slug) or {}).get(right))
+    ran_on = [runner_id, *earlier(c, runner_id)]  # a cloud machine made again keeps its turns
     runs = []
-    for r in _runs(c, runner_id, since, now + 1):
+    for r in _runs(c, ran_on, since, now + 1):
         slug = r["bot_id"].removeprefix("bot:")
         shown = seen(slug)
         runs.append(
@@ -856,7 +876,7 @@ def view(c, runner_id, hours, now=None, label=lambda b: b, access=None):
             }
         )
     name = lambda b: label(b) if b else ""
-    bots = [b | {"bot": name(b["bot"])} for b in _shown(ran(c, runner_id, since, now + 1), access, 20)]
+    bots = [b | {"bot": name(b["bot"])} for b in _shown(ran(c, ran_on, since, now + 1), access, 20)]
     procs = []
     for r in c.execute(
         "SELECT key,sum(cpu*n) cpu_n,max(cpu_max) cpu_max,max(mem_max) mem_max FROM perf_usage "
@@ -899,6 +919,41 @@ def view(c, runner_id, hours, now=None, label=lambda b: b, access=None):
     }
 
 
+# ------------------------------------------------------------------------------------------------ replaced
+def carry_over(c, old, new):
+    """Cloud machine made again: computer `new` takes over computer `old`'s points, process usage and overloads, so
+    Health and Performance keep showing them (Tico Team, 18 Nov: the Shared machine's overnight overload left Health
+    seven hours after it ended). A minute both reported keeps `new`'s reading. An overload still open on `old` ends at
+    its last loaded minute: `new`'s calm minutes do not stretch it. `new` remembers `old`, whose turns it still lists."""
+    if not old or old == new:
+        return
+    c.execute("UPDATE perf_overloads SET ended_at=last_seen_at+? WHERE runner_id=? AND ended_at IS NULL", (MINUTE, old))
+    c.execute(
+        "UPDATE perf_overloads SET runner_id=?,carried_from=coalesce(carried_from,runner_id) WHERE runner_id=?",
+        (new, old),
+    )
+    for table in ("perf_points", "perf_usage"):
+        c.execute(f"UPDATE OR IGNORE {table} SET runner_id=? WHERE runner_id=?", (new, old))
+        c.execute(f"DELETE FROM {table} WHERE runner_id=?", (old,))  # the minutes `new` reported itself
+    # One chain per computer: `old` (and the computers it replaced) joins at its end, so a computer that took over
+    # two at once lists both ones' turns.
+    chain = [new, *earlier(c, new)]
+    if old not in chain:
+        c.execute("UPDATE runners SET replaces=? WHERE id=? AND replaces IS NULL", (old, chain[-1]))
+
+
+def earlier(c, runner_id):
+    """Every computer `runner_id` replaced, newest first (`carry_over`)."""
+    out, seen = [], {runner_id}
+    while True:
+        row = c.execute("SELECT replaces FROM runners WHERE id=?", (runner_id,)).fetchone()
+        runner_id = row["replaces"] if row else None
+        if not runner_id or runner_id in seen:
+            return out
+        seen.add(runner_id)
+        out.append(runner_id)
+
+
 # ------------------------------------------------------------------------------------------------ retention
 def sweep(store, now=None):
     """Minutes older than 48 hours become ten-minute points; everything older than 14 days goes. Each hour of
@@ -935,9 +990,15 @@ def sweep(store, now=None):
             "UPDATE perf_overloads SET ended_at=last_seen_at+? WHERE ended_at IS NULL AND last_seen_at<?",
             (MINUTE, now - STALE_S),
         )
-        gone = "SELECT id FROM runners WHERE revoked_at IS NOT NULL"
+        from .cloud_machines import REPLACES_KEY
+
+        # A cloud machine made again keeps its old computer's history until the new one signs in (`carry_over`).
+        gone = (
+            "SELECT id FROM runners WHERE revoked_at IS NOT NULL AND id NOT IN (SELECT j.value FROM registry_metadata "
+            "m, json_each(CASE WHEN json_valid(m.value) THEN m.value ELSE '[]' END) j WHERE m.key>=? AND m.key<?)"
+        )
         for table in ("perf_points", "perf_usage", "perf_overloads", "runner_load_samples"):
-            c.execute(f"DELETE FROM {table} WHERE runner_id IN ({gone})")
+            c.execute(f"DELETE FROM {table} WHERE runner_id IN ({gone})", (REPLACES_KEY, REPLACES_KEY + "\uffff"))
 
 
 def _roll(c, runner_id, start, end):

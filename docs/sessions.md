@@ -153,12 +153,17 @@ its limit its queued work waits on every computer, and its other bots keep their
 free turn on <computer>" in its thread and on its task. The task shows the same waiting reason as the thread (a paused bot,
 an update, a computer being set up) to anyone who can read the task.
 
-Each task session has a git worktree at `sessions/bot-<slug>/<task>` on branch `tico-session/<task>`. A bot can hold
-up to 30 worktrees, or fewer when the computer gets under 5 GB free. Nothing is removed to make room: at the limit
-the bot ends its turn and Tico wakes the task when its worktree is ready ([Task worktrees](worktrees.md)), or the bot,
-or a person, cleans one up first. A task's worktree goes when the task is finished: at the end of
+Each task session has a git worktree at `sessions/bot-<slug>/<task>` on branch `tico-session/<task>`. A bot holds
+up to 30 of these session worktrees on a computer, and a new one is made only while the computer has at least 5 GB
+free. This limit is separate from the 100 code worktrees a bot can hold ([Task worktrees](worktrees.md)). Nothing is
+removed to make room: a task that gets no session worktree waits up to two minutes for one, then its turn runs in
+the bot's own checkout, one turn at a time, and the turn's log says why. A task that already has its worktree keeps
+using it at the limit or on a low disk. A task's worktree goes when the task is finished: at the end of
 that bot's turn, or within about 10 minutes for another bot's copy or one whose files were still uploading. A worktree
 with unsaved changes, or commits that are on no remote, stays until someone saves or discards them.
+Health lists each bot's session worktrees on each computer with their size for administrators, measured about every 30 minutes, and
+warns when one bot holds more than 30 or more than a quarter of the computer's disk; the low-disk warning names the
+bot whose worktrees take the most.
 Before making or reusing a session folder, the Computer checks its full path against the Tico install. A link
 such as `sessions` pointing into the install stops the turn with the path named in the error, before any folder
 or Git work. See [Task worktrees](worktrees.md) for code worktrees and cleanup.

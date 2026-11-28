@@ -111,8 +111,6 @@ def _task_write(
 def can_work(conn: "sqlite3.Connection", actor: str, row: Row, mover: bool | None = None) -> bool:
     """Whether `actor` can work this task: its owner, its requester, their managers and delegates, a party to a task
     above it, the General Manager, the manager and the owner of its pipeline, or a person who moves tasks."""
-    from . import task_engine as E
-
     H = _h()
     if actor == SYSTEM:
         return True
@@ -120,8 +118,7 @@ def can_work(conn: "sqlite3.Connection", actor: str, row: Row, mover: bool | Non
         return False
     if H._task_party(conn, actor, row) or H.general_manager_acts(conn, actor, row):
         return True
-    pipe: Row = E.pipeline(conn, row["pipeline_id"]) or {} if row.get("pipeline_id") else {}
-    if actor in (pipe.get("manager_id"), pipe.get("owner_id")):
+    if H.task_pipeline_head(conn, actor, row):
         return True
     if mover is None:
         mover = is_human(actor) and bool(H.can_move(conn, actor))
@@ -292,9 +289,11 @@ def task_move(
     seen_version: int | str | None = None,
     *,
     mover: bool | None = None,
+    undo_close: bool = False,
 ) -> Row:
     """Move a task: forward, push past, back, done, close or reopen. `to` is a stage id or name, or NEXT, DONE, CLOSED
-    or REOPEN. A bot does not reopen a task a person closed."""
+    or REOPEN. A bot does not reopen a task a person closed. `undo_close` on a reopen: the Undo of the caller's own
+    close a moment ago (task_engine.move)."""
     from . import task_engine as E
 
     H = _h()
@@ -309,7 +308,7 @@ def task_move(
             task_id,
         )
     with task_effects.because(actor):
-        return E.move(conn, task_id, str(to), actor, why, seen_version)
+        return E.move(conn, task_id, str(to), actor, why, seen_version, undo_close=undo_close)
 
 
 @_task_write()

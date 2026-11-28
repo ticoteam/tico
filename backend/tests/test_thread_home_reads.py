@@ -3,11 +3,10 @@ one (perf audit I50). Fictional people and bots only: ana (owner) and the ops bo
 
 import sys
 import threading
-import time
 
 from backend.tests.helpers.api import headers  # noqa: F401  (the fixture and its helper)
 
-HOLD_S = 0.3
+HOLD_BACKSTOP_S = 30  # only a read that waits on the writer gets here
 
 
 def home(api, actor, token="ana-test"):
@@ -42,23 +41,25 @@ def test_an_existing_home_is_served_while_another_request_holds_the_writer(api):
     store = api.app.state.store
     first = home(api, "bot:ops").json()["id"]
     holding, release = threading.Event(), threading.Event()
+    gave_up = []
 
     def hold():
+        # Holds the writer until the read below has answered. Only a read that waits on the writer reaches the backstop.
         with store.transaction():
             holding.set()
-            release.wait(HOLD_S)
+            gave_up.append(not release.wait(HOLD_BACKSTOP_S))
 
     holder = threading.Thread(target=hold)
     holder.start()
     assert holding.wait(5)
-    started = time.monotonic()
     got = home(api, "bot:ops")
-    elapsed = time.monotonic() - started
+    answered_while_held = holder.is_alive()
     release.set()
     holder.join()
     assert got.status_code == 200 and got.json()["id"] == first
-    # Before I50 this waited out the whole hold (about HOLD_S); now it does not wait on the writer at all.
-    assert elapsed < HOLD_S / 2, f"Home read took {elapsed * 1000:.0f} ms under a {HOLD_S * 1000:.0f} ms writer hold"
+    # Before I50 this read waited for the writer, so it could only answer once the hold ended. Now it answers while the
+    # writer is still held, however slow the machine is: no wall-clock bound.
+    assert answered_while_held and gave_up == [False], "the Home read waited for the writer to be released"
 
 
 def test_an_unknown_teammate_is_still_the_same_404_and_makes_nothing(api):

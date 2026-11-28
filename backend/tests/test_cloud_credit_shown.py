@@ -5,6 +5,7 @@ A machine HQ refused for credit (its 402) makes every page say Out of credit eve
 still open; each bot on it reads stopped for credit, a message to it says so, and its chat line names it. Before that,
 a balance falling to under two days of spend says Low credit. HQ is a fake (helpers/cloud_machines.py)."""
 
+import json
 from datetime import datetime, timedelta, timezone
 
 from backend import cloud_access, cloud_machines, events, holds, thread_bot_status
@@ -56,7 +57,11 @@ def test_a_machine_refused_for_credit_is_out_of_credit_everywhere_while_hq_still
         assert events.credit_overlay(c, {"bot": "botops", "state": "running"})["state"] == "running"
         assert holds.warning(c, "bot:botops") == holds.CREDIT_WARNING
         blocked = thread_bot_status._blocked(c, "botops", thread_bot_status._location(c, "botops"), None)
-        assert blocked == (thread_bot_status.OUT_OF_CREDIT, {"label": "Fix", "href": "#/settings/billing"})
+        assert blocked == (
+            thread_bot_status.OUT_OF_CREDIT,
+            {"label": "Fix", "href": "#/settings/billing"},
+            "out_of_credit",
+        )
     # The same word again (no credit added) changes nothing.
     cloud_access.apply(store, cloud_access.current(store))
     assert _shown(api)["access"] == "frozen"
@@ -151,3 +156,20 @@ def test_low_credit_is_read_from_the_falling_balance_and_said_once(api):
 def test_an_unreadable_sample_or_clock_keeps_the_last_spend(api):
     kept, rate = cloud_access.spend({"samples": [{"at": "not a time"}], "spend_day_micros": 5}, 100, "also not")
     assert (kept, rate) == ([], 5)
+
+
+def test_a_trial_lock_kept_from_before_clears_a_credit_refusal_once_hq_says_open(environment, monkeypatch):
+    # A machine refused for credit while the company was locked for its trial (no trial now): HQ's next open word
+    # starts it again, as after any lock.
+    api = _cloud_company(environment, monkeypatch)
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute("UPDATE cloud_machines SET problem='out_of_credit', problem_at=? WHERE bot='_shared'", (H.now(),))
+        c.execute(
+            "UPDATE registry_metadata SET value=? WHERE key=?",
+            (json.dumps({**signals("locked", "trial_over"), "balance_micros": 2_000_000}), cloud_access.KEY),
+        )
+    cloud_access.apply(store, cloud_access.parse(signals("open")))
+    with store.read() as c:
+        assert not cloud_machines.credit_refused(c)
+    assert _shown(api)["access"] == "open"

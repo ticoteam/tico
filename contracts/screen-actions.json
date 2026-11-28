@@ -8287,46 +8287,6 @@
       }
     },
     {
-      "id": "settings.roadmapApproval",
-      "title": "Ask a person before an agent's words go public",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "on": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "on"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "settings.roadmapLabels",
-      "title": "Change the labels on the public roadmap",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "labels": {
-            "maxItems": 50,
-            "type": "array",
-            "items": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 200
-            }
-          }
-        },
-        "required": [
-          "labels"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
       "id": "settings.setDetector",
       "title": "Turn a screening detector on or off",
       "kind": "change",
@@ -8470,7 +8430,6 @@
             "enum": [
               "webhook",
               "mail",
-              "idea",
               "watcher",
               "document",
               "slack"
@@ -11037,6 +10996,7 @@
         "properties": {
           "sort": {
             "enum": [
+              "board",
               "priority",
               "newest",
               "oldest"

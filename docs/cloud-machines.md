@@ -58,6 +58,11 @@ cloud machine" under Computer).
   or `POST /api/v2/bots/{bot}/cloud-machine/replace` with an `Idempotency-Key`: it uses the same deletion, keeps size, Always on, Pause after and placement, and refuses while a turn is running (409).
   The next work makes a fresh machine; its first enrollment gets the company plan under the admin placement rule below.
   Explicit replacement of an own or shared machine resets its retry budget even while old ids still await deletion.
+- **Wake now.** A stopped machine is woken once for a bot's newest queued work; if that wake runs nothing, it is not
+  woken for the same work again, and the bot's chat and Health's Turns line say so ("its cloud machine was woken at
+  21:40 UTC and ran nothing"). Those who manage the bot get **Wake now** in the chat, which is
+  `POST /api/v2/bots/{bot}/cloud-machine/wake` (`asked_again`): it forgets the spent wake, so the next look wakes the
+  machine again. Newer work and an Always on machine are woken for anyway.
   Those old ids stay fenced until HQ settles them; they do not block the new machine.
 - Its computer is "Shared cloud machine", owned by the company owner and open to member bots: a bot that joins is
   assigned to it, one that leaves (to its own machine or a computer) is unassigned, and the machine keeps running.
@@ -220,7 +225,7 @@ Explicit **Replace machine** (or replacing the shared machine) clears the marker
    `enrollments` and `cloud_machine_codes`, with the machine's key: the bot, or `_shared`) and asks HQ for a machine.
 2. HQ runs the equivalent of `boat new --from <HQ_BOAT_BASE_SNAPSHOT>` (default `tico-runner-base`) with two
    per-sandbox variables: `TICO_ENROLL_TOKEN` (that code) and `TICO_HUB_URL` (the server).
-3. At boot, `tico-cloud-machine.service` (`python -m runner.cloud_machine boot`, forwarded to runner_support/cloud_machine.py) finds the two variables, enrolls the
+3. At boot, `tico-cloud-machine.service` (`python -m runner_support.cloud_machine boot`) finds the two variables, enrolls the
    moves the checkout to the server's release (the `release` its public `/healthz` names, through
    `python -m runner_support.release_update` with no runner yet: forward only, nothing restarted), so nothing below
    the server's release enrolls. Then it enrolls the runner once with `tico-runner enroll` and runs

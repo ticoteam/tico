@@ -1,0 +1,6 @@
+{
+  "backend/task_actions_routes.py": {
+    "core-imports-app": 1,
+    "no-install-closure": 2
+  }
+}

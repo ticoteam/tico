@@ -407,7 +407,6 @@ STEPS = [
         outside=True,
     ),
     Step("updates", "Updates", "due", None, S.step_updates, failure="updates"),
-    Step("company_page", "Company page editions", "due", None, S.step_company_page, failure="company_page"),
     Step("thread_digest", "Email digest", "due", HOUR, S.step_thread_digest, failure="helper", lasting=True),
     Step(
         "thread_bot_digest", "Bot thread digest", "due", HOUR, S.step_thread_bot_digest, failure="helper", lasting=True

@@ -72,7 +72,12 @@ from typing import Any, Literal, NoReturn, get_args
 from .batch_work import isolated
 from . import idempotency_messages
 from . import task_relations as TR
-from .task_rights import represents as task_represents, participant as task_participant, mover as task_mover
+from .task_rights import (
+    represents as task_represents,
+    participant as task_participant,
+    mover as task_mover,
+    pipeline_head as task_pipeline_head,
+)
 from . import task_roles as TRo
 from . import run_triggers as RT
 from . import status_values as SV
@@ -136,6 +141,39 @@ from .hubdb_text import (
     JARGON,  # noqa: F401
     RUNNER,  # noqa: F401
     librarian_text,
+)
+
+# Domains split out of this file. Every name is re-exported, so `H.<name>` and `from .hubdb import <name>` callers
+# are unchanged; a new helper goes in its domain module, not here (landmines no-new-hubdb-def).
+from .hubdb_history import (
+    HISTORY_SUBJECTS as HISTORY_SUBJECTS,
+    MARKET_SUBJECTS_SQL as MARKET_SUBJECTS_SQL,
+    TASK_EVENT_COLUMNS as TASK_EVENT_COLUMNS,
+    history_event as history_event,
+    _task_event as _task_event,
+    _strategy_changed as _strategy_changed,
+    task_history as task_history,
+)
+from .hubdb_task_rooms import (
+    _room_person as _room_person,
+    _room_reads as _room_reads,
+    _task_started as _task_started,
+    task_from_chat as task_from_chat,
+    _task_room as _task_room,
+    give_task_room as give_task_room,
+)
+from .hubdb_quiet_notes import (
+    NOTE_MAX as NOTE_MAX,
+    NOTE_WAITING_SQL as NOTE_WAITING_SQL,
+    NOTE_CARRIER_SQL as NOTE_CARRIER_SQL,
+    note_create as note_create,
+    note as note,
+    note_waiting as note_waiting,
+    note_cancel as note_cancel,
+    notes_waiting as notes_waiting,
+    notes_settle as notes_settle,
+    notes_settle_catch_up as notes_settle_catch_up,
+    notes_waiting_counts as notes_waiting_counts,
 )
 
 HUB_DIR = Path(__file__).resolve().parent.parent
@@ -239,9 +277,8 @@ TASK_LANES = ("company", "product")
 # registry/people.yaml, so adding a mover is a roster edit. The environment owner always may.
 MOVER_TEAMS = ("leadership", "product", "engineering")
 # Labels are a mover's too, except that a bot may change a classification label on a task it manages
-# (_label_writer). Labels Tico acts on stay a mover's: a task goal (execution.task_goal) ...
+# (_label_writer). Labels Tico acts on stay a mover's: a task goal (execution.task_goal).
 WORKFLOW_LABELS = ("goal:on", "goal:off")
-# ...and a label on a public roadmap (roadmaps.settings), which roadmaps.approve checks for a bot.
 # A label refusal counts toward a quarantine once per task in this window (_escalate), so a bot
 # retrying a refusal it already had cannot quarantine itself in seconds.
 LABEL_REFUSAL_WINDOW_S = 3600
@@ -657,8 +694,8 @@ REFUSAL_TASK = contextvars.ContextVar("hub_refusal_task", default=None)
 # The bulk change (backend/app.py task_bulk) a refusal came from: each task it skipped keeps its own refusal on record,
 # but one call counts once toward rule 8's quarantine, however many tasks it skipped (_escalate).
 BULK_CALL = contextvars.ContextVar("hub_bulk_call", default="")
-# A task filed from an outside reader's words (backend/company_page/readers.py) reaches a person and nothing else: no
-# webhook, automation or task rule hears the write, so no bot runs on it until a person passes it on.
+# A write no webhook, automation or task rule hears (a message moved between bot homes is not news), so no bot runs on
+# it until a person passes it on.
 NO_TRIGGERS = contextvars.ContextVar("hub_no_triggers", default=False)
 
 
@@ -3197,10 +3234,12 @@ def number_pipeline(conn, actor, pipeline_id, note=""):
 
 
 def _labels(labels):
-    """Labels are lower-case free text, one word or a hyphenated few, unique, in the order given."""
+    """Labels are lower-case free text, one word or a hyphenated few, unique, in the order given. A key is the same
+    when normalized again (tag_create does), so a cut that leaves a trailing hyphen cannot pass a gate as one key and
+    be stored as another."""
     out = []
     for raw in labels if isinstance(labels, (list, tuple)) else str(labels or "").split(","):
-        one = re.sub(r"\s+", "-", str(raw or "").strip().lower()).strip("-")[:40]
+        one = re.sub(r"\s+", "-", str(raw or "").strip().lower()).strip("-")[:40].rstrip("-")
         if one and one not in out:
             out.append(one)
     return out[:20]
@@ -3367,17 +3406,13 @@ def _tag_bot_writers(conn, actor, row, writers, mover=None):
 
 
 def _granted_labels(conn, actor, row, keys):
-    """The labels in `keys` that a mover let `actor` set on any task it can read (tags.bot_writers). A public roadmap
-    label keeps its own gate even when granted."""
-    from .roadmaps import settings as roadmap_settings
-
+    """The labels in `keys` that a mover let `actor` set on any task it can read (tags.bot_writers)."""
     if not is_bot(actor) or not keys or not task_private_readable(conn, actor, row):
         return set()
-    public = set(roadmap_settings(conn)["labels"])
     granted = set()
     for key in keys:
         found = tag_by_key(conn, key)
-        if found and actor in found["bot_writers"] and key not in WORKFLOW_LABELS and key not in public:
+        if found and actor in found["bot_writers"] and key not in WORKFLOW_LABELS:
             granted.add(key)
     return granted
 
@@ -3402,8 +3437,7 @@ def hydrate_task_tags(conn, rows):
             by_id[value.pop("task_id")]["tags"].append(value)
 
 
-def _set_task_tags(conn, actor, task_id, labels, note="", approval_id=None, approved=False):
-    """`approved`: _label_writer already used this change's publish approval."""
+def _set_task_tags(conn, actor, task_id, labels, note=""):
     keys, resolved = _labels(labels), []
     for key in keys:
         row = tag_by_key(conn, key)
@@ -3412,14 +3446,6 @@ def _set_task_tags(conn, actor, task_id, labels, note="", approval_id=None, appr
         resolved.append((key, row))
     task_row = task(conn, task_id)
     old = task_labels(task_row)
-    from .roadmaps import settings as roadmap_settings, approve as approve_roadmap
-
-    if (
-        not approved
-        and task_row['visibility'] == 'public'
-        and (set(keys) - set(old)) & set(roadmap_settings(conn)['labels'])
-    ):
-        approve_roadmap(conn, actor, task_id, 'labels', {'labels': keys}, approval_id)
     old_ids = {r[0] for r in conn.execute("SELECT tag_id FROM task_tags WHERE task_id=?", (task_id,))}
     wanted, ordered = set(), []
     for key, row in resolved:
@@ -3438,115 +3464,61 @@ def _set_task_tags(conn, actor, task_id, labels, note="", approval_id=None, appr
         _task_event(conn, task_id, actor, "labels", _dump(old), _dump(keys), note)
 
 
-def _label_writer(conn, actor, row, labels, approval_id=None):
+def _label_writer(conn, actor, row, labels):
     """A bot that is not a mover changing labels on `row` (task_update): it may change a classification label
-    on a task it manages, one it owns or asked for or whose pipeline it manages, and nothing
-    else. A label Tico acts on (WORKFLOW_LABELS) stays a mover's. A label on a public roadmap puts the task
-    there once it is public, so adding or removing one takes the bot's exact approved publish approval
-    (roadmaps.approve), or a mover when the team does not ask bots for one. Refused as rule `label`, which
-    counts once per task an hour (_escalate). Returns whether the approval was used."""
-    from .roadmaps import settings as roadmap_settings, approve as approve_roadmap
-
+    on a task it manages, one it owns or asked for or whose pipeline it manages or owns, and nothing
+    else. A label Tico acts on (WORKFLOW_LABELS) stays a mover's. Refused as rule `label`, which counts once per task
+    an hour (_escalate)."""
     keys = _labels(labels)
     changed = sorted(set(keys) ^ set(task_labels(row)))
     granted = _granted_labels(conn, actor, row, changed)
     changed = [k for k in changed if k not in granted]
     if not changed:
-        return False
+        return
     teams = ", ".join(MOVER_TEAMS)
-    pipe = _one(conn, "SELECT manager_id FROM pipelines WHERE id=?", (row.get("pipeline_id") or "",)) or {}
-    if not task_participant(conn, actor, row) and pipe.get("manager_id") != actor:
+    if not task_participant(conn, actor, row) and not task_pipeline_head(conn, actor, row):
         refuse(
             conn,
             actor,
             "label",
-            f"{actor_name(conn, actor)} changes labels only on a task it owns, asked for, whose party it manages or whose pipeline it manages; labels on "
-            f"{row['id']} are changed by a person on the {teams} teams",
+            f"{actor_name(conn, actor)} changes labels only on a task it owns, asked for, whose party it manages or "
+            f"whose pipeline it manages or owns; labels on {row['id']} are changed by a person on the {teams} teams",
             task=row["id"],
         )
-    settings = roadmap_settings(conn)
-    public = [k for k in changed if k in settings["labels"]]
     flow = [k for k in changed if k in WORKFLOW_LABELS]
-    if public and settings["bot_public_approval"] and approval_id and not flow:
-        # An approval that is pending, spent or for other labels is still this label refusal: a bot retrying
-        # it would otherwise count every retry and quarantine itself, as before.
-        try:
-            approve_roadmap(conn, actor, row["id"], "labels", {"labels": keys}, approval_id)
-        except Refused as exc:
-            if exc.rule != "approval":
-                raise
-            refuse(
-                conn,
-                actor,
-                "label",
-                f"{approval_id} is no OK of exactly this change; a person on the {teams} teams changes it",
-                task=row["id"],
-            )
-        return True
-    held = _held_labels(
-        flow,
-        public,
-        teams,
-        (
-            f"the public roadmap is not open to bots yet: a person on the {teams} teams changes it"
-            if settings["bot_public_approval"]
-            else f"a person on the {teams} teams changes it"
-        ),
-    )
-    if held:
-        rest = [k for k in changed if k not in public and k not in flow]
+    if flow:
+        rest = [k for k in changed if k not in flow]
         refuse(
             conn,
             actor,
             "label",
-            "; ".join(held) + (f". {', '.join(rest)} you may change on its own" if rest else ""),
+            _held_labels(flow, teams) + (f". {', '.join(rest)} you may change on its own" if rest else ""),
             task=row["id"],
         )
-    return False
 
 
-def _held_labels(flow, public, teams, publish):
-    """The clauses of a `label` refusal: `flow` labels Tico acts on, `public` roadmap labels and what `publish`
-    says the bot does about them."""
-    held = []
-    if flow:
-        held.append(
-            f"{', '.join(flow)} {'changes' if len(flow) == 1 else 'change'} how Tico runs the task, so "
-            f"a person on the {teams} teams changes {'it' if len(flow) == 1 else 'them'}"
-        )
-    if public:
-        held.append(
-            f"{', '.join(public)} {'is a public roadmap label' if len(public) == 1 else 'are public roadmap labels'}"
-            f" (adding or removing one puts the task on a roadmap or takes it off), so " + publish
-        )
-    return held
+def _held_labels(flow, teams):
+    """The clause of a `label` refusal for `flow`, the labels Tico acts on."""
+    return (
+        f"{', '.join(flow)} {'changes' if len(flow) == 1 else 'change'} how Tico runs the task, so "
+        f"a person on the {teams} teams changes {'it' if len(flow) == 1 else 'them'}"
+    )
 
 
 def _create_labels(conn, actor, keys):
     """A bot that is not a mover creating a task with `keys` (task_create): _label_writer's rule for the new task.
-    A classification label goes on as before; a label Tico acts on stays a mover's, and a public roadmap label is
-    refused before anything is written. A publish approval is for a task that exists (publication-preview), so the
-    refusal says to create the task without it and add it on the task. Refused as rule `label`."""
-    from .roadmaps import settings as roadmap_settings
-
-    settings = roadmap_settings(conn)
-    public = [k for k in keys if k in settings["labels"]]
+    A classification label goes on as before; a label Tico acts on stays a mover's, refused before anything is
+    written. Refused as rule `label`."""
     flow = [k for k in keys if k in WORKFLOW_LABELS]
-    teams = ", ".join(MOVER_TEAMS)
-    held = _held_labels(
-        flow,
-        public,
-        teams,
-        (
-            f"the public roadmap is not open to bots yet: create the task without {'it' if len(public) == 1 else 'them'}, "
-            f"and a person on the {teams} teams adds {'it' if len(public) == 1 else 'them'}"
-            if settings["bot_public_approval"]
-            else f"a person on the {teams} teams adds {'it' if len(public) == 1 else 'them'}"
-        ),
-    )
-    if held:
-        rest = [k for k in keys if k not in public and k not in flow]
-        refuse(conn, actor, "label", "; ".join(held) + (f". {', '.join(rest)} you may set on its own" if rest else ""))
+    if flow:
+        rest = [k for k in keys if k not in flow]
+        teams = ", ".join(MOVER_TEAMS)
+        refuse(
+            conn,
+            actor,
+            "label",
+            _held_labels(flow, teams) + (f". {', '.join(rest)} you may set on its own" if rest else ""),
+        )
 
 
 def _lane_for(conn, lane, owner, actor):
@@ -5046,16 +5018,16 @@ def task_create(
         ):
             refuse_stage_reader(conn, actor, parent)
         readers = shared
-    from .roadmaps import settings as roadmap_settings
+    from .roadmaps import BOTS_NEED_A_PUBLISH_OK
 
     # Bots (and Assistant/Agent Ops acting for a person) publish only through an approved publication.
     if visibility == 'public' or public_title or public_summary:
         from .strategy_acts import gate
 
-        gate(conn, actor, "publish", f"publish a new task on the public roadmap: {public_title or title}")
-    bot_review = (is_bot(actor) or VIA.get()) and roadmap_settings(conn)['bot_public_approval']
+        gate(conn, actor, "publish", f"publish a new task's public text: {public_title or title}")
+    bot_review = (is_bot(actor) or VIA.get()) and BOTS_NEED_A_PUBLISH_OK
     if bot_review and (visibility == 'public' or public_title or public_summary):
-        # Said rather than dropped, so the bot knows its text is not on the roadmap.
+        # Said rather than dropped, so the bot knows its public text was not saved.
         refuse(
             conn,
             actor,
@@ -5638,12 +5610,15 @@ def task_update(
             )
         )
     )
-    # The bot that manages the task's pipeline may change its labels (_label_writer decides which); nothing else on
-    # the task becomes its to change.
-    manager = (_one(conn, "SELECT manager_id FROM pipelines WHERE id=?", (row.get("pipeline_id"),)) or {}).get(
-        "manager_id"
+    # The bot that manages or owns the task's pipeline may change its labels (_label_writer decides which); nothing
+    # else on the task becomes its to change.
+    mine = (
+        mine
+        or labels_only
+        and is_bot(actor)
+        and task_private_readable(conn, actor, row)
+        and task_pipeline_head(conn, actor, row)
     )
-    mine = mine or labels_only and is_bot(actor) and task_private_readable(conn, actor, row) and manager == actor
     # A bot a mover granted particular tags (tags.bot_writers) may set those, and only those, on a task it reads.
     if not mine and labels_only and is_bot(actor):
         changed = set(_labels(labels)) ^ set(task_labels(row))
@@ -5694,7 +5669,8 @@ def task_update(
             f"{', '.join(wanted)} on a task {'is' if len(wanted) == 1 else 'are'} changed by a person on "
             f"the {', '.join(MOVER_TEAMS)} teams, not by {actor_name(conn, actor)}",
         )
-    approved = labels is not None and not mover and _label_writer(conn, actor, row, labels, approval_id)
+    if labels is not None and not mover:
+        _label_writer(conn, actor, row, labels)
     if lane is not None:
         lane = _lane_for(conn, lane, row["owner_id"], actor)  # a task moves only onto company
     if title is not None:
@@ -5732,7 +5708,7 @@ def task_update(
         args[column] = value
         _task_event(conn, task_id, actor, field, row.get(column), value, note or "")
     if labels is not None:
-        _set_task_tags(conn, actor, task_id, labels, note or "", approval_id=approval_id, approved=approved)
+        _set_task_tags(conn, actor, task_id, labels, note or "")
         sets.append("updated_at=:updated_at")
     if rank is not None:
         sets.append("rank=:rank")
@@ -5922,101 +5898,7 @@ def stop_ended_work(conn, actor, task_id, status):
     return stopped, canceled
 
 
-# ----------------------------------------------------------------------------- history
-# What happened to each thing, one row per change, in `history_events` (backend/migrations/baseline.sql):
-# a task's, a goal's, the company profile's, the strategy's and the market graph's. `kind` is the field that changed
-# (or what happened), `old`/`new` its values, `data` a JSON object of the type's own extras. A task's rows read the
-# way its old `task_events` rows did through TASK_EVENT_COLUMNS, so its history keeps its shape in every answer.
-HISTORY_SUBJECTS = (
-    "task",
-    "goal",
-    "company",
-    "strategy",
-    "market_entity",
-    "market_edge",
-    "market_evidence",
-    "market_document",
-)
-MARKET_SUBJECTS_SQL = "('market_entity','market_edge','market_evidence','market_document')"
-TASK_EVENT_COLUMNS = (
-    "id, subject_id AS task_id, created_at, actor_id AS actor, kind AS field, old, new, note, action_id, via"
-)
-
-
-def history_event(
-    conn,
-    subject_type,
-    subject_id,
-    actor,
-    kind,
-    old=None,
-    new=None,
-    note=None,
-    data=None,
-    *,
-    action_id=None,
-    via=None,
-    created_at=None,
-    event_id=None,
-):
-    """Append one change to `history_events`; returns its id. Values are stored as text, `data` as JSON. `event_id` is
-    for a caller whose id is deterministic."""
-    if subject_type not in HISTORY_SUBJECTS:
-        raise ValueError(f"unknown history subject type {subject_type!r}")
-    data = SRC.stamp_data(data, actor)
-    event_id = event_id or new_id()
-    conn.execute(
-        "INSERT INTO history_events (id, subject_type, subject_id, actor_id, kind, old, new, note, action_id, "
-        "via, data, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-        (
-            event_id,
-            subject_type,
-            subject_id,
-            actor,
-            kind,
-            None if old is None else str(old),
-            None if new is None else str(new),
-            note,
-            action_id,
-            via,
-            None if data is None else json.dumps(data, sort_keys=True, ensure_ascii=False),
-            created_at or now(),
-        ),
-    )
-    return event_id
-
-
-def _task_event(conn, task_id, actor, field, old, new, note="", *, event_id=None, data=None):
-    """One row of a task's history; returns its id."""
-    # A Strategy Owner decision (or its Undo) stamps each change it makes with its action id (backend/strategy_acts.py).
-    from .strategy_acts import ACTION
-
-    return history_event(
-        conn,
-        "task",
-        task_id,
-        actor,
-        field,
-        old,
-        new,
-        note,
-        action_id=ACTION.get() or None,
-        via=VIA.get() or None,
-        data=data,
-        event_id=event_id,
-    )
-
-
-def _strategy_changed(conn, task_id):
-    """Whether a Strategy Owner decision (or its Undo) is writing this task now or has changed it before."""
-    from .strategy_acts import ACTION
-
-    return bool(ACTION.get()) or bool(
-        conn.execute(
-            "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND action_id IS NOT NULL LIMIT 1",
-            (task_id,),
-        ).fetchone()
-    )
+# ----------------------------------------------------------------------------- message refs
 
 
 def _task_ref(value):
@@ -6116,97 +5998,7 @@ def _mirror_task_note(conn, actor, task_row, note):
         return
 
 
-# ----------------------------------------------------------------------------- task rooms
-# A bot's task has a room of its own (kind "task"), so its traffic stays out of the chat its main
-# session reads. The main chat gets a quiet Tico line about it, `refs.task_started`, when the task is filed from
-# that chat. It is written with `quiet`, so it queues no run; the main session reads it in its history the next time
-# something real wakes it (execution.lane_history).
-
-
-def _room_person(conn, room, row):
-    """The person a main-chat line about `row` is addressed to: the room's owner, else a person in it."""
-    people = [p for p in room.get("participants") or [] if is_human(p)]
-    if room.get("owner_id"):
-        return room["owner_id"]
-    return row["requester_id"] if row.get("requester_id") in people else people[0] if people else row["owner_id"]
-
-
-def _room_reads(conn, room, row):
-    """Whether everyone in the room may read the task, so a line naming it says nothing new to anyone."""
-    readers = set(room.get("participants") or []) | {room.get("owner_id")} - {None}
-    return all(task_private_readable(conn, who, row) for who in readers)
-
-
-def _task_started(conn, row, room):
-    """The quiet "Started task" line in the chat a bot's task was filed from. A private task is named
-    only in a room whose every reader may read it."""
-    if not room or room["id"] == row["conversation_id"]:
-        return None
-    if task_private(conn, row) and not _room_reads(conn, room, row):
-        return None
-    msg = _write_message(
-        conn,
-        TICO_ACTOR,
-        _room_person(conn, room, row),
-        f"Started task: {row['title']}",
-        room,
-        "notice",
-        {"task": row["id"], "task_started": True, "quiet": True},
-        None,
-        None,
-    )
-    event(conn, TICO_ACTOR, "task.started_in", row["id"], {"conversation": room["id"], "message": msg["id"]})
-    return msg
-
-
-def task_from_chat(conn, task_id):
-    """Whether a bot's task came from a chat (filed there, or moved out of one): its turns' replies reach
-    the person in its room as they would have in the chat, not only once it is done (execution.complete)."""
-    return bool(
-        _one(
-            conn,
-            "SELECT 1 FROM events WHERE actor=? AND action IN ('task.started_in','task.room') AND target=? LIMIT 1",
-            (TICO_ACTOR, task_id),
-        )
-    )
-
-
-def _task_room(conn, row, parties):
-    """A new room of row's own (kind "task"), with `parties` in it; the task points at it."""
-    room = new_id()
-    conn.execute(
-        "INSERT INTO conversations(id,kind,subject,participants,created_at,scope,task_id) VALUES(?,?,?,?,?,?,?)",
-        (room, "task", row["title"], _dump(parties), now(), "task", row["id"]),
-    )
-    conn.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (room, row["id"]))
-    return conversation(conn, room)
-
-
-def give_task_room(conn, row):
-    """A bot's live task that still lives in a chat room (filed before task rooms) moves to a room of its
-    own, as execution.claim hands out a turn on it. Its earlier messages stay in the chat; the new room
-    opens with a line pointing there. Returns the task as it now is."""
-    if not row or not is_bot(row["owner_id"]) or row["status"] not in ACTIVE_STATUSES:
-        return row
-    old = conversation(conn, row["conversation_id"])
-    if not old or old.get("kind") != "chat":
-        return row
-    person = _room_person(conn, old, row) if not task_private(conn, row) else None
-    room = _task_room(conn, row, list(dict.fromkeys(p for p in (row["requester_id"], row["owner_id"], person) if p)))
-    name = (bot(conn, row["owner_id"]) or {}).get("display_name") or actor_id(row["owner_id"])
-    _write_message(
-        conn,
-        TICO_ACTOR,
-        row["owner_id"],
-        f"Earlier messages are in {name} chat.",
-        room,
-        "notice",
-        {"task": row["id"], "quiet": True, "moved_from": old["id"]},
-        None,
-        None,
-    )
-    event(conn, TICO_ACTOR, "task.room", row["id"], {"from": old["id"], "to": room["id"]})
-    return task(conn, row["id"])
+# ----------------------------------------------------------------------------- task contact, setup holds, Run now
 
 
 def tasks_only(conn, actor):
@@ -6221,10 +6013,6 @@ def tasks_only(conn, actor):
     if not row or not row.get("config"):
         return False
     return (_json(row["config"], {}) or {}).get("bot_contact") == "tasks"
-
-
-# A run in one of these states still holds the note it carried (note_waiting); a failed or interrupted one gives it back.
-NOTE_CARRIER_SQL = "SELECT 1 FROM attempts WHERE id=? AND state IN ('leased','running','completed')"
 
 
 def chunks[T](values: Iterable[T], size: int = 500) -> list[list[T]]:
@@ -6393,131 +6181,7 @@ def task_run_now(conn, actor, task_id):
     return after, not waiting
 
 
-# ----------------------------------------------------------------------------- quiet notes
-# A quiet note is something for a bot to know, not to do. It starts nothing; the next run the bot has for any reason
-# carries every note waiting for it, in the same prompt, each with the time it was sent. For example, monitor bots leave a
-# manager bot a note after each check, and its daily report reads them.
-NOTE_MAX = 8000
-NOTE_WAITING_SQL = (
-    "n.canceled_at IS NULL AND n.settled_at IS NULL AND (n.carried_by IS NULL OR NOT EXISTS("
-    "SELECT 1 FROM attempts a WHERE a.id=n.carried_by AND a.state IN ('leased','running','completed')))"
-)
-
-
-def note_create(conn, actor, to, body):
-    """Leave a note for a bot's next run. A person has no runs, so only a bot receives one. A paused or
-    quarantined bot's note waits for its next run when a person or its manager bot leaves it (held_for)."""
-    _writer(conn, actor)
-    target = _reach(conn, actor, to, allow_held=held_for(conn, actor, to))
-    if not is_bot(target):
-        refuse(conn, actor, "note", "a note waits for a bot's next run; a person has none, so tell them another way")
-    if target == actor:
-        refuse(conn, actor, "note", "a note to yourself belongs in your own repository")
-    body = str(body or "").strip()
-    if not body:
-        refuse(conn, actor, "note", "the note is empty")
-    if len(body) > NOTE_MAX:
-        refuse(conn, actor, "note", f"a note is at most {NOTE_MAX} characters; put the detail in a file or a task")
-    path_mentioned(conn, actor, "note", body)
-    row = {"id": new_id(), "from_actor": actor, "to_actor": target, "body": body, "created_at": now()}
-    conn.execute(
-        "INSERT INTO notes(id,from_actor,to_actor,body,created_at) VALUES "
-        "(:id,:from_actor,:to_actor,:body,:created_at)",
-        row,
-    )
-    event(conn, actor, "note.create", row["id"], {"to": target})
-    return note(conn, row["id"])
-
-
-def note(conn, note_id):
-    return _one(conn, "SELECT * FROM notes WHERE id=?", (note_id,))
-
-
-def note_waiting(conn, row):
-    """Whether this note (a row) is still waiting for its bot's next run."""
-    if not row or row.get("canceled_at") or row.get("settled_at"):
-        return False
-    if not row.get("carried_by"):
-        return True
-    try:
-        return not _one(conn, NOTE_CARRIER_SQL, (row["carried_by"],))
-    except sqlite3.OperationalError:  # a local hub has no attempts table and no runs
-        return True
-
-
-def note_cancel(conn, actor, note_id, human=False):
-    """Take a note back before a run carries it: its sender, or a person."""
-    _writer(conn, actor)
-    row = note(conn, note_id)
-    if not row:
-        refuse(conn, actor, "not-found", f"no note {note_id}")
-    if actor != row["from_actor"] and not human and not is_human(actor):
-        refuse(
-            conn,
-            actor,
-            "note",
-            f"{actor_name(conn, row['from_actor'])} left this note; only they or a person take it back",
-        )
-    if row.get("message_id"):
-        msg = message(conn, row["message_id"])
-        if msg:
-            _message_writer(conn, actor, msg, conversation(conn, msg["conversation_id"]))
-    if row["canceled_at"]:
-        return row
-    if not note_waiting(conn, row):
-        refuse(conn, actor, "note", "a run already carried this note; it cannot be taken back")
-    conn.execute("UPDATE notes SET canceled_at=?, canceled_by=? WHERE id=?", (now(), actor, note_id))
-    event(conn, actor, "note.cancel", note_id, {})
-    return note(conn, note_id)
-
-
-def notes_waiting(conn, bot, limit=50, *, unheld=False):
-    """The notes waiting for `bot` (a slug), oldest first after Tico's own: the one a lifted quarantine leaves
-    (quarantine_lifted_note) must reach the next run even behind a full backlog. A note that stands for a held
-    message (`message_id`) is the message, in the order messages arrived, whoever sent it, Tico too.
-    `unheld` selects notes deliverable now; the full pending list and its counts keep quarantined sources."""
-    from . import task_quarantine
-
-    available = " AND " + task_quarantine.notes_free_sql() if unheld else ""
-    return _rows(
-        conn.execute(
-            f"SELECT n.* FROM notes n WHERE n.to_actor=? AND {NOTE_WAITING_SQL}{available} "
-            f"ORDER BY NOT (n.from_actor=? AND n.message_id IS NULL),n.created_at,n.id LIMIT ?",
-            ("bot:" + bot, TICO_ACTOR, limit),
-        )
-    )
-
-
-def notes_settle(conn, attempt_id):
-    """Mark the notes a completed run carried as read for good (`settled_at`), where its result is recorded."""
-    conn.execute("UPDATE notes SET settled_at=? WHERE carried_by=? AND settled_at IS NULL", (now(), attempt_id))
-
-
-def notes_settle_catch_up(conn, limit: int | None = 500):
-    """Settle up to `limit` notes whose carrier completed but no path marked them (None settles them all: the
-    migration's one pass). Reads the small unsettled-carried index, so it is cheap on every scheduler tick, and
-    a note it leaves for the next pass stays correct, since waiting is still decided by the carrier. Returns the count."""
-    if not _has_table(conn, "attempts"):
-        return 0
-    stamp = now()
-    return conn.execute(
-        "UPDATE notes SET settled_at=? WHERE id IN (SELECT n.id FROM notes n JOIN attempts a ON a.id=n.carried_by "
-        "WHERE n.carried_by IS NOT NULL AND n.settled_at IS NULL AND a.state='completed' LIMIT ?)",
-        (stamp, -1 if limit is None else limit),
-    ).rowcount
-
-
-def notes_waiting_counts(conn, bots, limit=500):
-    """`len(notes_waiting(conn, bot, limit))` for many bots in one query per 500: {slug: count}."""
-    out = dict.fromkeys(bots, 0)
-    for part in chunks(out):
-        for row in conn.execute(
-            f"SELECT n.to_actor,count(*) FROM notes n WHERE n.to_actor IN "
-            f"({','.join('?' * len(part))}) AND {NOTE_WAITING_SQL} GROUP BY n.to_actor",
-            ["bot:" + bot for bot in part],
-        ):
-            out[actor_id(row[0])] = min(row[1], limit)
-    return out
+# ----------------------------------------------------------------------------- task wakes
 
 
 def _wake(
@@ -6833,7 +6497,10 @@ TURN_SELECT = (
     "message_id, task_id, exit, summary, input_tokens, cached_tokens, cache_write_tokens, output_tokens, "
     "usage_model AS model, "
     "provider, est_cost_usd, billing, trigger_kind, trigger_source, writes, outcome, did_nothing, purpose, "
-    "rotated, session_kind, session_why, prompt_tokens, usage_reason, rule_id"
+    "rotated, session_kind, session_why, prompt_tokens, usage_reason, rule_id, "
+    # The run's notes lists (backend/run_triggers.py notes): a table of its own, keyed by the run.
+    "(SELECT offered FROM attempt_notes WHERE attempt_id=attempts.id) AS notes_offered, "
+    "(SELECT sent FROM attempt_notes WHERE attempt_id=attempts.id) AS notes_sent"
 )
 LEASE = ("job_id", "runner_id", "generation", "token_hash", "state", "lease_until", "lane")
 
@@ -7738,16 +7405,6 @@ def task_flow(
             key=lambda row: (-sum(v for k, v in row.items() if k != "actor"), row["actor"]),
         ),
     }
-
-
-def task_history(conn, task_id, *, provenance=False):
-    columns = TASK_EVENT_COLUMNS + (", data" if provenance else "")
-    return _rows(
-        conn.execute(
-            f"SELECT {columns} FROM history_events WHERE subject_type='task' AND subject_id=? ORDER BY created_at, rowid",
-            (task_id,),
-        )
-    )
 
 
 def status(conn, bot_slug):

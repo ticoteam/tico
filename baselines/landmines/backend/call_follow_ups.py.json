@@ -1,0 +1,5 @@
+{
+  "backend/call_follow_ups.py": {
+    "no-install-closure": 1
+  }
+}

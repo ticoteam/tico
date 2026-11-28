@@ -614,6 +614,32 @@ def test_a_resumed_try_held_again_ends_quietly_with_a_note_on_its_task(api):
         assert c.execute("SELECT count(*) FROM tasks WHERE title LIKE 'Find why %'").fetchone()[0] == 0
 
 
+def test_the_resumed_try_held_again_waits_the_same_four_hours_before_it_ends(api):
+    """Invariant 5 (E-1 route-level settlement), the second hold's wait. The first eligible unreviewed hold resumed
+    after four hours; its resumed try is cut off again and reported through the completion route. That second hold
+    waits exactly HELD_REVIEW_HOURS too: still held a minute short of it, ended quietly (dismissed, never a third
+    try) a minute past it, with the first hold's own boundary pinned by test_a_held_run_under_four_hours_stays_held."""
+    assert execution.HELD_REVIEW_HOURS == 4
+    machine, attempt, _ = held_on_task(api)
+    stopped_two_hours(api, attempt['id'], minutes=241)
+    assert [d['state'] for d in sweep(api)] == ['queued']
+    ready(api, machine, ['ops'])
+    again = claim(api, machine)
+    assert again['job_id'] == attempt['job_id'] and again['id'] != attempt['id']
+    restart_mid_merge(api, machine, again)
+    stopped_two_hours(api, again['id'], minutes=239)
+    assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
+    assert [d['decision'] for d in decision_of(api, attempt['job_id'])] == ['resume']
+    stopped_two_hours(api, again['id'], minutes=241)
+    assert [d['state'] for d in sweep(api)] == ['canceled']
+    assert [(d['cause'], d['decision']) for d in decision_of(api, attempt['job_id'])] == [
+        ('held', 'resume'),
+        ('held', 'dismiss'),
+    ]
+    ready(api, machine, ['ops'])
+    assert claim(api, machine) is None
+
+
 def test_agent_ops_lists_and_reconciles_a_held_run_on_a_private_task_without_its_words(api):
     """Part 1. Agent Ops, as itself, lists another bot's held run and clears it, though the task is private to Ana. The run
     arrives without its words: no task, request, output or tool calls, as reconcile_job has always allowed."""

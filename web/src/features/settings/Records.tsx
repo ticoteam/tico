@@ -17,7 +17,7 @@ import { FiguresStrip, ReadFault, Section } from '@/pagekinds';
 import { StateBody } from '@/pagekinds';
 import { fixHref } from './fixes';
 import { Foot, NO_ACCESS, Verb, Word, act, isForbidden, micros } from './parts';
-import { billingFor, changelogQuery, healthQuery, type BillingMonth, type HealthFix } from './queries';
+import { billingFor, changelogQuery, healthQuery, type BillingMonth, type HealthFix, type SessionWorktrees } from './queries';
 import type { ChangelogEntry, ChangelogList } from '@/api/schema';
 import { changelogPage, type HealthCheck, type StuckAgent } from './queries';
 
@@ -159,7 +159,7 @@ export function Billing() {
         figures={[
           { label: 'Balance', value: micros(b.balance_micros), target: 'setting:balance', sub: status(b) },
           { label: month ? monthWords(b.month) : 'This month', value: micros(total) },
-          { label: 'Plan', value: b.cloud?.plan ?? 'Your own servers', sub: b.cloud?.trial_days_left != null ? `${b.cloud.trial_days_left} days of trial left` : undefined },
+          { label: 'Plan', value: b.cloud?.plan ?? 'Your own servers' },
         ]}
       />
       <Section name="Credit" count={credits.length} target="setting:credit">
@@ -272,6 +272,23 @@ function Stuck({ rows }: { rows: StuckAgent[] }) {
   );
 }
 
+/** Each bot's session worktrees on each computer and the space they take, so a pile-up shows before the disk fills. */
+function Worktrees({ rows }: { rows: SessionWorktrees[] }) {
+  if (rows.length === 0) return null;
+  return (
+    <Section name="Session worktrees" count={rows.length} target="setting:session-worktrees">
+      {rows.map((r) => (
+        <div key={`${r.computer}:${r.bot}`} className="row" title={`${r.name} on ${r.label}`}>
+          <span className="row-title">{r.name}</span>
+          <span className="row-sub">
+            {r.label}: {r.count === 1 ? '1 worktree' : `${r.count} worktrees`}, {(r.bytes / 1024 ** 3).toFixed(1)} GB
+          </span>
+        </div>
+      ))}
+    </Section>
+  );
+}
+
 export function Health() {
   const health = useQuery(healthQuery);
   const h = health.data;
@@ -297,6 +314,7 @@ export function Health() {
         )}
       </Section>
       <Stuck rows={h.stuck ?? []} />
+      <Worktrees rows={h.sessions ?? []} />
     </>
   );
 }

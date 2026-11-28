@@ -1,0 +1,5 @@
+{
+  "backend/groups.py": {
+    "no-install-closure": 1
+  }
+}

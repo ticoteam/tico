@@ -847,6 +847,9 @@ class Store:
         self.pooled = _pooled(self.factory)
         self.pool, self.pool_file, self.pool_lock = [], None, threading.Lock()
         self.pool_age = 0  # retire_pool's count, part of the pool's identity
+        # This store's own, on each connection it hands out: what a list kept for its readers is keyed by
+        # (backend/needs_share.py). A file's device and inode are not enough: a new file can take a deleted one's.
+        self.token = object()
         self._pool_finalizer = weakref.finalize(self, _close_idle, self.pool)
         # In-process writers queue before BEGIN instead of competing in SQLite's busy-handler sleeps.
         # Reads still use independent WAL snapshots; other processes remain governed by busy_timeout.
@@ -982,9 +985,6 @@ class Store:
 
                 plan_exits.initialize(c)
                 self.seed_goals(c)
-                from .public_roadmaps import seed_secret as seed_roadmap_secret
-
-                seed_roadmap_secret(c)
                 # Notes a completed run carried are settled (hubdb.notes_settle): one pass settles the ones from before the
                 # column, in one UPDATE. Unversioned and idempotent; it reads only the small unsettled-carried index.
                 H.notes_settle_catch_up(c, None)
@@ -1201,6 +1201,7 @@ class Store:
                     c.close()
                     continue
             break
+        c.store_token = self.token  # pyright: ignore[reportAttributeAccessIssue] - the pooled subclass carries this field
         c.pool_file = identity  # pyright: ignore[reportAttributeAccessIssue] - the pooled subclass carries this field
         # The server's file reader as the app has it configured now (media.install_media): work that holds only the
         # connection reads a company page's logo through it, so one saved in the company's own places is found.

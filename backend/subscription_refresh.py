@@ -389,6 +389,13 @@ def plan_report(c, runner, rid, body):
         }
     value['request'] = {**request, 'state': body.state, 'updated_at': now}
     save_metadata(c, storage, value)
+    if body.state == 'succeeded':
+        from . import login_holds
+
+        # A week with room again ends a weekly hold for one probe turn (login_holds.after_reading).
+        login_holds.after_reading(
+            c, body.subscription, 'claude', request['requested_at'], body.plan.used_percent, weekly_only=True, now=now
+        )
     return plan_view(value)
 
 

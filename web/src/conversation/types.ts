@@ -102,6 +102,13 @@ export interface LiveRun {
 /** A person's message that woke a bot here, and what became of it (GET /api/v2/threads/{id}/bot-status,
     backend/thread_bot_status.py): the timeline's first page brings them and the `threads` topic's `bot_status` keeps
     them current. */
+/** A wait's one fix: a page to open (`href`, an old-app "#/" address), or an action to run (`post`, e.g. Wake now). */
+export interface BotFix {
+  label: string;
+  href: string | null;
+  post?: string;
+}
+
 export interface BotWait {
   actor: string;
   name: string;
@@ -114,4 +121,10 @@ export interface BotWait {
   run_id: string | null;
   /** The message that woke it (the newest, when several did). */
   message_id: string;
+  /** Where a person fixes what stops it ('cant_reply' only): the server's label and page (an old-app "#/" address). */
+  fix?: BotFix | null;
+  /** The claim's code for what stops it ('cant_reply' only), e.g. 'payer_wait' (backend/wait_reasons.py). */
+  code?: string | null;
+  /** When a plan's usage limit resets (a usage limit's 'cant_reply' only, ISO): the line says it in the reader's time. */
+  until?: string | null;
 }

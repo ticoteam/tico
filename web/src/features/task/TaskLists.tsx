@@ -3,7 +3,7 @@ import { Link, useNavigate } from '@tanstack/react-router';
 import { Suspense, lazy, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { ApiError } from '@/api/client';
 import { directoryQuery, useActor } from '@/data';
-import { filtersOf, flowQuery, inOrder, isFiltered, loadListTools, loadMore, needsYouRows, pipelinesQuery, pipelineTasksQuery, sortOf, stageCount, stagePriorityQuery, taskHitsQuery, useNeedsYou, useNeedsYouDrawn, useStageSort, validateTasksSearch, waitsOnMe, type FlowItem, type TaskItem } from '@/features/tasks/routing';
+import { filtersOf, flowQuery, inOrder, isFiltered, loadListTools, loadMore, needsYouRows, pipelinesQuery, pipelineTasksQuery, sortOf, stageCount, stagePriorityQuery, taskHitsQuery, useNeedsYou, useNeedsYouDrawn, useStageSort, validateTasksSearch, waitsOnMe, yoursFirst, type FlowItem, type TaskItem } from '@/features/tasks/routing';
 import { ownerListQuery, type OwnTask } from '@/features/team/routing';
 import { Ago } from '@/kit/Ago';
 import { Avatar } from '@/kit/Avatar';
@@ -180,10 +180,12 @@ function PipelineList({ pipeline, open, stage, end }: { pipeline: string; open: 
   const read = useMemo(
     () =>
       (p?.stages ?? []).map((s) => {
-        const items = rows.filter((t) => t.stage_id === s.id);
+        const mine = rows.filter((t) => t.stage_id === s.id);
+        // in Board order, the stage as its board column draws it: what waits on the person first
+        const items = filters.sort ? mine : yoursFirst(mine, needs);
         return { ...s, items, n: page && stageCount(page, s.id, items.length) };
       }),
-    [p, rows, page],
+    [p, rows, page, filters.sort, needs],
   );
   const own = stage ?? rows.find((t) => isOpen(t, open))?.stage_id ?? undefined;
   // the open task's stage as it opened (`at`), and the stage shown: that one, or the one picked since
@@ -192,8 +194,9 @@ function PipelineList({ pipeline, open, stage, end }: { pipeline: string; open: 
   const at = head?.open === open ? head.at : undefined;
   const want = head?.open === open ? head.stage : undefined;
   const showing = read.find((g) => g.id === want)?.id ?? (page ? (read.find((g) => g.items.length) ?? read[0])?.id : undefined);
-  // Priority: the stage shown is read on its own, in Tico's order for the person, whole (no More)
-  const ranks = !filters.sort && !!showing;
+  // the board's order by default, the pipeline's read as the board draws it; Priority (picked): the stage shown is read
+  // on its own, in Tico's order for the person, whole (no More)
+  const ranks = filters.sort === 'priority' && !!showing;
   const byPriority = useQuery({ ...stagePriorityQuery(pipeline, showing ?? '', filters), enabled: !!p && ranks });
   const ranked = faultHides(byPriority) ? undefined : byPriority.data;
   // failed: unless the stage shown is read on its own by priority, the pipeline's read is the list

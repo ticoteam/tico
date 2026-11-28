@@ -52,14 +52,13 @@ def _runs(jobs, name, results, outputs, *, cancelled=False, inherited=(), ref="v
     )
 
 
-def _schedule(*, published=False, dry_run=False, build=True, enabled=True, failures=(), ref="v0.6.1"):
+def _schedule(*, published=False, dry_run=False, build=True, failures=(), ref="v0.6.1"):
     outputs = {
         "validated": {
             "published": "true" if published else "false",
             "dry_run": "" if "validated" in failures else str(dry_run).lower(),
         },
-        **{name: {"build": str(build).lower()} for name in ("runner-changes", "desktop-changes", "electron-changes")},
-        "company-matrix": {"enabled": str(enabled).lower()},
+        **{name: {"build": str(build).lower()} for name in ("runner-changes", "electron-changes")},
     }
     results = {}
     for name in JOBS:
@@ -72,6 +71,9 @@ def _schedule(*, published=False, dry_run=False, build=True, enabled=True, failu
 
 @pytest.mark.parametrize("published", [False, True], ids=["normal-release", "published-rebuild"])
 def test_release_build_and_carry_forward_schedules(published):
+    # The desktop app is the Electron one (desktop/, desktop.yml) alone: no other desktop or company app job remains.
+    assert set(JOBS) == CORE | {"macos", "macos-assets", "electron-changes", "electron", "electron-assets"}
+    assert JOBS["electron"]["uses"] == "./.github/workflows/desktop.yml"
     results = _schedule(published=published)
     assert {name for name, result in results.items() if result == "success"} == JOBS.keys() - (
         {"release"} if published else set()
@@ -81,21 +83,16 @@ def test_release_build_and_carry_forward_schedules(published):
     assert {name for name, result in results.items() if result == "success"} == {
         "validated",
         "runner-changes",
-        "desktop-changes",
-        "desktop-assets",
         "electron-changes",
         "electron-assets",
         *([] if published else ["release"]),
     }
-    assert _schedule(published=published, enabled=False)["companies"] == "skipped"
 
 
 @pytest.mark.parametrize("ref", ["v0.6.0-rc.1"])
-def test_a_prerelease_builds_the_generic_apps_and_no_company_app(ref):
-    # A company's installed apps update from its own bucket's latest.json: a prerelease must never move it.
+def test_a_prerelease_builds_the_desktop_app_and_the_mac_binaries(ref):
     results = _schedule(ref=ref)
-    assert results["company-matrix"] == results["companies"] == "skipped"
-    assert {"desktop", "desktop-assets", "electron", "electron-assets", "macos", "macos-assets"} <= {
+    assert {"electron", "electron-assets", "macos", "macos-assets"} <= {
         name for name, result in results.items() if result == "success"
     }
 
@@ -114,11 +111,8 @@ def test_dry_run_and_failed_validation_never_start_optional_jobs():
         ("release", JOBS.keys() - CORE),
         ("runner-changes", {"macos", "macos-assets"}),
         ("macos", {"macos-assets"}),
-        ("desktop-changes", {"desktop", "desktop-assets", "company-matrix", "companies"}),
-        ("desktop", {"desktop-assets"}),
         ("electron-changes", {"electron", "electron-assets"}),
         ("electron", {"electron-assets"}),
-        ("company-matrix", {"companies"}),
     ],
 )
 def test_failed_prerequisites_block_dependents_even_with_outputs(failed, blocked):
@@ -130,29 +124,9 @@ def test_failed_prerequisites_block_dependents_even_with_outputs(failed, blocked
 
 def test_cancelled_workflow_never_starts_optional_jobs():
     results = dict.fromkeys(JOBS, "success")
-    outputs = {name: {"build": "true", "enabled": "true"} for name in JOBS}
+    outputs = {name: {"build": "true"} for name in JOBS}
     for name in JOBS.keys() - CORE:
         assert not _runs(JOBS, name, results, outputs, cancelled=True)
-
-
-def test_company_publish_survives_skipped_release_and_requires_successful_build():
-    jobs = yaml.safe_load((ROOT / ".github/workflows/company-app.yml").read_text())["jobs"]
-    # The icon check sets available=true only when its download works; build and publish both wait for it.
-    passed = {"icon": {"available": "true"}}
-    for result in ("success", "failure", "skipped", "cancelled"):
-        expected = result == "success"
-        assert _runs(jobs, "publish", {"icon": "success", "build": result}, passed, inherited=("skipped",)) == expected
-    assert not _runs(jobs, "publish", {"icon": "success", "build": "success"}, passed, cancelled=True)
-    # A failed or skipped icon job never leaves a build or publish to run, even though its build could succeed.
-    for icon in ("failure", "skipped", "cancelled"):
-        assert not _runs(jobs, "build", {"icon": icon}, {})
-        assert not _runs(jobs, "publish", {"icon": icon, "build": "success"}, {})
-    unavailable = {"icon": {"available": "false"}}
-    assert _runs(jobs, "build", {"icon": "success"}, passed)
-    assert not _runs(jobs, "build", {"icon": "success"}, unavailable)
-    assert not _runs(jobs, "publish", {"icon": "success", "build": "success"}, unavailable)
-    assert jobs["build"]["needs"] == "icon"
-    assert set(jobs["publish"]["needs"]) == {"icon", "build"}
 
 
 @pytest.fixture
@@ -181,8 +155,8 @@ def app_build_decision(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", f'{bin_dir}{os.pathsep}{os.environ["PATH"]}')
 
     def decide(kind, paths=(), *, force=False, assets=None):
-        # A previous release counts only with its updater manifests: Tauri's latest.json, Electron's three feeds.
-        assets = assets or {"desktop": "latest.json", "electron": "latest-mac.yml\nlatest.yml\nlatest-linux.yml"}[kind]
+        # A previous release counts only with its updater manifests: the Electron app's three feeds.
+        assets = assets or {"electron": "latest-mac.yml\nlatest.yml\nlatest-linux.yml"}[kind]
         git("checkout", "-qf", "--detach", "v1.0.0")
         for name in paths:
             path = repo / name
@@ -218,18 +192,6 @@ def app_build_decision(tmp_path, monkeypatch):
 @pytest.mark.parametrize(
     ("kind", "paths"),
     [
-        (
-            "desktop",
-            [
-                "app/tests/update_hub.py",
-                "app/tests/glib-backport/tests/variant_str_iter.rs",
-                "app/src/testdata/presigned-artifact-url.txt",
-                "app/vendor/glib/tests/value.rs",
-                "app/vendor/glib/benches/gstring.rs",
-                "app/README.md",
-                "app/vendor/glib/README.md",
-            ],
-        ),
         ("electron", ["desktop/src/main/updateErrors.test.ts", "desktop/README.md", "desktop/docs/notes.md"]),
     ],
 )
@@ -241,21 +203,6 @@ def test_support_only_changes_keep_the_previous_app_version(app_build_decision, 
 @pytest.mark.parametrize(
     ("kind", "paths"),
     [
-        (
-            "desktop",
-            [
-                "app/src/main.rs",
-                "app/shell/setup.js",
-                "app/tauri.conf.json",
-                "app/icons/icon.icns",
-                "app/Cargo.lock",
-                "app/vendor/glib/src/lib.rs",
-                "scripts/app_release.py",
-                "scripts/company_apps.py",
-                ".github/workflows/app.yml",
-                ".github/workflows/company-app.yml",
-            ],
-        ),
         (
             "electron",
             [
@@ -271,11 +218,11 @@ def test_support_only_changes_keep_the_previous_app_version(app_build_decision, 
 )
 def test_shipping_changes_still_build_even_alongside_docs(app_build_decision, kind, paths):
     for path in paths:
-        assert app_build_decision(kind, [f"{'app' if kind == 'desktop' else 'desktop'}/README.md", path]), path
+        assert app_build_decision(kind, ["desktop/README.md", path]), path
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("kind", ["desktop", "electron"])
+@pytest.mark.parametrize("kind", ["electron"])
 def test_unchanged_apps_build_when_forced_or_missing_previous_assets(app_build_decision, kind):
     assert not app_build_decision(kind)
     assert app_build_decision(kind, force=True)
@@ -289,10 +236,9 @@ def test_electron_builds_when_the_previous_release_lacks_a_feed(app_build_decisi
 
 
 @pytest.mark.slow
-def test_each_app_builds_only_for_its_own_sources(app_build_decision):
-    # The Tauri app (app/) and the Electron app (desktop/) ship side by side; a change to one never rebuilds the other.
-    assert not app_build_decision("electron", ["app/src/main.rs", ".github/workflows/app.yml"])
-    assert not app_build_decision("desktop", ["desktop/src/main/main.ts", ".github/workflows/desktop.yml"])
+def test_the_desktop_app_builds_only_for_its_own_sources(app_build_decision):
+    # Only desktop/ and its build workflow enter the app: a change anywhere else never rebuilds it.
+    assert not app_build_decision("electron", ["app/src/main.rs", "backend/app.py", ".github/workflows/ci.yml"])
 
 
 def _electron_asset_steps():
@@ -400,8 +346,8 @@ def test_an_incremental_validation_is_a_plan_on_an_anchor_and_the_gate_runs_only
 def test_an_incremental_validation_runs_its_critical_path_on_runson_and_its_test_parts_hosted():
     """Every validation's critical path (candidate, the Linux binaries, the images) runs on RunsOn, hosted only under
     TICO_CI_HOSTED: the x86_64 binaries build about 2 minutes faster there and need no disk clean-up. An incremental
-    validation's python and browser parts run hosted; its product and desktop VMs need the 35 GiB disk and the Docker
-    images, so they stay on RunsOn."""
+    validation's python and browser parts run hosted; its product VM needs the 35 GiB disk and the Docker images, so it
+    stays on RunsOn."""
     ci, _ = _workflow("ci.yml")
     jobs = ci["jobs"]
     for name in ("candidate", "native-linux", "images"):
@@ -409,7 +355,7 @@ def test_an_incremental_validation_runs_its_critical_path_on_runson_and_its_test
         assert runs_on.startswith("${{ vars.TICO_CI_HOSTED == 'true' && ") and "inputs.anchor" not in runs_on, name
         assert "runs-on=" in runs_on, name
     gate = str(jobs["gate"]["runs-on"])
-    assert "inputs.anchor != ''" in gate and "matrix.part != 'product'" in gate and "matrix.part != 'desktop'" in gate
+    assert "inputs.anchor != ''" in gate and "matrix.part != 'product'" in gate and "'desktop'" not in gate
     assert "runs-on=" in gate
     # The hosted disk clean-up step follows each job's own runner choice.
     for name in ("native-linux", "images"):
@@ -541,7 +487,7 @@ def test_the_train_starts_release_yml_on_the_tag_with_inputs_it_declares():
     # On a tag ref, a dispatched run takes its commit and version from the tag, as a push does.
     validated = JOBS["validated"]["steps"][0]["run"]
     assert 'echo "sha=$GITHUB_SHA"; echo "version=$GITHUB_REF_NAME"' in validated
-    assert JOBS["desktop-changes"]["steps"][-1]["env"]["FORCE"] == (
+    assert JOBS["electron-changes"]["steps"][-1]["env"]["FORCE"] == (
         "${{ github.event_name == 'workflow_dispatch' && inputs.desktop }}"
     )
 
@@ -665,25 +611,46 @@ def test_each_main_validation_hands_its_run_to_main_red_which_waits_for_it_to_fi
 
 
 @pytest.mark.parametrize(
-    "gate, images, failed",
+    "gate, images, web, failed",
     [
-        ("success", "success", None),
-        ("failure", "success", "gate (failure)"),
-        ("success", "skipped", "images (skipped)"),
+        ("success", "success", "success", None),
+        ("failure", "success", "success", "gate (failure)"),
+        ("success", "skipped", "success", "images (skipped)"),
+        ("success", "success", "failure", "web journeys (failure)"),
     ],
 )
-def test_the_release_check_step_name_never_reads_as_a_result_and_its_exit_code_is_the_verdict(gate, images, failed):
+def test_the_release_check_step_name_never_reads_as_a_result_and_its_exit_code_is_the_verdict(
+    gate, images, web, failed
+):
     """A red gate once showed a step named "...passed" followed by exit 1: the name is neutral, the log names the part."""
     jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
     (step,) = jobs["release-check"]["steps"]
     assert "pass" not in step["name"].lower() and "fail" not in step["name"].lower()
-    assert jobs["release-check"]["needs"] == ["gate", "images"] and jobs["release-check"]["if"] == "always()"
+    assert (
+        jobs["release-check"]["needs"] == ["gate", "images", "web-journeys"]
+        and jobs["release-check"]["if"] == "always()"
+    )
     done = subprocess.run(
         ["bash", "-e", "-c", step["run"]],
-        env={**os.environ, "GATE": gate, "IMAGES": images},
+        env={**os.environ, "GATE": gate, "IMAGES": images, "WEB": web},
         capture_output=True,
         text=True,
     )
     assert done.returncode == (0 if failed is None else 1)
     if failed:
         assert f"::error::Release gate failed: {failed}" in done.stdout
+
+
+def test_every_validation_opens_the_app_in_a_browser_and_a_red_journey_fails_the_release():
+    """v0.6.278-282 shipped with every /next page broken: no part of the release check opened the app. The web
+    journeys (web/e2e) run in every validation, full or incremental, on the candidate's build, and the verdict needs them."""
+    ci, _ = _workflow("ci.yml")
+    jobs = ci["jobs"]
+    web = jobs["web-journeys"]
+    assert web["needs"] == "candidate" and "if" not in web and "continue-on-error" not in web
+    assert "runs-on=" in str(web["runs-on"])
+    checkout = next(step for step in web["steps"] if "actions/checkout" in step.get("uses", ""))
+    assert checkout["with"]["ref"] == "${{ needs.candidate.outputs.sha }}"
+    run = next(step for step in web["steps"] if step.get("name") == "The web app's journeys")
+    assert run["working-directory"] == "web" and "npm run e2e" in run["run"]
+    assert "web-journeys" in jobs["release-check"]["needs"]

@@ -80,6 +80,8 @@ pub struct Runner {
     pub worktrees: Arc<crate::worktrees::Worktrees>,
     /// The clean-up this computer runs by itself when its workspace volume runs low (crate::disk_clean).
     disk_clean: Arc<crate::disk_clean::DiskClean>,
+    /// Each bot's session worktrees here and their size, measured now and then (crate::session_sizes).
+    session_sizes: Arc<crate::session_sizes::SessionSizes>,
     /// The server takes `record_updated` on worktree reports (its heartbeat reply said so).
     worktree_stamp: AtomicBool,
     /// The server accepts short start reservations; claims opt in only after its heartbeat says so.
@@ -217,6 +219,7 @@ impl Runner {
             lanes: Arc::new(crate::sessions::Lanes::new(repositories)),
             worktrees,
             disk_clean: Arc::new(crate::disk_clean::DiskClean::new()),
+            session_sizes: Arc::new(crate::session_sizes::SessionSizes::new()),
             worktree_stamp: AtomicBool::new(false),
             start_places: AtomicBool::new(false),
             unanswered_claim: Mutex::new(None),
@@ -821,6 +824,12 @@ impl Runner {
         }
         if let Some(cleanup) = self.disk_clean.report() {
             readiness_doc["disk_cleanup"] = cleanup;
+        }
+        if full {
+            self.session_sizes.check(&self.config.projects_dir());
+        }
+        if let Some(sessions) = self.session_sizes.report() {
+            readiness_doc["session_worktrees"] = sessions;
         }
         let mut body = json!({
             "version": RUNNER_VERSION,

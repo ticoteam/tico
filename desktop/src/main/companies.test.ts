@@ -38,28 +38,6 @@ describe('companies.json', () => {
     expect(file).toMatchObject({ active: 'c1', companies: [{ id: 'c1' }] });
     expect(() => C.addCompany(file, 'https://x.tico.team', '../x')).toThrow();
   });
-
-  it('moves today’s orgs.json across once, keeping the open one', () => {
-    let n = 0;
-    const file = C.migrateOrgs(
-      {
-        version: 1,
-        active: 'org-2',
-        orgs: [
-          { id: 'org-1', url: 'https://acme.tico.team/', name: 'Acme', email: 'a@acme.example', store: 'x' },
-          { id: 'org-2', url: 'https://beta.tico.team/', name: 'Beta' },
-          { id: 'org-3', url: 'not an address' },
-        ],
-      },
-      () => `c${++n}`,
-    );
-    expect(file?.companies.map((c) => [c.url, c.name])).toEqual([
-      ['https://acme.tico.team', 'Acme'],
-      ['https://beta.tico.team', 'Beta'],
-    ]);
-    expect(file?.active).toBe('c2');
-    expect(C.migrateOrgs({ orgs: [] }, () => 'c')).toBeNull();
-  });
 });
 
 describe('bridge arguments', () => {

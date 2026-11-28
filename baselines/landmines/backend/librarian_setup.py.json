@@ -1,0 +1,6 @@
+{
+  "backend/librarian_setup.py": {
+    "core-imports-app": 1,
+    "no-install-closure": 1
+  }
+}

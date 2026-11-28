@@ -1,4 +1,5 @@
-"""The flight recorder: this server's own request, process and database history, kept in its database.
+"""The flight recorder: this server's own request, process and database history, kept in a database file of its own
+beside the server's (`<hub stem>.flight.db`, see `path`), never in the server's database.
 
 An incident (a server pinned at 100% CPU for hours) should be one query, and a release should be comparable with the one
 before it, without installing profilers on the server. So the server keeps, per minute: requests per route template and
@@ -10,7 +11,7 @@ unknown) and the resource counters it was read from.
 
 Stalls, slow requests and the per-minute rows go first to a local NDJSON file beside the database
 (backend/flight_file.py), which `python -m backend.flight summary --since 30m` reads with the server stopped or stuck;
-the tables here are written after, with a short lock wait, for the Health page.
+the tables here are written after, with a short lock wait on the flight database's own lock, for the Health page.
 
 The request path pays for two clock reads and a deque append (`Recorder.request`, `Recorder.query`); everything else
 (bucketing, fingerprinting SQL, writing) happens in one background thread (`Flight`), which writes once a minute in one
@@ -40,6 +41,7 @@ import sys
 import threading
 import time
 import traceback
+from pathlib import Path
 
 from . import background, hubdb
 
@@ -84,7 +86,6 @@ BIG = {
     "idempotency": "created_at",
     "changes": "created_at",
     "tasks": "created_at",
-    "flight_requests": None,
 }
 # Histogram bucket edges in milliseconds: 25% apart from 0.05 ms to about a minute. A percentile is its bucket's upper
 # edge, so it reads at most a quarter high and never low.
@@ -1169,16 +1170,490 @@ def note(conn, kind, detail):
         rec.event(kind, detail)
 
 
+# ---------------------------------------------------------------------------- its own database file
+# The recorder's tables live in `<hub stem>.flight.db` beside the server's database (hub.sqlite -> hub.flight.db), not
+# in it: telemetry written every minute no longer takes the server's one write lock, grows its file or its backups.
+# The file is disposable. Its schema is SCHEMA_VERSION in `PRAGMA user_version`, never a hub migration: another version
+# drops and remakes the seven tables, and a file SQLite cannot read is replaced. Backups, the dev copy and Litestream
+# copy the server's database only, so they never carry it. Readers that hold the server's connection (Health,
+# invariants, maintenance) pass it to the helpers below, which open this file themselves: a missing or unreadable file
+# reads as empty, never as an error.
+
+SUFFIX = ".flight.db"
+SCHEMA_VERSION = 1
+TABLES = ("flight_events", "flight_requests", "flight_process", "flight_db", "flight_slow", "flight_sql", "flight_web")
+SCHEMA = (
+    "CREATE TABLE flight_requests(created_at INTEGER NOT NULL, span INTEGER NOT NULL, route TEXT NOT NULL, "
+    "caller TEXT NOT NULL, n INTEGER NOT NULL, errors INTEGER NOT NULL, bytes INTEGER NOT NULL, total_ms REAL NOT NULL, "
+    "p50 REAL, p95 REAL, max_ms REAL, hist TEXT, PRIMARY KEY(created_at, span, route, caller)) WITHOUT ROWID",
+    "CREATE TABLE flight_slow(id INTEGER PRIMARY KEY, created_at INTEGER NOT NULL, route TEXT, caller TEXT, actor TEXT, "
+    "ms REAL, bytes INTEGER, status INTEGER, sql_ms REAL, wait_ms REAL, queries INTEGER, top TEXT, parts TEXT)",
+    "CREATE TABLE flight_process(created_at INTEGER PRIMARY KEY, cpu REAL, rss INTEGER, threads INTEGER, fds INTEGER, "
+    "sockets INTEGER, lag_p95 REAL, lag_max REAL, requests INTEGER, queries INTEGER, sql_ms REAL, txns INTEGER, "
+    "wait_max REAL, hold_max REAL, hold_p95 REAL, locked INTEGER, dropped INTEGER)",
+    "CREATE TABLE flight_sql(created_at INTEGER NOT NULL, fingerprint TEXT NOT NULL, n INTEGER NOT NULL, "
+    "total_ms REAL NOT NULL, p95 REAL, max_ms REAL, hist TEXT, PRIMARY KEY(created_at, fingerprint)) WITHOUT ROWID",
+    "CREATE TABLE flight_db(created_at INTEGER PRIMARY KEY, bytes INTEGER, wal_bytes INTEGER, free_bytes INTEGER, "
+    "detail TEXT)",
+    "CREATE TABLE flight_events(id INTEGER PRIMARY KEY, created_at INTEGER NOT NULL, kind TEXT NOT NULL, "
+    "detail TEXT NOT NULL)",
+    "CREATE INDEX flight_events_kind ON flight_events(kind, created_at)",
+    "CREATE TABLE flight_web(created_at INTEGER NOT NULL, span INTEGER NOT NULL, metric TEXT NOT NULL, "
+    "route TEXT NOT NULL, n INTEGER NOT NULL, hist TEXT NOT NULL, PRIMARY KEY(created_at, span, metric, route)) "
+    "WITHOUT ROWID",
+)
+# A new file takes the server database's recorder rows from these last seconds (the hour before an update, which the
+# release comparison reads, with room), two days of the hourly size samples (Health's 24-hour growth), and every start.
+SEED_SECONDS = 6 * 3600
+SEED_LONGER = {"flight_db": 2 * 86400}
+SEED_BATCH = 1000
+WAL_LIMIT = 64 * 1024 * 1024  # bytes the -wal file is cut back to after a checkpoint
+# One schema check, reset, replacement or seed at a time in this process; re-entrant, as `_ensure` replaces a file.
+_LOCK = threading.RLock()
+_READY: set = set()  # flight files this process has brought to SCHEMA_VERSION
+
+
+class FlightConnection(sqlite3.Connection):
+    """A connection to a flight database: the readers below use it as it is. Any other connection is taken as the
+    server database's, and they open the flight database beside it. `file` is (device, inode, change time) of the file `connect`
+    opened: a repair removes only that file, never a new one another connection made meanwhile."""
+
+    file: tuple[int, int, int] | None = None
+
+
+def _identity(target):
+    try:
+        st = os.stat(target)
+    except FileNotFoundError:
+        return None
+    return (st.st_dev, st.st_ino, st.st_ctime_ns)  # an inode number is reused at once; with its change time it is not
+
+
+def path(db_path):
+    """The flight database beside the server's database `db_path` (hub.sqlite -> hub.flight.db), symlinks resolved so
+    the writers and a reader holding SQLite's own path for the file (`PRAGMA database_list`) name the same one. Never
+    `db_path` itself (company.flight.db -> company.flight.flight.db). None for an in-memory or unnamed database."""
+    text = str(db_path or "")
+    if text in ("", ":memory:") or text.startswith("file::memory:") or "mode=memory" in text:
+        return None
+    hub = Path(text).resolve()
+    return hub.with_name(hub.stem + SUFFIX)
+
+
+def _secure(target):
+    """Owner-only, the file and its -wal and -shm: SQLite makes those with the file's own mode, this keeps it so."""
+    for name in (str(target), f"{target}-wal", f"{target}-shm"):
+        with contextlib.suppress(FileNotFoundError):
+            os.chmod(name, 0o600)
+
+
+def _replace(target, file=None):
+    """Remove a flight database SQLite cannot read, with its -wal and -shm, so the next write makes a new one. Under
+    `_LOCK`, after the caller closed its own connection to it: no `_ensure` in this process makes a file meanwhile.
+    With `file` (the caller connection's `file`), only while the path still holds that file: when another connection
+    already replaced it, the new file and its rows stay. A file that cannot be removed stays, logged: the next
+    `connect` finds it damaged again and fails that write."""
+    with _LOCK:
+        if file is not None and _identity(target) != file:
+            return
+        _READY.discard(str(target))
+        for name in (str(target), f"{target}-wal", f"{target}-shm"):
+            try:
+                os.remove(name)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                LOG.warning("Flight database %s not removed: %s", Path(name).name, type(exc).__name__)
+
+
+def _damaged(exc):
+    """A file SQLite cannot read as a database (not a lock, a constraint or a missing table): it is replaced."""
+    return type(exc) is sqlite3.DatabaseError
+
+
+def _schema(target, timeout=30.0):
+    """Bring `target` to SCHEMA_VERSION in one write transaction: another version, or the right one with any of the
+    seven tables gone, drops them all and makes them again. Waits at most `timeout` seconds for the file's lock.
+    Raises sqlite3.DatabaseError when the file is not a readable database."""
+    c = sqlite3.connect(f"{target.as_uri()}?mode=rw", uri=True, timeout=timeout, isolation_level=None)
+    try:
+        hubdb.wal_mode(c, wait=timeout)
+        c.execute("BEGIN IMMEDIATE")
+        try:
+            have = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if c.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION or not set(TABLES) <= have:
+                for table in TABLES:
+                    c.execute(f"DROP TABLE IF EXISTS {table}")
+                for statement in SCHEMA:
+                    c.execute(statement)
+                c.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+            c.execute("COMMIT")
+        except BaseException:
+            c.execute("ROLLBACK")
+            raise
+    finally:
+        c.close()
+
+
+def _create(target):
+    """Make the empty file owner-only. False when another process made it first (that one seeds it)."""
+    try:
+        os.close(os.open(target, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600))
+    except FileExistsError:
+        return False
+    return True
+
+
+def _ensure(target, hub_path=None, timeout=30.0):
+    """Make `target` if it is missing (owner-only), bring its schema to SCHEMA_VERSION, replace it when it is not a
+    database, and seed a new one from the server's database (`_seed`). Once per file per process, under `_LOCK`."""
+    key = str(target)
+    if key in _READY and target.exists():
+        return
+    with _LOCK:
+        if key in _READY and target.exists():
+            return
+        fresh = not target.exists() and _create(target)
+        try:
+            _schema(target, timeout)
+        except sqlite3.DatabaseError as exc:
+            if not _damaged(exc):
+                raise
+            LOG.warning("Flight database %s unreadable (%s): starting a new one", target.name, exc)
+            _replace(target)
+            fresh = _create(target)
+            _schema(target, timeout)
+        _secure(target)
+        if fresh and hub_path is not None:
+            _seed(target, hub_path, timeout=timeout)
+        _READY.add(key)
+
+
+def _seed(target, hub_path, now=None, timeout=30.0):
+    """A new flight database starts with the server database's recorder rows from the last SEED_SECONDS (SEED_LONGER
+    for the size samples), and every start event, read once from the tables the recorder used before it had its own
+    file. The release comparison (`speed`) then still has the hour before the update, and Health its starts. Nothing
+    when the server's database has no such tables; a failure leaves the new file empty (the comparison reads an empty
+    baseline) and is logged."""
+    now = int(now or _now())
+    if not os.path.exists(hub_path):
+        return {}
+    copied = {}
+    hub = out = None
+    try:
+        hub = hubdb.leave_wal_for_litestream(
+            sqlite3.connect(f"{Path(hub_path).resolve().as_uri()}?mode=rw", uri=True, timeout=1)
+        )
+        hub.execute("PRAGMA query_only=1")
+        out = sqlite3.connect(f"{target.as_uri()}?mode=rw", uri=True, timeout=timeout, isolation_level=None)
+        present = {r[0] for r in hub.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        out.execute("BEGIN IMMEDIATE")
+        for table in TABLES:
+            if table not in present:
+                continue
+            columns = [r[1] for r in out.execute(f"PRAGMA table_info({table})")]
+            have = {r[1] for r in hub.execute(f"PRAGMA table_info({table})")}
+            columns = [col for col in columns if col in have]
+            where = "created_at>=? OR kind='start'" if table == "flight_events" else "created_at>=?"
+            since = now - SEED_LONGER.get(table, SEED_SECONDS)
+            rows = hub.execute(f"SELECT {','.join(columns)} FROM {table} WHERE {where}", (since,))
+            insert = f"INSERT OR IGNORE INTO {table}({','.join(columns)}) VALUES({','.join('?' * len(columns))})"
+            while batch := rows.fetchmany(SEED_BATCH):
+                out.executemany(insert, batch)
+                copied[table] = copied.get(table, 0) + len(batch)
+        if copied:
+            _event(out, "seeded", {"from": Path(hub_path).name, "since": now - SEED_SECONDS, "rows": copied})
+        out.execute("COMMIT")
+    except sqlite3.Error as exc:
+        if out is not None and out.in_transaction:
+            with contextlib.suppress(sqlite3.Error):
+                out.execute("ROLLBACK")
+        LOG.warning("Flight database seed failed, starting empty: %s", type(exc).__name__)
+        copied = {}
+    finally:
+        for c in (out, hub):
+            if c is not None:
+                c.close()
+    return copied
+
+
+def keep_before_drop(conn):
+    """Before the drop migration (backend/migrations/20261127053651_drop_hub_flight_tables.py, which calls this: keep it
+    while an install may still have that migration pending) takes the seven old tables out of the server's database
+    `conn`: a server that never seeded its flight file (an update straight from a release before it, or a boot that
+    stopped between making the file and seeding it) gets it seeded now from those tables (`_seed`), so the release
+    comparison keeps the hour before the update and Health every start. A file holding any row was seeded when it was
+    made and is left as it is. Nothing when the database is in memory or the old tables hold no row. A file that cannot
+    be made or seeded is logged and the drop goes on: the file is disposable, and a boot never waits on it."""
+    row = conn.execute("PRAGMA database_list").fetchone()
+    hub_path = row[2] if row else ""
+    target = path(hub_path)
+    if target is None:
+        return
+    present = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if not any(conn.execute(f"SELECT EXISTS(SELECT 1 FROM {t})").fetchone()[0] for t in TABLES if t in present):
+        return
+    try:
+        if not target.exists():
+            _ensure(target, Path(hub_path))  # makes the file and seeds it
+            return
+        _ensure(target)  # its schema, or a new file in place of a damaged one
+        with contextlib.closing(sqlite3.connect(f"{target.as_uri()}?mode=rw", uri=True, timeout=30)) as c:
+            empty = not any(c.execute(f"SELECT EXISTS(SELECT 1 FROM {t})").fetchone()[0] for t in TABLES)
+        if empty:
+            _seed(target, hub_path)
+    except (OSError, sqlite3.Error) as exc:
+        LOG.warning("Flight database not seeded before the drop, its history is lost: %s", type(exc).__name__)
+
+
+def connect(db_path, timeout=DB_WAIT):
+    """A connection of its own (autocommit, rows by name) to the flight database beside the server's database
+    `db_path`, made and brought to SCHEMA_VERSION first. It never makes the file itself (`mode=rw`), so a file
+    replaced meanwhile is an error here, not a new file without tables. sqlite3.OperationalError for an in-memory
+    database; OSError when the folder cannot take the file."""
+    target = path(db_path)
+    if target is None:
+        raise sqlite3.OperationalError("an in-memory database has no flight database beside it")
+    _ensure(target, Path(str(db_path)), timeout)
+    c = sqlite3.connect(
+        f"{target.as_uri()}?mode=rw", uri=True, timeout=timeout, isolation_level=None, factory=FlightConnection
+    )
+    try:
+        c.file = _identity(target)
+        c.row_factory = sqlite3.Row
+        c.execute(f"PRAGMA journal_size_limit={WAL_LIMIT}")
+    except BaseException:
+        c.close()
+        raise
+    return c
+
+
+@contextlib.contextmanager
+def tables(store, write=False):
+    """A connection to the recorder's tables for a caller that opens its own (`record_event`, `size_db`, `sweep`,
+    tests): the flight database beside the store's. A write is one transaction, committed when the block ends. A file
+    SQLite cannot read is replaced once this connection is closed."""
+    c = connect(store.settings.db_path, timeout=30)
+    damaged = False
+    try:
+        if not write:
+            yield c
+            return
+        c.execute("BEGIN IMMEDIATE")
+        try:
+            yield c
+        except BaseException:
+            c.execute("ROLLBACK")
+            raise
+        c.execute("COMMIT")
+    except sqlite3.DatabaseError as exc:
+        damaged = _damaged(exc)
+        raise
+    finally:
+        c.close()
+        if damaged:
+            _replace(path(store.settings.db_path), c.file)
+
+
 def record_event(store, kind, detail, now=None):
-    with store.transaction() as c:
+    with tables(store, write=True) as c:
         _event(c, kind, detail, now)
 
 
-def last_start(c):
-    row = c.execute(
+def _main_file(c):
+    for row in c.execute("PRAGMA database_list").fetchall():
+        if row[1] == "main":
+            return row[2] or ""
+    return ""
+
+
+@contextlib.contextmanager
+def _reading(c):
+    """(connection, state) for a reader holding `c`: `c` itself when it is a FlightConnection, else a short read-only
+    connection of its own to the flight database beside the server database `c` holds. state is "ok", "missing" (no
+    file: an in-memory database, a server that has not written its first minute) or "unreadable" (it is there and
+    cannot be opened), with None for the connection."""
+    if isinstance(c, FlightConnection):
+        yield c, "ok"
+        return
+    target = path(_main_file(c))
+    if target is None or not target.exists():
+        yield None, "missing"
+        return
+    f = None
+    try:
+        f = sqlite3.connect(f"{target.as_uri()}?mode=rw", uri=True, timeout=1, factory=FlightConnection)
+        f.row_factory = sqlite3.Row
+        f.execute("PRAGMA query_only=1")
+        f.execute("PRAGMA schema_version").fetchone()  # reads the header: a file that is not a database fails here
+    except sqlite3.Error as exc:
+        LOG.warning("Flight database unreadable: %s", type(exc).__name__)
+        if f is not None:
+            f.close()
+        yield None, "unreadable"
+        return
+    try:
+        yield f, "ok"
+    finally:
+        f.close()
+
+
+@contextlib.contextmanager
+def reading(c):
+    """The flight database for a reader holding the server database's connection `c` (or a FlightConnection), or None
+    when it is missing or cannot be opened: a reader then answers empty."""
+    with _reading(c) as (f, _):
+        yield f
+
+
+def state(c):
+    """'ok', 'missing' (no flight database yet) or 'unreadable', for a reader holding the server's connection `c`."""
+    with _reading(c) as (f, found):
+        if f is None:
+            return found
+        try:
+            for table in TABLES:  # every one: a file missing any of them is not what the readers can trust
+                f.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchall()
+        except sqlite3.DatabaseError:
+            return "unreadable"
+    return "ok"
+
+
+def _read(c, empty, query):
+    """`query(flight connection)`, or `empty` when the flight database is missing or cannot be read."""
+    with reading(c) as f:
+        if f is None:
+            return empty
+        try:
+            return query(f)
+        except (sqlite3.DatabaseError, ValueError) as exc:
+            LOG.warning("Flight database read failed: %s", type(exc).__name__)
+            return empty
+
+
+def _loads(text, default=None):
+    """A stored JSON value of `default`'s shape ({} when None), or `default` for a row whose text is not JSON or holds
+    another shape (a list where an object belongs): one bad row never fails a read or a sweep."""
+    empty = {} if default is None else default
+    try:
+        value = json.loads(text or "null")
+    except ValueError:
+        return empty
+    return value if isinstance(value, type(empty)) else empty
+
+
+def _blank():
+    """An in-memory database holding the recorder's empty tables: what a reader reads when the file is not there."""
+    c = sqlite3.connect(":memory:", factory=FlightConnection)
+    c.row_factory = sqlite3.Row
+    for statement in SCHEMA:
+        c.execute(statement)
+    return c
+
+
+def _last_start(f):
+    row = f.execute(
         "SELECT created_at,detail FROM flight_events WHERE kind='start' ORDER BY created_at DESC,id DESC LIMIT 1"
     ).fetchone()
-    return {"at": row[0], **json.loads(row[1])} if row else None
+    return {"at": row[0], **_loads(row[1])} if row else None
+
+
+def last_start(c):
+    """The newest start event ({at, version, commit, ...}), or None: none kept, or no flight database to read."""
+    return _read(c, None, _last_start)
+
+
+# ---------------------------------------------------------------------------- reads for Health and invariants
+# Health (backend/health.py, backend/maintenance_health.py) and the invariant sweep (backend/invariants.py) read the
+# recorder's tables only through these, on the server database's connection they hold; each opens the flight database
+# beside it (`reading`) and reads empty when it cannot, so where the tables live is this module's business.
+
+
+def start_times(c):
+    """Every kept start event's time, as epoch seconds."""
+    return _read(
+        c, [], lambda f: [row[0] for row in f.execute("SELECT created_at FROM flight_events WHERE kind='start'")]
+    )
+
+
+def long_hold_count(c, since):
+    """Write-lock holds of LONG_HOLD_MS or more logged since `since` (epoch seconds)."""
+    return _read(
+        c,
+        0,
+        lambda f: f.execute(
+            "SELECT count(*) FROM flight_events WHERE kind='long_hold' AND created_at>=?", (since,)
+        ).fetchone()[0],
+    )
+
+
+def long_hold_sites(c, since, limit):
+    """Those holds per route and code site, most first: rows of route, site, n and worst (the longest, in seconds)."""
+    return _read(
+        c,
+        [],
+        lambda f: f.execute(
+            "SELECT json_extract(detail,'$.route') AS route, json_extract(detail,'$.site') AS site, "
+            "count(*) AS n, max(json_extract(detail,'$.hold_s')) AS worst FROM flight_events "
+            "WHERE kind='long_hold' AND created_at>=? GROUP BY route, site ORDER BY n DESC LIMIT ?",
+            (since, limit),
+        ).fetchall(),
+    )
+
+
+def route_totals(c, since, routes):
+    """Requests and 5xx answers per route in `routes` from one-minute rows since `since`, every caller summed: rows of
+    route, n and errors."""
+    marks = ",".join("?" * len(routes))
+    return _read(
+        c,
+        [],
+        lambda f: f.execute(
+            f"SELECT route, sum(n) AS n, sum(errors) AS errors FROM flight_requests "
+            f"WHERE span=60 AND created_at>=? AND route IN ({marks}) GROUP BY route",
+            (since, *routes),
+        ).fetchall(),
+    )
+
+
+def route_minutes(c, since, routes):
+    """The one-minute rows (route, hist) of `routes` since `since`; None when there is no flight database to read."""
+    marks = ",".join("?" * len(routes))
+    return _read(
+        c,
+        None,
+        lambda f: f.execute(
+            f"SELECT route,hist FROM flight_requests WHERE created_at>=? AND span=60 AND route IN ({marks})",
+            (since, *routes),
+        ).fetchall(),
+    )
+
+
+def drop_totals(c, since):
+    """Samples the recorder dropped and requests it kept, summed over the process minutes since `since`: one row of
+    dropped and requests, 0 when there are none."""
+    return _read(
+        c,
+        {"dropped": 0, "requests": 0},
+        lambda f: f.execute(
+            "SELECT coalesce(sum(dropped),0) AS dropped, coalesce(sum(requests),0) AS requests "
+            "FROM flight_process WHERE created_at>=?",
+            (since,),
+        ).fetchone(),
+    )
+
+
+def worst_drop_minutes(c, since, limit):
+    """The process minutes since `since` that dropped samples, most dropped first: rows of created_at and dropped."""
+    return _read(
+        c,
+        [],
+        lambda f: f.execute(
+            "SELECT created_at, dropped FROM flight_process WHERE created_at>=? AND dropped>0 "
+            "ORDER BY dropped DESC LIMIT ?",
+            (since, limit),
+        ).fetchall(),
+    )
 
 
 # ---------------------------------------------------------------------------- the database itself
@@ -1271,11 +1746,12 @@ def _object_sizes(store, page_size, objects):
 
 
 def sweep(store, now=None):
-    """Request minutes older than two days become hours; old rows go. Each step is its own short transaction."""
+    """Request minutes older than two days become hours; old rows go. Each step is its own short transaction on the
+    flight database, and its WAL is checkpointed and cut back after (no Litestream reads this file's WAL)."""
     now = int(now or time.time())
     cutoff = now - MINUTE_DAYS * 86400
     while True:
-        with store.transaction() as c:
+        with tables(store, write=True) as c:
             row = c.execute(
                 "SELECT min(created_at) FROM flight_requests WHERE span=60 AND created_at<?", (cutoff,)
             ).fetchone()
@@ -1295,7 +1771,7 @@ def sweep(store, now=None):
                 m[2] += r[4]
                 m[3] += r[5]
                 m[4] = max(m[4], r[6] or 0)
-                _merge(m[5], json.loads(r[7] or "{}"))
+                _merge(m[5], _loads(r[7]))
             for (route, caller), m in merged.items():
                 old = c.execute(
                     "SELECT n,errors,bytes,total_ms,max_ms,hist FROM flight_requests WHERE created_at=? AND span=3600 "
@@ -1308,7 +1784,7 @@ def sweep(store, now=None):
                     m[2] += old[2]
                     m[3] += old[3]
                     m[4] = max(m[4], old[4] or 0)
-                    _merge(m[5], json.loads(old[5] or "{}"))
+                    _merge(m[5], _loads(old[5]))
                 c.execute(
                     "INSERT OR REPLACE INTO flight_requests VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
@@ -1329,7 +1805,7 @@ def sweep(store, now=None):
             c.execute("DELETE FROM flight_requests WHERE span=60 AND created_at>=? AND created_at<?", (hour, end))
     _sweep_web(store, cutoff)
     short, long = now - SHORT_DAYS * 86400, now - LONG_DAYS * 86400
-    with store.transaction() as c:
+    with tables(store, write=True) as c:
         c.execute("DELETE FROM flight_requests WHERE created_at<?", (short,))
         c.execute("DELETE FROM flight_web WHERE created_at<?", (short,))
         c.execute(
@@ -1343,12 +1819,14 @@ def sweep(store, now=None):
             "DELETE FROM flight_events WHERE kind='start' AND id NOT IN "
             "(SELECT id FROM flight_events WHERE kind='start' ORDER BY id DESC LIMIT 500)"
         )
+    with tables(store) as c:
+        c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
 
 def _sweep_web(store, cutoff):
     """Browser timing minutes older than `cutoff` become hours, an hour per transaction, as request minutes do."""
     while True:
-        with store.transaction() as c:
+        with tables(store, write=True) as c:
             row = c.execute(
                 "SELECT min(created_at) FROM flight_web WHERE span=60 AND created_at<?", (cutoff,)
             ).fetchone()
@@ -1364,7 +1842,7 @@ def _sweep_web(store, cutoff):
             ):
                 m = merged.setdefault((r[0], r[1]), [0, {}])
                 m[0] += r[2]
-                _merge(m[1], json.loads(r[3] or "{}"))
+                _merge(m[1], _loads(r[3]))
             c.executemany(
                 "INSERT OR REPLACE INTO flight_web VALUES(?,?,?,?,?,?)",
                 [
@@ -1513,20 +1991,20 @@ class Flight(threading.Thread):
         return record
 
     def write_db(self, work, minute=None):
-        """One short write transaction on a connection of the recorder's own, waiting at most `db_wait` for the lock,
-        that also writes whatever an earlier busy lock kept out, oldest first. False (and counted in the next minute's
-        `db_failed`) when it could not: the work waits for the next try, up to PENDING_MAX of them, and a minute that
-        goes unwritten is named in a `recorder_gap` event, so the tables never lose a minute silently."""
+        """One short write transaction on a connection of the recorder's own to the flight database (`connect`),
+        waiting at most `db_wait` for its lock, that also writes whatever an earlier busy lock kept out, oldest first.
+        False (and counted in the next minute's `db_failed`) when it could not: the work waits for the next try, up to
+        PENDING_MAX of them, and a minute that goes unwritten is named in a `recorder_gap` event, so the tables never
+        lose a minute silently. A file that is not a database is replaced, and the work waits for the new one."""
         self.pending.append((minute, work))
         try:
-            c = hubdb.leave_wal_for_litestream(
-                sqlite3.connect(str(self.settings.db_path), timeout=self.db_wait, isolation_level=None)
-            )
-        except sqlite3.Error:
+            c = connect(self.settings.db_path, timeout=self.db_wait)
+        except (sqlite3.Error, OSError) as exc:  # a folder that cannot take the file counts as a failed write too
             self.db_failed += 1
             self._trim()
+            LOG.warning("Flight database not opened (%d waiting): %s", len(self.pending), type(exc).__name__)
             return False
-        failing = None
+        failing, damaged = None, False
         try:
             c.execute("BEGIN IMMEDIATE")
             try:
@@ -1544,6 +2022,13 @@ class Flight(threading.Thread):
         except Exception as exc:
             self.db_failed += 1
             busy = isinstance(exc, sqlite3.OperationalError) and any(w in str(exc) for w in ("locked", "busy"))
+            if _damaged(exc):  # the file, not the work: a new one takes the same work at the next try
+                damaged, failing = True, None
+            elif isinstance(exc, sqlite3.OperationalError) and "no such table: flight_" in str(exc):
+                # A table gone from a file this process had checked: the next connect checks it again and remakes
+                # the tables, and the work waits for that.
+                _READY.discard(str(path(self.settings.db_path)))
+                failing = None
             if not busy and failing is not None:
                 # Not the lock: that work would fail every time, so it goes now (named) rather than block the rest.
                 gone, _ = self.pending.pop(failing)
@@ -1554,6 +2039,8 @@ class Flight(threading.Thread):
             return False
         finally:
             c.close()
+            if damaged:  # replaced only once this connection to it is closed, and only if it is still that file
+                _replace(path(self.settings.db_path), c.file)
 
     def _trim(self):
         while len(self.pending) > PENDING_MAX:
@@ -1580,9 +2067,9 @@ class Flight(threading.Thread):
     def size_db(self, now):
         started = time.monotonic()
         self.db_next = now + self.db_every
-        with self.store.read() as c:
-            latest = c.execute("SELECT created_at,detail FROM flight_db ORDER BY created_at DESC LIMIT 1").fetchone()
-        previous = json.loads(latest["detail"] or "{}") if latest else {}
+        with tables(self.store) as c:
+            latest = latest_db_sample(c)
+        previous = _loads(latest["detail"]) if latest else {}
         # The original scan timestamp travels with each hourly sample, including across recorder restarts.
         objects_at = previous.get("objects_at", latest["created_at"] if latest else None)
         scan = objects_at is None or now - objects_at >= SIZES_EVERY
@@ -1625,7 +2112,7 @@ def _requests(c, since, until=None, top=25, caller=None):
         m["total_ms"] += r[5]
         m["max_ms"] = max(m["max_ms"], r[6] or 0)
         m["callers"][r[1]] = m["callers"].get(r[1], 0) + r[2]
-        _merge(m["_h"], json.loads(r[7] or "{}"))
+        _merge(m["_h"], _loads(r[7]))
     every, rows = {}, []
     for m in merged.values():
         hist = m.pop("_h")
@@ -1669,7 +2156,7 @@ def _web(c, since, until=None):
             continue
         m = merged.setdefault((metric, route), [0, {}])
         m[0] += n
-        _merge(m[1], json.loads(hist or "{}"))
+        _merge(m[1], _loads(hist))
     rows = [
         {
             "metric": metric,
@@ -1693,7 +2180,7 @@ def _sql(c, since):
         m["n"] += r[1]
         m["total_ms"] += r[2]
         m["max_ms"] = max(m["max_ms"], r[3] or 0)
-        _merge(m["_h"], json.loads(r[4] or "{}"))
+        _merge(m["_h"], _loads(r[4]))
     rows = [
         {
             **{k: v for k, v in m.items() if k != "_h"},
@@ -1737,16 +2224,21 @@ def _process(c, since, until=None):
     }
 
 
+def latest_db_sample(c):
+    """The newest hourly database sample (a flight_db row), or None before the first."""
+    return _read(c, None, lambda f: f.execute("SELECT * FROM flight_db ORDER BY created_at DESC LIMIT 1").fetchone())
+
+
 def _db(c, now):
-    latest = c.execute("SELECT * FROM flight_db ORDER BY created_at DESC LIMIT 1").fetchone()
+    latest = latest_db_sample(c)
     if not latest:
         return {}
     day = c.execute(
         "SELECT * FROM flight_db WHERE created_at<=? ORDER BY created_at DESC LIMIT 1",
         (latest["created_at"] - 86400 + 1800,),
     ).fetchone()
-    detail = json.loads(latest["detail"] or "{}")
-    before = json.loads(day["detail"] or "{}") if day else {}
+    detail = _loads(latest["detail"])
+    before = _loads(day["detail"]) if day else {}
     return {
         "at": latest["created_at"],
         "bytes": latest["bytes"],
@@ -1775,11 +2267,15 @@ SPEED_ROUTES = 10_000  # every route: a cut per window would drop a route from o
 
 def speed(c, since, end, now, warmup=SPEED_WARMUP):
     """[{route, before: {n, p95}, after: {n, p95}}]: the hour before `end` (only minutes wholly before it) against
-    `since` + `warmup` to `now` (epoch seconds), busiest after first."""
-    windows = {
-        "before": _requests(c, end - SPEED_BEFORE, end - 59, SPEED_ROUTES)["routes"],
-        "after": _requests(c, since + warmup, now + 60, SPEED_ROUTES)["routes"],
-    }
+    `since` + `warmup` to `now` (epoch seconds), busiest after first. Empty when the flight database cannot be read."""
+    windows = _read(
+        c,
+        {"before": [], "after": []},
+        lambda f: {
+            "before": _requests(f, end - SPEED_BEFORE, end - 59, SPEED_ROUTES)["routes"],
+            "after": _requests(f, since + warmup, now + 60, SPEED_ROUTES)["routes"],
+        },
+    )
     out = {}
     for name, rows in windows.items():
         for r in rows:
@@ -1806,7 +2302,20 @@ def speed_windows(history, base=None):
 def view(c, minutes=60, sections=SECTIONS, now=None, since=None, until=None, routes=25, caller=None):
     """The last `minutes`, or with `since` the minutes from `since` up to `until` (epoch seconds, `until` excluded): a
     load run reads exactly its steady window this way. Requests and process minutes keep to the window; slow requests,
-    SQL hours and events start at `since`."""
+    SQL hours and events start at `since`. `c` is the server database's connection (or a FlightConnection). With the
+    flight database missing or unreadable, every section is empty and `flight_db` says which."""
+    with _reading(c) as (f, found):
+        if f is not None:
+            try:
+                return _view(f, minutes, sections, now, since, until, routes, caller)
+            except (sqlite3.DatabaseError, ValueError) as exc:  # ValueError: a histogram that is not JSON
+                LOG.warning("Flight database read failed: %s", type(exc).__name__)
+                found = "unreadable"
+    with contextlib.closing(_blank()) as blank:
+        return {**_view(blank, minutes, sections, now, since, until, routes, caller), "flight_db": found}
+
+
+def _view(c, minutes, sections, now, since, until, routes, caller):
     now = int(now or time.time())
     if since is not None:  # the window's own length, in whole minutes
         minutes = max(0, -(-(int(until if until is not None else now) - int(since)) // 60))
@@ -1822,8 +2331,8 @@ def view(c, minutes=60, sections=SECTIONS, now=None, since=None, until=None, rou
         out["slow"] = [
             {
                 **{k: r[k] for k in r.keys() if k not in ("top", "parts")},
-                **({"top": json.loads(r["top"])} if r["top"] else {}),
-                **({"parts": json.loads(r["parts"])} if r["parts"] else {}),
+                **({"top": _loads(r["top"], [])} if r["top"] else {}),
+                **({"parts": _loads(r["parts"])} if r["parts"] else {}),
             }
             for r in c.execute(
                 "SELECT created_at,route,caller,actor,ms,bytes,status,sql_ms,wait_ms,queries,top,parts FROM flight_slow "
@@ -1839,9 +2348,9 @@ def view(c, minutes=60, sections=SECTIONS, now=None, since=None, until=None, rou
         out["db"] = _db(c, now)
     if "events" in sections:
         out["events"] = {
-            "start": last_start(c),
+            "start": _last_start(c),
             "recent": [
-                {"id": r[0], "at": r[1], "kind": r[2], **json.loads(r[3])}
+                {"id": r[0], "at": r[1], "kind": r[2], **_loads(r[3])}
                 for r in c.execute(
                     "SELECT id,created_at,kind,detail FROM flight_events WHERE created_at>=? ORDER BY id DESC LIMIT 20",
                     (since,),
@@ -1915,16 +2424,18 @@ def install(app, store, auth):
         now = int(time.time())
         with store.read() as c:
             found = speed_windows(releases.history(c), base.strip().removeprefix("v") if base else None)
-            if found is None:
-                return {"release": releases.version(), "since": None, "now": now, "base": None, "routes": []}
+            if found is None:  # no release ran before this one here (or not `base`): nothing to compare against
+                out = {"release": releases.version(), "since": None, "now": now, "base": None, "routes": []}
+                return {**out, "baseline": "empty"}
             since, end, ran = found
-            return {
-                "release": releases.version(),
-                "since": since,
-                "now": now,
-                "base": ran,
-                "routes": speed(c, since, end, now),
-            }
+            routes = speed(c, since, end, now)
+            out = {"release": releases.version(), "since": since, "now": now, "base": ran, "routes": routes}
+            # Nothing recorded for the hour before: say so, rather than let every route read as new.
+            if not any(r["before"]["n"] for r in routes):
+                out["baseline"] = "empty"
+            if (found_state := state(c)) != "ok":
+                out["flight_db"] = found_state
+            return out
 
     # On app.state so a test can hold the minute still (backend/tests/test_web_timings.py).
     allowance = app.state.web_allowance = WebAllowance()

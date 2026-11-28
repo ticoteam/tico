@@ -31,6 +31,7 @@ pub const OPTIONAL: &[&str] = &[
     "browser_launch",
     "disk",
     "disk_cleanup",
+    "session_worktrees",
     "screen",
     "isolated",
     // Sent once GET config says readiness_browser (runner.rs); a hub rolled back since then refuses it until the next

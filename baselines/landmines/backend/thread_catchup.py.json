@@ -1,0 +1,5 @@
+{
+  "backend/thread_catchup.py": {
+    "no-install-closure": 1
+  }
+}

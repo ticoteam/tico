@@ -1,0 +1,5 @@
+{
+  "backend/heartbeat.py": {
+    "no-install-closure": 1
+  }
+}

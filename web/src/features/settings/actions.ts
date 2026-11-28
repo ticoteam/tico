@@ -2,13 +2,14 @@ import * as z from 'zod/mini';
 import { defineAction } from '@/actions';
 import type { Ctx } from '@/actions';
 import { refused, run } from '@/actions/run';
-import { meQuery } from '@/data';
+import { forgetRecentViews, meQuery } from '@/data';
 import { desktopApp, tellDesktopSigningOut } from '@/desktop';
 import { agentsQuery, computersQuery, moveAgentWithFeedback, routeTo } from '@/features/team/routing';
 import { setMotionChoice } from '@/motion';
 import { setThemeChoice, type Theme } from '@/prefs';
 import {
   addPerson,
+  setAssistantOks,
   addSubscription,
   cancelSignIn,
   createToken,
@@ -16,6 +17,7 @@ import {
   enrollComputer,
   labelComputer,
   refreshSubscription,
+  tryPlanNow,
   replaceSubscriptionSecret,
   removeComputer,
   removePerson,
@@ -32,7 +34,6 @@ import {
   setMyNotice,
   setPageOwner,
   setPlanExit,
-  setRoadmap,
   addContactField,
   addProductUpdate,
   changeOwnerEmail,
@@ -93,7 +94,6 @@ import {
   healthQuery,
   markChangelogRead,
   resetAsk,
-  roadmapQuery,
   saveAsk,
 } from './queries';
 import { renameCompany } from './queries';
@@ -177,6 +177,8 @@ export const signOut = defineAction({
   // the desktop app hears first, so it drops the person's count and small call window before the page leaves
   run: async () => {
     await tellDesktopSigningOut();
+    // nothing of the person's is left on this device: their Recent views go (data/recentViews.ts)
+    forgetRecentViews();
     location.assign('/api/v2/logout');
   },
 });
@@ -394,13 +396,25 @@ export const reportsDirect = defineAction({
   target: () => setting('reports'),
 });
 
+export const assistantGivesOks = defineAction({
+  id: 'settings.assistantGivesOks',
+  title: 'Give OKs for me when I tell you to',
+  kind: 'change',
+  input: z.strictObject({ on: z.boolean() }),
+  // Whether the Assistant gives OKs for the person is theirs alone to choose: their own press, never Tico's.
+  tico: false,
+  run: (_ctx, { on }) => setAssistantOks(on),
+  did: ({ on }) => (on ? 'Turned on' : 'Turned off'),
+  target: () => setting('assistant'),
+});
+
 // ---------------------------------------------------------------- security
 
 export const screenMode = defineAction({
   id: 'settings.setScreening',
   title: 'Change how a door is screened',
   kind: 'change',
-  input: z.strictObject({ door: z.enum(['webhook', 'mail', 'idea', 'watcher', 'document', 'slack'] as const), mode: z.enum(['off', 'warn', 'hold'] as const) }),
+  input: z.strictObject({ door: z.enum(['webhook', 'mail', 'watcher', 'document', 'slack'] as const), mode: z.enum(['off', 'warn', 'hold'] as const) }),
   // Holding is the strict side and stays Tico's; anything looser is the person's own press.
   can: (ctx, { mode }) => !(mode !== 'hold' && ctx.via === 'tico'),
   run: (_ctx, { door, mode }) => setScreening({ [door]: mode }),
@@ -539,6 +553,16 @@ export const refreshSub = defineAction({
   input: z.strictObject({ subscription: id('a subscription id') }),
   run: (_ctx, { subscription }) => refreshSubscription(subscription),
   did: () => 'Checked',
+  target: ({ subscription }) => sub(subscription),
+});
+
+export const trySubNow = defineAction({
+  id: 'settings.tryPlanNow',
+  title: 'Try a plan at its usage limit now',
+  kind: 'change',
+  input: z.strictObject({ subscription: id('a subscription id') }),
+  run: (_ctx, { subscription }) => tryPlanNow(subscription),
+  did: () => 'Trying now',
   target: ({ subscription }) => sub(subscription),
 });
 
@@ -828,30 +852,6 @@ export const settleRun = defineAction({
 });
 
 // ---------------------------------------------------------------- tasks and contacts
-
-export const roadmapLabels = defineAction({
-  id: 'settings.roadmapLabels',
-  title: 'Change the labels on the public roadmap',
-  kind: 'change',
-  input: z.strictObject({ labels: z.array(z.string().check(z.minLength(1), z.maxLength(200))).check(z.maxLength(50)) }),
-  // What the public sees: Tico may only take a label off (shows less); putting one on is the person's own press.
-  can: (ctx, { labels }) => ctx.via !== 'tico' || labels.every((l) => ctx.queryClient.getQueryData(roadmapQuery.queryKey)?.labels.includes(l)),
-  run: (_ctx, { labels }) => setRoadmap({ labels }),
-  did: () => 'Roadmap changed',
-  target: () => setting('roadmap'),
-});
-
-export const roadmapApproval = defineAction({
-  id: 'settings.roadmapApproval',
-  title: "Ask a person before an agent's words go public",
-  kind: 'change',
-  input: z.strictObject({ on: z.boolean() }),
-  // Asking first is Tico's; dropping the ask lets an agent's words leave the company unread.
-  can: (ctx, { on }) => !(!on && ctx.via === 'tico'),
-  run: (_ctx, { on }) => setRoadmap({ bot_public_approval: on }),
-  did: ({ on }) => (on ? 'Turned on' : 'Turned off'),
-  target: () => setting('roadmap-approval'),
-});
 
 export const addField = defineAction({
   id: 'settings.addField',

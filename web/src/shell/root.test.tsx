@@ -5,6 +5,7 @@ import { Suspense, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi, type MockInstance } from 'vitest';
 import { ApiError, api } from '@/api/client';
 import { queryClient } from '@/data/query-client';
+import { forgetRecentViews, readRecentViews } from '@/data/recentViews';
 import { Route as root } from '@/routes/__root';
 import { Route as landingRoute } from '@/routes/index';
 import { resetDesktopReports, type TicoDesktop } from '@/desktop';
@@ -17,6 +18,7 @@ import { dispatch, installPatchers } from '@/live/patch';
 import { router as appRouter } from '@/router';
 import { showPageName } from '@/tico/pageName';
 import { foldSheet } from './Frame';
+import { PageFault } from './PageFault';
 import { tabTitle, useTabTitle } from './title';
 
 /* The root as the app draws it, with the features around the shell stood in: the second chat for Tico support, the
@@ -47,6 +49,10 @@ const { gate, q, catchUpRead, lists, pages, ranked, rankFails, listFails, owners
   /** How many times the shell drew itself (it asks whether a file is open, once a draw). */
   shellDraws: { n: 0 },
 }));
+/** The company's config read, held back where a test holds it (a slow reload). */
+const config = vi.hoisted(() => ({ held: null as Promise<void> | null }));
+/** How many more times the Risk page breaks as it draws (a 500 from its read). */
+const risk = vi.hoisted(() => ({ fails: 0 }));
 
 // the router module only: the app's pages are not needed to know what it draws for a page that breaks
 vi.mock('@/routeTree.gen', () => ({ routeTree: createRootRoute() }));
@@ -76,7 +82,14 @@ vi.mock('@/data', async (orig) => ({
     staleTime: Infinity,
     retry: false,
   },
-  configQuery: { queryKey: ['config'], queryFn: async () => ({ company_name: 'Fernhill', app_name: 'Tico', visual_origin: 'https://files.example.com' }), staleTime: Infinity },
+  configQuery: {
+    queryKey: ['config'],
+    queryFn: async () => {
+      if (config.held) await config.held;
+      return { company_name: 'Fernhill', app_name: 'Tico', visual_origin: 'https://files.example.com' };
+    },
+    staleTime: Infinity,
+  },
   directoryQuery: { queryKey: ['directory'], queryFn: async () => ({ actors: [], byId: {} }), staleTime: Infinity },
   recordVisit: vi.fn(),
   useHeldCount: () => 0,
@@ -268,7 +281,20 @@ function show(at: string, browser = false, opened?: (p: { pipeline: string; task
     },
   });
   const finance = createRoute({ getParentRoute: () => root, path: '/company/finance', component: () => <main className="pane page"><h1>Finance</h1></main> });
-  const router = createRouter({ routeTree: root.addChildren([page, call, calendar, task, tasks, needs, editor, board, open, tab, finance]),
+  // a page whose read fails while `risk.fails` lasts, shown by the app's own fault page
+  const riskPage = createRoute({
+    getParentRoute: () => root,
+    path: '/company/risk',
+    errorComponent: PageFault,
+    component: function Risk() {
+      if (risk.fails > 0) {
+        risk.fails--;
+        throw new ApiError(500, 'server_error', 'The server broke');
+      }
+      return <main className="pane page"><h1>Risk</h1></main>;
+    },
+  });
+  const router = createRouter({ routeTree: root.addChildren([page, call, calendar, task, tasks, needs, editor, board, open, tab, finance, riskPage]),
     context: { queryClient },
     // the window's own history where a test needs what the phone's cards push onto it (shell/phone PhoneCards)
     history: browser ? (window.history.replaceState(null, '', at), createBrowserHistory()) : createMemoryHistory({ initialEntries: [at] }),
@@ -322,6 +348,8 @@ beforeEach(() => {
   for (const k of Object.keys(hops)) delete hops[k];
   needsRead.real = false;
   asks.length = 0;
+  config.held = null;
+  risk.fails = 0;
   resetDesktopReports();
 });
 afterEach(() => {
@@ -1168,5 +1196,93 @@ describe('the browser tab’s title', () => {
     expect(tabTitle('')).toBe('Tico');
     expect(tabTitle('Tasks')).toBe('Tasks - Tico');
     expect(tabTitle('Tasks')).not.toContain('·');
+  });
+});
+
+describe('Recent views in the top bar', () => {
+  afterEach(() => forgetRecentViews());
+
+  it('lists each page opened before this one, newest first, once each, as last seen; an address that only passes on is none', async () => {
+    forgetRecentViews();
+    hops['9'] = '/company/finance';
+    people(MAYA);
+    const router = show('/calendar');
+    const stood = (href: string) => vi.waitFor(() => expect(readRecentViews('Fernhill\u0000human:maya')[0]?.to).toBe(href), { timeout: 3000 });
+    await stood('/calendar');
+    await act(() => router.navigate({ to: '/company/finance', search: { tab: 'bills' } as never }));
+    await stood('/company/finance?tab=bills');
+    await act(() => router.navigate({ to: '/needs-you' }));
+    await stood('/needs-you');
+    // the board's filters changed: the same row, at the top again, with the filters it had last
+    await act(() => router.navigate({ to: '/company/finance', search: { tab: 'cash' } as never }));
+    await stood('/company/finance?tab=cash');
+    // an old task address passing on to a page is not a view of its own
+    await act(() => router.navigate({ to: '/task/$task', params: { task: '9' } }));
+    await vi.waitFor(() => expect(router.state.location.pathname).toBe('/company/finance'));
+    await act(() => router.navigate({ to: '/' }));
+    await act(() => router.navigate({ to: '/needs-you' }));
+    await stood('/needs-you');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Recent views' }));
+    const rows = within(await screen.findByRole('menu', { name: 'Recent views' })).getAllByRole('menuitem');
+    expect(rows.map((r) => r.getAttribute('title'))).toEqual(['Company › Finance', 'Calendar › Calendar page']);
+    // the page it passed on to is a view: Finance as it was landed on
+    expect(rows[0]?.getAttribute('href')).toBe('/company/finance');
+    delete hops['9'];
+  });
+
+  const ME = 'Fernhill\u0000human:maya';
+  const tos = () => readRecentViews(ME).map((r) => r.to);
+
+  it('keeps each page that opened, however soon the person moves on, and no address that only passed on', async () => {
+    hops['9'] = '/company/finance';
+    people(MAYA);
+    const router = show('/calendar');
+    await screen.findByRole('heading', { name: 'Calendar page' });
+    // each page drawn, then left at once
+    await act(() => router.navigate({ to: '/company/finance' }));
+    await screen.findByRole('heading', { name: 'Finance' });
+    await act(() => router.navigate({ to: '/task/$task', params: { task: '9' } }));
+    await act(() => router.navigate({ to: '/needs-you' }));
+    await screen.findByRole('heading', { name: 'Needs you page' });
+    await act(() => router.navigate({ to: '/calendar' }));
+    await screen.findByRole('heading', { name: 'Calendar page' });
+    expect(tos()).toEqual(['/calendar', '/needs-you', '/company/finance']);
+  });
+
+  it('keeps what was saved through a reload whose company is still being read', async () => {
+    let tell!: () => void;
+    config.held = new Promise<void>((r) => (tell = r));
+    localStorage.setItem(
+      'tico-next:recent-views.v1',
+      JSON.stringify({ v: 1, who: ME, rows: [
+        { key: 'page:/needs-you', to: '/needs-you', trail: ['Needs you'] },
+        { key: 'page:/company/finance', to: '/company/finance', trail: ['Company', 'Finance'] },
+      ] }),
+    );
+    people(MAYA);
+    show('/calendar');
+    await screen.findByRole('heading', { name: 'Calendar page' });
+    // long enough for any write the page would make
+    await act(() => new Promise((r) => setTimeout(r, 600)));
+    expect(tos()).toEqual(['/needs-you', '/company/finance']);
+    await act(async () => tell());
+    await vi.waitFor(() => expect(tos()).toEqual(['/calendar', '/needs-you', '/company/finance']));
+  });
+
+  it('keeps a page that failed to load out of the list, and lists it once it loads', async () => {
+    risk.fails = 99;
+    people(MAYA);
+    const router = show('/calendar');
+    await vi.waitFor(() => expect(tos()).toEqual(['/calendar']));
+    await act(() => router.navigate({ to: '/company/risk' }));
+    await screen.findByText(/didn.t load/);
+    await act(() => new Promise((r) => setTimeout(r, 600)));
+    expect(tos()).toEqual(['/calendar']);
+    // read again (by itself once the server is back, or Try again), it draws
+    risk.fails = 0;
+    await act(() => router.invalidate());
+    await screen.findByRole('heading', { name: 'Risk' });
+    await vi.waitFor(() => expect(tos()).toEqual(['/company/risk', '/calendar']));
   });
 });

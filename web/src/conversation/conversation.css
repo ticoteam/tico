@@ -230,3 +230,5 @@ a.head-name:hover{text-decoration-color:var(--line-strong)}
 .jump-n{position:absolute;right:calc(var(--s-1) * -1);top:calc(var(--s-1) * -1);min-width:16px;height:16px;line-height:16px;padding:0 var(--s-1);border-radius:var(--r-pill);
   background:var(--well-2);color:var(--ink);font-style:normal;font-size:var(--t-micro);font-weight:var(--w-strong);font-variant-numeric:tabular-nums;text-align:center;
   box-shadow:0 0 0 2px var(--raised);pointer-events:none}
+/* A line that says why an agent can't reply, with its one fix (and Wait, for a usage limit) under the words. */
+.reply-fix{display:flex;flex-wrap:wrap;gap:var(--s-2);margin:var(--s-2) 0 0 calc(22px + var(--s-3))}

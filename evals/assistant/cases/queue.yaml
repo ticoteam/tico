@@ -463,6 +463,41 @@
     pick Name-level access and does not message Engineering or anyone else. The other question, the runner queue test
     ping, stays open. It says in one line that Engineering sees the reply in the task's chat, with no undo line. Plain lines, with the task's link.
 
+- id: queue-every-open-task
+  group: queue
+  prompt: "List every open task, all of them."
+  hub:
+    - match: '^task list'
+      out: *q_tasks
+  must:
+    - '^task list'
+  must_not:
+    - '^task (close|done|move|update|reassign|comment|answer)\b'
+    - '^message send(?! -h\b| --help)'
+  reply: |
+    An explicit ask for every item lifts the short-reply limit (about 90 words, five list items). The first sentence
+    answers with the count: eleven open tasks. Then all eleven, one line each with its link, not five and "more"; the
+    three Check health test pings may share one line if it names all three. No headings, no closing offer, no
+    narration of lookups. It changes nothing.
+
+- id: queue-whole-draft
+  group: queue
+  prompt: "Show me the whole launch email draft, word for word."
+  history:
+    - {from: "assistant", body: "Copywriter finished [Launch email, draft 2](#/file/file-launch2); the annual price is still a placeholder."}
+  hub:
+    - match: '^file (read|show) file-launch2'
+      out: {id: file-launch2, title: "Launch email, draft 2", version: 2, content: "Subject: Acme Planner 2.0 is here\n\nHi {first_name},\n\nAcme Planner 2.0 ships today. Three things change for your team. Shared boards now update live, so nobody plans from a stale copy. The weekly digest lands every Monday at 8 a.m. with what moved, what slipped and who is waiting on whom. And the new mobile app lets you approve requests from anywhere in two taps.\n\nPricing stays the same for current customers through March 31. After that, the annual plan is [PRICE TBD] per seat.\n\nUpgrade from Settings, then Plan, or reply to this email and we will move you over.\n\nThanks for planning with us,\nThe Acme team"}
+  must:
+    - '^file (read|show) file-launch2'
+  must_not:
+    - '^task (close|done|move|update|reassign|comment|answer)\b'
+    - '^message send(?! -h\b| --help)'
+  reply: |
+    An ask for the whole draft lifts the short-reply limit (about 90 words). It gives the full launch email word for
+    word, subject line through sign-off, about 120 words, not a summary or the first lines. It may open with one short
+    line (and may name the open price placeholder after the draft). It changes nothing and sends nothing.
+
 - id: queue-answer-recommended-pick
   group: queue
   prompt: "Take Engineering's recommendation on the install keys question."

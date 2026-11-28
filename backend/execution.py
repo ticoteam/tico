@@ -4324,6 +4324,8 @@ class Execution:
             self.readiness_reported(c, who.runner_id, readiness)
         if body.release:
             runner_versions.record(c, who.runner_id, body)
+        else:
+            runner_versions.forget_entry(c, who.runner_id)
         if body.mail_agent_instructions:
             from .views import roster
 
@@ -6339,7 +6341,7 @@ class Execution:
         subscriptions = model_subscriptions.hand_out(c, aid, subscribed, who.runner_id)
         parked = c.execute("SELECT onboarding_state FROM bot_config WHERE bot=?", (row["bot_id"],)).fetchone()
         from .chat_goals import current
-        from . import task_context
+        from . import pipeline_notes, task_context
         from .finance import brief as finance_brief
 
         make_page_task = self.auth.task(c, acting or bot_who, making_page["task"]) if making_page else None
@@ -6355,6 +6357,18 @@ class Execution:
         runner_wire.conversation(c, conv)
         runner_wire.conversation(c, conversation)  # the claim's copy (thread_payload) was made before
         wire_task = runner_wire.task(task)
+        # A command's turn is only what the person wrote (runner-rs/src/prompt.rs build), and a goal control sends the
+        # harness its objective, not the prompt (runner-rs/src/execute.rs start_turn): neither is offered notes.
+        said = (msg.get("refs") or {}) if msg else {}
+        typed = bool(said.get("command") or said.get("goal_action"))
+        learned_here = pipeline_notes.for_task(c, task) if task and not relationship and not typed else {}
+        if learned_here:
+            # The run's record says which lists its claim carried (backend/run_triggers.py `notes_offered`).
+            c.execute(
+                "INSERT INTO attempt_notes(attempt_id, offered) VALUES(?,?) "
+                "ON CONFLICT(attempt_id) DO UPDATE SET offered=excluded.offered",
+                (aid, ",".join(learned_here)),
+            )
         wire_config = runner_versions.wire_template(rooms.session_config(conv, row["bot_id"], config))
         session_fence = None
         moved_history = None
@@ -6491,6 +6505,9 @@ class Execution:
                     # bot (backend/finance/brief.py). Standing lines in the prompt, so a resumed thread gets them when they change.
                     "finance": None if relationship else finance_brief.for_turn(c, (acting or bot_who).actor),
                     "task_context": task_context.for_turn(c, self.auth, acting or bot_who, make_page_task or task),
+                    # The task's pipeline and stage notes, each a text the runner sends once per session (backend/pipeline_notes.py,
+                    # runner-rs/src/prompt.rs): in the turn's message, never the instructions, so the cached prefix stays.
+                    **({"pipeline_notes": learned_here} if learned_here else {}),
                     **({"make_page": {"task": runner_wire.task(make_page_task)}} if making_page else {}),
                     # place "updates": the recent updates that person may read and open, read now as them
                     # (backend/updates_chat.py). None for every other turn.
@@ -6926,6 +6943,7 @@ class Execution:
         run_triggers.pushed(c, row["id"], row["runner_id"], body.pushes)
         run_triggers.rotation(c, row["id"], body.rotated)
         run_triggers.session(c, row["id"], body.session)
+        run_triggers.notes(c, row["id"], body.notes)
         H.turn_finish(
             c,
             H.TICO_ACTOR,
@@ -8720,6 +8738,7 @@ class Execution:
         run_triggers.pushed(c, aid, row["runner_id"], body.pushes)
         run_triggers.rotation(c, aid, body.rotated)
         run_triggers.session(c, aid, body.session)
+        run_triggers.notes(c, aid, body.notes)
         # The runner's notices (a file left out of the commit) are shown beside the reply, not as the turn's summary.
         H.turn_finish(
             c,

@@ -1,0 +1,5 @@
+{
+  "backend/live_meetings.py": {
+    "no-install-closure": 1
+  }
+}

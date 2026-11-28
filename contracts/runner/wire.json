@@ -16,11 +16,14 @@
   },
   "error": "ErrorEnvelope",
   "gated": {
+    "heartbeat.request.worktrees[].backed_up": "runner-rs/src/lanes.rs refused_field drops it on an older server's 422 (drop_held); the worktree report still goes, without its wip/ copy's state (task #3448)",
+    "heartbeat.request.worktrees[].backup_error": "runner-rs/src/lanes.rs refused_field drops it on an older server's 422 (drop_held); the worktree report still goes, without its wip/ copy's state (task #3448)",
     "browser_commands": "runner-rs/src/browser/host.rs backs off on an older server without this endpoint; expires_in is optional to old readers, and new runners accept its absence from old servers",
     "heartbeat.request.readiness.worktree_recovery": "runner-rs/src/readiness_extra.rs OPTIONAL: an older server's 422 drops this field for ten minutes; retired worktrees are not allocated to computers without this capability",
     "start_place.request.harness_allocated": "runner-rs/src/execute.rs post_allocated: a 422 naming harness_allocated retries without the field",
     "started.request.harness_allocated": "runner-rs/src/execute.rs post_allocated: a 422 naming harness_allocated retries without the field",
     "start_place.request.waiting": "runner-rs/src/execute.rs wait_before_start: an older server's 422 on a computer busy: memory N% reason retries with pre-start requirements",
+    "heartbeat.request.entry": "runner-rs/src/follow.rs fields: sent only once runners/desired says runner_entry; which package started the runner, for deleting runner/ (task #4343)",
     "heartbeat.request.readiness.bots.*.burst_preparation": "Sent for a candidate offered by runners/assignments?burst=true, gated by features.burst_preparation on runners/desired.",
     "x-note": "Request fields, values and endpoints a runner sends only after the server says it takes them (or drops on a 422 that names them). The check allows them in the new-runner/old-server direction. Key: '<endpoint>.request<path>' as the check prints it; value: how the runner gates it.",
     "heartbeat.request.device_id": "runner-rs/src/lanes.rs refused_field drops it on an older server's 422 for ten minutes; computers without a device identity are never auto-retired",
@@ -58,6 +61,7 @@
     "heartbeat.request.readiness.bots.*.harness": "runner-rs/src/readiness.rs sends it for the relationship worker once GET config says readiness_relationship_lanes, or for a prepared Burst candidate once runners/desired says burst_preparation",
     "heartbeat.request.readiness.browser": "runner-rs/src/runner.rs: sent only once GET config says readiness_browser (fallback.rs server_takes_browser)",
     "heartbeat.request.readiness.disk_cleanup": "runner-rs/src/readiness_extra.rs OPTIONAL: an older server's 422 drops this field for ten minutes; it reports only what the computer already cleaned",
+    "heartbeat.request.readiness.session_worktrees": "runner-rs/src/readiness_extra.rs OPTIONAL: an older server's 422 drops this field for ten minutes; it only reports each bot's session worktrees and their size",
     "heartbeat.request.readiness.runtimes.*.weekly": "runner-rs/src/profiles.rs for_server: a window's origin and subscription_id are sent only once the heartbeat answer says subscription_usage_sources (runner.rs)",
     "heartbeat.request.readiness.runtimes.*.five_hour": "runner-rs/src/profiles.rs for_server: a window's origin and subscription_id are sent only once the heartbeat answer says subscription_usage_sources (runner.rs)",
     "heartbeat.request.readiness.runtimes.*.weekly.attempt_id": "runner-rs/src/profiles.rs for_server: sent only when the heartbeat answer says subscription_usage_attempts",
@@ -67,6 +71,7 @@
     "complete.request.usage.cache_write_1h_tokens": "runner-rs/src/execute.rs served: sent only when the server's features say usage_cache_writes and usage_cache_write_1h; an older server guesses the split",
     "complete.request.usage.segments[].cache_write_1h_tokens": "runner-rs/src/execute.rs served: sent only when the server's features say usage_cache_writes and usage_cache_write_1h; an older server guesses the split",
     "complete.request.timings": "runner-rs/src/execute.rs: sent only when the server's features say run_timings",
+    "complete.request.notes": "runner-rs/src/execute.rs serves_session: sent only when the server's features say run_notes",
     "complete.request.parent_message_id": "echoed only from the claim's message.parent_message_id, which only a server with native threads sends; an older server's claim has none, so the runner never sends it there"
   },
   "$defs": {
@@ -198,6 +203,7 @@
         "learned": {"oneOf": [{"type": "object", "additionalProperties": true}, {"type": "null"}]},
         "make_page": {"type": "object", "additionalProperties": false, "required": ["task"], "properties": {"task": {"type": "object", "additionalProperties": true}}},
         "task_context": {"$ref": "#/$defs/TaskContext"},
+        "pipeline_notes": {"type": "object", "additionalProperties": false, "properties": {"pipeline": {"type": "string", "minLength": 1}, "stage": {"type": "string", "minLength": 1}}, "x-note": "The task's pipeline and stage notes, each a rendered list (backend/pipeline_notes.py). The runner sends each once per session, again when its text changes or the session is new, in the turn's own message, never the standing part. Omitted when neither has a note in force; an older server omits it and an older runner ignores it."},
         "updates": {"oneOf": [{"type": "object", "additionalProperties": true}, {"type": "null"}]},
         "run_header": {"type": "string", "maxLength": 2000, "x-note": "Where the turn's card stands now and, in a person's own Assistant turn, their Needs you and open handoffs (backend/run_header.py), read just after the claim as whoever the turn acts for. The runner puts it in the turn's own part of the prompt, never the standing part. Omitted when there is nothing to say or it could not be read in time; an older server omits it."},
         "session_epoch": {"type": "integer"},

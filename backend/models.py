@@ -408,6 +408,9 @@ class TaskMove(Contract):
     # A person lets exactly this one see a private task and moves it on (the stuck card's one fix, task #392): `to` is
     # next. Refused when the task now waits on someone else (H.task_let_see).
     let_see: list[ID] | None = Field(default=None, min_length=1, max_length=50)
+    # With `to` reopen: the Undo of the close this caller made a moment ago. The stage visit it ended comes back as it
+    # was, its page and the OK it waited on included, and nobody is woken; past two minutes it is a plain reopen.
+    undo: bool | None = None
 
 
 class TaskMovePlace(Contract):
@@ -665,7 +668,7 @@ class PipelineRetire(Contract):
 
 
 class PipelineFromPreset(Contract):
-    """Add a preset the company does not have (pipeline_settings.add_preset): Product beside the pair it replaced.
+    """Add a preset the company does not have (pipeline_settings.add_preset): Engineering and Product beside Features.
     `name` and `prefix` default to the preset's; give others while a pipeline in use has them."""
 
     preset: str
@@ -1019,6 +1022,12 @@ class AssistantViewerAdd(Contract):
 
 class AssistantViewerLearned(Contract):
     include_learned: bool
+
+
+class AssistantOkSettings(Contract):
+    """Whether your Assistant gives OKs for you when you tell it to (backend/assistant_oks.py)."""
+
+    gives_oks: bool
 
 
 class GoalReadBack(Contract):
@@ -1569,6 +1578,33 @@ class DiskCleanupReadiness(Contract):
     still_low: StrictBool = False
 
 
+# Bounds that keep Health's arithmetic finite: a count and a size no real computer reaches (8 EiB).
+SESSION_WORKTREES_MOST = 1_000_000
+SESSION_WORKTREE_BYTES_MOST = 2**63 - 1
+
+
+class SessionWorktreesBot(Contract):
+    """One bot's session worktrees on the computer: how many and their size on disk."""
+
+    count: int = Field(ge=0, le=SESSION_WORKTREES_MOST)
+    bytes: int = Field(ge=0, le=SESSION_WORKTREE_BYTES_MOST)
+
+
+SESSION_WORKTREE_BOTS = 200
+
+
+class SessionWorktreesReadiness(Contract):
+    """Each bot's session worktrees (sessions/bot-<bot>/<task>) and their size, measured at `at`
+    (runner-rs/src/session_sizes.rs), so Health shows a pile-up before the disk fills."""
+
+    at: str = Field(max_length=40)
+    bots: Annotated[
+        # A bot id as the runner's session folders take it (runner-rs/src/sessions.rs slug_ok).
+        dict[Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")], SessionWorktreesBot],
+        BeforeValidator(lambda v: dict(list(v.items())[:SESSION_WORKTREE_BOTS]) if isinstance(v, dict) else v),
+    ] = Field(default_factory=dict)
+
+
 class ContainerExecReadiness(Contract):
     """A throwaway container start on the computer (runner-rs/src/readiness_extra.rs)."""
 
@@ -1653,6 +1689,8 @@ class StructuredReadiness(Contract):
     disk: DiskReadiness | None = None
     # Sent once the computer has cleaned up a low disk by itself; an older server's 422 drops it for ten minutes.
     disk_cleanup: DiskCleanupReadiness | None = None
+    # Each bot's session worktrees and their size; an older server's 422 drops it for ten minutes.
+    session_worktrees: SessionWorktreesReadiness | None = None
     # Bots run as their own user here (runner-rs/src/isolation.rs), so a Tico model may run (backend/models_preset.py).
     isolated: bool | None = None
     relationship_lanes: bool | None = None
@@ -1686,6 +1724,7 @@ class StructuredReadiness(Contract):
             data.pop("disk", None)
         for field in (
             "disk_cleanup",
+            "session_worktrees",
             "container_exec",
             "github_auth",
             "browser_launch",
@@ -1765,6 +1804,9 @@ class WorktreeStatus(Contract):
     last_commit: str | None = Field(default=None, max_length=100)
     size_mb: float = Field(default=0, ge=0)
     error: str | None = Field(default=None, max_length=300)
+    # The head the computer last copied to the checkout's wip/ branch, and why its latest copy failed (task #3448).
+    backed_up: str | None = Field(default=None, pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+    backup_error: str | None = Field(default=None, max_length=300)
     # The record's `updated_at` stamp this report was built from; a report older than the record is stale.
     record_updated: str | None = Field(default=None, max_length=40)
 
@@ -1858,6 +1900,9 @@ class Heartbeat(Contract):
     # The commit it runs: an image's release-manifest.json, else its checkout's HEAD; "" when it cannot say.
     commit: str | None = Field(default=None, pattern=r"^([0-9a-f]{40}|[0-9a-f]{64})?$")
     kind: Literal["mac", "linux", "docker"] | None = None
+    # Which package started it: "runner" through the legacy runner/ package (runner/__main__.py, runner/cloud_machine.py),
+    # else "runner_support". Sent once runners/desired says runner_entry; None from an older runner.
+    entry: Literal["runner", "runner_support"] | None = None
     update: "RunnerUpdate | None" = None
     # A restart a person asked for that has not happened yet (runner-rs runner.rs): sent until the runner restarts.
     restart: "RunnerRestart | None" = None
@@ -3138,6 +3183,15 @@ class RunSession(Contract):
     detail: str | None = Field(default=None, max_length=500)
 
 
+class RunNotes(Contract):
+    """What the turn's prompt did with each notes list its claim offered (backend/pipeline_notes.py, runner-rs/src/prompt.rs
+    notes_sent): `given` in full, `held` left out because the session already holds it, `retracted` an earlier list
+    said to no longer apply. A list neither offered nor retracted is left out."""
+
+    pipeline: Literal["given", "held", "retracted"] | None = None
+    stage: Literal["given", "held", "retracted"] | None = None
+
+
 class RunTimings(Contract):
     """Where a turn's time went on its computer, up to its result (runner-rs/src/flight.rs timings, feature
     `run_timings`): when the runner claimed it on its own clock (Unix seconds), each mark's milliseconds since then, and
@@ -3197,6 +3251,8 @@ class Completion(Contract):
     rotated: RunRotation | None = None
     # Whether the run resumed the thread's session or started a new one, and why (feature `run_session`).
     session: RunSession | None = None
+    # What the prompt did with the task's notes lists (feature `run_notes`): how anyone checks they reached the bot.
+    notes: RunNotes | None = None
     timings: RunTimings | None = None  # feature `run_timings`
 
 

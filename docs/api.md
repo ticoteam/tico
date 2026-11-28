@@ -77,7 +77,7 @@ tag, run `python3 scripts/build_api_docs.py`; `--check` verifies the guide match
 | Events | The catalog of named events ([guide](routines.md)). |
 | Finance | Budgets, the P&L, expenses, bills, invoices, contacts, reports and the work inbox, as far as the caller sees; Finance actions, committed or sent to one person for approval. |
 | Automations | A trigger and a tree of steps (filter, decide, llm, find, bot_turn, paths, action), saved as versions; one permission rule for UI, CLI and MCP. |
-| Roadmaps | The Roadmap's ranked Product tasks, company roadmap settings and internal requesters ([guide](roadmaps.md)). |
+| Roadmaps | The Roadmap's ranked Product tasks and internal requesters ([guide](roadmaps.md)). |
 | Support | Reports to Tico support ([guide](support.md)). |
 | Rules | Org rules: what teammates follow (internal) and what someone outside requires (external), with their due dates and sources. |
 | Risk | Risks: tags of kind risk that any task can carry, the matter facts and key dates of each tagged task, and the rules and documents linked to a risk. |
@@ -99,7 +99,6 @@ tag, run `python3 scripts/build_api_docs.py`; `--check` verifies the guide match
 | Slack links | A thread's link to a Slack channel, both ways ([guide](slack.md)): asked for by an admin, checked by the gateway, then active, suspended or refused. Admins only. |
 | Threads | Threads: the sidebar, a thread and its timeline, read marks, search, members, follow, and the messages in a thread. A thread the viewer may not read answers 404, never 403. |
 | Feedback | A person's 👍 or 👎 on a message, task or approval a bot or another person made, with an optional reason: a 👎 on a bot's work can tell the bot (a note for its next run in that conversation) or become an org rule. Every answer leaves out feedback on what the caller cannot read. |
-| Company page | The public page for the company's updates: its audiences, the editions each one reads, the stats the page shows, the readers who sign in to it, and the logo ([guide](company-page.md)). |
 | Mailboxes | Which mailboxes Tico uses and who may use each: Read, or Read and write (organize, draft and send, as far as the company allows). |
 | Email | Live Gmail organizing; Gmail holds the mail and Tico records only action details and ids. |
 | Letters out | Physical letters sent through the Gateway; approvals bind the saved proof and price. |
@@ -302,7 +301,7 @@ MCP uses `tico_bot_branch(bot, runner_id?)` and `tico_bot_update(slug, shared=)`
 New tasks and canonical chats to an original route to the caller's active branch when branches are allowed.
 Stored keys, room-mode `shared`, independent copy routes and older runner payloads keep their meanings.
 
-Public roadmap publication, requesters and anonymous endpoints are described in [Public roadmaps](roadmaps.md).
+Requesters and the Roadmap are described in [Roadmap](roadmaps.md).
 
 ## Threads
 

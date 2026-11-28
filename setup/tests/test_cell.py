@@ -1371,7 +1371,6 @@ def test_an_older_company_gains_its_visuals_host_on_add_whatever_its_aliases(rea
 
 
 def test_a_visuals_host_is_never_another_companys_host(ready):
-    assert ready(*add_args(ready, "boatyard", "--page-host", "boatyard-visuals.tico.team"))["error"] == "bad_domain"
     ready(*add_args(ready))
     answer = ready(*move_args(ready, slug="other", domain="boatyard-visuals.tico.team"))
     assert answer == {"ok": False, "error": "domain_taken", "detail": "boatyard-visuals.tico.team belongs to boatyard"}
@@ -2686,60 +2685,39 @@ def test_the_cores_release_is_its_folders_name_when_it_has_no_installer_file():
     assert U.host_core(Path("/opt/tico-cell/core")) == ""  # the pre-versioned folder: every newer release gets its own
 
 
-# --- company page hosts (docs/company-page.md) -------------------------------------------------------------------
+# --- retired company page hosts -------------------------------------------------------------------
+# The Company page is retired. A record an older core wrote may still carry `page_host` (and `page_pending`), cell.json
+# `page_domain`, the company's .env TICO_READER_ORIGIN and the cell a pages/ folder: each still loads, none is routed,
+# and the next write of each drops it.
 
 
 def page_company(state="running", slug="acme", page="acme.tico.page", port=20000):
     return {"slug": slug, "domain": f"{slug}.tico.team", "port": port, "page_host": page, "state": state}
 
 
-def site_of(text, host):
-    """One site block of a rendered Caddyfile: from its address line to the next block's."""
-    start = text.index(f"http://{host}:{cell.ROUTER_PORT} {{")
-    end = text.find(f"\nhttp://", start + 1)
-    return text[start : end if end != -1 else len(text)]
+def leave_a_page_host(host, slug="acme", page="acme.tico.page"):
+    """What an older core left on a company it gave a page host: the record's host, its origin in .env and a folder."""
+    path = host.root / "companies" / slug / "company.json"
+    path.write_text(json.dumps({**json.loads(path.read_text()), "page_host": page, "page_pending": True}))
+    env = host.root / "companies" / slug / ".env"
+    env.write_text(env.read_text() + f"TICO_READER_ORIGIN=https://{page}\n")
+    (host.root / "pages" / slug).mkdir(parents=True, exist_ok=True)
+    (host.root / "pages" / slug / "release.txt").write_text("left")
 
 
-def test_a_page_host_serves_the_public_paths_from_its_own_folder_and_nothing_else():
-    site = site_of(cell.router_config([page_company()]), "acme.tico.page")
-    assert "request_header -Authorization" in site
-    assert f'request_header Cookie "{cell.APP_COOKIES_RE}" ""' in site
-    assert "\t\tpath /\n" in site and "\t\tpath /data.json /feed.xml\n" in site and "\t\tpath /assets/*\n" in site
-    assert "try_files index.html" in site and "try_files {path}" in site
-    assert "root * /pages/acme/current" in site and "file_server" in site
-    assert 'header Cache-Control "public, max-age=60"' in site and "header X-Content-Type-Options nosniff" in site
-    # the file matchers (/, the two files, the assets): GET and HEAD only, no reader cookie, no query string
-    assert site.count("\t\tmethod GET HEAD\n") == 3 and site.count(f"not header Cookie {cell.READER_COOKIE_GLOB}") == 3
-    assert site.count("expression \"{http.request.uri.query} == ''\"") == 3
-    # everything else is the company's own proxy, with the same hold and close delay as its domain
-    assert site.rindex("handle {") > site.index("@page_files")
-    assert "reverse_proxy 127.0.0.1:20000 {" in site and "stream_close_delay 5m" in site
-    assert site.count("lb_try_duration 30s") == 1 and "handle_errors" in site
+@pytest.mark.parametrize("state", ["running", "sleeping", "stopped"])
+def test_a_page_host_left_on_a_record_gets_no_site_of_its_own_in_the_router(state):
+    """Whatever the company's state, the old page host falls to the router's catch-all 404, as every unknown host does,
+    and never reaches the company's server or the wake service."""
+    text = cell.router_config([page_company(state), page_company(state, "beta", "beta.tico.page", 20001)])
+    assert "tico.page" not in text and "/pages" not in text
+    assert 'respond "No Tico company at this address." 404' in text
 
 
-def test_a_sleeping_page_host_serves_files_and_wakes_the_company_for_the_rest():
-    site = site_of(cell.router_config([page_company("sleeping")]), "acme.tico.page")
-    assert "file_server" in site and "root * /pages/acme/current" in site
-    assert f"reverse_proxy {cell.WAKE_ADDRESS}:{cell.WAKE_PORT} {{" in site
-    assert f"header_up {cell.WAKE_HEADER} acme" in site and "flush_interval -1" in site
-    assert "127.0.0.1:20000" not in site
-
-
-def test_a_stopped_page_host_is_a_503_at_once_and_its_folder_is_not_served():
-    site = site_of(cell.router_config([page_company("stopped")]), "acme.tico.page")
-    assert site.count("respond \"This Tico company is stopped.\" 503") == 1
-    assert "file_server" not in site and "reverse_proxy" not in site and "root" not in site
-
-
-def test_no_page_host_can_read_another_companys_folder():
-    text = cell.router_config([page_company(), page_company(slug="beta", page="beta.tico.page", port=20001)])
-    for slug in ("acme", "beta"):
-        assert set(re.findall(r"/pages/[^/\s]+", site_of(text, f"{slug}.tico.page"))) == {f"/pages/{slug}"}
-
-
-def test_a_page_host_is_one_of_the_companys_hosts_for_the_wake_service_and_the_tunnel():
-    assert cell.hosts_of(page_company()) == ["acme.tico.team", "acme.tico.page"]
-    assert cell.tunnel_hosts("tico.team", [page_company()]) == ["acme.tico.page"]
+def test_a_page_host_left_on_a_record_is_not_a_host_of_the_company_or_the_tunnel():
+    assert cell.app_hosts(page_company()) == ["acme.tico.team"]
+    assert cell.tunnel_hosts("tico.team", [page_company(slug="beta", page="beta.example.com")]) == []
+    assert not hasattr(cell, "hosts_of") and not hasattr(cell, "page_site")
 
 
 def test_the_cell_front_door_uses_the_same_images_as_compose():
@@ -2749,265 +2727,98 @@ def test_the_cell_front_door_uses_the_same_images_as_compose():
     assert cell.TUNNEL_IMAGE == services["cloudflared"]["image"]
 
 
-def test_the_router_mounts_the_page_folders_read_only_and_nothing_else_of_the_cell():
+def test_the_router_mounts_nothing_of_the_cell_but_its_own_config():
     text = cell.edge_compose(Path("/opt/cell"), tunnel=False)
-    assert "      - /opt/cell/pages:/pages:ro" in text
-    assert "/opt/cell/companies" not in text
+    assert "/opt/cell/pages" not in text and "/opt/cell/companies" not in text
+    assert "      - /opt/cell/router:/etc/caddy:ro" in text
 
 
-@pytest.mark.parametrize(
-    "bad",
-    [
-        "acme.tico.team",
-        "tico.team",
-        "10.0.0.1",
-        "*.tico.page",
-        "https://acme.tico.page",
-        "localhost",
-        "acme_page.tico.page",
-    ],
-)
-def test_a_page_host_must_be_a_plain_hostname_that_is_not_the_companys_own_or_the_cells(ready, bad):
-    assert ready(*add_args(ready, "acme", "--page-host", bad))["error"] == "bad_domain"
-    assert not (ready.root / "companies" / "acme" / "company.json").exists()
-    assert not (ready.root / "pages" / "acme").exists()
+def test_set_page_host_and_init_page_domain_are_gone(ready):
+    ready(*add_args(ready, "acme"))
+    assert ready("set-page-host", "--company", "acme", "--host", "acme.tico.page")["error"] == "bad_args"
+    assert ready("init", "--page-domain", "tico.page", "--json")["error"] == "bad_args"
+    assert "page_host" not in record(ready, "acme")
 
 
-def test_a_page_host_another_company_uses_is_refused(ready):
-    ready(*add_args(ready, "alpha", "--page-host", "alpha.tico.page"))
-    assert ready(*add_args(ready, "bravo", "--page-host", "alpha.tico.page"))["error"] == "domain_taken"
-    assert ready(*add_args(ready, "bravo", "--page-host", "alpha.tico.team"))["error"] == "domain_taken"
-    assert (
-        ready(*add_args(ready, "bravo", "--domain", "bravo.tico.team", "--alias", "alpha.tico.page"))["error"]
-        == "domain_taken"
-    )
-
-
-def test_add_with_a_page_host_makes_its_folder_and_names_it_to_the_server(ready):
+def test_add_still_takes_an_older_callers_page_host_and_ignores_it(ready):
+    """HQ's provisioning still sends --page-host; it is accepted so a new company still comes up, and nothing of it is
+    kept: no record field, no folder, no setting and no route."""
     assert ready(*add_args(ready, "acme", "--page-host", "acme.tico.page"))["ok"]
-    folder = ready.root / "pages" / "acme"
-    assert stat.S_IMODE(folder.stat().st_mode) == 0o755  # the router reads it as nobody
-    assert (str(folder), cell.SERVER_UID, cell.SERVER_UID) in ready.system.chowns
-    assert record(ready, "acme")["page_host"] == "acme.tico.page"
-    env = (ready.root / "companies" / "acme" / ".env").read_text()
-    assert (
-        "TICO_READER_ORIGIN=https://acme.tico.page\n" in env and "TICO_COMPANY_PAGE_DIR=/company-page-public\n" in env
-    )
-    override = (ready.root / "companies" / "acme" / "compose.cell.yaml").read_text()
-    assert (
-        f"      - {folder}:/company-page-public\n" in override
-        and "TICO_READER_ORIGIN: https://acme.tico.page" in override
-    )
-    assert "acme.tico.page" in caddyfile(ready) and "/pages/acme/current" in caddyfile(ready)
-
-
-def test_a_company_without_a_page_host_has_no_folder_no_page_settings_and_no_page_route(ready):
-    ready(*add_args(ready, "acme"))
-    assert not (ready.root / "pages" / "acme").exists()
+    assert "page_host" not in record(ready, "acme")
+    assert not (ready.root / "pages").exists()
     assert "TICO_READER_ORIGIN" not in (ready.root / "companies" / "acme" / ".env").read_text()
-    assert "/company-page-public" not in (ready.root / "companies" / "acme" / "compose.cell.yaml").read_text()
-    assert "/pages/" not in caddyfile(ready)
+    assert "TICO_READER_ORIGIN" not in (ready.root / "companies" / "acme" / "compose.cell.yaml").read_text()
+    assert "acme.tico.page" not in caddyfile(ready)
+    assert ready(*add_args(ready, "bravo", "--page-host", "acme.tico.page"))["ok"]  # no longer a host anyone holds
 
 
-def test_adding_again_keeps_the_page_host_unless_the_flag_is_given(ready):
-    ready(*add_args(ready, "acme", "--page-host", "acme.tico.page"))
+def test_adding_again_drops_a_page_host_an_older_core_left(ready):
+    ready(*add_args(ready, "acme"))
+    leave_a_page_host(ready)
     assert ready(*add_args(ready, "acme"))["ok"]
-    assert record(ready, "acme")["page_host"] == "acme.tico.page"
-    assert "TICO_READER_ORIGIN=https://acme.tico.page" in (ready.root / "companies" / "acme" / ".env").read_text()
-
-
-def test_set_page_host_turns_the_page_on_for_a_running_company_and_keeps_its_other_settings(ready):
-    ready(*add_args(ready, "acme"))
-    env_dir = ready.root / "companies" / "acme"
-    before = (env_dir / ".env").read_text()
-    answer = ready("set-page-host", "--company", "acme", "--host", "acme.tico.page")
-    assert answer["ok"] and answer["changed"] and answer["page_host"] == "acme.tico.page"
-    assert record(ready, "acme")["page_host"] == "acme.tico.page"
-    env = (env_dir / ".env").read_text()
-    assert (
-        "TICO_READER_ORIGIN=https://acme.tico.page\n" in env and "TICO_COMPANY_PAGE_DIR=/company-page-public\n" in env
-    )
-    kept = [line for line in before.splitlines() if not line.startswith("#")]
-    assert all(line in env.splitlines() for line in kept)  # sign-in, backups and the rest are untouched
-    folder = ready.root / "pages" / "acme"
-    assert stat.S_IMODE(folder.stat().st_mode) == 0o755
-    assert f"      - {folder}:/company-page-public\n" in (env_dir / "compose.cell.yaml").read_text()
-    assert "acme.tico.page" in caddyfile(ready) and "/pages/acme/current" in caddyfile(ready)
-
-
-def test_set_page_host_again_is_a_no_op_and_an_empty_host_clears_it(ready):
-    ready(*add_args(ready, "acme"))
-    ready("set-page-host", "--company", "acme", "--host", "acme.tico.page")
-    assert ready("set-page-host", "--company", "acme", "--host", "acme.tico.page")["changed"] is False
-    assert ready("set-page-host", "--company", "acme", "--host", "")["changed"]
-    assert "page_host" not in record(ready, "acme")
+    assert "page_host" not in record(ready, "acme") and "page_pending" not in record(ready, "acme")
     assert "TICO_READER_ORIGIN" not in (ready.root / "companies" / "acme" / ".env").read_text()
-    assert "/pages/" not in caddyfile(ready) and (ready.root / "pages" / "acme").exists()
 
 
-def test_set_page_host_that_failed_to_start_is_redone_in_full_when_given_again(ready, monkeypatch):
+@pytest.mark.parametrize("version", ["v1.2.3", "v1.3.0"])
+def test_an_update_retires_a_page_host_an_older_core_left(ready, version):
+    """An older core's router served the page folder, its record named the host and its .env the reader origin. A
+    routine update (the same release or a new one) rewrites and reloads the router without the host, and drops the
+    record's host and the origin, so the old record still loads and nothing is left pointing at the folder."""
     ready(*add_args(ready, "acme"))
-    real_up = cell.Cell.up
-
-    def broken(self, *a, **k):
-        raise cell.CellError("compose_failed", "up failed")
-
-    monkeypatch.setattr(cell.Cell, "up", broken)
-    assert ready("set-page-host", "--company", "acme", "--host", "acme.tico.page")["ok"] is False
-    assert record(ready, "acme")["page_pending"] is True
-    monkeypatch.setattr(cell.Cell, "up", real_up)
-    again = ready("set-page-host", "--company", "acme", "--host", "acme.tico.page")
-    assert again["ok"] and again["changed"]
-    assert "page_pending" not in record(ready, "acme")
-    assert "acme.tico.page" in caddyfile(ready)
-
-
-def test_a_page_host_that_is_the_companys_visual_or_runner_host_is_refused(ready):
-    ready(*add_args(ready, "acme"))
-    env = ready.root / "companies" / "acme" / ".env"
-    env.write_text(
-        env.read_text()
-        + "TICO_VISUAL_ORIGIN=https://vis.acme.example\nTICO_RUNNER_URL=https://run.acme.example/x\nTICO_PUBLIC_URL=//app.acme.example\n"
-    )
-    for taken in ("vis.acme.example", "run.acme.example", "app.acme.example"):
-        assert ready("set-page-host", "--company", "acme", "--host", taken)["error"] == "bad_domain"
-    assert "page_host" not in record(ready, "acme")
-
-
-def test_set_page_host_refuses_a_host_that_is_taken_or_the_companys_own(ready):
-    ready(*add_args(ready, "alpha", "--page-host", "alpha.tico.page"))
-    ready(*add_args(ready, "bravo"))
-    assert ready("set-page-host", "--company", "bravo", "--host", "alpha.tico.page")["error"] == "domain_taken"
-    assert ready("set-page-host", "--company", "bravo", "--host", "bravo.tico.team")["error"] == "bad_domain"
-    assert ready("set-page-host", "--company", "bravo", "--host", "tico.team")["error"] == "bad_domain"
-    assert ready("set-page-host", "--company", "nobody", "--host", "nobody.tico.page")["error"] == "not_found"
-    assert "page_host" not in record(ready, "bravo")
-
-
-def test_clearing_the_page_host_drops_its_route_and_keeps_the_folder(ready):
-    ready(*add_args(ready, "acme", "--page-host", "acme.tico.page"))
-    (ready.root / "pages" / "acme" / "release.txt").write_text("kept")
-    assert ready(*add_args(ready, "acme", "--page-host", ""))["ok"]
-    assert "page_host" not in record(ready, "acme")
-    assert "acme.tico.page" not in caddyfile(ready) and "/pages/" not in caddyfile(ready)
+    leave_a_page_host(ready)
+    path = ready.root / "router" / "Caddyfile"
+    path.write_text("http://acme.tico.page:8080 {\n\troot * /pages/acme\n\tfile_server\n}\n")
+    before = ready.system.argv_text()
+    assert ready("update", "--company", "acme", "--version", version)["ok"]
+    assert "acme.tico.page" not in path.read_text() and "/pages/" not in path.read_text()
+    assert "caddy reload" in ready.system.argv_text()[len(before) :]
+    assert "page_host" not in record(ready, "acme") and "page_pending" not in record(ready, "acme")
     assert "TICO_READER_ORIGIN" not in (ready.root / "companies" / "acme" / ".env").read_text()
-    assert "/company-page-public" not in (ready.root / "companies" / "acme" / "compose.cell.yaml").read_text()
-    assert (ready.root / "pages" / "acme" / "release.txt").read_text() == "kept"
+    assert "TICO_READER_ORIGIN" not in (ready.root / "companies" / "acme" / "compose.cell.yaml").read_text()
 
 
-def test_a_page_host_in_a_sleeping_or_stopped_company_keeps_its_folder_and_route_state(ready):
-    ready(*add_args(ready, "acme", "--page-host", "acme.tico.page"))
-    ready("sleep", "--company", "acme")
-    assert "header_up X-Tico-Cell-Wake acme" in caddyfile(ready)
-    ready("stop", "--company", "acme")
-    assert 'respond "This Tico company is stopped." 503' in site_of(caddyfile(ready), "acme.tico.page")
-    assert (ready.root / "pages" / "acme").is_dir()
-
-
-def test_list_and_status_show_the_page_host_only_when_there_is_one(ready):
-    ready(*add_args(ready, "acme", "--page-host", "acme.tico.page"))
-    ready(*add_args(ready, "bravo"))
-    listed = {c["company"]: c for c in ready("list")["companies"]}
-    assert listed["acme"]["page_host"] == "acme.tico.page" and "page_host" not in listed["bravo"]
+def test_list_and_status_do_not_show_a_page_host_an_older_core_left(ready):
+    ready(*add_args(ready, "acme"))
+    leave_a_page_host(ready)
+    assert "page_host" not in ready("list")["companies"][0]
     status = ready("status", "--company", "acme", "--json")
-    assert status["page_host"] == "acme.tico.page" and status["page_url"] == "https://acme.tico.page"
-    assert "page_url" not in ready("status", "--company", "bravo", "--json")
+    assert "page_host" not in status and "page_url" not in status
 
 
 @pytest.mark.parametrize("keep", [False, True])
-def test_remove_deletes_the_page_folder_unless_data_is_kept(ready, keep):
-    ready(*add_args(ready, "acme", "--page-host", "acme.tico.page"))
+def test_remove_deletes_a_page_folder_an_older_core_left_unless_data_is_kept(ready, keep):
+    ready(*add_args(ready, "acme"))
+    leave_a_page_host(ready)
     assert ready("remove", "--company", "acme", *(["--keep-data"] if keep else []))["removed"] is True
     assert (ready.root / "pages" / "acme").exists() is keep
-    assert "acme.tico.page" not in caddyfile(ready)
 
 
-def test_a_removal_the_router_refuses_keeps_the_page_folder_it_still_serves(ready):
-    ready(*add_args(ready, "acme", "--page-host", "acme.tico.page"))
-    ready.system.fail["caddy reload"] = Result(1, "", "Error: adapting config")
-    assert ready("remove", "--company", "acme")["error"] == "router_failed"
-    assert (ready.root / "pages" / "acme").is_dir()
-
-
-def test_init_page_domain_is_one_wildcard_route_for_every_page_host(tunneled):
+def test_init_drops_the_page_domain_and_its_wildcard_route_an_older_core_saved(tunneled):
+    """An older core's `init --page-domain` saved the domain and routed `*.<page domain>` to the router. The next init
+    (the step that moves a cell to a new core) writes the tunnel's routes without it and drops it from cell.json, so
+    no route is left for a page host; the operator removes the DNS record (docs/cell.md)."""
     routes = tunneled.root / "tunnel" / "cloudflared.yml"
-    assert tunneled("init", "--page-domain", "tico.page", "--json")["page_domain"] == "tico.page"
-    text = routes.read_text()
-    assert text.index('"*.tico.team"') < text.index('"*.tico.page"') < text.index("http_status:404")
-    assert tunneled(*add_args(tunneled, "acme", "--page-host", "acme.tico.page"))["ok"]
-    assert '"acme.tico.page"' not in routes.read_text()  # under the page wildcard: no route of its own
-    assert tunneled(*add_args(tunneled, "beta", "--page-host", "beta.example.com"))["ok"]
-    assert '"beta.example.com"' in routes.read_text()  # outside it: a route of its own
-    assert tunneled("init", "--json")["page_domain"] == "tico.page"  # kept when left out
-    assert tunneled("init", "--page-domain", "", "--json").get("page_domain") is None
-    text = routes.read_text()
-    assert (
-        "*.tico.page" not in text
-        and '"acme.tico.page"' in text
-        and "page_domain" not in json.loads((tunneled.root / "cell.json").read_text())
-    )
-
-
-@pytest.mark.parametrize("bad", ["tico.team", "*.tico.page", "10.0.0.1", "tico.page/x"])
-def test_init_page_domain_must_be_a_plain_domain_of_its_own(tunneled, bad):
-    assert tunneled("init", "--page-domain", bad, "--json")["error"] == "bad_domain"
-    assert "*.tico.page" not in (tunneled.root / "tunnel" / "cloudflared.yml").read_text()
-
-
-def test_page_hosts_under_the_page_domain_need_no_route_and_others_do():
-    companies = [
-        page_company(),
-        page_company(slug="beta", page="beta.example.com", port=20001),
-        page_company(slug="gamma", page="a.b.tico.page", port=20002),
-    ]
-    assert cell.tunnel_hosts("tico.team", companies, "tico.page") == ["a.b.tico.page", "beta.example.com"]
-    text = cell.tunnel_config("tico.team", ["a.b.tico.page", "beta.example.com"], "tico.page")
-    assert (
-        text.index('"beta.example.com"')
-        < text.index('"*.tico.team"')
-        < text.index('"*.tico.page"')
-        < text.index("http_status:404")
-    )
-    assert cell.tunnel_config("tico.team", [], None) == cell.tunnel_config("tico.team")
-
-
-def test_the_pinned_router_accepts_the_page_config(tmp_path):
-    # Caddy's own parser, on the image this cell pins: a page block the router refuses would take down every company.
-    import subprocess, shutil
-
-    if (
-        not shutil.which("docker")
-        or subprocess.run(["docker", "image", "inspect", cell.ROUTER_IMAGE], capture_output=True).returncode
-    ):
-        pytest.skip("the pinned caddy image is not on this machine")
-    (tmp_path / "Caddyfile").write_text(
-        cell.router_config(
-            [
-                page_company(),
-                page_company(slug="beta", page="beta.tico.page", port=20001),
-                page_company(slug="gamma", page="gamma.tico.page", port=20002),
-            ]
+    saved = json.loads((tunneled.root / "cell.json").read_text())
+    (tunneled.root / "cell.json").write_text(json.dumps({**saved, "page_domain": "tico.page"}))
+    routes.write_text(
+        routes.read_text().replace(
+            '  - service: http_status:404',
+            '  - hostname: "*.tico.page"\n    service: http://127.0.0.1:8080\n  - service: http_status:404',
         )
     )
-    run = subprocess.run(
-        [
-            "docker",
-            "run",
-            "--rm",
-            "-v",
-            f"{tmp_path}:/etc/caddy:ro",
-            cell.ROUTER_IMAGE,
-            "caddy",
-            "validate",
-            "--config",
-            "/etc/caddy/Caddyfile",
-            "--adapter",
-            "caddyfile",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    assert run.returncode == 0, run.stderr[-800:]
+    answer = tunneled("init", "--json")
+    assert answer["ok"] and "page_domain" not in answer
+    assert "tico.page" not in routes.read_text()
+    assert routes.read_text() == cell.tunnel_config("tico.team")
+    assert "page_domain" not in json.loads((tunneled.root / "cell.json").read_text())
+
+
+def test_a_company_added_after_a_page_host_was_left_does_not_route_it_through_the_tunnel(tunneled):
+    tunneled(*add_args(tunneled, "acme"))
+    leave_a_page_host(tunneled, page="acme.example.com")  # outside the cell's wildcard: an older core routed it alone
+    assert tunneled(*add_args(tunneled, "bravo"))["ok"]
+    assert "acme.example.com" not in (tunneled.root / "tunnel" / "cloudflared.yml").read_text()
 
 
 # --- the Slack gateway (`set-slack`) -------------------------------------------------------------------------------

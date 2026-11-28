@@ -7,12 +7,18 @@ import { upsertMessage, type TimelineData } from '@/live';
 import type * as Live from '@/live';
 import { Composer } from './Composer';
 import { Toasts } from '@/kit/Toast';
+import { fmtWhen } from '@/lib/format';
 import { Conversation } from './Conversation';
+import { jumpTo } from './Outline';
 import { Message } from './Message';
 import { showPageName } from '@/tico/pageName';
 import type { Session } from './Session';
 import { waitsQuery, type Timeline } from './queries';
 import type { ChatMessage } from './types';
+
+// Read with node's fs (tests load no CSS), as QuestionCard.test.tsx does.
+const fs = (await import(/* @vite-ignore */ 'node:' + 'fs')) as { readFileSync(file: URL, encoding: 'utf8'): string };
+const here = import.meta.url;
 
 /* The stream, stood in for: handlers register as they do in the app; `emit` applies one frame. A `messages` frame
    first does what live/patch.ts's built-in patcher does (upsert by id into the timeline), then the module's own. */
@@ -319,6 +325,19 @@ describe('Conversation', () => {
     expect((sends()[1]?.body as { refs: unknown }).refs).toEqual({ from_page: { page: 'tasks', label: 'Tasks' } });
   });
 
+  it('pages back for a jump when the first page came empty with older pages behind it', async () => {
+    // the chat-activity cutoff can leave the first page with no messages and a cursor (backend/threads.py)
+    queryClient.setQueryData(key, { pages: [{ messages: [], next_cursor: 'c1', read_marks: {} }], pageParams: [null] });
+    const asked: string[] = [];
+    serve((url) => {
+      asked.push(url);
+      return { status: 200, body: { messages: [msg(5, 'bot:qa', 'The one')], next_cursor: null, read_marks: {} } };
+    });
+    jumpTo(T, 'm5');
+    show();
+    await waitFor(() => expect(asked.some((u) => u.includes('/timeline') && u.includes('cursor=c1'))).toBe(true));
+  });
+
   it('follows and reads new messages at the bottom, and waits for the reader to scroll back otherwise', async () => {
     const settle = () => act(async () => {});
     const reads = () => posts.filter((p) => p.url === `/api/v2/threads/${T}/read`).map((p) => p.body);
@@ -550,6 +569,84 @@ describe('the page it sits beside', () => {
     expect(sends()).toHaveLength(0);
   });
 
+  it('the starters step away when the person clicks or tabs into the box, and come back when they leave it empty', async () => {
+    const style = document.createElement('style');
+    style.textContent = fs.readFileSync(new URL('../shell/Menu.css', here), 'utf8');
+    document.head.append(style);
+    try {
+      seed([]);
+      serve(() => ({ status: 200, body: {} }));
+      render(<Conversation id={T} variant="side" title="Ana" actor="bot:qa" from={FROM} starters={['What needs me on Tasks?']} />, {
+        wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+      });
+      const box = (await screen.findByRole('textbox', { name: 'Message Ana' })) as HTMLTextAreaElement;
+      const shown = () => getComputedStyle(document.querySelector('.qchips')!).display !== 'none';
+      expect(shown()).toBe(true);
+      // Tico putting the cursor there (Cmd+J, the phone's Tico button) is not the person's move: they stay
+      act(() => box.focus());
+      expect(shown()).toBe(true);
+      // a click or tap in the box
+      fireEvent.pointerDown(box);
+      expect(shown()).toBe(false);
+      // out again with the box empty
+      act(() => box.blur());
+      expect(shown()).toBe(true);
+      // in by Tab: the key comes up in the box
+      act(() => box.focus());
+      fireEvent.keyUp(box, { key: 'Tab' });
+      expect(shown()).toBe(false);
+      act(() => box.blur());
+      expect(shown()).toBe(true);
+      // typed and wiped without leaving: still away until they leave
+      act(() => box.focus());
+      fireEvent.change(box, { target: { value: 'Hi' } });
+      fireEvent.change(box, { target: { value: '' } });
+      expect(shown()).toBe(false);
+      // words left in the box keep them away after leaving (as before)
+      fireEvent.change(box, { target: { value: 'Hi' } });
+      act(() => box.blur());
+      expect(shown()).toBe(false);
+    } finally {
+      style.remove();
+    }
+  });
+
+  it("on a phone with the keyboard up over Tico, Tico's own focus keeps the starters; a press or typing puts them away", async () => {
+    const style = document.createElement('style');
+    style.textContent = ['../shell/Menu.css', '../shell/phone/phone.css'].map((f) => fs.readFileSync(new URL(f, here), 'utf8')).join('\n');
+    document.head.append(style);
+    try {
+      seed([]);
+      serve(() => ({ status: 200, body: {} }));
+      // the phone shell's state once the Tico button has focused the box and the keyboard is up (PhoneCards.tsx)
+      render(<Conversation id={T} variant="side" title="Ana" actor="bot:qa" from={FROM} starters={['What needs me on Tasks?']} />, {
+        wrapper: ({ children }) => (
+          <QueryClientProvider client={queryClient}>
+            <div className="phone" data-typing="tico">
+              <div className="ly ly-tico is-up" data-slot="tico">
+                {children}
+              </div>
+            </div>
+          </QueryClientProvider>
+        ),
+      });
+      const box = (await screen.findByRole('textbox', { name: 'Message Ana' })) as HTMLTextAreaElement;
+      const shown = () => getComputedStyle(document.querySelector('.qchips')!).display !== 'none';
+      act(() => box.focus());
+      expect(shown()).toBe(true);
+      fireEvent.pointerDown(box);
+      expect(shown()).toBe(false);
+      act(() => box.blur());
+      expect(shown()).toBe(true);
+      act(() => box.focus());
+      expect(shown()).toBe(true);
+      fireEvent.change(box, { target: { value: 'Hi' } });
+      expect(shown()).toBe(false);
+    } finally {
+      style.remove();
+    }
+  });
+
   it("a starter's words stay in the chat they were pressed in: another chat shown in its place neither takes them nor the focus", async () => {
     seed([]);
     queryClient.setQueryData(['thread', 't2', 'timeline'], { pages: [{ messages: [], next_cursor: null, read_marks: {} }], pageParams: [null] });
@@ -777,6 +874,35 @@ describe('an agent answering', () => {
 
     waiting(wait('cant_reply', 'm2', { detail: 'Its computer is offline' }));
     expect(screen.getByText("QA Owner can't reply. Its computer is offline")).toBeTruthy();
+  });
+
+  it("names a plan at its usage limit with Switch model and Wait, and Wait hides the line (#3967)", () => {
+    show();
+    const until = '2026-11-26T17:40:00+00:00';
+    const sent = 'It hit its Antigravity usage limit (resets Nov 26 17:40 UTC)';
+    waiting(wait('cant_reply', 'm2', { detail: sent, code: 'payer_wait', until, fix: { label: 'Switch model', href: '#/bot/qa-owner/model' } }));
+    // The server's UTC reset reads in the person's own time.
+    const limit = `It hit its Antigravity usage limit (resets ${fmtWhen(until)})`;
+    expect(screen.getByText(`QA Owner can't reply. ${limit}`)).toBeTruthy();
+    // Switch model opens the agent's model picker, not its whole settings.
+    const fix = screen.getByRole('link', { name: 'Switch model' });
+    expect(fix.getAttribute('href')).toContain('/team/qa-owner?tab=model');
+    fireEvent.click(screen.getByRole('button', { name: 'Wait' }));
+    expect(screen.queryByText(`QA Owner can't reply. ${limit}`)).toBeNull();
+    // Another cause comes back with its own fix, and no Wait: only a usage limit can be sat out.
+    waiting(wait('cant_reply', 'm2', { detail: 'Its checkout is on Shared cloud machine', code: 'worktree_home', fix: { label: 'Open Computers', href: '#/settings/computers' } }));
+    expect(screen.getByRole('link', { name: 'Open Computers' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Wait' })).toBeNull();
+  });
+
+  it('offers Wake now when a wake ran nothing, and taking it asks the server to wake the machine (#3967)', async () => {
+    serve(() => ({ status: 200, body: { woken: true } }));
+    show();
+    const spent = 'Its cloud machine was woken at 21:40 UTC and ran nothing; it is not woken again for this work';
+    waiting(wait('cant_reply', 'm2', { detail: spent, code: 'wake_spent', fix: { label: 'Wake now', href: null, post: '/api/v2/bots/qa/cloud-machine/wake' } }));
+    fireEvent.click(screen.getByRole('button', { name: 'Wake now' }));
+    await waitFor(() => expect(posts.some((p) => p.url.endsWith('/api/v2/bots/qa/cloud-machine/wake'))).toBe(true));
+    await waitFor(() => expect(screen.queryByText(`QA Owner can't reply. ${spent}`)).toBeNull());
   });
 
   it('counts a reply the agent posted with a tool: no typing comes back while its run goes on', () => {

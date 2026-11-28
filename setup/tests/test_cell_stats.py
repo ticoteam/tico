@@ -8,11 +8,12 @@ import sqlite3
 import subprocess
 import sys
 from collections import namedtuple
+from contextlib import closing
 from pathlib import Path
 
 import pytest
 
-from backend import flight_file, migrations
+from backend import flight, flight_file, migrations
 from setup import cell, cell_stats as cs
 from setup.cell import Result
 
@@ -302,10 +303,12 @@ def busy_minute(ts):
 
 def make_db(data, freelist=False):
     schema = sqlite3.connect(data / "hub.sqlite", isolation_level=None)
-    migrations.apply(schema)  # the server's schema, the flight tables included
+    migrations.apply(schema)  # the server's schema: no flight table since the recorder has its own file
     schema.close()
     c = sqlite3.connect(data / "hub.sqlite")
     c.execute("PRAGMA journal_mode=WAL")
+    # A server from before that file kept flight_sql in its own database: the cell reads it there until the file exists.
+    c.execute(next(s for s in flight.SCHEMA if s.startswith("CREATE TABLE flight_sql(")))
     hour = int(NOW) // 3600 * 3600
     c.executemany(
         "INSERT INTO flight_sql VALUES(?,?,?,?,?,?,?)",
@@ -832,6 +835,36 @@ def test_db_reads_read_only_and_flight_reads_the_files(box):
     assert r["ok"] and got["stalls_total"] == 1 and got["routes"][0]["route"] == "GET /api/v2/slow"
     r = cs.run_tool(box, "db", {"company": "stuck"})
     assert r["ok"] is False and "no database" in r["output"]
+
+
+def test_sql_top_reads_the_recorders_own_file_and_the_servers_database_on_a_cell_without_one(box):
+    name = "tico-boatyard-server-1"
+    older = [r["shape"] for r in cs.sql_top(box, name, NOW)]  # no hub.flight.db yet: flight_sql in hub.sqlite
+    assert "UPDATE jobs SET x = ? WHERE id = ?" in older
+    target = box.cell_root / "companies" / "boatyard" / "data" / "hub.flight.db"
+    with closing(sqlite3.connect(target)) as c:  # as the server leaves it between writes: WAL, no connection open
+        c.execute("PRAGMA journal_mode=WAL")
+        for statement in flight.SCHEMA:
+            c.execute(statement)
+        c.execute(
+            "INSERT INTO flight_sql VALUES(?,?,?,?,?,?,?)",
+            (int(NOW) // 3600 * 3600, "SELECT moved", 7, 70.0, 1, 9, "{}"),
+        )
+        c.commit()
+    assert [r["shape"] for r in cs.sql_top(box, name, NOW)] == ["SELECT moved"]
+
+
+def test_sql_top_is_empty_on_a_cell_whose_server_has_neither_the_file_nor_the_old_table(tmp_path):
+    """A server on this code before its first recorder write: hub.sqlite has no flight_sql and hub.flight.db is not
+    there yet. The read answers no shapes, not an error."""
+    b = FakeBox(tmp_path)
+    b.add_edge()
+    data = b.add_company("boatyard", updater=True)
+    with closing(sqlite3.connect(data / "hub.sqlite", isolation_level=None)) as c:
+        migrations.apply(c)
+    out, why = cs.exec_db(b, "tico-boatyard-server-1", "top", cs.SQL_TOP_BUDGET, int(NOW) - 7200, cs.SQL_TOP)
+    assert (out, why) == ({"sql_top": []}, "")
+    assert cs.sql_top(b, "tico-boatyard-server-1", NOW) == []
 
 
 # --- SQLite: never on the host ----------------------------------------------------------------------------------------

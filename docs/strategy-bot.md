@@ -164,7 +164,7 @@ reply on.
 
 At every level, these stay yours, and the server refuses the Strategy Owner each one:
 - anything that raises cost: a new routine or a routine that runs more often, a bot's model, fallback or wake settings;
-- publishing to a public roadmap without your approval, and writing the strategy on its own reading;
+- publishing a task's public text without your approval, and writing the strategy on its own reading;
 - sending anything outside the company, such as a calendar invitation to someone outside it;
 - adding, removing or bringing back bots;
 - changing a goal, or a goal's KPI target;

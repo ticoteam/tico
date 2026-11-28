@@ -10,7 +10,7 @@ import type { BotWait, LiveRun } from './types';
     a line that something stops it, or a line that its run ended with no reply. */
 export type Answering =
   | { k: 'live'; key: string; r: LiveRun; text: string }
-  | { k: 'stuck'; key: string; bot: string; name: string; detail: string }
+  | { k: 'stuck'; key: string; bot: string; name: string; detail: string; fix: BotWait['fix']; code: BotWait['code']; until: BotWait['until'] }
   | { k: 'quiet'; key: string; bot: string; why: 'none' | 'failed' };
 
 /** Which agents' answers a view of the thread draws: `bot`, and `message`, the person's message it answers. */
@@ -46,7 +46,7 @@ export function replyingRows(live: readonly LiveRun[], waits: readonly BotWait[]
     if (done.has(w.actor) || !shown(w.actor, w.message_id)) continue;
     done.add(w.actor);
     if (w.state === 'replied') continue;
-    if (w.state === 'cant_reply') out.push({ k: 'stuck', key: `stuck:${w.actor}`, bot: w.actor, name: w.name, detail: w.detail });
+    if (w.state === 'cant_reply') out.push({ k: 'stuck', key: `stuck:${w.actor}`, bot: w.actor, name: w.name, detail: w.detail, fix: w.fix ?? null, code: w.code ?? null, until: w.until ?? null });
     else if (w.state === 'no_reply' || w.state === 'stopped')
       out.push({ k: 'quiet', key: `quiet:${w.actor}:${w.message_id}`, bot: w.actor, why: w.state === 'no_reply' ? 'none' : 'failed' });
     else {

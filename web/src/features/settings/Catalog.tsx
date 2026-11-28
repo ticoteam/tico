@@ -1,21 +1,18 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import { configQuery } from '@/data';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
 import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
-import { IconButton } from '@/kit/IconButton';
-import { Facts } from '@/kit/LabelValue';
 import { Link as To } from '@/kit/Link';
 import { Select } from '@/kit/Select';
 import { Section } from '@/pagekinds';
-import { SwitchLine, act } from './parts';
-import { FIELD_KINDS, contactTypeQuery, contactTypesQuery, labelsQuery, roadmapQuery, type FieldKind } from './queries';
+import { act } from './parts';
+import { FIELD_KINDS, contactTypeQuery, contactTypesQuery, type FieldKind } from './queries';
 import { AskSection } from './TasksMore';
 
-/* Tasks (what agents may ask, the public roadmap) and Contacts (the types and their fields): the two catalogs
+/* Tasks (what agents may ask) and Contacts (the types and their fields): the two catalogs
    Settings edits. What the mock draws that the server cannot keep yet
    (new task defaults, sharing) is left out. */
 
@@ -40,57 +37,7 @@ const KIND_NAME: Record<string, string> = {
 // ---------------------------------------------------------------- tasks
 
 export function Tasks() {
-  const roadmap = useQuery(roadmapQuery);
-  const tags = useQuery(labelsQuery);
-  const config = useQuery(configQuery);
-  const r = roadmap.data;
-  if (!r) return null;
-  const base = (config.data?.public_url || location.origin).replace(/\/+$/, '');
-  const name = (key: string) => tags.data?.find((t) => t.key === key)?.label ?? key;
-  const unused = (tags.data ?? []).filter((t) => !r.labels.includes(t.key));
-  const add = unused.length > 0 && (
-    <Select
-      label="Add a label"
-      labelHidden
-      look="quiet"
-      value={null}
-      placeholder="Add label"
-      options={unused.map((t) => ({ value: t.key, label: t.label }))}
-      onValueChange={(key) => void act('settings.roadmapLabels', { labels: [...r.labels, key] })}
-    />
-  );
-  return (
-    <>
-      <AskSection />
-      <Section name="Public roadmap" count={r.labels.length} actions={add} target="setting:roadmap">
-        {r.labels.length === 0 ? (
-          <Empty title="Nothing public" />
-        ) : (
-          r.labels.map((key) => (
-            <div key={key} className="row g-road" title={name(key)} data-target={`roadmap:${key}`}>
-              <span className="row-title">{name(key)}</span>
-              <code className="row-cell fs-code">{`${base}/public/roadmaps/${key}`}</code>
-              <IconButton
-                icon="close"
-                label={`Take ${name(key)} off`}
-                size="sm"
-                quiet
-                onClick={() => act('settings.roadmapLabels', { labels: r.labels.filter((l) => l !== key) })}
-              />
-            </div>
-          ))
-        )}
-        <Facts label="Roadmap">
-          <SwitchLine
-            label="Ask before an agent's words go public"
-            target="setting:roadmap-approval"
-            checked={r.bot_public_approval}
-            onChange={(on) => void act('settings.roadmapApproval', { on })}
-          />
-        </Facts>
-      </Section>
-    </>
-  );
+  return <AskSection />;
 }
 
 // ---------------------------------------------------------------- contacts

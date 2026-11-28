@@ -1,6 +1,7 @@
 import { infiniteQueryOptions, queryOptions } from '@tanstack/react-query';
 import { ApiError, api } from '@/api/client';
 import type {
+  AssistantOkSettingsResult,
   BotTaskChoice,
   BotTaskModel,
   BotTaskModelSaved,
@@ -347,6 +348,22 @@ export const setSupport = (on: boolean) =>
     send: (idempotencyKey) => api.put('/api/v2/cloud-machines/support', { on }, { idempotencyKey }),
   });
 
+// ---------------------------------------------------------------- your Assistant gives OKs for you (/api/v2/assistant/settings)
+
+/** Whether your Assistant gives OKs for you when you tell it to, and whether this caller may change it: only the
+    person's own click (false for their Assistant, Agent Ops or a personal token; backend/assistant_oks.py). */
+export const assistantOksQuery = queryOptions({
+  queryKey: ['settings', 'assistant-oks'],
+  queryFn: ({ signal }) => api.get<AssistantOkSettingsResult>('/api/v2/assistant/settings', { signal }),
+});
+
+export const setAssistantOks = (on: boolean) =>
+  write({
+    key: assistantOksQuery.queryKey,
+    optimistic: (v: AssistantOkSettingsResult | undefined) => v && { ...v, gives_oks: on },
+    send: (idempotencyKey) => api.post<AssistantOkSettingsResult>('/api/v2/assistant/settings', { gives_oks: on }, { idempotencyKey }),
+  });
+
 // ---------------------------------------------------------------- billing (owners and admins; money in micro-dollars)
 
 export interface BillingView {
@@ -354,7 +371,7 @@ export interface BillingView {
   month: string;
   balance_micros: number;
   min_balance_micros: number;
-  cloud?: { access?: string; plan?: string; trial_days_left?: number | null; billing_url?: string | null } | null;
+  cloud?: { access?: string; plan?: string; billing_url?: string | null } | null;
   credits: { label: string; amount_micros: number; left_micros: number; expires?: string | null; current: boolean }[];
   usage: { period: string; total_micros: number }[];
   statement: { opening_micros: number; closing_micros: number; debits_by_product: Record<string, number> };
@@ -408,7 +425,7 @@ export const healthQuery = queryOptions({
   queryKey: ['settings', 'health'],
   queryFn: async ({ signal }) => {
     const h = await api.get<Health>('/api/v2/health', { signal });
-    return { checked: h.checked, attention: h.attention, checks: h.checks as HealthCheck[], stuck: stuckOf(h) };
+    return { checked: h.checked, attention: h.attention, checks: h.checks as HealthCheck[], stuck: stuckOf(h), sessions: sessionWorktreesOf(h) };
   },
 });
 
@@ -491,6 +508,13 @@ export const removeSubscription = (id: string) =>
   });
 
 export const refreshSubscription = (id: string) => api.post(`/api/v2/model-subscriptions/${enc(id)}/usage-refresh`, {});
+
+// Ends a held plan's usage-limit hold now: one probe turn decides (backend model_subscriptions.try_now).
+export const tryPlanNow = (id: string) =>
+  api.post(`/api/v2/model-subscriptions/${enc(id)}/try-now`, {}).then((result) => {
+    void queryClient.invalidateQueries({ queryKey: subscriptionsQuery.queryKey });
+    return result;
+  });
 
 export const editSubscription = (id: string, change: { name?: string; owner_id?: string; max_live_turns?: number }) =>
   write({
@@ -1046,27 +1070,6 @@ export const setCountPlanRuns = (on: boolean) =>
 export const purgeQueue = (scope: string) =>
   api.post<{ cancelled: number; kept_people: number; still_running: number }>('/api/v2/usage/queues/purge', { scope });
 
-// ---------------------------------------------------------------- tasks: the public roadmap (GET /api/v2/roadmaps/settings)
-
-export interface RoadmapView {
-  /** The labels (tag keys) whose tasks show on a public page at /public/roadmaps/<label>. */
-  labels: string[];
-  /** An agent's public words wait for a person's OK. */
-  bot_public_approval: boolean;
-}
-
-export const roadmapQuery = queryOptions({
-  queryKey: ['settings', 'roadmap'],
-  queryFn: ({ signal }) => api.get<RoadmapView>('/api/v2/roadmaps/settings', { signal }),
-});
-
-export const setRoadmap = (change: Partial<Pick<RoadmapView, 'labels' | 'bot_public_approval'>>) =>
-  write({
-    key: roadmapQuery.queryKey,
-    optimistic: (v: RoadmapView | undefined) => v && { ...v, ...change },
-    send: (idempotencyKey) => api.post<RoadmapView>('/api/v2/roadmaps/settings', change, { idempotencyKey }),
-  });
-
 export interface TagRow {
   id: string;
   key: string;
@@ -1544,6 +1547,26 @@ export interface StuckAgent {
   why: string;
   oldest?: string | null;
 }
+
+/** One bot's session worktrees on one computer (backend/health.py `_session_worktrees`, on the computer's disk row). */
+export interface SessionWorktrees {
+  computer: string;
+  label: string;
+  bot: string;
+  name: string;
+  count: number;
+  bytes: number;
+}
+
+type HealthComputer = { id: string; label: string; disk?: { session_worktrees?: unknown } | null };
+
+/** Every computer's session worktrees, each bot on it largest first, as Health reports them to an administrator. */
+export const sessionWorktreesOf = (h: { computers?: unknown } | undefined): SessionWorktrees[] =>
+  (Array.isArray(h?.computers) ? (h.computers as HealthComputer[]) : []).flatMap((c) =>
+    (Array.isArray(c.disk?.session_worktrees) ? (c.disk.session_worktrees as Omit<SessionWorktrees, 'computer' | 'label'>[]) : []).map(
+      (row) => ({ ...row, computer: c.id, label: c.label }),
+    ),
+  );
 
 export const stuckOf = (h: { stuck?: unknown } | undefined): StuckAgent[] => (Array.isArray(h?.stuck) ? (h.stuck as StuckAgent[]) : []);
 

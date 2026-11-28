@@ -158,7 +158,29 @@ def _people_only(requirement: Row) -> Row:
 # A finding on the PR description has no line of the diff to point at: the guideline line it breaks (CONTRIBUTING.md
 # for a missing Spec, Demo steps or Risk) is its place. Without saying so, the judge is unsure of a page whose one
 # finding is that, though it has a place, a severity and why.
+# A page with no blocking findings has nothing to place: the judge was unsure of ten such pages in one week (Nov 16 to
+# 23), each of which the manager OK'd unchanged. It meets the check when each review names the commit and says what
+# it read; its non-blocking notes need no file:line.
+# Task #3970 (Chris, Nov 26, on #2913 and #3588): the second review needs only a different maker from the model that
+# built the change, and the page names that model; the text Tico Team's Engineering Review stage runs, word for word.
+# What a page with no blocking findings needs is asked in the findings part (pipeline_judges.CHECKS["two_reviews"]).
 REVIEW_RUBRIC = (
+    "Two reviews of the newest commit of every linked PR, each naming that commit and its model, and the page names "
+    "the model that built the change: the second review's model is by a different maker than the builder's (it may "
+    "share a maker with the first review), and say what each checked. Give each real defect its own finding with "
+    "file:line, severity, and why it matters; a finding on the PR description may cite the file:line of the guideline "
+    "it breaks. Skip style nits and diff summaries. Say when there are no findings."
+)
+# The combined Review rubric before the builder rule: the two reviews' models differ (EARLIER, `_follow`).
+_REVIEW_RUBRIC_BEFORE_BUILDER = (
+    "Two reviews of the newest commit of every linked PR, each naming that commit and its model: use different models "
+    "and say what each checked. Give each real defect its own finding with file:line, severity, and why it matters; "
+    "a finding on the PR description may cite the file:line of the guideline it breaks. Skip style nits and diff "
+    "summaries. Say when there are no findings: a page with no blocking findings meets this when each review names "
+    "the commit and says what it read, and its non-blocking notes need no file:line."
+)
+# The combined Review rubric before a page with no blocking findings was said to meet it (EARLIER, `_follow`).
+_REVIEW_RUBRIC_BEFORE_NO_BLOCKERS = (
     "Two reviews of the newest commit of every linked PR, each naming that commit and its model: use different models "
     "and say what each checked. Give each real defect its own finding with file:line, severity, and why it matters; "
     "a finding on the PR description may cite the file:line of the guideline it breaks. Skip style nits and diff "
@@ -171,7 +193,12 @@ _REVIEW_RUBRIC_BEFORE_DESCRIPTION = (
     "Skip style nits and diff summaries. Say when there are no findings."
 )
 # Every text the combined Review rubric has shipped with: asked as pipeline_judges.CHECKS["two_reviews"].
-COMBINED_REVIEW_RUBRICS = (REVIEW_RUBRIC, _REVIEW_RUBRIC_BEFORE_DESCRIPTION)
+COMBINED_REVIEW_RUBRICS = (
+    REVIEW_RUBRIC,
+    _REVIEW_RUBRIC_BEFORE_BUILDER,
+    _REVIEW_RUBRIC_BEFORE_NO_BLOCKERS,
+    _REVIEW_RUBRIC_BEFORE_DESCRIPTION,
+)
 # The single-review line the presets shipped before the one Review stage (still recognised, EARLIER).
 # Judged from the page alone (Jev is shown the linked PRs' newest commits beside it), and true of a good review of a
 # correct change: one with nothing to fix says so. "What is wrong" alone made a clean review read as incomplete, and
@@ -250,7 +277,39 @@ RELEASE_RUBRIC = (
     "Says what is shipping: the change in a few plain lines, the PRs it merges at their newest commits, and anything a "
     "person should know before it merges (a migration, a setting, what is left out)."
 )
-QA_STAGE = "engineering-qa"  # where a person approves the change before it ships (`_add_qa` brings it to a company)
+QA_STAGE = "engineering-qa"  # the QA report before the change ships (`_add_qa` brings it to a company)
+
+
+QA_PURPOSE = (
+    "Write the QA report: what changed, before and after screenshots of the running app (or the output that proves a "
+    "change with nothing to see), the checks at the newest commit and what both reviewers found. When it meets the bar "
+    "the task goes to Release; no person signs it (the person's sign-off was the spec's Approval). To change it, write "
+    "the next version."
+)
+# QA's purpose while a person approved the QA report: what `_add_qa` gives a QA whose page is still people only.
+_QA_PURPOSE_PERSON = (
+    "Write the QA report: what changed, before and after screenshots of the running app (or the output that proves a "
+    "change with nothing to see), the checks at the newest commit and what both reviewers found. Writing it here "
+    "submits it; a person approves it to ship. To change it, write the next version; Tico asks the person again when "
+    "there are new commits."
+)
+# The texts of stages a company of the pair before Nov 26 keeps but the preset no longer has in that shape: Merge, and a
+# QA a person still signs. `_follow` moves their unedited lines to these, where the stage's requirements (and which of
+# them are people only) are these and every stage the text names is there (Merge's sends a task back to QA).
+_MERGE_PURPOSE = (
+    "The PRs are in the merge queue. If GitHub takes one out, queue it again, fix it on its branch, or send the task "
+    "back to QA."
+)
+KEPT_TEXTS: dict[str, dict[str, tuple[str, list[tuple[str, bool]], tuple[str, ...]]]] = {
+    "engineering": {
+        "engineering-merge/purpose": (_MERGE_PURPOSE, [("item:github.pr_merged", False)], (QA_STAGE,)),
+        "engineering-qa/purpose": (_QA_PURPOSE_PERSON, [("item:github.checks_pass", False), ("page", True)], ()),
+    },
+}
+RELEASE_PURPOSE = (
+    "Entering Release queues the PRs to merge. If GitHub takes one out, queue it again, fix it on its branch, or send "
+    "the task back to QA. The task leaves when a published release holds the merge."
+)
 
 
 def _review(sid: str) -> Row:
@@ -259,14 +318,17 @@ def _review(sid: str) -> Row:
         "Review",
         "Review the newest commit of every linked PR. File a subtask here with tico task child <id> --check-model "
         "<runtime>:<model> --role review --title \"Review: second opinion\", with the PRs and commits in --body. "
-        "Choose a different model and attach both reviews in one Review page.",
+        "Choose a model by a different maker than the model that built the change, name the builder's model, and "
+        "attach both reviews in one Review page.",
         120,
         [_page("Review page", REVIEW_RUBRIC, at_head=True), {"kind": "linked_done"}],
     )
 
 
-# The Product and Engineering presets (docs/dev/pipelines-v3.md "Default pipelines"). Made only for a company that builds
-# software (a blank answer is yes), once its setup is finished (ensure_presets).
+# The Product and Engineering presets (docs/dev/pipelines-v3.md "Default pipelines"): Product decides, Engineering builds
+# and ships. Every new company's that builds software (a blank answer is yes), once its setup is finished
+# (ensure_presets). One person sign-off, the Spec's Approval; QA is the decision model's and Release queues the merge
+# (Nov 26, as Tico Team runs them since Nov 18).
 PRESETS["engineering"] = {
     "id": "engineering",
     "name": "Engineering",
@@ -298,40 +360,31 @@ PRESETS["engineering"] = {
         _stage(
             QA_STAGE,
             "QA",
-            "Write the QA report: what changed, before and after screenshots of the running app (or the output that "
-            "proves a change with nothing to see), the checks at the newest commit and what both reviewers found. "
-            "Writing it here submits it; a person approves it to ship. To change it, write the next version; Tico asks "
-            "the person again when there are new commits.",
+            QA_PURPOSE,
             240,
             [
                 github("checks_pass"),
-                _people_only(_approval("QA report", QA_RUBRIC)),
-            ],
-        ),
-        _stage(
-            "engineering-merge",
-            "Merge",
-            "The PRs are in the merge queue. If GitHub takes one out, queue it again, fix it on its branch, or send "
-            "the task back to QA.",
-            120,
-            [github("pr_merged")],
-            on_enter={"act": "github.queue"},
+                {**_approval("QA report", QA_RUBRIC), "who_oks": "none"},
+            ],  # the decision model's alone
         ),
         _stage(
             "engineering-release",
             "Release",
-            "Waits for a published release that holds the merge.",
+            RELEASE_PURPOSE,
             1440,
-            [github("in_release")],
+            [github("pr_merged"), github("in_release")],
+            on_enter={"act": "github.queue"},  # Merge is folded in here
         ),
     ],
     "done": {"id": "engineering-done"},
     "closed": {"id": "engineering-closed"},
 }
-IDEAS_PURPOSE = (
+IDEAS_PURPOSE = "One line: what and why. Ideas rest here; the owner moves one to Spec when they pick it up."
+_IDEAS_PURPOSE_ON_ROOM = (
     "Ideas move on to Spec by themselves when Spec has room, oldest first. Snooze one to park it; a bot's own idea "
     "starts snoozed."
 )
+SPEC_OK_STAGE = "product-spec-ok"  # the Spec's Approval: the one person sign-off of the pair
 PRESETS["product"] = {
     "id": "product",
     "name": "Product",
@@ -348,15 +401,24 @@ PRESETS["product"] = {
             "Ideas",
             IDEAS_PURPOSE,
             None,
-            [],  # nothing to approve: an idea moves on when Spec has room, unless snoozed (backend/idea_checks.py)
+            [],  # nothing to approve: a person or the owner moves an idea to Spec (backend/idea_checks.py)
+            by_hand=True,
         ),
         _stage(
             "product-spec",
             "Spec",
             "A spec a builder can build from.",
             2880,
+            [{**_approval("Spec", SPEC_RUBRIC), "who_oks": "none"}],  # the decision model's; Approval is the person's
+            task_limit=20,  # room for every owner
+        ),
+        _stage(
+            SPEC_OK_STAGE,
+            "Approval",
+            "A person approves the spec. This is the only person sign-off; after it, Engineering builds, QAs and releases "
+            "without asking again.",
+            2880,
             [_people_only(_approval("Spec", SPEC_RUBRIC))],
-            task_limit=20,  # room for every owner; a spec waiting only on a person's OK holds no slot (has_room)
         ),
         _stage(
             "product-in-development",
@@ -377,9 +439,9 @@ PRESETS["product"] = {
     "done": {"id": "product-done"},
     "closed": {"id": "product-closed"},
 }
-# Product (Nov 14, docs/dev/pipelines-v3.md "Product"): one pipeline from the Spec to production, the default for a
-# company that builds software from 0.6 on. It replaces the Product and Engineering pair (LEGACY), which stay defined for
-# the companies that have them. One feature owner, the task's assignee, holds it from Spec to Validate in one task and
+# Features (Nov 14, docs/dev/pipelines-v3.md "Features"): one pipeline from the Spec to production, under the id and name
+# Product, the default for a company that built software from 0.6 until the pair came back as the default (Nov 26). It
+# is LEGACY now: kept for the companies that have it, never made again. One feature owner, the task's assignee, holds it from Spec to Validate in one task and
 # one session; the reviewers, the QA Owner and the Release Owner hold their stages as on Engineering. A feature starts as
 # a chat and its first approval is the Spec (no pitch, Nov 16). Any person approves the Spec and the Release report
 # (people only, nobody named), and a bot never does.
@@ -387,8 +449,8 @@ IDEAS_STAGE = "product-ideas"  # the pair's Ideas, and the Pitch stage Product h
 # Related input (backend/related_input.py): Jev picks 1 to 2 bots over the bar, each adds one round of comments to the
 # spec page; it never blocks and moves on after 4 hours.
 RELATED_INPUT = "related_input"
-PRODUCT = "features"  # the preset's key and `preset` column: "product" is the Product of the pair it replaces
-PRESETS[PRODUCT] = {
+FEATURES = "features"  # the preset's key and `preset` column: "product" is the Product of the pair
+PRESETS[FEATURES] = {
     "id": "product",
     "name": "Product",
     "goal": "From a spec to something checked in production",
@@ -397,7 +459,7 @@ PRESETS[PRODUCT] = {
     "owner_id": None,
     "private": False,
     "factory_id": "product",
-    "preset": PRODUCT,
+    "preset": FEATURES,
     "stages": [
         _stage(
             "product-spec",
@@ -526,17 +588,45 @@ _FIXES_2_RUBRICS = (
     "to OK it without opening the code.",
     _FIXES_2_RUBRIC_QA,
 )
+# The Review stage's purpose before the builder rule (task #3970): a second review by any different model.
+_REVIEW_PURPOSE_BEFORE_BUILDER = (
+    "Review the newest commit of every linked PR. File a subtask here with tico task child <id> --check-model "
+    "<runtime>:<model> --role review --title \"Review: second opinion\", with the PRs and commits in --body. "
+    "Choose a different model and attach both reviews in one Review page."
+)
 _REVIEW_PURPOSE_BEFORE_BODY = (
     "Review the newest commit of every linked PR. File a subtask here with tico task child <id> --check-model "
     "<runtime>:<model> --role review --title \"Review: second opinion\", with the PRs and commits in its message. "
     "Choose a different model and attach both reviews in one Review page."
 )
 EARLIER: dict[str, tuple[str, ...]] = {
-    "product-ideas/purpose": ("Ideas wait here. Move one to Spec when it is worth a spec. Snooze one to park it.",),
-    "engineering-review-1/page/rubric": (LEGACY_REVIEW_RUBRIC, _REVIEW_RC3, _REVIEW_RUBRIC_BEFORE_DESCRIPTION),
-    "product-review-1/page/rubric": (LEGACY_REVIEW_RUBRIC, _REVIEW_RUBRIC_BEFORE_DESCRIPTION),
-    "engineering-review-1/purpose": ("Review the newest commit and attach a Review page.", _REVIEW_PURPOSE_BEFORE_BODY),
-    "product-review-1/purpose": ("Review the newest commit and attach a Review page.", _REVIEW_PURPOSE_BEFORE_BODY),
+    "product-ideas/purpose": (
+        "Ideas wait here. Move one to Spec when it is worth a spec. Snooze one to park it.",
+        _IDEAS_PURPOSE_ON_ROOM,
+    ),
+    "engineering-review-1/page/rubric": (
+        LEGACY_REVIEW_RUBRIC,
+        _REVIEW_RC3,
+        _REVIEW_RUBRIC_BEFORE_DESCRIPTION,
+        _REVIEW_RUBRIC_BEFORE_NO_BLOCKERS,
+        _REVIEW_RUBRIC_BEFORE_BUILDER,
+    ),
+    "product-review-1/page/rubric": (
+        LEGACY_REVIEW_RUBRIC,
+        _REVIEW_RUBRIC_BEFORE_DESCRIPTION,
+        _REVIEW_RUBRIC_BEFORE_NO_BLOCKERS,
+        _REVIEW_RUBRIC_BEFORE_BUILDER,
+    ),
+    "engineering-review-1/purpose": (
+        "Review the newest commit and attach a Review page.",
+        _REVIEW_PURPOSE_BEFORE_BODY,
+        _REVIEW_PURPOSE_BEFORE_BUILDER,
+    ),
+    "product-review-1/purpose": (
+        "Review the newest commit and attach a Review page.",
+        _REVIEW_PURPOSE_BEFORE_BODY,
+        _REVIEW_PURPOSE_BEFORE_BUILDER,
+    ),
     "engineering-fixes-2/purpose": (
         "Fix what the second review found and attach a Review page that shows what was built.",
         "Fix what the second review found and attach a Review page that shows what was built, the checks at the "
@@ -553,7 +643,12 @@ EARLIER: dict[str, tuple[str, ...]] = {
         "change with nothing to see), the checks at the newest commit and what both reviewers found. A person approves "
         "it to ship. To change it, attach the new version; Tico asks the person again when there are new commits or it "
         "is another page. Never ask your own OK of it.",
+        _QA_PURPOSE_PERSON,
     ),
+    # Nov 26: QA is the decision model's and Release queues the merge (Merge folded in). Neither follows onto a stage
+    # whose requirements are not the preset's (`_follow`): a QA a person still signs keeps its line, as does a Release
+    # after Merge.
+    "engineering-release/purpose": ("Waits for a published release that holds the merge.",),
     # Nov 16: stage approvals name a document; Product has no pitch (a feature starts as a chat).
     "product/goal": ("From a pitch to something checked in production",),
     # Nov 18: the Spec skill is write-the-spec; write-a-spec never existed.
@@ -594,11 +689,12 @@ EARLIER: dict[str, tuple[str, ...]] = {
         "release that holds this work, it is not yet.",
     ),
 }
-# The Product and Engineering pair Product (PRODUCT) replaced in 0.6. Kept for the companies that have them, so their
-# open tasks finish where they are and their upkeep (`_fill`, `_follow`, `_add_qa`) goes on; never made again. A person
-# adds Product beside them (`add_preset`) and retires each once it holds no open task.
-LEGACY = ("engineering", "product")
-SOFTWARE = (*LEGACY, PRODUCT)  # the presets only a company that builds software gets
+# Features, every new company's from 0.6 until the pair came back. Kept for the companies that have it, so their open
+# tasks finish where they are and its upkeep (`_fill`, `_follow`) goes on; never made again, nor the pair beside it. A
+# person adds Engineering and Product beside it (`add_preset`) and retires it once it holds no open task.
+LEGACY = (FEATURES,)
+PAIR = ("engineering", "product")  # Engineering first: Product files into it
+SOFTWARE = (*PAIR, FEATURES)  # the presets only a company that builds software gets
 FACTORY = {"id": "product", "name": "Product", "goal": "From an idea to something checked in production."}
 # Who fills each preset's manager, its stage owners (including older stages), and which pages a person OKs (D5, D9).
 ROLES: dict[str, Row] = {
@@ -612,23 +708,24 @@ ROLES: dict[str, Row] = {
             "engineering-review-2": S.REVIEWER_2,
             "engineering-fixes-2": S.BUILDER,
             QA_STAGE: S.BUILDER,
-            "engineering-merge": S.RELEASE_MANAGER,
+            "engineering-merge": S.RELEASE_MANAGER,  # the stage Release took in, on companies that keep it
             "engineering-release": S.RELEASE_MANAGER,
         },
-        "ok": (QA_STAGE,),
+        "ok": (),  # no person signs anything on Engineering
     },
     "product": {
         "manager": S.PRODUCT_MANAGER,
         "stages": {
             "product-ideas": S.PRODUCT_OWNER,
             "product-spec": S.PRODUCT_OWNER,
+            SPEC_OK_STAGE: S.PRODUCT_OWNER,
             "product-in-development": S.PRODUCT_OWNER,
             "product-validate": S.PRODUCT_OWNER,
         },
-        "ok": ("product-spec",),
+        "ok": (SPEC_OK_STAGE,),  # the Spec's Approval names its person; the Spec stage is the decision model's
     },
 }
-ROLES[PRODUCT] = {
+ROLES[FEATURES] = {
     "manager": S.PRODUCT_MANAGER,
     # Every other stage is the task's assignee's: its feature owner.
     "stages": {
@@ -1283,6 +1380,21 @@ def _free_stage_id(conn: "sqlite3.Connection", base: str, taken: set[str]) -> st
     return candidate
 
 
+def _saved_stage_ids(conn: "sqlite3.Connection", pipeline_id: str, ids: list[str]) -> dict[str, str]:
+    """Each of a preset's stage ids, mapped to the id its stage has in `pipeline_id`: the same one, or the `-2`, `-3`...
+    `_free_stage_id` gave it when `add_preset` made the preset beside a pipeline that had the id (Product beside
+    Features: `product-spec-2`). An id with no stage maps to itself."""
+    have = {str(s["id"]) for s in task_engine.stages(conn, pipeline_id)}
+    saved: dict[str, str] = {}
+    for sid in ids:
+        suffixed = sorted(
+            (h for h in have if h.startswith(sid + "-") and h[len(sid) + 1 :].isdigit()),
+            key=lambda h: int(h[len(sid) + 1 :]),
+        )
+        saved[sid] = sid if sid in have else next(iter(suffixed), sid)
+    return saved
+
+
 def _flat(record: Row | None) -> Row:
     """A record as {path: value}, for the log of what changed."""
     if not record:
@@ -1879,6 +1991,7 @@ def _fill(conn: "sqlite3.Connection", key: str, pipeline_id: str) -> None:
     roles = ROLES.get(key)
     if not roles:
         return
+    saved = _saved_stage_ids(conn, pipeline_id, [stage["id"] for stage in record["stages"]])
     owners = {stage["id"]: stage.get("owner") for stage in record["stages"]}
     legacy = roles["stages"].keys() - owners.keys()
     if legacy:
@@ -1891,22 +2004,26 @@ def _fill(conn: "sqlite3.Connection", key: str, pipeline_id: str) -> None:
             conn.execute(
                 "UPDATE stages SET owner=?, updated_at=? WHERE id=? AND pipeline_id=? "
                 "AND (owner IS NULL OR owner=? OR owner=?)",
-                (owner, ts, sid, pipeline_id, *stand_ins),
+                (owner, ts, saved.get(sid, sid), pipeline_id, *stand_ins),
             )
+    present = {str(s["id"]) for s in task_engine.stages(conn, pipeline_id)}
     for stage in record["stages"]:
+        sid = saved[stage["id"]]
+        if sid not in present:
+            continue  # a stage this pipeline does not have: a stage of that id is another pipeline's
         for req in stage["requirements"]:
             if req.get("person_id"):
                 conn.execute(
                     "UPDATE requirements SET person_id=? WHERE stage_id=? AND kind=? AND person_id IS NULL "
                     "AND withdrawn_at IS NULL AND visit_id IS NULL",
-                    (req["person_id"], stage["id"], req["kind"]),
+                    (req["person_id"], sid, req["kind"]),
                 )
             if req.get("who_oks") == "people_only":
                 # A preset made before its sign-offs were people only gets them: a tightening, never a loosening.
                 conn.execute(
                     "UPDATE requirements SET who_oks='people_only' WHERE stage_id=? AND kind=? "
                     "AND who_oks<>'people_only' AND withdrawn_at IS NULL AND visit_id IS NULL",
-                    (stage["id"], req["kind"]),
+                    (sid, req["kind"]),
                 )
 
 
@@ -1982,13 +2099,16 @@ def _follow(conn: "sqlite3.Connection", key: str, pipeline_id: str) -> list[str]
         reqs = R.on_stage(conn, stage["id"])
         keys = [requirement_key(r) for r in reqs]
         wanted = [requirement_key(r) for r in stage["requirements"]]
+        # A purpose says who signs off: it follows only where the same requirements are people only.
+        signed = sorted((requirement_key(r), R.people_only(r)) for r in reqs)
+        signs = sorted((requirement_key(r), r.get("who_oks") == "people_only") for r in stage["requirements"])
         # The combined Review rubric goes with the subtask gate in a pipeline with one review stage.
         if stage["id"] in second_review and (
             second_review[stage["id"]] in work or have["name"] != stage["name"] or "linked_done" not in keys
         ):
             continue
         purpose = f"{stage['id']}/purpose"
-        if whole and sorted(keys) == sorted(wanted) and _behind(purpose, have.get("purpose"), texts[purpose]):
+        if whole and signed == signs and _behind(purpose, have.get("purpose"), texts[purpose]):
             paths.append(purpose)
             writes.append(("UPDATE stages SET purpose=?, updated_at=? WHERE id=?", (texts[purpose], ts, stage["id"])))
         for k in wanted:
@@ -2005,6 +2125,15 @@ def _follow(conn: "sqlite3.Connection", key: str, pipeline_id: str) -> list[str]
                 settings.update({n: texts[f"{at}/{n}"] for n in moved})
                 paths.extend(f"{at}/{n}" for n in moved)
                 writes.append(("UPDATE requirements SET settings=? WHERE id=?", (_h()._dump(settings), mine["id"])))
+    for path, (text, wanted_signs, named) in KEPT_TEXTS.get(key, {}).items():
+        sid = path.partition("/")[0]
+        have = work.get(sid)
+        if not have or path in paths or any(n not in work for n in named):
+            continue
+        signed = sorted((requirement_key(r), R.people_only(r)) for r in R.on_stage(conn, sid))
+        if signed == sorted(wanted_signs) and _behind(path, have.get("purpose"), text):
+            paths.append(path)
+            writes.append(("UPDATE stages SET purpose=?, updated_at=? WHERE id=?", (text, ts, sid)))
     if not paths:
         return []
     before = read(conn, pipeline_id)
@@ -2057,6 +2186,7 @@ def _add_qa(conn: "sqlite3.Connection", pipeline_id: str) -> bool:
         at + 1,
         {
             **{key: shipped.get(key) for key in STAGE_FIELDS},
+            "purpose": _QA_PURPOSE_PERSON,  # the page that moves is still a person's to approve
             "id": QA_STAGE,
             "owner": fixes["owner"],
             "pick": None,  # Fixes 2's owner, as one bot; a person can make it One of several afterwards
@@ -2155,11 +2285,11 @@ def ensure_presets(conn: "sqlite3.Connection") -> list[str]:
     have yet. Returns the ids it made.
 
     - General is made for every company, at the first start.
-    - Product (PRODUCT) is made for a company that builds software (`makes_software`: a blank answer is yes), once its
-      setup finished, so its roles find the bots setup made. With it comes the Product factory. A company that says no
-      gets its untouched Product retired; saying yes again brings it back. A company that has the Product and
-      Engineering pair it replaced (LEGACY) keeps them and their upkeep, and does not get Product made beside them: its
-      `product` id is the old Product's. A person adds it there (`add_preset`).
+    - Engineering and Product (PAIR) are made for a company that builds software (`makes_software`: a blank answer is
+      yes), once its setup finished, so its roles find the bots setup made. With them comes the Product factory. A
+      company that says no gets its untouched ones retired; saying yes again brings them back. A company that has
+      Features (LEGACY, every new company's from 0.6) keeps it and its upkeep, and gets neither half of the pair made
+      beside it: Features holds the id `product`. A person adds the pair there (`add_preset`).
     - Growth Experiments, Lead, Opportunity, Customer and Success Experiments (pipeline_presets_more) are made for every
       company once its setup finished, each with its Growth or Success factory. A company set up before they existed
       gets them at its next start. Growth and Success Monitoring are made with them, only where their factory's
@@ -2191,7 +2321,9 @@ def ensure_presets(conn: "sqlite3.Connection") -> list[str]:
             _follow(conn, key, have)
             continue
         if key in LEGACY or conn.execute("SELECT 1 FROM pipelines WHERE id=?", (PRESETS[key]["id"],)).fetchone():
-            continue  # never made again; or its id is another pipeline's (the old Product's `product`)
+            continue  # never made again; or its id is another pipeline's (Features' `product`)
+        if key in PAIR and _made_from(conn, FEATURES):
+            continue  # a company with Features, retired or not, gets no Engineering beside it either
         if key in SOFTWARE:
             if not _set_up(conn):
                 continue
@@ -2230,19 +2362,20 @@ def add_preset(
     name: str | None = None,
     prefix: str | None = None,
 ) -> Row:
-    """Make a preset in a company that does not have it, by hand: Product beside the Product and Engineering pair it
-    replaced, whose open tasks finish where they are. The record is the one `ensure_presets` would make (`preset`: its
-    roles' bots, its people OK's person), under `pipeline_id`, `name` and `prefix` when given (the old Product holds
-    `product`, its name and P while it is in use). A stage id another pipeline has gets the first free one after it
-    (`product-spec-2`). Its factory is made when missing. Only the company's owner and Admins (a new pipeline's save).
-    Refused (`task_settings`) for General, a pair preset (LEGACY), a preset the company has, an id in use, and anything a
-    new pipeline's save refuses. Returns the record as `read` gives it."""
+    """Make a preset in a company that does not have it, by hand: Engineering, then Product, beside the Features
+    pipeline (LEGACY) a company set up from 0.6 has, whose open tasks finish where they are. The record is the one
+    `ensure_presets` would make (`preset`: its roles' bots, its people OK's person), under `pipeline_id`, `name` and
+    `prefix` when given (Features holds `product`, its name and P while it is in use). A stage id another pipeline has
+    gets the first free one after it (`product-spec-2`). Product files into the company's Engineering, whatever its id.
+    Its factory is made when missing. Only the company's owner and Admins (a new pipeline's save). Refused
+    (`task_settings`) for General, Features (LEGACY), a preset the company has, an id in use, and anything a new
+    pipeline's save refuses. Returns the record as `read` gives it."""
     if key not in PRESETS or key in LEGACY or key == "general":
         _refuse(
             conn,
             by,
             "task_settings",
-            f"{key} is not a preset to add. Add {PRODUCT} or one of {', '.join(more.PRESETS)}.",
+            f"{key} is not a preset to add. Add {' or '.join(PAIR)}, or one of {', '.join(more.PRESETS)}.",
         )
     have = _made_from(conn, key)
     if have:
@@ -2261,6 +2394,10 @@ def add_preset(
         stage["id"] = _free_stage_id(conn, stage["id"], taken)
     for kind in BUILT_IN:
         record[kind]["id"] = _free_stage_id(conn, record[kind]["id"], taken)
+    engineering = _made_from(conn, "engineering")
+    for stage in record["stages"]:
+        if engineering and stage["on_enter"].get("file_into") == "engineering":
+            stage["on_enter"] = {**stage["on_enter"], "file_into": engineering}
     if key in SOFTWARE:
         _ensure_factory(conn)
     elif record.get("factory_id"):

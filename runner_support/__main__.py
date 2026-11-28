@@ -3,6 +3,7 @@
 import argparse
 import fcntl
 import json
+import os
 import signal
 import sys
 from pathlib import Path
@@ -12,8 +13,8 @@ from . import importers
 
 
 # The Rust runner's own commands: `python -m runner_support <one>` execs it with the same arguments (engine.py), so
-# launchd plists and systemd units, which say `python -m runner run|doctor|...` (runner/__main__.py forwards here),
-# keep working.
+# launchd plists and systemd units, which say `python -m runner_support run` (older ones `python -m runner run`, which
+# runner/__main__.py forwards here), keep working.
 BINARY = ("enroll", "profile", "status", "doctor", "adopt", "run")
 
 
@@ -47,7 +48,15 @@ def main(argv=None):
     if command:
         from . import engine
 
-        engine.exec_binary(argv, config_path=config_path if command == "run" else None)
+        # Which package started this (runner/__main__.py sets the shim's word): the Rust runner reports it beside its
+        # release (runner-rs/src/follow.rs entry). Taken out here, so nothing the runner starts later inherits it.
+        os.environ["TICO_RUNNER_ENTRY"] = "runner" if os.environ.pop("TICO_RUNNER_SHIM", "") else "runner_support"
+        if command == "run":
+            # The runner's own start, under launchd or systemd: point an older install's jobs at runner_support.
+            from . import release_update
+
+            release_update.move_at_start()
+        engine.exec_binary(argv)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=Path.home() / ".config/tico/runner.json")
     sub = parser.add_subparsers(dest="command", required=True)

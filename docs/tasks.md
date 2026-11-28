@@ -45,6 +45,29 @@ A side stage such as **Rejected** sits beside a main stage. Automatic moves skip
 without giving a reason. In a side stage, **Send back** returns the task to the last main stage it visited.
 Reopening a task that ended in a side stage returns it there.
 
+### Pipeline and stage notes
+A pipeline and each of its stages can carry notes: what the team learned there, each with why, since when and its
+evidence (a task, a pull request or a run). They sit in the pipeline editor next to each stage's rules, and
+`tico pipeline show` lists them. A bot's first turn after its task enters a pipeline reads that pipeline's notes, and its
+first turn after the task enters a stage reads the stage's, in the turn's own message (never its instructions, so a
+resumed session keeps its cached start). A later turn in the same session does not repeat them; a fresh session, an edit
+to a list, or a compaction during the turn sends them again. When a list the session was given becomes empty (its last
+note retired, or a stage with none), the next turn says so in one line; a session never given notes is told nothing.
+A fallback's side session keeps its own record of the lists it holds, as the primary session does. Side stages carry
+notes too, with no rules.
+
+To check that a turn got them, read its run (`tico run list <bot>`): `notes_offered` names the lists Tico handed the
+turn (`pipeline`, `stage`), and `notes_sent` what its prompt did with each (`given` in full, `held` because the session
+already had it, `retracted`; a list held, then given back after a compaction during the turn, reads `given`). A goal
+control or a typed command is offered none. A run export does not show them: it keeps only the message the turn answered, not the
+prompt built around it. `notes_sent` is empty from a runner before this change.
+
+People who may change the pipeline add, edit and retire notes; an edit or a retire says in one line what changed and
+why, shown under the note. A bot proposes one with `tico pipeline note propose <pipeline> [--stage <stage>] --note ...
+--why ... --evidence ...`: it reaches no turn until the pipeline's manager or such a person accepts it, and the proposer
+receives the reason either way. Nobody decides their own proposal. A note may name a guard (`approval_first`): that
+guard's refusal then quotes the note's why.
+
 ### Moving a task to another pipeline
 
 Task ⋯ › **Move to…** lists every pipeline's stages ("Backlog › On ice"); typing finds by each word ("back ice"). The
@@ -214,6 +237,13 @@ tico task done <id> -m "Sent the invoices" --version N
 tico task close <id> -m "Not needed this quarter" --version N
 tico task move <id> reopen -m "The export is wrong again" --version N
 ```
+
+A reopen is a new visit to the stage: what the stage needs starts over and its owner is told. The **Undo** on an
+approval card's Close is not: it gives back the visit the close ended, with the page attached and the OK still waiting
+on the same person, and nobody is woken (`POST /api/v2/tasks/{id}/move` with `{"to": "reopen", "why": "...",
+"undo": true}`). The sub-tasks and hand-offs the close closed with it come back the same way, except one reopened
+since. It works for whoever closed the task, within two minutes, while the close is still its newest move; otherwise
+it is a plain reopen. A stage that queues PRs is entered again instead: the close took its PRs out of the queue.
 
 Done and Closed tasks are behind the archive button on the Tasks page. Nothing closes by itself.
 

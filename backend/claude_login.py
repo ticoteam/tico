@@ -1012,6 +1012,7 @@ def usage_result(c: Any, runner_id: str, sid: str, body: "UsageResult") -> Any:
         if not week:
             raise Problem("invalid", "Usage has no current valid week", 422)
         superseded = (sub["credential_at"] or "") > request["requested_at"]
+        top = None  # the read's most-used window, when this answer is the plan's newest
         if not superseded:
             five = _window(body.five_hour, timedelta(hours=6))
             models = [
@@ -1029,17 +1030,13 @@ def usage_result(c: Any, runner_id: str, sid: str, body: "UsageResult") -> Any:
         schedule.update(
             failures=0, read_at=now, next_at=H.shift(now, seconds=USAGE_EVERY + random.randint(0, USAGE_JITTER))
         )
-        if not superseded and request.get("state") == "requested":  # a new read, not a replayed answer
+        if top is not None and request.get("state") == "requested":  # a new read, not a replayed answer
             from . import login_holds
 
             LH: Any = login_holds
-            login: str = LH.subscription_login(sid)
-            runtime = plan_exits.provider(sub)
-            held: dict[str, Any] = LH.get(c, "", login, runtime)
-            # Only a read asked after the refusal: one already out says nothing of the plan since.
-            if held and LH.payment(held.get("error")) and request["requested_at"] >= (held.get("since") or ""):
-                # The plan answers again (it was paid): its next turn tries it now rather than at the next wait's end.
-                LH.try_now(c, "", login, runtime, now)
+            # A plan held on a refusal or its limit that this read shows paid or with room again is tried now, rather
+            # than at the hold's end: while held no turn runs on it, so no turn would ever say so.
+            LH.after_reading(c, sid, plan_exits.provider(sub), request["requested_at"], top, now=now)
     else:
         failures = (schedule.get("failures") or 0) + 1
         wait = _backoff(failures)

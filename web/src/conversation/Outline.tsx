@@ -7,20 +7,30 @@ import { VirtualList } from '@/kit/VirtualList';
 import { faultHides, ReadFault } from '@/pagekinds';
 import { outlineQuery } from './queries';
 
-/* A jump asked from the Outline reaches the open Conversation with that id, wherever it is drawn. */
+/* A jump asked from the Outline reaches the open Conversation with that id, wherever it is drawn. One asked for a chat
+   that is not listening yet (a task's history line opens the chat, then asks for the message) waits for it, once. */
 const jumps = new EventTarget();
+let waiting: { chat: string; message: string } | null = null;
 
 export function jumpTo(chat: string, message: string): void {
-  jumps.dispatchEvent(new CustomEvent('jump', { detail: { chat, message } }));
+  const taken = !jumps.dispatchEvent(new CustomEvent('jump', { detail: { chat, message }, cancelable: true }));
+  waiting = taken ? null : { chat, message };
 }
 
-/** Listen for jumps into one chat; returns the unsubscribe. */
+/** Listen for jumps into one chat; returns the unsubscribe. A jump that waits for this chat is taken at once. */
 export function onJump(chat: string, fn: (message: string) => void): () => void {
   const h = (e: Event) => {
     const d = (e as CustomEvent<{ chat: string; message: string }>).detail;
-    if (d.chat === chat) fn(d.message);
+    if (d.chat !== chat) return;
+    e.preventDefault();
+    fn(d.message);
   };
   jumps.addEventListener('jump', h);
+  if (waiting?.chat === chat) {
+    const { message } = waiting;
+    waiting = null;
+    fn(message);
+  }
   return () => jumps.removeEventListener('jump', h);
 }
 

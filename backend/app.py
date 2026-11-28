@@ -26,6 +26,7 @@ from . import setup_failures
 from . import sources as SRC
 from . import ask_ingest, owner_link, setup_handoff
 from . import org_rule_check
+from . import cors, roadmaps
 from . import task_rule_gate
 from . import bot_home_merge
 from . import cloud_access
@@ -55,9 +56,11 @@ from .execution import (
 from .onboarding import AGENT_OPS, Onboarding
 from .recruit import Recruiter
 from . import names as actor_names
+from . import api_routing, deps
 from . import settings_catalog
 from .files import raw_media
 from . import company_server
+from .downloads import PUBLIC_PATHS as DOWNLOAD_PATHS
 from . import hosted_updates, releases, runner_versions
 from .census import Census
 from .providers import MODEL_BY_ID
@@ -181,11 +184,14 @@ def _configure_app(
 
     flight.install_middleware(app, recorder)
 
-    actor_names.install_route_class(app, store)
+    # Every route answers through TicoRoute (backend/api_routing.py). HTTP middleware's call_next wraps every response
+    # as a stream, hiding its original type: names are added before that wrapping, so file and stream answers stay.
+    app.router.route_class = api_routing.TicoRoute
 
     flight.register_timing(app)
 
     mutate = _mutation(auth, store)
+    app.state.deps = deps.Deps(store=store, auth=auth, mutate=mutate)  # route modules' services (backend/deps.py)
 
     mover, task_view, task_views, visible_tasks = task_list_routes.readers(auth)
 
@@ -429,17 +435,16 @@ def _configure_app(
 
 
 def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions, settings, store, telemetry):
-    @asynccontextmanager
-    async def lifespan(app):
+    async def start(app, workers):
+        """Everything the server starts before it serves. Each worker, the stop that ends it and the cleanup after it go
+        on `workers` (backend/lifespan_workers.py) as they start, so the way out covers whatever had started."""
         screen_sessions = get_screen_sessions()
-        # The default pool is min(32, cpus + 4) threads, about 6 on the server. Long waits (every
-        # open chat stream's polls, uploads) filled it, and
-        # every request's sign-in queued behind them for seconds. Give the loop a
-        # roomier pool, and sign-in its own (app.state.auth_pool, made below and shut down on the way out).
         from concurrent.futures import ThreadPoolExecutor
 
-        asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=64, thread_name_prefix="tico"))
         store.initialize()
+        from . import lifespan_workers
+
+        lifespan_workers.forget(store)  # every worker starts again below: a death recorded before no longer holds
         # A cloud agent request a stopped process left filing is released before any request is served.
         from . import cloud_agents
 
@@ -453,8 +458,8 @@ def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions
 
         finance_vault.use_vault(app.state.vault)
         cloud_access.current(store)  # a lock kept from before the restart holds from the first request
-        asyncio.get_running_loop().run_in_executor(None, auth.warm)  # Cloudflare's keys, before anyone signs in
-        asyncio.get_running_loop().run_in_executor(None, _vault_start, store, app.state.vault.cipher)
+        workers.job("auth_warm", auth.warm)  # Cloudflare's keys, before anyone signs in
+        workers.job("vault_start", _vault_start, store, app.state.vault.cipher)
         # The company file stays before serving: on a first start the first page shows the company it makes, and the
         # owner's first answer must not race it; on any later start it is a quick check.
         if settings.company_file_configured or settings.company_file_data:
@@ -518,6 +523,11 @@ def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions
         except Exception as exc:
             telemetry.capture("support_access", exc)
         telemetry.start()
+        from .repositories import stop_sync
+
+        workers.on_exit_thread("repository_sync", stop_sync, app.state.github_app)
+        workers.on_stop("repository_sync", app.state.github_app.repository_stop.set)
+        workers.on_stop("live_meeting_routing", app.state.live_meeting_routing.stop)
 
         # Work no request depends on runs beside the server; initialization and the restart repairs stay above.
         from . import start_jobs
@@ -525,22 +535,30 @@ def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions
         # TICO_START_JOBS=inline (the tests, conftest.py) runs them before serving, as a start did before.
         if os.environ.get("TICO_START_JOBS") == "inline":
             start_jobs.run(store, onboarding, telemetry, app.state.vault)
-            start_jobs_task = None
         else:
-            start_jobs_task = asyncio.create_task(
-                asyncio.to_thread(start_jobs.run, store, onboarding, telemetry, app.state.vault)
-            )
+            # Short, and each job in its own transaction: it has no stop, and the way out lets it finish.
+            # A one-off batch, not a loop: a failure is logged and sent to telemetry, never a dead-worker alert.
+            workers.job("start_jobs", start_jobs.run, store, onboarding, telemetry, app.state.vault)
         stop = asyncio.Event()
+        workers.on_stop("loops", stop.set)
         # Always runs: local 90-day retention must not depend on the inbound key or HQ (sync itself stays off).
-        inbound_task = asyncio.create_task(app.state.inbound.loop(stop))
-        screen_relay_task = None
+        workers.task("inbound", app.state.inbound.loop(stop))
+        # Before the relay starts, so a start that fails after it still closes the client (closing twice is harmless: the
+        # relay's run closes it too).
+        workers.on_exit("screen_sessions", screen_sessions.http.close)
         if settings.screen_relay_url:
             await asyncio.to_thread(screen_sessions.start)
-            screen_relay_task = asyncio.create_task(screen_sessions.run(stop))
-        timing_task = asyncio.create_task(flight.watch_loop(app.state.timing, stop))
+            workers.task("screen_relay", screen_sessions.run(stop))
+        # The lag probe sleeps half a second at a time; cancel it rather than wait out the sleep.
+        timing_task = workers.task("timing", flight.watch_loop(app.state.timing, stop))
+        workers.on_stop("timing", timing_task.cancel)
         recorder_thread = flight.Flight(recorder, store, settings) if recorder else None
         if recorder_thread:
             recorder_thread.start()
+            workers.on_stop(
+                "flight_recorder", recorder_thread.halt.set
+            )  # it stops sampling now; joined after the workers
+            workers.on_exit_thread("flight_recorder", recorder_thread.stop)
             # SIGUSR1 (stacks) and SIGUSR2 (memory top 50) for `python -m backend.flight stacks|memory`.
             from .flight_file import install_signals
 
@@ -569,13 +587,13 @@ def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions
             # this loop (backend/drains.py): the beat's due times and recovery never wait for Gmail or a connector.
             from . import drains
 
-            workers = drains.Drains(
+            drain = drains.Drains(
                 store,
                 auth,
                 on_error=lambda name, exc: telemetry.capture(drains.TELEMETRY[name], exc),
                 stopping=stop.is_set,
             ).start()
-            scheduler.drains = workers
+            scheduler.drains = drain
             # The steps that call GitHub, and the release check and update feeds, on a worker of their own beside
             # this loop (backend/heartbeat.py `Outside`): a slow GitHub never holds up a due time or a recovery.
             from . import heartbeat
@@ -593,8 +611,8 @@ def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions
             finally:
                 # No new claims or passes; a call already started finishes within its own timeout.
                 outside.stop.set()
-                await asyncio.to_thread(workers.stop, 75)
-                await asyncio.to_thread(outside.halt, 15)
+                await workers.offload("scheduler", drain.stop, 75)
+                await workers.offload("scheduler", outside.halt, 15)
 
         async def run_passes(scheduler):
             from . import heartbeat
@@ -609,17 +627,17 @@ def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions
                 if scheduler.outside is not None:
                     scheduler.outside.wake(ctx.at)
                 try:
-                    await asyncio.to_thread(heartbeat.beat, ctx)
+                    await workers.offload("scheduler", heartbeat.beat, ctx)
                 except Exception as exc:
                     telemetry.capture("heartbeat", exc)
                 # The rest of the pass, at most every 10 s however short the beat (heartbeat.REST_FLOOR). A skipped
                 # pass's beat failures ride on the next one, so they still reach the scheduler's health row.
                 if rest.due(ctx):
                     try:
-                        await asyncio.to_thread(scheduler.tick, ctx.at, ctx)
+                        await workers.offload("scheduler", scheduler.tick, ctx.at, ctx)
                         if scheduler.outside is not None:
                             # The release check, here only while the worker's thread is dead.
-                            await asyncio.to_thread(scheduler.outside.rest_fallback)
+                            await workers.offload("scheduler", scheduler.outside.rest_fallback)
                     except Exception as exc:
                         telemetry.capture("scheduler", exc)
                         import logging
@@ -627,14 +645,16 @@ def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions
                         logging.getLogger("tico.scheduler").error("Scheduler tick failed: %s", type(exc).__name__)
                 try:
                     # Seconds between beats (Automations > Heartbeat), read each pass: 10 by default, 5 to 60.
-                    await asyncio.wait_for(stop.wait(), timeout=await asyncio.to_thread(heartbeat.interval, store))
+                    await asyncio.wait_for(
+                        stop.wait(), timeout=await workers.offload("scheduler", heartbeat.interval, store)
+                    )
                 except TimeoutError:
                     pass
 
         async def directory_loop():
             while not stop.is_set():
                 try:
-                    await asyncio.to_thread(app.state.directory.tick, True)
+                    await workers.offload("directory", app.state.directory.tick, True)
                 except Exception as exc:
                     telemetry.capture("directory", exc)
                 try:
@@ -644,6 +664,15 @@ def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions
 
         # A rehearsal never runs them, whatever else says so (docs/install.md, "Rehearse a migration").
         timers = settings.scheduler_enabled and not settings.rehearsal
+        webhooks_on = timers or settings.rehearsal
+        if webhooks_on:
+            # The outbound gate, the webhook deliveries and Finance's workers below, all stopped together on the way
+            # out (backend/background.py).
+            from . import background
+
+            # Told to stop with the other stops (a join of no time), then joined after the workers end.
+            workers.on_stop("background", lambda: background.stop_all(0))
+            workers.on_exit_thread("background", lambda: background.stop_all())
         if timers:
             # The outbound gate's worker (backend/outbound_actions.py): rung by each commit that queues an action. A
             # rehearsal copy never runs it, and a dev copy empties its table.
@@ -652,7 +681,6 @@ def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions
             outbound_actions.start(store)
         # Outgoing webhooks (backend/webhook_delivery.py): a rehearsal copy runs the workers too, only to mark what is
         # due as withheld, so nothing queued there ever waits for a send that cannot happen.
-        webhooks_on = timers or settings.rehearsal
         if webhooks_on:
             from . import webhook_delivery
 
@@ -674,128 +702,109 @@ def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions
             from .finance import ad_import
 
             ad_import.start(store, app.state.vault, rehearsal=settings.rehearsal)
-        # Webhooks waiting at Tico Gateway; the loop does nothing without a relay or a key.
-        hook_relay_task = asyncio.create_task(app.state.hook_relay.loop(stop)) if timers else None
-        # Physical mail (backend/postal_mail.py): reads and routes the letters the relay and the mail-intake inbox kept.
-        postal_mail_task = asyncio.create_task(app.state.postal_mail.loop(stop)) if timers else None
-        letters_task = asyncio.create_task(app.state.letters.loop(stop)) if timers else None
-        # Sleep when idle (backend/sleep_idle.py): looks every five minutes (a cell: every minute), and only on a hosted server that asked for it.
-        sleep_idle_task = asyncio.create_task(app.state.sleep_idle.loop(stop)) if timers else None
-        # Bots' own cloud machines (backend/cloud_machines.py): started for work, stopped when idle; Tico Cloud only.
-        cloud_machines_task = asyncio.create_task(app.state.cloud_machines.loop(stop)) if timers else None
-        scheduler_task = asyncio.create_task(schedule_loop()) if timers else None
-        directory_task = asyncio.create_task(directory_loop()) if timers else None
-        granola_task = asyncio.create_task(app.state.granola.loop(stop)) if timers else None
-        docs_task = asyncio.create_task(app.state.doc_sources.loop(stop)) if timers and not settings.demo else None
+        if timers:
+            # Webhooks waiting at Tico Gateway; the loop does nothing without a relay or a key.
+            workers.task("hook_relay", app.state.hook_relay.loop(stop))
+            # Physical mail (backend/postal_mail.py): reads and routes the letters the relay and the mail-intake inbox kept.
+            workers.task("postal_mail", app.state.postal_mail.loop(stop))
+            workers.task("letters", app.state.letters.loop(stop))
+            # Sleep when idle (backend/sleep_idle.py): looks every five minutes (a cell: every minute), and only on a hosted server that asked for it.
+            workers.task("sleep_idle", app.state.sleep_idle.loop(stop))
+            # Bots' own cloud machines (backend/cloud_machines.py): started for work, stopped when idle; Tico Cloud only.
+            workers.task("cloud_machines", app.state.cloud_machines.loop(stop))
+            workers.task("scheduler", schedule_loop())
+            workers.task("directory", directory_loop())
+            workers.task("granola", app.state.granola.loop(stop))
+        # Its loop closes it too, but not when the loop is cancelled at the deadline (closing twice is harmless).
+        workers.on_exit("granola", app.state.granola.close)
+        if timers and not settings.demo:
+            workers.task("docs", app.state.doc_sources.loop(stop))
+        workers.on_stop("docs", app.state.doc_sources.stop.set)
         # A demo runs no scheduler: nothing fires, and nothing waits for a bot that will never run.
         import threading
 
         copy_stop = threading.Event()
-        copy_task = asyncio.create_task(asyncio.to_thread(app.state.blobs.storage_loop, store, copy_stop))
-        media_task = asyncio.create_task(asyncio.to_thread(app.state.file_metadata.loop))
+        workers.on_stop("storage_copy", copy_stop.set)
+        # The storage probe observes copy_stop even while its bounded SDK call is in flight.
+        workers.thread("storage_copy", app.state.blobs.storage_loop, store, copy_stop)
+
+        def media_stop():
+            app.state.file_metadata.stop.set()
+            app.state.file_metadata.wake.set()
+
+        workers.on_stop("media", media_stop)
+        workers.thread("media", app.state.file_metadata.loop)
         # History rows' read dependencies, settled beside the server (backend/read_deps.py); a read of a row not
         # settled yet walks its provenance as before.
         from . import read_deps
 
         reads_stop = threading.Event()
-        reads_task = asyncio.create_task(asyncio.to_thread(read_deps.loop, store, reads_stop)) if timers else None
+        workers.on_stop("read_deps", reads_stop.set)
+        if timers:
+            workers.thread("read_deps", read_deps.loop, store, reads_stop)
         # Library › Files: search text for files published before it existed, and bytes a hard delete still has to
         # remove from storage (backend/file_library.py).
         from . import file_library
 
         library_stop = threading.Event()
-        library_task = (
-            asyncio.create_task(asyncio.to_thread(file_library.loop, store, app.state.blobs, library_stop))
-            if timers
-            else None
-        )
-        demo_task = None
+        workers.on_stop("file_library", library_stop.set)
+        if timers:
+            workers.thread("file_library", file_library.loop, store, app.state.blobs, library_stop)
         if settings.demo:
             from . import demo
 
-            demo_task = asyncio.create_task(demo.keep_alive(store, stop, app.state.vault))
+            workers.task("demo", demo.keep_alive(store, stop, app.state.vault))
         # Sign-in's own threads, one pool per run of the app: an app built and served again and again (a demo build,
         # every test) would otherwise keep 16 idle threads, and the app they hold, for the life of the process.
         # A test can run the same app's lifespan inside another (two clients on one app), so each run keeps its own
         # pool and clears the shared slot only while that slot is still its own.
         auth_pool = ThreadPoolExecutor(max_workers=16, thread_name_prefix="tico-auth")
         app.state.auth_pool = auth_pool
-        from . import needs_lane
 
-        lane = needs_lane.start(app)  # Needs you's own build threads (backend/needs_lane.py)
-        try:
-            yield
-        finally:
-            # First, so nothing below that raises can skip it; requests are done by the time the server shuts down.
+        def auth_pool_stop():
+            # Requests are done by the time the server shuts down.
             if app.state.auth_pool is auth_pool:
                 app.state.auth_pool = None
             auth_pool.shutdown(wait=False, cancel_futures=True)
-            needs_lane.stop(app, lane)
-            stop.set()
-            if start_jobs_task:
-                await start_jobs_task  # short, and each in its own transaction: let it finish
-            app.state.live_meeting_routing.stop()
-            if inbound_task:
-                await inbound_task
-            if hook_relay_task:
-                await hook_relay_task
-            if postal_mail_task:
-                await postal_mail_task
-            if letters_task:
-                await letters_task
-            if sleep_idle_task:
-                await sleep_idle_task
-            if cloud_machines_task:
-                await cloud_machines_task
-            if screen_relay_task:
-                await screen_relay_task
-            else:
-                screen_sessions.http.close()
-            app.state.doc_sources.stop.set()
-            copy_stop.set()
-            reads_stop.set()
-            library_stop.set()
-            app.state.file_metadata.stop.set()
-            app.state.file_metadata.wake.set()
-            # The storage probe observes copy_stop even while its bounded SDK call is in flight.
-            await copy_task
-            if reads_task:
-                await reads_task
-            if library_task:
-                await library_task
-            await media_task
-            app.state.github_app.repository_stop.set()
-            if demo_task:
-                await demo_task
-            # The lag probe sleeps half a second at a time; cancel it rather than wait out the sleep.
-            timing_task.cancel()
+
+        workers.on_stop("auth_pool", auth_pool_stop)
+        from . import needs_lane
+
+        lane = needs_lane.start(app)  # Needs you's own build threads (backend/needs_lane.py)
+        workers.on_stop("needs_lane", lambda: needs_lane.stop(app, lane))
+
+    @asynccontextmanager
+    async def lifespan(app):
+        # The way out (backend/lifespan_workers.py): every stop first, then every worker under one deadline, then the
+        # cleanups. It runs over whatever had started, also when the start fails part way or a worker raised.
+        from concurrent.futures import ThreadPoolExecutor
+
+        from . import lifespan_workers
+        from .maintenance_steps import check_health
+
+        # The default pool is min(32, cpus + 4) threads, about 6 on the server. Long waits (every
+        # open chat stream's polls, uploads) filled it, and
+        # every request's sign-in queued behind them for seconds. Give the loop a
+        # roomier pool, and sign-in its own (app.state.auth_pool, made in the start and shut down on the way out).
+        pool = ThreadPoolExecutor(max_workers=64, thread_name_prefix="tico")
+        asyncio.get_running_loop().set_default_executor(pool)
+        # A worker's death files its own Agent Ops alert at once: the Maintenance run that files the others runs on the
+        # scheduler, which may be the worker that died.
+        workers = lifespan_workers.Workers(
+            store, telemetry, on_death=lambda: check_health.file_check_now(store, "worker_died")
+        )
+        try:
+            await start(app, workers)
+            yield
+        finally:
             try:
-                await timing_task
-            except asyncio.CancelledError:
-                pass
-            if docs_task:
-                await docs_task
-            if scheduler_task:
-                await scheduler_task
-            if directory_task:
-                await directory_task
-            if granola_task:
-                await granola_task
-            else:
-                await app.state.granola.close()
-            from .repositories import stop_sync
-
-            await asyncio.to_thread(stop_sync, app.state.github_app)
-            if recorder_thread:
-                await asyncio.to_thread(recorder_thread.stop)
-            if webhooks_on:
-                # The webhook deliveries and Finance's workers, all stopped together (backend/background.py).
-                from . import background
-
-                await asyncio.to_thread(background.stop_all)
-            telemetry.close()
-            # Every task above has stopped, so no read is in flight: the store's idle connections close with the server.
-            store.close()
+                await workers.shutdown()
+            finally:
+                telemetry.close()  # never raises
+                # Every worker has ended or, past the deadline, been named in the log as left behind: no read of
+                # theirs is in flight, and a connection one still holds is closed when it is given back.
+                store.close()
+                pool.shutdown(wait=False, cancel_futures=True)  # nothing queued behind a stuck thread runs after this
 
     return lifespan
 
@@ -1031,11 +1040,10 @@ def _install_request_guard(
                 )
             ):
                 raise Problem("not_found", "Not found", 404)
-            if request.url.path.startswith('/public/roadmaps/'):
-                from .public_roadmaps import guard as public_roadmap_guard
-
-                return await public_roadmap_guard(request, call_next, store)
             if request.url.path == "/healthz":
+                return await call_next(request)
+            # An outside requester's withdrawal link (backend/roadmaps.py withdraw): its token is the credential.
+            if request.method == "DELETE" and cors.WITHDRAW_PATH.fullmatch(request.url.path):
                 return await call_next(request)
             # A visual in a reply (backend/visuals.py): its signed token is the credential, and the app's cookies are
             # never read there. Its own headers stand: nothing below adds the app's framing or caching rules.
@@ -1073,9 +1081,9 @@ def _install_request_guard(
             # A frontend's one-time sign-in code, exchanged with its PKCE verifier (backend/oidc.py).
             if request.url.path == oidc.TOKEN_PATH and request.method == "POST":
                 return await call_next(request)
-            # The desktop app's installers and update manifest (backend/downloads.py): the app's
-            # updater has no browser session, and a build is nothing to protect.
-            if request.url.path.startswith("/download/") and request.method == "GET":
+            # The desktop app's installer for each system (backend/downloads.py): a link a visitor follows before
+            # they have a session, and an installer is nothing to protect.
+            if request.url.path in DOWNLOAD_PATHS and request.method == "GET":
                 return await call_next(request)
             if request.url.path == "/api/v2/team/icon" and request.method == "GET":
                 return await call_next(request)
@@ -1270,8 +1278,6 @@ def _install_request_guard(
                 limit = (
                     1024 * 1024
                     if request.url.path == "/api/v2/team/icon"
-                    else 2 * 1024 * 1024
-                    if request.url.path == "/api/v2/company-page/logo"
                     else settings.upload_max_bytes
                     if media_raw
                     else settings.upload_max_bytes + 11_000_000
@@ -2036,7 +2042,7 @@ def _rule_checks(app, assistant_mod, auth, routed_message, settings, store):
                 out["body"] = org_rule_check.warned_note(gate, getattr(body, "body", None) or "")
             return out
         if not approved and "public_summary" not in out and rule_shows_public(body, row):
-            # The public roadmap shows the public title and summary, never the note: the line goes on the summary it
+            # Public text is the public title and summary, never the note: the line goes on the summary it
             # will show (the one kept, or the line alone when there is none), the title kept whole.
             summary = getattr(body, "public_summary", None)
             # A kept summary warned before carries only this line: the bot's own text stays within the cap.
@@ -2057,7 +2063,7 @@ def _rule_checks(app, assistant_mod, auth, routed_message, settings, store):
         return getattr(body, "visibility", None) == "public" and row.get("visibility") != "public"
 
     def rule_shows_public(body, row):
-        """Whether a task change puts public text before the public roadmap's readers: it makes the task public, or
+        """Whether a task change publishes public text: it makes the task public, or
         gives one that is or becomes public a new public title."""
         public = (getattr(body, "visibility", None) or row.get("visibility")) == "public"
         return public and (rule_newly_public(body, row) or bool(getattr(body, "public_title", None)))
@@ -2194,12 +2200,7 @@ def _install_features(
     from .roadmaps import install_internal
 
     install_internal(app, store, auth, mutate, mover)
-    from .public_roadmaps import install as install_public_roadmaps
-
-    install_public_roadmaps(app, store, auth, mutate)
-    from .company_page import api as company_page_api
-
-    company_page_api.register(app, store, auth, mutate, settings)
+    api_routing.include(app, roadmaps.router)
     from .service_keys import install_service_keys
 
     install_service_keys(app, store, auth, mutate)
@@ -2454,6 +2455,9 @@ def _install_features(
     from . import stage_rules_api
 
     stage_rules_api.install(app, store, auth, mutate)  # stage rules: the Rules button, the Rules page's groups
+    from . import pipeline_notes_api
+
+    pipeline_notes_api.install(app, store, auth, mutate)  # pipeline and stage notes, served to a bot's first turn
     why_here.install(app, store, auth)  # GET /api/v2/origins/{ref}: why an item is on the list
     assistant_changes.install(app, store, auth, mutate, settings_admin)  # the Assistant's changes, and undoing one
     from . import page_history
@@ -2479,12 +2483,6 @@ def _install_features(
     from . import finance_ads_routes
 
     finance_ads_routes.install(app, store, auth, mutate)  # Finance: ad spend import settings on ad tools' pages
-    from .company_page import api_readers
-
-    api_readers.register(app, store, auth, mutate)  # Company page readers, invites and messages, for owners and admins
-    from .company_page import api_editions
-
-    api_editions.register(app, store, auth, mutate)  # the Company page's editions and their approvals
     from . import bills_address
 
     bills_address.install(app, store, auth)  # the bills address: emailed bills become draft bills
@@ -2527,6 +2525,9 @@ def _install_features(
     assistant_share.install(
         app, store, auth, mutate
     )  # bots a person lets view their Assistant chat (docs/assistant.md)
+    from . import assistant_oks
+
+    api_routing.include(app, assistant_oks.router)  # a person lets their Assistant give OKs on their word
     from .mcp import install_mcp
 
     install_mcp(app, settings)
@@ -2654,9 +2655,9 @@ def _install_features(
     from .team_build import install as install_team_build
 
     install_team_build(app, store, auth, mutate, onboarding)
-    from .report_order import install as install_report_order
+    from . import report_order
 
-    install_report_order(app, store, auth, mutate)
+    api_routing.include(app, report_order.router)
     from .settings_catalog import install as install_settings_catalog
 
     install_settings_catalog(app, store, auth, settings)
@@ -2725,7 +2726,4 @@ def _install_features(
 
     cors.install(app, settings)  # last, so it is outermost: a preflight is answered before sign-in
     org_rule_check.seal(app)  # every write registered above can be sent from a hold, whatever installed when
-    from .company_page import reader_app
-
-    reader_app.install(app, store, auth, settings)  # outside even that: the reader origin never reaches anything above
     return MAX_REPORT_BYTES, automations, screen_sessions

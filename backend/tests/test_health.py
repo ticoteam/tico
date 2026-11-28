@@ -302,6 +302,97 @@ def test_a_low_disk_check_names_the_computers_own_clean_up(environment):
     assert body["computers"][0]["disk"]["cleanup"]["freed_bytes"] == 2 * gb
 
 
+def test_health_counts_each_bots_session_worktrees_and_their_size_per_computer(environment):
+    """A QA bot's disk filled with 68 session worktrees (102 GB) and nothing said so. The runner reports each bot's
+    session worktrees and their size (runner-rs/src/session_sizes.rs); Health shows them on the computer's disk row,
+    warns when one bot holds more than the documented 30 or a quarter of the disk, and the disk warning names it."""
+    from backend.models import StructuredReadiness
+
+    api = environment()
+    runner = enrolled(api)
+    gb = 1024**3
+    add_bot(api, "acme-qa")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET display_name='Acme QA' WHERE slug='acme-qa'")
+        qa = c.execute("SELECT id FROM bots WHERE slug='acme-qa'").fetchone()["id"]
+    sessions = {
+        "at": "2026-11-27T06:00:00+00:00",
+        "bots": {qa: {"count": 68, "bytes": 102 * gb}, "ghost": {"count": 2, "bytes": gb}},
+    }
+    report = StructuredReadiness.model_validate(
+        {
+            "schema_version": 1,
+            "runtimes": {},
+            "bots": {},
+            "disk": {"total_bytes": 157 * gb, "free_bytes": 3 * gb},
+            "session_worktrees": sessions,
+        }
+    ).model_dump()
+    assert report["session_worktrees"]["bots"][qa] == {"count": 68, "bytes": 102 * gb}
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE runner_states SET last_seen_at=?, readiness=? WHERE runner_id=?",
+            (H.now(), json.dumps(report), runner),
+        )
+    body, checks = health_of(api)
+    rows = body["computers"][0]["disk"]["session_worktrees"]
+    assert rows[0] == {"bot": qa, "name": "Acme QA", "count": 68, "bytes": 102 * gb}
+    assert [row["bot"] for row in rows] == [qa, "ghost"]  # largest first
+    pile = checks["session_worktrees:" + runner + ":" + qa]
+    assert pile["status"] == "warn"
+    assert "Acme QA has 68 session worktrees" in pile["summary"] and "102.0 GB" in pile["summary"]
+    assert "session_worktrees:" + runner + ":ghost" not in checks  # 2 worktrees, 1 GB: no pile-up
+    assert "Acme QA's 68 session worktrees take 102.0 GB" in checks["disk:" + runner]["summary"]
+
+    # A bot reading Health sees the computer's disk, not what each other bot keeps on it.
+    add_bot(api, "reader")
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES('reader','hermes','x',?,'human:ana')",
+            (H.now(),),
+        )
+    api.app.state.store.settings.test_identities["reader-bot"] = Identity("bot:reader", "bot", agent="hermes")
+    as_bot, _ = health_of(api, signed_in("reader-bot"))
+    assert as_bot["audience"] == "bot"
+    assert as_bot["computers"][0]["disk"]["total_bytes"] == 157 * gb
+    assert "session_worktrees" not in as_bot["computers"][0]["disk"]
+
+    # A size no computer has is refused at the door, and one stored by an older server is left out of Health
+    # instead of breaking its arithmetic.
+    from pydantic import ValidationError
+
+    huge = 10**320
+    with pytest.raises(ValidationError):
+        StructuredReadiness.model_validate(
+            {**report, "session_worktrees": {"at": "x", "bots": {qa: {"count": 1, "bytes": huge}}}}
+        )
+    with pytest.raises(ValidationError):
+        StructuredReadiness.model_validate(
+            {**report, "session_worktrees": {"at": "x", "bots": {"b" * 101: {"count": 1, "bytes": 1}}}}
+        )
+    stored = {
+        **report,
+        "session_worktrees": {
+            "at": "x",
+            "bots": {qa: {"count": 1, "bytes": 2**64 - 1}, "ghost": {"count": 40, "bytes": gb}},
+        },
+    }
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id=?", (json.dumps(stored), runner))
+    body, checks = health_of(api)
+    assert [row["bot"] for row in body["computers"][0]["disk"]["session_worktrees"]] == ["ghost"]
+    assert "session_worktrees:" + runner + ":ghost" in checks
+
+    # Under both marks: shown on the disk row, no warning.
+    small = {**report, "disk": {"total_bytes": 157 * gb, "free_bytes": 100 * gb}}
+    small["session_worktrees"] = {"at": sessions["at"], "bots": {qa: {"count": 30, "bytes": 30 * gb}}}
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id=?", (json.dumps(small), runner))
+    body, checks = health_of(api)
+    assert body["computers"][0]["disk"]["session_worktrees"][0]["count"] == 30
+    assert not [key for key in checks if key.startswith("session_worktrees:")]
+
+
 def test_a_local_credential_key_that_is_not_backed_up_is_a_warning_or_a_note():
     from types import SimpleNamespace
 
@@ -1871,6 +1962,64 @@ def test_work_its_tasks_snooze_holds_is_work_queueing_not_a_stuck_bot(environmen
         assert stuck == [] and [(row["bot"], row["reason"], row.get("resting")) for row in slow] == [
             ("ops", "task_wait", True)
         ]
+
+
+def _refused_for_13_hours(c, settings, bot):
+    """The bot's claim refusal as the scheduler records it, with its start moved back 13 hours: what Health's 12-hour
+    queued-work check (queue_refused) reports, or [] when its claim refuses nothing it should."""
+    from backend import queue_refusals as Q
+
+    Q.observe(c, settings)
+    row = Q.state(c, bot)
+    if row:
+        c.execute(
+            "UPDATE registry_metadata SET value=? WHERE key=?",
+            (H._dump({**row, "since": H.shift(H.now(), hours=-13)}), Q.KEY + bot),
+        )
+    return [(value["bot"], value["reason"]) for value in Q.aged(c, settings)]
+
+
+def test_work_its_tasks_snooze_holds_is_never_refused_for_12_hours(environment):
+    """Acme, Nov 17: Health's 12-hour queued-work check opened a task on its Product Manager every hour for a job
+    its task's snooze held on purpose (task_wait), while the slow-queue check called the same job resting. Only
+    ending the snooze cleared it. A snoozed task's notice is now never an aged refusal; any other refusal of the same
+    job still is."""
+    from backend.tests.helpers.run_failures import failing
+
+    api = environment()
+    runner = enrolled(api)
+    heartbeat(api, runner)
+    add_bot(api, "ops")
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('ops',?,1,?,'t')",
+            (runner, H.now()),
+        )
+        claimable(c, runner, "ops")
+        owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
+        task = H.task_create(c, owner, "Wait for a decision", "", "bot:ops", private=False, lint=False)
+        c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops' AND state='queued'")
+        notice = H._wake(c, H.task(c, task["id"]), "bot:ops", "A related task moved.", {"wake": "update"})
+        H.task_snooze(c, owner, task["id"], "Approve the plan first.")
+        c.execute(
+            "UPDATE jobs SET state='queued', created_at=? WHERE message_id=?",
+            (H.shift(H.now(), hours=-14), notice["id"]),
+        )
+        assert _refused_for_13_hours(c, api.app.state.store.settings, "ops") == []
+        online = {r["id"] for r in runner_online.online_rows(c)}
+        _, slow, stuck = health._waiting(c, online)
+        assert stuck == [] and [(row["bot"], row["reason"], row.get("resting")) for row in slow] == [
+            ("ops", "task_wait", True)
+        ]
+        # The snooze ends and the same job is refused for another reason: the bot is held for its failed runs. That
+        # is still reported after 12 hours.
+        H.task_unsnooze(c, owner, task["id"])
+        failing(c, "ops", 3, held_at=H.shift(H.now(), hours=-14), probe_at=H.shift(H.now(), days=2))
+        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (notice["id"],)).fetchone()[0] == "queued"
+        assert [
+            (bot, reason != "task_wait")
+            for bot, reason in _refused_for_13_hours(c, api.app.state.store.settings, "ops")
+        ] == [("ops", True)]
 
 
 def test_a_rejected_sign_in_says_when_in_clock_time_never_an_iso_stamp():

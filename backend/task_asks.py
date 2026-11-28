@@ -1,7 +1,7 @@
 # pyright: strict
 """An OK bound to exactly what was shown, used once (docs/dev/pipelines-v3-cutover.md, "Approvals and questions").
 
-Anything that leaves the company or spends (send this email, mail this letter, publish this edition, spend this, raise
+Anything that leaves the company or spends (send this email, mail this letter, spend this, raise
 this cap, send this report) waits on an OK from a named person. The OK is a requirement on the task the work belongs to
 (`H.task_ask(kind="ok")`), and this module keeps a grant beside it (`ok_grants`): who asked, what will be done
 (`subject`, "<kind>:<id>", e.g. "email_send:<id>"), and the content asked about with its hash.
@@ -61,13 +61,6 @@ FROM_PREVIEW = "OK this from its preview in Tico."
 
 # Each module's step is imported by name inside a small function: lazily, so task_asks imports none of them at load
 # (they import task_asks), and by name, so the test selector (scripts/pr_checks.py) can see what depends on what.
-
-
-def _board_ok(conn: "sqlite3.Connection", grant: Row, ctx: "Context | None") -> object:
-    from .company_page import editions
-
-    module: Any = editions  # its functions are typed loosely
-    return module.board_ok(conn, grant, ctx)
 
 
 def _email_ok(conn: "sqlite3.Connection", grant: Row, ctx: "Context | None") -> object:
@@ -136,13 +129,6 @@ def _growth_may_ok(conn: "sqlite3.Connection", person: str, grant: Row) -> str |
     from . import growth_proposals
 
     return growth_proposals.may_ok(conn, person, grant)
-
-
-def _edition_may_ok(conn: "sqlite3.Connection", person: str, grant: Row) -> str | None:
-    from .company_page import editions
-
-    module: Any = editions  # its functions are typed loosely
-    return module.may_ok(conn, person, grant)
 
 
 def _proposal_may_ok(conn: "sqlite3.Connection", person: str, grant: Row) -> str | None:
@@ -217,7 +203,6 @@ def _file_may_see(conn: "sqlite3.Connection", auth: object, who: object, grant: 
 # What happens in the same transaction as an OK, by the subject's kind, called as fn(conn, grant, ctx). A kind that is
 # not here has nothing to do until whoever asked uses the OK.
 ON_OK: dict[str, Callable[..., object]] = {
-    "board": _board_ok,
     "email_send": _email_ok,
     "finance": _finance_ok,
     "growth": _growth_ok,
@@ -233,8 +218,6 @@ ON_OK: dict[str, Callable[..., object]] = {
 OWNED = (
     "email_send",
     "letter",
-    "edition",
-    "board",
     "proposal",
     "support",
     "webhook",
@@ -251,8 +234,6 @@ OWNED = (
 # A module whose check needs the caller's sign-in (an inbox's approvers, a letter's) checks it itself, in its ON_OK
 # step and again before it acts: CHECKS_ITSELF.
 MAY_OK: dict[str, Callable[..., str | None]] = {
-    "board": _edition_may_ok,
-    "edition": _edition_may_ok,
     "proposal": _proposal_may_ok,
     "growth": _growth_may_ok,
     "file": _file_may_ok,
@@ -292,16 +273,14 @@ SEES: dict[str, Callable[..., bool]] = {
 
 # The title of a task filed for an OK of an OWNED kind: the kind of act, then the matter it is for, the title of the
 # task the asker was working (`matter`) when everyone who reads the filed task reads that one too
-# ("Mail a letter · Reply to Winberg's demand letter", `_matter_title`). Never anything of the subject (no recipient,
-# edition or endpoint name): the filed task's readers (its asker's managers, the person's Assistant) are wider than
+# ("Mail a letter · Reply to Winberg's demand letter", `_matter_title`). Never anything of the subject (no recipient
+# or endpoint name): the filed task's readers (its asker's managers, the person's Assistant) are wider than
 # the OK's parties, who alone see the subject. With no matter it is the kind alone. An email's OK is the exception:
 # its filed task takes the asker's title (subject and first recipient, email_sending.send_title), under the task the
 # email is for, since several sends wait side by side and a person must tell them apart; the task stays private to
 # the OK's parties.
 FILED_TITLES: dict[str, str] = {
     "letter": "Mail a letter",
-    "edition": "Publish an edition",
-    "board": "Approve a stats board",
     "proposal": "Approve a change",
     "support": "Send a report to Tico support",
     "webhook": "Make a webhook endpoint",
@@ -358,7 +337,6 @@ def _named(content: object, *path: str) -> str:
 ABOUT: dict[str, Callable[[object], str]] = {
     "email_send": lambda c: f"Send email: {s}" if (s := _named(c, "subject")) else "",
     "letter": lambda c: f"Mail a letter to {n}" if (n := _named(c, "recipient", "name")) else "",
-    "edition": lambda c: f"Publish: {t}" if (t := _named(c, "title")) else "",
     "webhook": lambda c: f"Make webhook endpoint {n}" if (n := _named(c, "name")) else "",
     "publish": lambda c: f"Publish to the roadmap: {t}" if (t := _published_title(c)) else "",
     "finance": lambda c: _finance_summary(c),
@@ -660,12 +638,17 @@ SHARED_OWN = "A page several people approve is answered only by your own click i
 SHARED_NOT_HELD = "A page several people approve takes its answer now, never sent later from a hold"
 
 
-def refuses_ok_by(conn: "sqlite3.Connection", who: object, requirement_id: str, value: object) -> str | None:
+def refuses_ok_by(
+    conn: "sqlite3.Connection", who: object, requirement_id: str, value: object, *, task_id: str | None = None
+) -> str | None:
     """For every answer path before the engine (the answer route, a batch decision): the refusal's words when `ok` to
     an OK requirement, bound or plain, on anyone's ask, does not come from the person's own session: the Assistant or
     Agent Ops (acting for a person, confirmed or not, or as itself), a personal token, or anything else acting for them.
     Else None. A send back stays theirs to give, except on a page several people approve: its first answer, OK or send
-    back, settles it for all of them, so either is only an approver's own click."""
+    back, settles it for all of them, so either is only an approver's own click. On the answer route (`task_id`), the
+    person's own Assistant, or Agent Ops, giving a plain OK on their word, with their setting on, passes
+    (backend/assistant_oks.py).
+    """
     said = str(value or "").strip().casefold()
     if said not in ("ok", "no"):
         return None
@@ -680,7 +663,24 @@ def refuses_ok_by(conn: "sqlite3.Connection", who: object, requirement_id: str, 
     if shared_page(conn, requirement_id):
         return SHARED_OWN
     found = conn.execute("SELECT kind FROM requirements WHERE id=?", (requirement_id,)).fetchone()
-    return words if found and found[0] == "ok" and said == "ok" else None
+    if not (found and found[0] == "ok" and said == "ok"):
+        return None
+    if via in ("assistant", "botops") and task_id:
+        return _assistant_ok(conn, str(getattr(who, "actor", "")), task_id, requirement_id)
+    return words
+
+
+def _assistant_ok(conn: "sqlite3.Connection", person: str, task_id: str, requirement_id: str) -> str | None:
+    """The person's own Assistant's OK, read as the engine reads it (backend/assistant_oks.py `refusal`)."""
+    from . import assistant_oks
+    from . import task_engine as E
+    from . import task_requirements as R
+
+    row = E.task(conn, task_id)
+    requirement = R.get(conn, requirement_id)
+    if not row or not requirement or not row.get("visit"):
+        return NOT_YOURS
+    return assistant_oks.refusal(conn, person, row, requirement)
 
 
 def shared_page(conn: "sqlite3.Connection", requirement_id: str) -> bool:
@@ -736,7 +736,7 @@ def ask_ok(
     if not is_human(target) or not R.active_person(conn, target):
         _refuse(conn, by, "task_requirement", "An OK to send, spend or publish is asked of a person who is here")
     digest = content_hash(content)
-    # A subject a module owns names one object (an email, a letter, an edition): the module checked the asker's rights
+    # A subject a module owns names one object (an email, a letter): the module checked the asker's rights
     # on it, and one live OK per object is what it reads back (`latest`), so asking again replaces anyone's. A GENERIC
     # subject is the asker's own words: only the same asker's ask on the same task is replaced; another's is never
     # touched (they stand side by side, each used by whoever asked it).
@@ -950,7 +950,7 @@ def may_see(conn: "sqlite3.Connection", auth: object, who: object, requirement_i
 
 def preview(conn: "sqlite3.Connection", viewer: str, requirement_id: str, *, own_click: bool) -> Row:
     """What an OK is for, as it was asked: {requirement_id, subject, content, shown_hash, standing}. For a subject
-    whose module has its own preview (an email, an edition), that preview is the one to show; this is the rest. The
+    whose module has its own preview (an email), that preview is the one to show; this is the rest. The
     caller has checked that `viewer` may read the task."""
     row = grant(conn, requirement_id)
     if not row:

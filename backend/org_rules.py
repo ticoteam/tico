@@ -69,7 +69,7 @@ LIST_BYTES = 200_000  # the serialized size one page of rules may reach; a page 
 SCOPE_MAX = 100  # the names one Who or With may hold, in all
 DUE_PER_RULE = 20  # the due dates a rule's view names; the rest are counted (`due_more`)
 SETTINGS_TASK_CAPS = 20  # the task limits a bot's settings name; the rest are counted
-SCOPE_KEYS = ("everyone", "all_bots", "outside_editions", "groups", "bots", "people", "names")
+SCOPE_KEYS = ("everyone", "all_bots", "groups", "bots", "people", "names")
 EXACT_KINDS = ("allow_list", "max_usd")
 EXACT_NAME_MAX = 200  # an action's or a field's name
 EXACT_VALUES_MAX = 100  # the values one allow list holds
@@ -106,7 +106,6 @@ def _has(scope):
     return bool(scope) and bool(
         scope.get("everyone")
         or scope.get("all_bots")
-        or scope.get("outside_editions")
         or scope.get("groups")
         or scope.get("bots")
         or scope.get("people")
@@ -444,8 +443,6 @@ def _scope_view(ctx, scope, *, flags=True):
     }
     if flags:
         out = {"everyone": bool(scope.get("everyone")), "all_bots": bool(scope.get("all_bots")), **out}
-        if scope.get("outside_editions"):
-            out["outside_editions"] = True
     return out
 
 
@@ -534,8 +531,8 @@ def scope_in(c, value, *, flags):
     unknown = sorted(set(raw) - set(SCOPE_KEYS))
     if unknown:
         raise Problem("validation", f"Unknown field {unknown[0]} in who or with", 422)
-    if not flags and (raw.get("everyone") or raw.get("all_bots") or raw.get("outside_editions")):
-        raise Problem("validation", "With names teammates: not everyone, all bots or outside editions", 422)
+    if not flags and (raw.get("everyone") or raw.get("all_bots")):
+        raise Problem("validation", "With names teammates: not everyone or all bots", 422)
     ctx = _ctx(c)
     out = {
         "everyone": bool(raw.get("everyone")) if flags else False,
@@ -558,8 +555,6 @@ def scope_in(c, value, *, flags):
         out["groups"], out["bots"], out["people"] = [], [], []
     for key in ("groups", "bots", "people"):
         out[key] = sorted(out[key])
-    if flags and raw.get("outside_editions"):
-        out["outside_editions"] = True  # only when set: a Who without it reads exactly as it always has
     if len(out["groups"]) + len(out["bots"]) + len(out["people"]) > SCOPE_MAX:
         raise Problem("validation", f"Keep one Who or With to {SCOPE_MAX} names", 422)
     return out
@@ -648,12 +643,6 @@ def matching(c, author, recipients=(), place=None):
     return out
 
 
-def outside_edition_rules(c):
-    """The active rules whose Who is Outside editions (backend/company_page/editions.py). No teammate's write matches
-    this Who (`_hits` never reads it): it reaches only what the Company page sends outside."""
-    return [row for row in _active(c) if row["who"].get("outside_editions")]
-
-
 def _names(rule, key):
     """Whether a rule's Who names a teammate, and whether its With does (an empty With names no one). The one check
     `applies_to` and `teammate_rules` both read, so the two cannot drift apart."""
@@ -689,7 +678,7 @@ def may_manage(c, auth, who, scope, ctx=None):
         return False
     if auth.bot_admin(who):
         return True
-    if who.role != "human" or scope.get("everyone") or scope.get("outside_editions"):
+    if who.role != "human" or scope.get("everyone"):
         return False
     if set(scope.get("groups") or ()) & _led(ctx or _ctx(c), who.actor):
         return True
@@ -1018,27 +1007,17 @@ def _scope_checked(c, auth, who, value):
         raise Problem("validation", "Say who follows it: everyone, all bots, a group, a bot or a person", 422)
     if scope["everyone"] and not auth.bot_admin(who):
         raise Problem("forbidden", "Only the owner and admins make a rule Everyone", 403)
-    if scope.get("outside_editions") and not auth.bot_admin(who):
-        raise Problem("forbidden", "Only the owner and admins make a rule for outside editions", 403)
     return scope
 
 
 NO_EXACT_WITH_TOWARD = "A rule checked in code by its toward scope takes no typed check"
-NO_EXACT_OUTSIDE = "A rule only for outside editions takes no typed check: no teammate's write meets it"
 
 
-def _exact_fits(who, toward, check):
-    """Refuse a typed check on a rule that never runs it: one checked in code (toward scope), or one whose final Who is
-    Outside editions alone. Checked on the Who and check a rule ends with, on add, edit and accept."""
+def _exact_fits(toward, check):
+    """Refuse a typed check on a rule that never runs it: one checked in code (toward scope). Checked on the check a
+    rule ends with, on add, edit and accept."""
     if check and toward:
         raise Problem("validation", NO_EXACT_WITH_TOWARD, 422)
-    if check and _outside_only(who):
-        raise Problem("validation", NO_EXACT_OUTSIDE, 422)
-
-
-def _outside_only(scope):
-    """Whether a Who names Outside editions and no teammate (`matching` never reaches such a rule)."""
-    return bool(scope.get("outside_editions")) and not _has({**scope, "outside_editions": False})
 
 
 def _exact_json(value):
@@ -1101,7 +1080,7 @@ def add_rule(c, auth, who, body):
     )
     where = _where_terms(c, body.get("where"))
     toward, applies = _structured_terms(body.get("toward_scope"), body.get("applies_when"))
-    _exact_fits(scope, toward, exact_check_in(body.get("exact_check")))
+    _exact_fits(toward, exact_check_in(body.get("exact_check")))
     # A bot's add is a suggestion, and so is a person's add they may not manage (the rule is theirs to suggest). Whoever may
     # manage the rule, Everyone included, makes it active at once.
     status = "active" if who.role != "bot" and may_manage(c, auth, who, scope, ctx) else "suggested"
@@ -1186,9 +1165,8 @@ def edit_rule(c, auth, who, rule_id, body):
         if row["kind"] != "external":
             raise Problem("validation", "Only an external rule has a From", 422)
         changes["source_entity_id"] = _source_named(c, body["source_id"])
-    final_who = json.loads(changes["who"]) if "who" in changes else row["who"]
     final_check = json.loads(changes["exact_check"] or "null") if "exact_check" in changes else row["exact_check"]
-    _exact_fits(final_who, row["toward_scope"], final_check)  # the Who and check the rule ends with, together
+    _exact_fits(row["toward_scope"], final_check)  # the check the rule ends with
     if not changes:
         return view(c, auth, who, row, ctx, quote=False)
     before = _core(row)
@@ -1222,7 +1200,7 @@ def decide_rule(c, auth, who, rule_id, body, action, by_ok=False):
             raise Problem("conflict", "Only a suggested rule is accepted", 409)
         scope = _scope_checked(c, auth, who, body["who"]) if body.get("who") is not None else row["who"]
         _check_manage(c, auth, who, scope, ctx)
-        _exact_fits(scope, row["toward_scope"], row["exact_check"])  # the Who it is accepted with, its check
+        _exact_fits(row["toward_scope"], row["exact_check"])  # the check it is accepted with
         _check_version(row, body.get("version"))
         before = _core(row)
         extra = {"decided_by": who.actor, "decided_at": H.now()}
@@ -1855,6 +1833,38 @@ def _replaced(c, old_id, by_id):
     _event(c, H.TICO_ACTOR, "replaced", old_id, {"by": by_id})
 
 
+def retire_for_tico(c, rule_id, why, who=None):
+    """Tico retires a rule that can no longer apply (a migration does, when what its Who named is gone), as a person's
+    Retire or Skip would: its history gains a version by Tico, an OK still waiting on it is withdrawn the normal way (its
+    task moves on if that was all it waited for), and an active rule's retirement reaches the webhooks. `who`, when
+    given, is the Who it is stored with from then on. A rule already retired is left as it is."""
+    old = _get(c, rule_id)
+    if old["status"] == "retired":
+        return
+    _withdraw_ok(c, rule_id, why)
+    extra = {"decided_by": H.TICO_ACTOR, "decided_at": H.now()}
+    if who is not None:
+        extra["who"] = _json(who)
+    _save(c, rule_id, status="retired", extra=extra)
+    stored = _get(c, rule_id)
+    _audit(c, H.TICO_ACTOR, rule_id, _core(old), _core(stored), SimpleNamespace(via="", actor=H.TICO_ACTOR))
+    _event(c, H.TICO_ACTOR, "retired" if old["status"] == "active" else "skipped", rule_id, {"why": why})
+    if old["status"] == "active":
+        H.hook(
+            c,
+            "org_rule.retired",
+            rule_id,
+            lambda: {
+                "id": rule_id,
+                "kind": stored["kind"],
+                "text": stored["text"],
+                "source_id": stored["source_id"],
+                "retired_by": H.TICO_ACTOR,
+            },
+            H.TICO_ACTOR,
+        )
+
+
 def ok_given(c, grant, ctx):
     """The person OK'd a suggestion from its preview (task_asks.ON_OK), in that transaction: it is accepted as them, with
     their own rights, only on the clerk task it is bound to and while it is still the version they were shown. The OK is
@@ -2136,7 +2146,6 @@ def counts(c, auth, who):
 class RuleScope(Contract):
     everyone: bool = False
     all_bots: bool = False
-    outside_editions: bool = False
     groups: list[str] = Field(default_factory=list, max_length=100)
     bots: list[str] = Field(default_factory=list, max_length=100)
     people: list[str] = Field(default_factory=list, max_length=100)

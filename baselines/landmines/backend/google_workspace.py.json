@@ -1,0 +1,6 @@
+{
+  "backend/google_workspace.py": {
+    "core-imports-app": 2,
+    "no-install-closure": 1
+  }
+}

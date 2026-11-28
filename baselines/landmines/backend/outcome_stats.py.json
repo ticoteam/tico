@@ -1,0 +1,5 @@
+{
+  "backend/outcome_stats.py": {
+    "no-install-closure": 1
+  }
+}

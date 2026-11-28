@@ -1,0 +1,6 @@
+{
+  "backend/events.py": {
+    "core-imports-app": 3,
+    "no-install-closure": 2
+  }
+}

@@ -27,10 +27,6 @@ def _rule_scope(description):
             "bots": names,
             "people": names,
             "names": {**names, "description": "A group, person or bot, by id or name"},
-            "outside_editions": {
-                "type": "boolean",
-                "description": "What the Company page sends outside (its editions); the owner and admins only",
-            },
         },
     }
 
@@ -652,7 +648,6 @@ def _who(fields):
         fields.get("who_names"),
         everyone=fields.get("everyone"),
         all_bots=fields.get("all_bots"),
-        outside_editions=fields.get("outside_editions"),
     )
     return fields | ({"who": who} if who else {})
 
@@ -679,7 +674,6 @@ WHO = (
     Arg("who_names", "--who", action="append", metavar="NAME", into="who", part="names"),
     Arg("everyone", "--everyone", action="store_true", into="who"),
     Arg("all_bots", "--all-bots", action="store_true", into="who"),
-    Arg("outside_editions", "--outside-editions", action="store_true", into="who"),
 )
 WITH = (Arg("with_names", "--with", action="append", metavar="NAME", into="with", part="names"),)
 CITE = (

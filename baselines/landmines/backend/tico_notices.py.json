@@ -1,0 +1,5 @@
+{
+  "backend/tico_notices.py": {
+    "no-install-closure": 1
+  }
+}

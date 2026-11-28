@@ -6,7 +6,7 @@ draft. Budget 30 minutes.
 Inputs: teammates' weekly updates for the period (`tico update list --kind weekly`), any teammate the list does not show
 (`tico update list --bot <slug>`), and the period's first and last day.
 
-Outcome: `reports/company-update-YYYY-MM.md`, a draft the owner reviews. It is a file for review, not an edition.
+Outcome: `reports/company-update-YYYY-MM.md`, a draft the owner reviews. It is a file for review, not a published update.
 
 Done when: the draft is written and published as a file, the task names its path and the next step, and the task is done.
 
@@ -18,6 +18,6 @@ Done when: the draft is written and published as a file, the task names its path
 4. Put a source line under each figure: the update it came from and its date. A figure with no source is left out.
 5. End with a short "Left out" list: what you did not include and why (no source, private, or not yet decided).
 6. Publish it: `tico file publish reports/company-update-<YYYY-MM>.md`. Comment on the task with the path and "Review, then
-   draft and approve the edition on the Company page", then `tico task done`.
+   decide whether and where to share it", then `tico task done`.
 
 Write only what the updates say. A number you could not read is "not available", never a guess.

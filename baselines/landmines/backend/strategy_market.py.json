@@ -1,0 +1,6 @@
+{
+  "backend/strategy_market.py": {
+    "core-imports-app": 2,
+    "no-install-closure": 1
+  }
+}

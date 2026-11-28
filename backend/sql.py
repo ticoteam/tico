@@ -43,20 +43,6 @@ OPEN = {"rate_limits", "service_health", "learnings", "sqlite_master"}
 # A message's own read rule (guarded), as a view of the unfiltered messages that no caller reads by name: the views of
 # the tables read it, `messages` among them with the timeline's cut (a person's timeline shows only messages with a seq).
 READABLE_MESSAGES = "readable_messages"
-# The Company page's tables the owner reads as the page's API does; the readers' own tables are not here at all.
-COMPANY_PAGE_OWNER_TABLES = (
-    "company_page_settings",
-    "audiences",
-    "audience_sources",
-    "disclosure_revisions",
-    "disclosure_rules",
-    "editions",
-    "edition_sources",
-    "edition_checks",
-    "page_stats",
-    "stat_board_approvals",
-    "page_releases",
-)
 # Table-valued functions SQLite reports like tables of the main schema.
 TABLE_FUNCTIONS = {"json_each", "json_tree"}
 SAFE_COLUMNS = {
@@ -595,6 +581,7 @@ _TABLE_DEPS: dict[str, tuple[str, ...]] = {
     "attempt_events": ("attempts",),
     "attempt_inputs": ("attempts",),
     "attempt_conversations": ("attempts",),
+    "attempt_notes": ("attempts",),
     "bot_transition_checkpoints": ("conversations",),
     "kpi_readings": ("kpis",),
     "kpi_definitions": ("kpis",),
@@ -660,6 +647,7 @@ GUARDED_TABLES = frozenset(
         "attempt_events",
         "attempt_inputs",
         "attempt_conversations",
+        "attempt_notes",
         "bot_transition_checkpoints",
         "humans",
         "seats",
@@ -714,7 +702,6 @@ GUARDED_TABLES = frozenset(
         "slack_posts",
         "read_index",
         "task_file_reviews",
-        *COMPANY_PAGE_OWNER_TABLES,
     }
 )
 # Tables whose predicates or teammate masks consult TA.hidden(..., ("human", "group")).
@@ -1292,6 +1279,7 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None, private=No
         + (f" AND NOT (kind IN ('delta','message') AND attempt_id IN ({unsettled}))" if unsettled else ""),
         "attempt_inputs": by_attempt,
         "attempt_conversations": by_attempt,
+        "attempt_notes": by_attempt,
         "bot_transition_checkpoints": "conversation_id IN (SELECT id FROM conversations)",
         "humans": TA.sql_visible(c, who, "id", bare="human", unseen=unseen) if want("humans") else "0",
         # Recruiting seats are roles on the company chart that everyone sees (backend/lifecycle.py): their titles,
@@ -1349,14 +1337,13 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None, private=No
         # count(*) from the base table, which the authorizer rightly refuses.
         "listening_sources": "id IS NOT NULL" if admin and not bot else "id IS NULL",
         "listening_items": "id IS NOT NULL" if admin and not bot else "id IS NULL",
-        # The roster, the sign-in lists and roles, onboarding: for the owner and the Admins. Never the key that
-        # hashes roadmap visitors' addresses: with it the small IPv4 space turns every stored hash back into an address.
+        # The roster, the sign-in lists and roles, onboarding: for the owner and the Admins.
         # The setup research job (backend/strategy_setup.py) holds the owner's words and an unpublished draft, and the
         # imported company file (backend/company_import.py) its unpublished strategy: the owner's.
         # Nor the never-stuck reading's tasks and break sentences (health.NEVER_STUCK_TASKS_KEY): they name tasks an
         # Admin may not read. Its numbers (health:never_stuck) are readable.
         "registry_metadata": (
-            "key NOT IN ('roadmap_ip_secret','health:never_stuck:tasks')"
+            "key NOT IN ('health:never_stuck:tasks')"
             + ("" if owner else " AND key NOT IN ('strategy.draft_from','onboarding.company_file')")
         )
         if admin and not bot
@@ -1403,10 +1390,6 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None, private=No
         "OR id IN (SELECT blob_id FROM media_assets))",
         "archives": "1" if owner else "0" if bot else f"owner={me}",
         "service_jobs": "1" if owner else "0" if bot else f"requested_by={me}",
-        # The Company page's own rules, drafts, stats and approvals: the owner's, as the page's API shows them. The
-        # readers' tables (who they are, their sessions and invites, what they wrote, what they read) are not listed, so
-        # they are denied to everyone, the owner included.
-        **{table: "1" if owner else "0" for table in COMPANY_PAGE_OWNER_TABLES},
         "outbound_actions": f"channel='slack' AND id IN (SELECT id FROM {inner(READABLE_MESSAGES)})" if owner else "0",
         "slack_posts": by_message if owner else "0",
         # Which history rows are settled (backend/read_deps.py): read by the message and run gates, by no caller.
@@ -1909,6 +1892,12 @@ def connect(
             "live_meeting_access",
             "live_meeting_bots",
             "live_meeting_turns",
+            # A private task's reader by a meeting it came from or a call it follows up (hubdb.task_private_readable),
+            # read when a page's check asks whether its reader may read the task the page is attached to.
+            "meeting_participant_readers",
+            "meeting_task_links",
+            "call_follow_ups",
+            "calls",
             "letters",
             "letter_proofs",
             "letter_outbox_grants",

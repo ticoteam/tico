@@ -1,0 +1,6 @@
+{
+  "backend/context_search.py": {
+    "core-imports-app": 2,
+    "no-install-closure": 1
+  }
+}

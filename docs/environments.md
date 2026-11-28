@@ -26,7 +26,6 @@ lowercase letters, digits and single hyphens.
 | `runner.json` | 0600 | `enroll` | This computer's registration for this environment |
 | `state-<runner_id>/` | 0700 | the runner | `runner.sqlite`, `heartbeat`, `runtimes.json`, `runner-revision`, locks, warm sessions, routine checkouts |
 | `profiles/<name>/` | 0700 | `profile add` | One subscription: a provider home per runtime, plus `profile.json` |
-| `icon.png` | any | you, optionally | The app icon `scripts/app.sh --env <slug>` builds with |
 
 The **workspace** is deliberately outside this directory, because it is the team's own material
 rather than the product's state. It defaults to `~/Companies/<Company>`, is created mode 0700, and

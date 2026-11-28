@@ -703,3 +703,22 @@ test('phone: a task opens full screen over its board; its list pulls up from the
   await expect(page).toHaveURL(board);
   clean(page);
 });
+
+test("Library: an app page an agent made is marked App in Pages; it opens as a page, and Back returns to the list", async ({ browser, hub }) => {
+  // the shape of an agent's library page (a Creative Library): an app that reads files and keeps notes in its store
+  const text =
+    '<!doctype html><html><head><title>Creative library</title></head><body><h1>Creative library</h1>' +
+    '<p>Winners first, then the tired ones.</p></body></html>';
+  const { page: made } = await post<{ page: { file_id: string } }>(hub, 'pages', { name: 'creative-library.html', title: 'Creative library', text, app: 'reads=files,store' });
+  const page = await open(browser, hub, '/library/pages');
+  const row = page.locator('.page-line').filter({ hasText: 'Creative library' });
+  await expect(row).toBeVisible();
+  await expect(row.locator('.tag', { hasText: 'App' })).toBeVisible();
+  await row.click();
+  await expect(page).toHaveURL(new RegExp(`[?&]file=${made.file_id}`));
+  // the page itself, framed: its own heading inside the frame, under the page's title
+  await expect(page.frameLocator('iframe[title="Creative library"]').getByRole('heading', { name: 'Creative library' })).toBeVisible();
+  await page.goBack();
+  await expect(page.locator('.page-line').filter({ hasText: 'Creative library' })).toBeVisible();
+  clean(page);
+});

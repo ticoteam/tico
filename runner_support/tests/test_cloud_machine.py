@@ -316,8 +316,8 @@ def test_base_gives_sudo_and_the_boot_service_only_on_the_machine_it_prepares(ma
     assert fake.named("visudo") and ["systemctl", "enable", cm.UNIT] in fake.calls
     assert [c for c in fake.calls if "runner_support.engine" in c and "prepare" in c]
     unit = (tmp_path / "units" / cm.UNIT).read_text()
-    # `runner.cloud_machine`: a saved image may boot a checkout moved back to a release from before runner_support/.
-    assert f"ExecStart={m.python} -m runner.cloud_machine boot" in unit.splitlines()
+    # runner_support's own name: every release a machine may boot (MIN_RUNNER_RELEASE 0.6.0) has it (since 0.5.94).
+    assert f"ExecStart={m.python} -m runner_support.cloud_machine boot" in unit.splitlines()
     assert "Restart=on-failure" in unit and "WantedBy=multi-user.target" in unit
     marker = json.loads(cm.marker_path(machine.etc).read_text())
     assert marker == {"user": "user", "root": str(m.root), "release": "0.5.7"}
@@ -329,7 +329,8 @@ def test_base_gives_sudo_and_the_boot_service_only_on_the_machine_it_prepares(ma
 
 
 def test_the_boot_units_command_runs_through_the_runner_forwarder():
-    # What the saved unit starts, `python -m runner.cloud_machine boot`, reaches runner_support's boot (--help: no root).
+    # What an image saved before this release starts, `python -m runner.cloud_machine boot`, reaches runner_support's
+    # boot (--help: no root).
     root = Path(__file__).resolve().parents[2]
     old, new = (
         subprocess.run(
@@ -339,6 +340,49 @@ def test_the_boot_units_command_runs_through_the_runner_forwarder():
     )
     assert old.returncode == new.returncode == 0, old.stderr
     assert old.stdout == new.stdout and "boot" in old.stdout
+
+
+def old_boot_unit(m, units):
+    """The boot unit as an image saved before runner_support/ was named has it."""
+    units.mkdir(exist_ok=True)
+    text = cm.unit_text(m).replace("-m runner_support.cloud_machine", "-m runner.cloud_machine")
+    (units / cm.UNIT).write_text(text)
+    (units / cm.UNIT).chmod(0o644)
+    return text
+
+
+def test_a_boot_points_a_saved_images_boot_unit_at_runner_support_once(machine, tmp_path):
+    m, fake = machine()
+    units = tmp_path / "units"
+    old_boot_unit(m, units)
+    assert cm.boot(m, {}, unit_dir=units) == 0
+    assert (units / cm.UNIT).read_text() == cm.unit_text(m)
+    assert oct((units / cm.UNIT).stat().st_mode & 0o777) == "0o644"
+    assert fake.calls.count(["systemctl", "daemon-reload"]) == 1
+    assert cm.boot(m, {}, unit_dir=units) == 0
+    assert fake.calls.count(["systemctl", "daemon-reload"]) == 1  # already moved: nothing to reload
+
+
+@pytest.mark.parametrize("how", ["exits non-zero", "times out"])
+def test_a_failed_reload_puts_the_boot_unit_back_and_the_next_boot_tries_again(machine, tmp_path, how):
+    m, fake = machine()
+    units = tmp_path / "units"
+    text = old_boot_unit(m, units)
+    reloads = []
+
+    def run(command, **kw):
+        if command == ["systemctl", "daemon-reload"]:
+            reloads.append(command)
+            if len(reloads) == 1:
+                if how == "times out":
+                    raise subprocess.TimeoutExpired(command, 120)
+                return subprocess.CompletedProcess(command, 1, "", "")
+        return fake(command, **kw)
+
+    m.run = run
+    assert cm.boot(m, {}, unit_dir=units) == 0  # the boot goes on
+    assert (units / cm.UNIT).read_text() == text and len(reloads) == 2
+    assert cm.move_boot_unit(m, units) and (units / cm.UNIT).read_text() == cm.unit_text(m)
 
 
 class Healthz:
@@ -441,3 +485,34 @@ def test_an_unreadable_hub_release_skips_the_catch_up(machine, monkeypatch, body
 def test_hub_release_reads_healthz_and_strips_a_leading_v():
     assert cm.hub_release(HUB + "/", Healthz({"release": "v0.6.64"})) == "0.6.64"
     assert cm.hub_release(HUB, Healthz({"release": "0.7.0-rc.1"})) == "0.7.0-rc.1"
+
+
+def test_each_boot_records_whether_it_came_through_the_old_runner_package(machine, monkeypatch):
+    # `python -m runner.cloud_machine boot` (an image saved before v0.6.315) sets TICO_RUNNER_SHIM; the runner reads
+    # the file and reports it beside its release (runner-rs/src/follow.rs entry).
+    m, _ = machine()
+    assert cm.boot(m, {"TICO_RUNNER_SHIM": "1"}) == 0
+    assert (machine.etc / "tico" / "boot-entry").read_text() == "runner\n"
+    m, _ = machine()
+    assert cm.boot(m, {}) == 0
+    assert (machine.etc / "tico" / "boot-entry").read_text() == "runner_support\n"
+
+    # A boot that cannot write its record leaves none, never the last boot's: the runner then reports not reported.
+    def full(path, text, mode):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(cm, "write_root_file", full)
+    m, _ = machine()
+    assert cm.boot(m, {"TICO_RUNNER_SHIM": "1"}) == 0
+    assert not (machine.etc / "tico" / "boot-entry").exists()
+    assert any("could not record how this boot started" in line for line in machine.said)
+    monkeypatch.undo()
+    # The boot service's own start hands the word to boot() and takes it out of what boot starts.
+    monkeypatch.setenv("TICO_RUNNER_SHIM", "1")
+    for key in (cm.TOKEN, cm.HUB, cm.FILE):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(cm.os, "geteuid", lambda: 0)
+    m, _ = machine()
+    monkeypatch.setattr(cm, "load", lambda: m)
+    assert cm.main(["boot"]) == 0
+    assert (machine.etc / "tico" / "boot-entry").read_text() == "runner\n" and "TICO_RUNNER_SHIM" not in os.environ

@@ -1,0 +1,6 @@
+{
+  "backend/messaging.py": {
+    "core-imports-app": 5,
+    "no-install-closure": 1
+  }
+}

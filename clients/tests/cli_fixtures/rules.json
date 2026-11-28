@@ -440,7 +440,6 @@
    "writer",
    "--everyone",
    "--all-bots",
-   "--outside-editions",
    "--with",
    "Ada",
    "--where",
@@ -472,8 +471,7 @@
       "names": [
        "Ops",
        "writer"
-      ],
-      "outside_editions": true
+      ]
      },
      "with": {
       "names": [
@@ -502,8 +500,7 @@
        "writer"
       ],
       "everyone": true,
-      "all_bots": true,
-      "outside_editions": true
+      "all_bots": true
      },
      "with": {
       "names": [
@@ -728,7 +725,6 @@
    "Ops",
    "--everyone",
    "--all-bots",
-   "--outside-editions",
    "--with",
    "Ada",
    "--where",
@@ -760,8 +756,7 @@
       "everyone": true,
       "names": [
        "Ops"
-      ],
-      "outside_editions": true
+      ]
      },
      "with": {
       "names": [
@@ -789,8 +784,7 @@
        "Ops"
       ],
       "everyone": true,
-      "all_bots": true,
-      "outside_editions": true
+      "all_bots": true
      },
      "with": {
       "names": [
@@ -904,39 +898,11 @@
    "--all-bots",
    "--outside-editions"
   ],
-  "tools": [
-   [
-    "tico_rules_accept",
-    {
-     "id": "r1",
-     "operation_id": null,
-     "who": {
-      "all_bots": true,
-      "outside_editions": true
-     }
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
-   [
-    "POST",
-    "rules/r1/accept",
-    {
-     "who": {
-      "all_bots": true,
-      "outside_editions": true
-     }
-    }
-   ]
-  ],
-  "stdout": "{\n  \"ok\": true\n}\n",
-  "stderr": "",
-  "exit": 0
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico rules accept: error: unrecognized arguments: --outside-editions It takes: --all-bots, --everyone, --version, --who",
+  "exit": 64
  },
  {
   "argv": [

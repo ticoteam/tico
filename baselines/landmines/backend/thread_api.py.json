@@ -1,0 +1,6 @@
+{
+  "backend/thread_api.py": {
+    "core-imports-app": 1,
+    "no-install-closure": 2
+  }
+}

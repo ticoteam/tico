@@ -729,10 +729,16 @@ def db_header(root: Path) -> dict | None:
 # made or validated. Its answer is one JSON line, checked like anything else from a company.
 EXEC_PYTHON = "/opt/tico/.venv/bin/python"
 CONTAINER_DB = "/data/hub.sqlite"
+# "top" reads flight_sql from the recorder's own file beside it (backend/flight.py `path`: hub.sqlite -> hub.flight.db),
+# and from the server's database on a cell whose server is from before that file. A server on newer code that has not
+# made the file yet has the table in neither: no shapes, not an error.
 DB_SCRIPT = r"""
-import json, sqlite3, sys, time
+import json, os, sqlite3, sys, time
 mode, db, budget = sys.argv[1], sys.argv[2], float(sys.argv[3])
 start = time.monotonic()
+flight = os.path.splitext(db)[0] + ".flight.db"
+if mode == "top" and os.path.exists(flight):
+    db = flight
 c = sqlite3.connect("file:" + db + "?mode=ro", uri=True, timeout=1)
 c.execute("PRAGMA query_only=1")
 def cap(seconds):
@@ -742,9 +748,12 @@ out = {}
 if mode == "top":
     cap(budget)
     try:
-        out["sql_top"] = c.execute("SELECT fingerprint, SUM(n), SUM(total_ms), MAX(max_ms) FROM flight_sql WHERE created_at>=? "
-                                   "GROUP BY fingerprint ORDER BY 3 DESC LIMIT ?",
-                                   (int(sys.argv[4]), int(sys.argv[5]))).fetchall()
+        if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='flight_sql'").fetchone() is None:
+            out["sql_top"] = []
+        else:
+            out["sql_top"] = c.execute("SELECT fingerprint, SUM(n), SUM(total_ms), MAX(max_ms) FROM flight_sql "
+                                       "WHERE created_at>=? GROUP BY fingerprint ORDER BY 3 DESC LIMIT ?",
+                                       (int(sys.argv[4]), int(sys.argv[5]))).fetchall()
     except sqlite3.Error as e:
         out["error"] = str(e)
 elif mode == "db":

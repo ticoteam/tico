@@ -15,7 +15,7 @@ import { Segmented } from '@/kit/Segmented';
 import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
 import type { MotionChoice } from '@/motion';
-import { Section } from '@/pagekinds';
+import { ReadFault, Section } from '@/pagekinds';
 import { THEME_KEY, usePref, type Theme } from '@/prefs';
 import { Repositories, TeamIcon } from './Company';
 import { CompanyName } from './CompanyName';
@@ -27,6 +27,7 @@ import { ScreeningMore, SupportAccess } from './SecurityMore';
 import { Foot, Line, SwitchLine, Verb, act, useAgentFaces, useFaces } from './parts';
 import {
   accessQuery,
+  assistantOksQuery,
   supportAccessQuery,
   type AccessFull,
   type ScreeningFull,
@@ -81,10 +82,46 @@ export function General() {
           </Facts>
         </Section>
       )}
+      <AssistantOks />
       {pages.length > 0 && <PageOwners pages={pages} canChange={owners.data?.canChange === true} />}
       {access.data && <Repositories admin={access.data.you === 'owner' || access.data.you === 'admin'} owner={access.data.you === 'owner'} />}
       <TicoSection version={c?.version} update={c?.update} owner={me.data?.role === 'owner'} />
     </>
+  );
+}
+
+/** Your Assistant gives OKs for you when you tell it to (backend/assistant_oks.py): off until your own click turns it
+    on. Anyone acting for you (your Assistant, Agent Ops, a personal token) sees it and cannot change it (may_change). */
+function AssistantOks() {
+  const oks = useQuery(assistantOksQuery);
+  // One write at a time: the switch waits for the server's answer, so a quick on and off is sent in that order.
+  const [saving, setSaving] = useState(false);
+  if (!oks.data) {
+    return oks.isError ? (
+      <Section name="Assistant" target="setting:assistant">
+        <ReadFault what="Assistant" reads={[oks]} inline />
+      </Section>
+    ) : null;
+  }
+  const change = (on: boolean) => {
+    setSaving(true);
+    void act('settings.assistantGivesOks', { on }).finally(() => setSaving(false));
+  };
+  return (
+    <Section name="Assistant" target="setting:assistant">
+      <Facts label="Assistant">
+        <SwitchLine
+          label="Give OKs for me when I tell you to"
+          wrap
+          checked={oks.data.gives_oks}
+          disabled={!oks.data.may_change || saving}
+          onChange={change}
+        />
+        <div className="fact set-sw">
+          <p className="set-cmd-note">Stage OKs and approval pages only. Sends, money, files and access always need your own click.</p>
+        </div>
+      </Facts>
+    </Section>
   );
 }
 

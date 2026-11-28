@@ -231,11 +231,15 @@ Official SDK references consulted: [PostHog configuration](https://posthog.com/d
 
 ## The flight recorder
 
-Separate from the optional services above, every server keeps its own performance history in its database, so a slow
-or pinned server can be explained with one query and a release compared with the one before it. Nothing in it leaves
-the server. It is on unless `TICO_FLIGHT_RECORDER=0`; the request path pays for two clock reads and a queue append, and a
-background thread does the rest and writes once a minute in one short transaction (`backend/flight.py`), after writing
-the same rows to a local file that can be read without the server (below).
+Separate from the optional services above, every server keeps its own performance history in a database file of its
+own beside the server's (`hub.flight.db` next to `hub.sqlite`, owner-only), so a slow or pinned server can be explained
+with one query and a release compared with the one before it. Nothing in it leaves the server, and backups, dev copies
+and Litestream never carry it: it is disposable, and a missing or damaged file is made again and reads as empty
+meanwhile. It is on unless `TICO_FLIGHT_RECORDER=0`; the request path pays for two clock reads and a queue append, and a
+background thread does the rest and writes once a minute in one short transaction on that file's own lock
+(`backend/flight.py`), after writing the same rows to a local file that can be read without the server (below). A new
+file starts with the last hours of the recorder's rows the server's database held before the move, so the first update
+after it can still be compared with the release before.
 
 | Table | What | Kept |
 | --- | --- | --- |

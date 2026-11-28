@@ -5,6 +5,9 @@ Deadline work stays in the engine on its own cadence (scheduler.py): support tri
 approval expiry and the finance sweep. No model, and no customer tokens.
 """
 
+import logging
+import sqlite3
+
 from ..store import (
     H,
     reclaim_free_pages,
@@ -16,6 +19,7 @@ from ..store import (
 )
 
 RUN_HISTORY_DAYS = 30
+LOG = logging.getLogger("tico.maintenance")
 
 
 def _prune_history(c, now):
@@ -66,8 +70,13 @@ def run(c, ctx):
     events.sweep(store, now)  # live events keep a day
     triggers.sweep(store, now)  # webhook bodies keep their trigger's days, delivery ids 30
     at = H.parse_ts(now).timestamp()
-    flight.sweep(store, at)  # the flight recorder's minutes become hours
     performance.sweep(store, at)  # computers' minutes become ten-minute points
+    details = {}
+    try:
+        flight.sweep(store, at)  # the flight recorder's minutes become hours, in its own disposable file
+    except (sqlite3.Error, OSError) as exc:  # that file's trouble is not the server database's: the rest has run
+        LOG.warning("Flight recorder sweep skipped: %s", type(exc).__name__)
+        details["flight"] = f"not swept: {type(exc).__name__}"
     return {
         "status": "ran",
         "reason": "Done",
@@ -75,5 +84,5 @@ def run(c, ctx):
         "found": 0,
         "woke": 0,
         "cost_usd": 0.0,
-        "details": {},
+        "details": details,
     }

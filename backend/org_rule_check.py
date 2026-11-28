@@ -1293,102 +1293,6 @@ def refused(problem):
     return {"refused": problem}
 
 
-@SRC.scoped("rule-check")
-def outside_edition(store, primary, output, to=""):
-    """A Company page edition against the rules whose Who is Outside editions. Not `preflight`: that one skips a person's
-    writes and fails open, and an edition goes outside the company whoever wrote it. Here anything short of the judge
-    finding the whole text clean (a broken rule of any strength, checks Off, no engine, the budget, the day's cap, a
-    failed or malformed answer) is `held`. Runs outside any transaction. Returns {"outcome": "pass"|"held", "reason",
-    "broken", "rules"}; events and the answer never carry the text."""
-    rules = []
-
-    def result(outcome, reason=None, broken=()):
-        return {
-            "outcome": outcome,
-            "reason": reason,
-            "broken": list(broken),
-            "rules": [{"id": r["id"], "version": r["version"], "text": r["text"]} for r in rules],
-        }
-
-    try:
-        with store.read() as c:
-            rules = _rule_rows(R.outside_edition_rules(c))
-            if not rules:
-                return result("pass", "no_rules")
-            if not on(c):
-                return result("held", "checks_off")
-            level = RULE_LEVEL
-            qset = J.load_set(QUESTION_SET)
-            key = digest("outside_edition", "", [to], output, "", rules, qset["label"], level)
-            hit = c.execute("SELECT broken FROM org_rule_verdicts WHERE digest=?", (key,)).fetchone()
-            if hit:
-                broken, _ = _cached(hit[0])
-                return result("held", "broken", broken) if broken else result("pass")
-            # Every rule is judged, in one call unless the rules do not fit beside the text in one (`J.pack`: its size
-            # and the Gateway's MAX_QUESTIONS), never refused only for how many there are.
-            batches = J.pack(
-                rules,
-                lambda batch: (
-                    _questions(qset, batch),
-                    {
-                        "rules": [{"id": f"r{n}", "text": r["text"]} for n, r in enumerate(batch, 1)],
-                        "operation": "an edition sent outside the company",
-                        "output": output,
-                        "from": "the company",
-                        "to": [to] if to else [],
-                        "context": {},
-                    },
-                ),
-            )
-            if batches is None:
-                return result("held", "too_large")
-            engine = B.server_engine(store, c, primary)
-            if engine is None:
-                return result("held", "budget" if B.over_spend_cap(c, store.settings) else "no_engine")
-            if calls_today(c) + len(batches) > B.daily_cap(store.settings, "bot"):
-                return result("held", "day_cap")
-        cut = float(qset["thresholds"]["broken"])
-        broken, calls = [], []
-        for batch, questions, state in batches:
-            answer, error = _ask(calls_for(store), engine, state, questions, qset["label"], level)
-            if error:
-                return result("held", error)
-            if not isinstance(answer, dict):
-                return result("held", "shape")
-            answers = J.check_answers(answer.get("answers"), questions)
-            found = [batch[int(qid[1:]) - 1]["id"] for qid in questions if J.noul(answers, qid) >= cut]
-            broken += found
-            with store.transaction() as c:
-                calls.append(
-                    H.event(
-                        c,
-                        H.TICO_ACTOR,
-                        "judge.call",
-                        qset["label"],
-                        {
-                            "label": qset["label"],
-                            "questions": len(questions),
-                            "operation": "outside_edition",
-                            "level": level,
-                            "rules": [r["id"] for r in batch],
-                            "broken": len(found),
-                            **B.audit_detail(answer),
-                        },
-                    )
-                )
-        with store.transaction() as c:
-            c.execute(
-                "INSERT OR REPLACE INTO org_rule_verdicts(digest, broken, call_id, created_at) VALUES(?,?,?,?)",
-                (key, json.dumps(broken), calls[0]["id"], H.now()),  # the first call's id, as `preflight` caches
-            )
-        return result("held", "broken", broken) if broken else result("pass")
-    except J.JudgeError:
-        return result("held", "shape")
-    except Exception as exc:  # noqa: BLE001 - whatever went wrong, the edition is held for a person
-        LOG.warning("Edition rule check failed: %s", type(exc).__name__)
-        return result("held", "error")
-
-
 def holds(verdict):
     """Whether a verdict will hold the write (so a caller skips ask ingest's own call: a block skips it, and so does a
     refusal)."""
@@ -2993,7 +2897,12 @@ def send(c, who, hold_id, nonce, ingest=None, table=None, check=None, auth=None,
         result = fn(c, bot, hold, replay, ingest.ingest, gate, ingest.inputs)
     else:
         result = fn(c, bot, hold, replay, ingest, gate)
-    return {"hold": view_hold(c, who, _hold(c, hold_id), "reviewer"), "result": result}
+    if isinstance(result, dict) and result.get("refs"):
+        from .files import readable_page_refs
+
+        # The reviewer reads what was sent: each page it names only as they may read it (a thread post or edit).
+        result = {**result, "refs": readable_page_refs(c, auth, who, result["refs"])}
+    return {"hold": view_hold(c, who, _hold(c, hold_id), "reviewer", auth=auth), "result": result}
 
 
 def appeal(c, who, hold_id, why):

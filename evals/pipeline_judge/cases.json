@@ -2706,6 +2706,156 @@
    "expected": "not_met",
    "trap": "no_rollback",
    "source": "v2-qa-t329 with its Risk and rollback section cut"
+  },
+  {
+   "id": "dev-two-reviews-notes-only",
+   "domain": "dev",
+   "requirement": {
+    "name": "Review page",
+    "rubric": "Two reviews of the newest commit of every linked PR, each naming that commit and its model, and the page names the model that built the change: the second review's model is by a different maker than the builder's (it may share a maker with the first review), and say what each checked. Give each real defect its own finding with file:line, severity, and why it matters; a finding on the PR description may cite the file:line of the guideline it breaks. Skip style nits and diff summaries. Say when there are no findings."
+   },
+   "work": {
+    "title": "Dark mode toggle on Settings",
+    "spec": "Add a Dark mode toggle to the Settings page. Show it off and on, in light and dark themes.",
+    "work_version": 3,
+    "context": {
+     "heads": {
+      "acme/app#91": "4be1c0de9f2a7a3c5d0e1b2a3c4d5e6f7a8b9c0d"
+     }
+    },
+    "repo": "acme/app",
+    "pr": 91,
+    "author": "bot:builder"
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "review-notes-only.md",
+    "work_version": 0,
+    "text": "Review of acme/app PR 91 at 4be1c0de9f2a7a3c5d0e1b2a3c4d5e6f7a8b9c0d.\nBuilt by Builder-Model-5 (Builder Labs).\nReviewer 1 (model: Acme-Coder-7, Acme Labs) reviewed 4be1c0de9f2a7a3c5d0e1b2a3c4d5e6f7a8b9c0d. Read: settings/theme.py, settings/views.py, tests/test_theme.py. Ran: pytest tests/test_theme.py, 12 passed.\nReviewer 2 (model: Other-Model-3, Other Labs) reviewed 4be1c0de9f2a7a3c5d0e1b2a3c4d5e6f7a8b9c0d. Read the same three files and the PR description. Ran: the UI test for the toggle, passed.\nFindings\n- suggestion (non-blocking): the toggle's label could say \"Dark mode\" instead of \"Theme\".\n- note (non-blocking): consider caching the theme lookup later.\n"
+   },
+   "expected": "met",
+   "trap": null,
+   "source": "E-3516: a page with only non-blocking notes and no 'none block' line meets the combined Review check"
+  },
+  {
+   "id": "dev-two-reviews-unplaced-blocker",
+   "domain": "dev",
+   "requirement": {
+    "name": "Review page",
+    "rubric": "Two reviews of the newest commit of every linked PR, each naming that commit and its model, and the page names the model that built the change: the second review's model is by a different maker than the builder's (it may share a maker with the first review), and say what each checked. Give each real defect its own finding with file:line, severity, and why it matters; a finding on the PR description may cite the file:line of the guideline it breaks. Skip style nits and diff summaries. Say when there are no findings."
+   },
+   "work": {
+    "title": "Dark mode toggle on Settings",
+    "spec": "Add a Dark mode toggle to the Settings page. Show it off and on, in light and dark themes.",
+    "work_version": 3,
+    "context": {
+     "heads": {
+      "acme/app#91": "4be1c0de9f2a7a3c5d0e1b2a3c4d5e6f7a8b9c0d"
+     }
+    },
+    "repo": "acme/app",
+    "pr": 91,
+    "author": "bot:builder"
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "review-unplaced-blocker.md",
+    "work_version": 0,
+    "text": "Review of acme/app PR 91 at 4be1c0de9f2a7a3c5d0e1b2a3c4d5e6f7a8b9c0d.\nBuilt by Builder-Model-5 (Builder Labs).\nReviewer 1 (model: Acme-Coder-7, Acme Labs) reviewed 4be1c0de9f2a7a3c5d0e1b2a3c4d5e6f7a8b9c0d. Read: settings/theme.py, settings/views.py, tests/test_theme.py. Ran: pytest tests/test_theme.py, 12 passed.\nReviewer 2 (model: Other-Model-3, Other Labs) reviewed 4be1c0de9f2a7a3c5d0e1b2a3c4d5e6f7a8b9c0d. Read the same three files and the PR description. Ran: the UI test for the toggle, passed.\nFindings\n- issue (blocking): the toggle does not persist after reload. Fix before merge.\n"
+   },
+   "expected": "not_met",
+   "trap": "unplaced_blocker",
+   "source": "E-3516: cut from dev-two-reviews-notes-only, a blocking finding with no file:line"
+  },
+  {
+   "id": "dev-two-reviews-silent",
+   "domain": "dev",
+   "requirement": {
+    "name": "Review page",
+    "rubric": "Two reviews of the newest commit of every linked PR, each naming that commit and its model, and the page names the model that built the change: the second review's model is by a different maker than the builder's (it may share a maker with the first review), and say what each checked. Give each real defect its own finding with file:line, severity, and why it matters; a finding on the PR description may cite the file:line of the guideline it breaks. Skip style nits and diff summaries. Say when there are no findings."
+   },
+   "work": {
+    "title": "Dark mode toggle on Settings",
+    "spec": "Add a Dark mode toggle to the Settings page. Show it off and on, in light and dark themes.",
+    "work_version": 3,
+    "context": {
+     "heads": {
+      "acme/app#91": "4be1c0de9f2a7a3c5d0e1b2a3c4d5e6f7a8b9c0d"
+     }
+    },
+    "repo": "acme/app",
+    "pr": 91,
+    "author": "bot:builder"
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "review-silent.md",
+    "work_version": 0,
+    "text": "Review of acme/app PR 91 at 4be1c0de9f2a7a3c5d0e1b2a3c4d5e6f7a8b9c0d.\nBuilt by Builder-Model-5 (Builder Labs).\nReviewer 1 (model: Acme-Coder-7, Acme Labs) reviewed 4be1c0de9f2a7a3c5d0e1b2a3c4d5e6f7a8b9c0d. Read: settings/theme.py, settings/views.py, tests/test_theme.py. Ran: pytest tests/test_theme.py, 12 passed.\nReviewer 2 (model: Other-Model-3, Other Labs) reviewed 4be1c0de9f2a7a3c5d0e1b2a3c4d5e6f7a8b9c0d. Read the same three files and the PR description. Ran: the UI test for the toggle, passed.\n"
+   },
+   "expected": "not_met",
+   "trap": "silent_findings",
+   "source": "E-3516 QA: cut from dev-two-reviews-notes-only, the Findings block removed: a page that says nothing about what the reviews found"
+  },
+  {
+   "id": "dev-two-reviews-builders-maker",
+   "domain": "dev",
+   "requirement": {
+    "name": "Review page",
+    "rubric": "Two reviews of the newest commit of every linked PR, each naming that commit and its model, and the page names the model that built the change: the second review's model is by a different maker than the builder's (it may share a maker with the first review), and say what each checked. Give each real defect its own finding with file:line, severity, and why it matters; a finding on the PR description may cite the file:line of the guideline it breaks. Skip style nits and diff summaries. Say when there are no findings."
+   },
+   "work": {
+    "title": "Dark mode toggle on Settings",
+    "spec": "Add a Dark mode toggle to the Settings page. Show it off and on, in light and dark themes.",
+    "work_version": 3,
+    "context": {
+     "heads": {
+      "acme/app#91": "4be1c0de9f2a7a3c5d0e1b2a3c4d5e6f7a8b9c0d"
+     }
+    },
+    "repo": "acme/app",
+    "pr": 91,
+    "author": "bot:builder"
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "review-builders-maker.md",
+    "work_version": 0,
+    "text": "Review of acme/app PR 91 at 4be1c0de9f2a7a3c5d0e1b2a3c4d5e6f7a8b9c0d.\nBuilt by Other-Model-2 (Other Labs).\nReviewer 1 (model: Acme-Coder-7, Acme Labs) reviewed 4be1c0de9f2a7a3c5d0e1b2a3c4d5e6f7a8b9c0d. Read: settings/theme.py, settings/views.py, tests/test_theme.py. Ran: pytest tests/test_theme.py, 12 passed.\nReviewer 2 (model: Other-Model-3, Other Labs) reviewed 4be1c0de9f2a7a3c5d0e1b2a3c4d5e6f7a8b9c0d. Read the same three files and the PR description. Ran: the UI test for the toggle, passed.\nFindings\n- suggestion (non-blocking): the toggle's label could say \"Dark mode\" instead of \"Theme\".\n- note (non-blocking): consider caching the theme lookup later.\n"
+   },
+   "expected": "not_met",
+   "trap": "builders_maker",
+   "source": "E-3970: cut from dev-two-reviews-notes-only, the builder by Reviewer 2's maker: a second review by the builder's maker"
+  },
+  {
+   "id": "dev-two-reviews-no-builder",
+   "domain": "dev",
+   "requirement": {
+    "name": "Review page",
+    "rubric": "Two reviews of the newest commit of every linked PR, each naming that commit and its model, and the page names the model that built the change: the second review's model is by a different maker than the builder's (it may share a maker with the first review), and say what each checked. Give each real defect its own finding with file:line, severity, and why it matters; a finding on the PR description may cite the file:line of the guideline it breaks. Skip style nits and diff summaries. Say when there are no findings."
+   },
+   "work": {
+    "title": "Dark mode toggle on Settings",
+    "spec": "Add a Dark mode toggle to the Settings page. Show it off and on, in light and dark themes.",
+    "work_version": 3,
+    "context": {
+     "heads": {
+      "acme/app#91": "4be1c0de9f2a7a3c5d0e1b2a3c4d5e6f7a8b9c0d"
+     }
+    },
+    "repo": "acme/app",
+    "pr": 91,
+    "author": "bot:builder"
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "review-no-builder.md",
+    "work_version": 0,
+    "text": "Review of acme/app PR 91 at 4be1c0de9f2a7a3c5d0e1b2a3c4d5e6f7a8b9c0d.\nReviewer 1 (model: Acme-Coder-7, Acme Labs) reviewed 4be1c0de9f2a7a3c5d0e1b2a3c4d5e6f7a8b9c0d. Read: settings/theme.py, settings/views.py, tests/test_theme.py. Ran: pytest tests/test_theme.py, 12 passed.\nReviewer 2 (model: Other-Model-3, Other Labs) reviewed 4be1c0de9f2a7a3c5d0e1b2a3c4d5e6f7a8b9c0d. Read the same three files and the PR description. Ran: the UI test for the toggle, passed.\nFindings\n- suggestion (non-blocking): the toggle's label could say \"Dark mode\" instead of \"Theme\".\n- note (non-blocking): consider caching the theme lookup later.\n"
+   },
+   "expected": "not_met",
+   "trap": "no_builder",
+   "source": "E-3970: cut from dev-two-reviews-notes-only, the builder line removed: a page that does not name the model that built the change"
   }
  ]
 }

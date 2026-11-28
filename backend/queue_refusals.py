@@ -2,12 +2,16 @@
 
 from typing import Any, cast
 
-from . import execution as E, hubdb as H, usage_limits
+from . import execution as E, hubdb as H, login_holds, usage_limits
 
 EVENT = 'job.refusal-observed'
 KEY = 'queue-refusal:'
 REFRESH_SECONDS = 60
 MAX_GAP_SECONDS = 300
+# Refusals that hold a job on purpose, each until a person or a date ends it, never an aged refusal: a card's lane
+# held, a card On ice (D69) until a person moves it out, and a Tico notice on a snoozed task (task_wait,
+# docs/dev/pipelines-v3.md rule 7) until the snooze ends. Health's slow-queue check shows the last as resting.
+ON_PURPOSE = frozenset({'lane_held', 'on_ice', 'task_wait'})
 
 
 def state(c, bot):
@@ -61,10 +65,9 @@ def current(c, settings, bot, default=None, loads=None):
         tuple[Any, Any, Any, Any],
         E.bot_claimable(c, settings, row['runner_id'], bot, default, oldest=True, with_job=True, loads=loads),
     )
-    # A job held for a card On ice (D69) waits on purpose until a person moves the card out: never an aged refusal.
-    if not job or not why or why in ('lane_held', 'on_ice'):
+    if not job or not why or why in ON_PURPOSE:
         return {}
-    return {
+    value = {
         'bot': bot,
         'runner_id': row['runner_id'],
         'name': row['display_name'] or bot,
@@ -72,6 +75,59 @@ def current(c, settings, bot, default=None, loads=None):
         'oldest': created,
         'reason': why,
     }
+    if why == 'payer_wait' and (payer := payer_wait(c, settings, row['runner_id'], bot, loads)):
+        value['payer'] = payer
+    elif why == 'cooling_off' and (limit := login_limit(c, settings, row['runner_id'], bot)):
+        value['payer'] = limit
+    return value
+
+
+def limit_words(payer):
+    """ "It hit its Antigravity usage limit (resets Nov 26 17:40 UTC)" from a recorded {'plan', 'until'}, or ""."""
+    from .model_subscriptions import _when
+
+    plan, until = (payer or {}).get('plan'), (payer or {}).get('until')
+    return f'It hit its {plan} usage limit (resets {_when(until)})' if plan and until else ''
+
+
+def login_limit(c, settings, runner_id, bot):
+    """{'plan', 'until'} when the bot's own login waits out its provider's usage limit (login_holds), else {}: a
+    capacity or payment hold on it is no usage limit."""
+    from .model_subscriptions import RUNTIME_LABELS
+    from .read_cache import one
+    from .shared_bots import follow
+
+    config = one(c, E.CLAIM_CONFIG_SQL, (bot,))
+    if not config:
+        return {}
+    login = E._limits_login(c, settings, runner_id, bot, follow(c, bot, H._json(config['config'], {}) or {}))
+    if not login:
+        return {}
+    hold = login_holds.get(c, *login)
+    # A busy provider (capacity) says nothing of the plan, and a payment hold ends at a retry, not a reset.
+    if not hold.get('until') or hold.get('capacity') or login_holds.payment(hold.get('error')):
+        return {}
+    runtime = login[2]
+    return {'plan': RUNTIME_LABELS.get(runtime, runtime), 'until': hold['until']}
+
+
+def payer_wait(c, settings, runner_id, bot, loads=None):
+    """What the bot's Paid by waits for, so the chat can say it (thread_bot_status): {'text'} as Health says it, and
+    'plan' and 'until' when a plan waits out its usage limit. {} when no queued job waits on a payer now."""
+    from .read_cache import one
+    from .shared_bots import follow
+
+    runner = one(c, E.RUNNER_SQL, (runner_id,))
+    config = one(c, E.CLAIM_CONFIG_SQL, (bot,))
+    if not runner or not config:
+        return {}
+    followed = follow(c, bot, H._json(config['config'], {}) or {})
+    for _, payment in E.waiting_payers(c, settings, runner, bot, followed, loads):
+        out = {'text': payment.reason}
+        if payment.limited and payment.until:
+            out.update(plan=payment.limited, until=payment.until.isoformat())
+        return out
+    return {}
 
 
 def plan(c, settings, bot, at, previous=None):

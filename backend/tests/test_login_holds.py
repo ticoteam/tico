@@ -1157,3 +1157,27 @@ def test_canonical_parses_the_readiness_once_per_transaction(api, monkeypatch):
             ),
         )
         assert login_holds.canonical(c, rid, "solo", "fake") == ""
+
+
+def test_a_plan_read_since_the_limit_ends_only_a_quota_hold_it_shows_room_on(api):
+    """login_holds.after_reading: a usage read asked after the limit was met, with every window below it, ends the
+    plan's usage-limit hold as Try now does (`cut` kept). A refusal or a busy model is not the plan's quota, and a read
+    of the week alone says nothing of a 5-hour hold."""
+    week = "You've hit your weekly limit · resets Dec 1, 5am (UTC)"
+    five = "You've hit your session limit · resets 2:40am (UTC)"
+    refused = "API Error: 400 This organization does not support this model"
+    hit = H.shift(H.now(), seconds=-60)
+    with api.app.state.store.transaction() as c:
+        for sid, notice in (("w", week), ("f", five), ("r", refused)):
+            login_holds.record(c, "", login_holds.subscription_login(sid), "claude", hit, error=notice)
+        before = H.shift(hit, seconds=-1)
+        assert not login_holds.after_reading(c, "w", "claude", before, 4)  # asked before the limit
+        assert not login_holds.after_reading(c, "w", "claude", H.now(), 99.5)  # still at it
+        assert not login_holds.after_reading(c, "f", "claude", H.now(), 4, weekly_only=True)
+        assert not login_holds.after_reading(c, "r", "claude", H.now(), 4)
+        assert not login_holds.after_reading(c, "none", "claude", H.now(), 4)
+        held = login_holds.get(c, "", login_holds.subscription_login("w"), "claude")["until"]
+        assert login_holds.after_reading(c, "w", "claude", H.now(), 4, weekly_only=True)
+        hold = login_holds.get(c, "", login_holds.subscription_login("w"), "claude")
+        assert hold["until"] <= H.now() and hold["cut"] == held
+        assert login_holds.after_reading(c, "f", "claude", H.now(), 4)  # a read with the 5 hours too

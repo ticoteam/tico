@@ -339,9 +339,12 @@ export function Conversation({ id, variant, title, actor, session, from, starter
 
   /* ---- a jump from the Outline: page back until the message is loaded, then bring it to the middle */
   const { fetchNextPage } = timeline;
+  // Listened for once the first page is in (the list is drawn then, even for an empty page with older ones behind
+  // it): a jump that waited for this chat pages back from there.
+  const drawn = !!timeline.data;
   useEffect(
     () =>
-      onJump(id, (message) => {
+      !drawn ? undefined : onJump(id, (message) => {
         void (async () => {
           for (let n = 0; n <= JUMP_PAGES; n++) {
             if (scroller.current?.scrollToKey(message)) return;
@@ -353,7 +356,7 @@ export function Conversation({ id, variant, title, actor, session, from, starter
           if (!scroller.current?.scrollToKey(message)) toast({ text: 'That message is not in this chat', kind: 'failed' });
         })();
       }),
-    [id, fetchNextPage],
+    [id, fetchNextPage, drawn],
   );
 
   /* ---- where the person is: scrolled up past UP_PX, the asks over the box fade; up more than a window, Jump to latest
@@ -469,7 +472,7 @@ export function Conversation({ id, variant, title, actor, session, from, starter
             );
           if (it.k === 'did') return <DidLine text={it.text} fault={it.fault} />;
           if (it.k === 'live') return <LiveRow r={it.r} variant={variant} text={it.text} />;
-          if (it.k === 'stuck') return <ReplyLine bot={it.bot} name={it.name} variant={variant} why="stuck" detail={it.detail} />;
+          if (it.k === 'stuck') return <ReplyLine key={`${it.key}:${it.code ?? ''}:${it.detail}`} bot={it.bot} name={it.name} variant={variant} why="stuck" detail={it.detail} fix={it.fix} code={it.code} until={it.until} />;
           if (it.k === 'quiet') return <ReplyLine bot={it.bot} variant={variant} why={it.why} />;
           if (it.k === 'reply')
             return myId ? (

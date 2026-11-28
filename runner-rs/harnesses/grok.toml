@@ -6,6 +6,8 @@ host = "grok"
 runtime = "grok"
 executable = "grok"
 providers = ["xai"]
+# Runs on the generic ACP host (runner-rs/src/hosts/acp_host.rs), set up by [acp] below.
+protocol = "acp"
 
 [install]
 method = "npm"
@@ -27,6 +29,29 @@ command = ["login", "--device-auth"]
 terminal = false
 logout = ["logout"]
 files = [".grok/auth.json"]
+
+# `grok agent -m <model> --reasoning-effort <effort> --always-approve --no-leader stdio`, one process per bot.
+[acp]
+args = ["agent", "-m", "{model}", "--reasoning-effort", "{effort}", "--always-approve", "--no-leader", "stdio"]
+label = "grok agent"
+default_model = "grok-4.6"
+# Grok 4.6's four reasoning levels; any other is high.
+efforts = ["low", "medium", "high", "xhigh"]
+default_effort = "high"
+mcp_servers = "acp"
+resume = "load"
+# --always-approve: a tool's permission the agent still asks for is given.
+permission = "allow"
+request_timeout_s = 120
+stop_wait_s = 5
+
+# The operator's own MCP servers Grok would pick up from other tools' files (~/.claude.json, ~/.cursor/mcp.json) and
+# from the xAI account: off, so a bot gets its declared servers. Grok has no switch for servers in its own
+# ~/.grok/config.toml or in plugins; those still load.
+[acp.env]
+GROK_CLAUDE_MCPS_ENABLED = "false"
+GROK_CURSOR_MCPS_ENABLED = "false"
+GROK_MANAGED_MCPS_ENABLED = "false"
 
 # What Tico does differently for this CLI (docs/harnesses.md, Capabilities).
 [capabilities]

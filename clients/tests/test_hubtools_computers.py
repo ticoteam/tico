@@ -102,7 +102,10 @@ def test_computer_restart_finds_the_computer_by_name_and_versions_says_who_runs_
         tool("tico_computer_restart", api, computer="nowhere")
 
     code, got = cli(monkeypatch, api, "computer", "versions")
-    assert got["summary"] == "Server 0.6.0-rc.3 (idle); computers: 1 current, 1 failed."
+    assert got["summary"] == (
+        "Server 0.6.0-rc.3 (idle); computers: 1 current, 1 failed. Starts through the old runner package: 0; "
+        "through runner_support: 0; not reported: 2."
+    )
     assert got["computers"][1] == {
         "computer": "Ana's Mac",
         "id": "r2",
@@ -111,12 +114,33 @@ def test_computer_restart_finds_the_computer_by_name_and_versions_says_who_runs_
         "runner_version": "0.5.1",
         "state": "failed",
         "wanted": "0.6.0-rc.3",
+        "starts": "Not reported",
         "error": "disk full",
     }
     # Only the Owner reads the server's own update; an admin still sees the computers.
     api.routes[("GET", "system/update")] = APIError("forbidden", "Only the owner sees update progress", 403)
     got = tool("tico_computer_versions", api)
-    assert got["server"] is None and got["summary"] == "computers: 1 current, 1 failed."
+    assert got["server"] is None and got["summary"].startswith("computers: 1 current, 1 failed. ")
+
+
+def test_computer_versions_counts_which_computers_still_start_through_the_old_runner_package(monkeypatch):
+    def computer(n, starts):
+        update = {"state": "current"} | ({"starts": starts} if starts else {})
+        return {"id": f"r{n}", "label": f"C{n}", "online": True, "release": "0.6.341", "update": update}
+
+    rows = [computer(1, "old_package"), computer(2, "runner_support"), computer(3, "runner_support"), computer(4, "")]
+    api = Api({("GET", "computers"): {"computers": rows}, ("GET", "system/update"): APIError("no", "Owner only", 403)})
+    got = tool("tico_computer_versions", api)
+    assert [line["starts"] for line in got["computers"]] == [
+        "Starts through the old runner package",
+        "Starts through runner_support",
+        "Starts through runner_support",
+        "Not reported",  # a server from before the report sends no `starts`
+    ]
+    assert got["starts"] == {"old_package": 1, "runner_support": 2, "not_reported": 1}
+    assert got["summary"] == (
+        "computers: 4 current. Starts through the old runner package: 1; through runner_support: 2; not reported: 1."
+    )
 
 
 def test_upgrade_commands_reach_the_installation_routes(monkeypatch):
@@ -241,3 +265,16 @@ def test_over_mcp_a_required_key_sent_as_null_resets_where_its_schema_allows_nul
     assert half["error"] == "validation" and "expected integer" in half["detail"]
     assert call("tico_computer_turns_at_once", {"computer": "c1", "limit": True})["isError"]
     assert len(api.calls) == sent
+
+
+def test_the_computer_list_names_why_queued_work_waits_with_its_code():
+    """#3967 AC-4: `tico computer list` said nothing of the Turns line, so "checkout is on <computer>" was only on
+    Health. Each computer's summary carries its Turns line and each wait's words and code."""
+    from clients.commands.computers import computer_summary
+
+    wait = {"reason": "checkout is on Shared cloud machine", "count": 23, "code": "worktree_home", "oldest": "x"}
+    row = {"id": "pc_1", "label": "Builder Mac", "turn_counts": {"waits": [wait]}}
+    row["turn_summary"] = "0 running · 0 starting · 23 waiting: checkout is on Shared cloud machine (oldest 2 h)"
+    summary = computer_summary(row)
+    assert summary["turns"] == row["turn_summary"]
+    assert summary["waits"] == [{"words": "checkout is on Shared cloud machine", "count": 23, "code": "worktree_home"}]

@@ -89,12 +89,54 @@ def legacy_review_stages(c, record):
     return record
 
 
+MERGE_PURPOSE = PS._MERGE_PURPOSE
+RELEASE_PURPOSE_BEFORE = PS.EARLIER["engineering-release/purpose"][-1]
+
+
+def _as_before(c, key, record):
+    """The pair as ensure_presets made it before Nov 26: Engineering with a QA a person approves and a Merge stage
+    before Release; Product whose Ideas move on by themselves and whose Spec a person approves, with no Approval."""
+    stages = record["stages"]
+    if key == "engineering":
+        qa = next(s for s in stages if s["id"] == PS.QA_STAGE)
+        qa["purpose"] = PS._QA_PURPOSE_PERSON
+        page = next(r for r in qa["requirements"] if r["kind"] == "page")
+        page.update(who_oks="people_only", person_id=S.ok_person(c, record["manager_id"]))
+        release = next(s for s in stages if s["id"] == "engineering-release")
+        merge = {
+            **release,
+            "id": "engineering-merge",
+            "name": "Merge",
+            "purpose": MERGE_PURPOSE,
+            "late_minutes": 120,
+            "requirements": [PS.github("pr_merged")],
+        }
+        release.update(purpose=RELEASE_PURPOSE_BEFORE, on_enter={}, requirements=[PS.github("in_release")])
+        stages.insert(stages.index(release), merge)
+        return legacy_review_stages(c, record)
+    ideas = next(s for s in stages if s["id"] == PS.IDEAS_STAGE)
+    ideas.update(by_hand=False, purpose=PS._IDEAS_PURPOSE_ON_ROOM)
+    approval = next(s for s in stages if s["id"] == PS.SPEC_OK_STAGE)
+    spec = next(s for s in stages if s["id"] == "product-spec")
+    spec["requirements"] = approval["requirements"]
+    stages.remove(approval)
+    return record
+
+
 def legacy_pair(c):
-    """The Product and Engineering pair (pipeline_settings.LEGACY) as a company set up before 0.6 has it: made the way
-    ensure_presets made them then, with the Product factory. Its next start keeps them and their upkeep, and does not
-    make the one-pipeline Product beside them. Call it before ensure_presets."""
+    """The Product and Engineering pair as a company set up before 0.6 has it: made the way ensure_presets made them
+    then, with the Product factory (`_as_before`). Its next start keeps them and their upkeep. Call it before
+    ensure_presets."""
     PS._ensure_factory(c)
-    for key in ("engineering", "product"):
+    for key in PS.PAIR:
         if not PS._made_from(c, key):
-            record = PS.preset(c, key)
-            PS.save(c, PS.SYSTEM, legacy_review_stages(c, record) if key == "engineering" else record)
+            PS.save(c, PS.SYSTEM, _as_before(c, key, PS.preset(c, key)))
+
+
+def features(c):
+    """Features (pipeline_settings.LEGACY) as a company set up from 0.6 until Nov 26 has it: made the way
+    ensure_presets made it then, with the Product factory. Its next start keeps it and makes no pair beside it. Call it
+    before ensure_presets."""
+    PS._ensure_factory(c)
+    if not PS._made_from(c, PS.FEATURES):
+        PS.save(c, PS.SYSTEM, PS.preset(c, PS.FEATURES))

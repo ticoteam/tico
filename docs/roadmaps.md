@@ -1,22 +1,18 @@
-# Public roadmaps
+# Roadmap
 
-The public roadmap is off in 0.6.0-rc.1. It comes back with the Product pipeline, built on its stages
-([Product](dev/pipelines-v3.md#product)).
+The public roadmap, its pages under `/public/roadmaps/{label}`, its settings and its visitor routes, is removed, but
+for one: `DELETE /public/roadmaps/{label}/tasks/{id}/requesters/{token}` still removes an outside requester's details
+with no sign-in, so the token handed back when they were recorded always takes them back, from a task in the trash
+too. Tokens are bound to one task; an unknown or spent token gets 404. What else stays is signed in:
 
-Until then:
-
-- Every public route under `/public/roadmaps/{label}` answers 404 "The public roadmap is not available yet.", except
-  one: `DELETE /public/roadmaps/{label}/tasks/{id}/requesters/{token}` still removes a visitor's request, so a visitor
-  can always take back their contact details. Tokens are bound to one task; an unknown token gets 404.
-- The settings are kept and stay editable: `GET` and `POST /api/v2/roadmaps/settings`, `tico roadmap settings`
-  (owners and admins). An update is partial and an empty one is refused.
-- A task's requesters stay internal and work as before: `GET`/`POST /api/v2/tasks/{id}/requesters`,
+- A task's requesters are internal: `GET`/`POST /api/v2/tasks/{id}/requesters`,
   `POST .../requesters/{requester_id}` (partial update) and `POST .../requesters/{requester_id}/delete`, and
   `tico task requesters`, `tico task requester-save`, `tico task requester-remove`. Lists are paged and never return
   tokens. Teammate status comes from a verified actor, never from an email claim.
-- The signed-in Roadmap is back on the Product pipeline: `GET /api/v2/roadmap-tasks` ranks the Product pipeline's
-  tasks the caller may read by their requesters (`sort`: `requester_count`, `external_requesters`, `important`,
-  `organization`, `size`; `direction`: `desc` or `asc`), and answers 404 for a company with no Product pipeline.
+- The Roadmap ranks the Product pipeline: `GET /api/v2/roadmap-tasks` (`tico roadmap tasks`) ranks the Product
+  pipeline's tasks the caller may read by their requesters (`sort`: `requester_count`, `external_requesters`,
+  `important`, `organization`, `size`; `direction`: `desc` or `asc`), and answers 404 for a company with no Product
+  pipeline.
 
 ## Client addresses behind a proxy
 
@@ -37,5 +33,5 @@ addresses, never a range shared with untrusted machines.
 `TICO_CLIENT_IP_HEADER=x-forwarded-for` (default) works behind both Caddy and cloudflared: the relay appends its
 peer to the chain, and the API chooses the rightmost untrusted address. `TICO_CLIENT_IP_HEADER=cf-connecting-ip` is
 for a deployment whose only trusted ingress is cloudflared. Both processes receive `TICO_TRUSTED_PROXIES` through
-the standard server command and Docker Compose. Restart after changing these environment settings. Roadmap settings
-and requester updates are partial: omitted fields keep their current values, and an empty update is rejected.
+the standard server command and Docker Compose. Restart after changing these environment settings. Requester updates are
+partial: omitted fields keep their current values, and an empty update is rejected.

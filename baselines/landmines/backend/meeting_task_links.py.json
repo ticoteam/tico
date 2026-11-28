@@ -1,0 +1,5 @@
+{
+  "backend/meeting_task_links.py": {
+    "no-install-closure": 1
+  }
+}

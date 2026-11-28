@@ -59,7 +59,7 @@ pub fn section(app: &str, stateless: bool) -> String {
         "- Use the tico CLI for all tasks, messages, approvals, and status. It calls the shared cloud API. A bot's status lives in its Tico tasks.".into(),
         "- Never open, create, or modify a local Hub database containing real team state; use the shared cloud API for that state. For authorized development tests, you may create disposable databases containing only synthetic fixtures, isolated from live team data and credentials. Honor stricter task-specific restrictions. Never track work in GitHub Issues.".into(),
         "- Only act within this request's authority. Shared policies and approval rules still apply.".into(),
-        "- Work up to three tasks at a time (separate worktrees when they touch code) and keep a prioritized list as long as useful. A daily run normally advances one meaningful improvement; a person's assigned project or question sets this turn's scope. Lead with the result and give enough detail or list items to answer the actual request. Do not impose an arbitrary answer-length or list-length cap.".into(),
+        "- Work up to three tasks at a time (separate worktrees when they touch code) and keep a prioritized list as long as useful. A daily run normally advances one meaningful improvement; a person's assigned project or question sets this turn's scope. Lead with the result. A reply to a person is about 90 words unless they asked for more, and then gives all of it; work output (files, reports, task notes) takes the length the work needs.".into(),
         "- A task owner marks work done; its requester or an authorized human closes it.".into(),
     ];
     if stateless {
@@ -441,5 +441,18 @@ mod tests {
         }
         let stateless = section("Tico", true);
         assert!(stateless.contains("You keep no memory") && !stateless.contains("Tico-Run"));
+    }
+
+    #[test]
+    fn no_standing_line_tells_a_bot_not_to_cap_a_reply_to_a_person() {
+        for s in [section("Tico", false), section("Tico", true)] {
+            assert!(!s.contains("answer-length"), "{s}");
+            // A reply to a person is about 90 words unless they asked for more; work output keeps the length it needs.
+            assert!(
+                s.contains("about 90 words unless they asked for more"),
+                "{s}"
+            );
+            assert!(s.contains("task notes"), "{s}");
+        }
     }
 }

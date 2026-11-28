@@ -450,22 +450,10 @@ def test_a_typed_check_is_kept_exactly_and_judges_one_actions_params(api):
     rule(api, {**body, "exact_check": {**REFUND_CAP, "per": "day"}}, expected=422)
     toward = {**body, "toward_scope": ["entity:organization/acme-lights"]}
     rule(api, {**toward, "exact_check": REFUND_CAP}, expected=422)  # a rule checked in code takes no typed check
-    outside = {"kind": "internal", "text": "Editions quote no refund over $100.", "who": {"outside_editions": True}}
-    rule(api, {**outside, "exact_check": REFUND_CAP}, expected=422)  # no teammate's write meets it
     coded = rule(api, toward)
     edit(api, coded["id"], {"version": coded["version"], "exact_check": REFUND_CAP}, expected=422)
     made = rule(api, {**body, "exact_check": REFUND_CAP})
     assert made["exact_check"] == REFUND_CAP
-    # The Who it ends with is checked with its check, on edit and on accept with a new Who.
-    moved = edit(api, made["id"], {"version": made["version"], "who": {"outside_editions": True}}, expected=422)
-    assert "outside" in moved["error"]["detail"]
-    drafted = rule(api, {**body, "who": {"bots": ["ops"]}, "exact_check": REFUND_CAP}, token="ops-test")
-    accepted = api.post(
-        f"/api/v2/rules/{drafted['id']}/accept",
-        headers=headers("ana-test"),
-        json={"version": drafted["version"], "who": {"outside_editions": True}},
-    )
-    assert accepted.status_code == 422, accepted.text
     lists = rule(
         api,
         {
@@ -563,3 +551,72 @@ def test_a_completed_company_without_a_constitution_gets_it_at_its_next_start(ap
         api.app.state.onboarding.complete_company(c)
     made = get(api, "rules/counts")["constitution"]
     assert made and made["title"] == "Constitution"
+
+
+def test_outside_editions_is_no_longer_a_who(api):
+    """The Company page is gone, so no edition reads a rule: a Who of Outside editions is refused like any unknown
+    field, on add, edit and accept, and never stored."""
+    org(api)
+    outside = {"kind": "internal", "text": "Editions quote no refund over $100.", "who": {"outside_editions": True}}
+    refused = rule(api, outside, expected=422)
+    assert "outside_editions" in refused["error"]["detail"]
+    rule(api, {**outside, "who": {"outside_editions": True, "bots": ["ops"]}}, expected=422)
+    made = rule(api, {**outside, "who": {"bots": ["ops"]}})
+    edit(api, made["id"], {"version": made["version"], "who": {"outside_editions": True}}, expected=422)
+    drafted = rule(api, {**outside, "who": {"bots": ["ops"]}}, token="ops-test")
+    accepted = api.post(
+        f"/api/v2/rules/{drafted['id']}/accept",
+        headers=headers("ana-test"),
+        json={"version": drafted["version"], "who": {"outside_editions": True}},
+    )
+    assert accepted.status_code == 422, accepted.text
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM org_rules WHERE who LIKE '%outside_editions%'").fetchone()
+
+
+def test_a_stored_outside_editions_who_is_retired_alone_and_dropped_beside_teammates(api):
+    """Rules stored before the Company page went: one whose only Who was Outside editions is retired (it never named a
+    teammate, and must not read as Everyone), its open OK taken back; beside teammates the flag is dropped and the rule
+    still applies to them."""
+    import importlib
+
+    from backend import task_asks as K
+
+    migration = importlib.import_module("backend.migrations.20261127102111_retire_outside_editions_who")
+    org(api)
+    builtin_off(api)
+    base = {"kind": "internal", "text": "Editions quote no refund over $100."}
+    alone = rule(api, {**base, "who": {"bots": ["ops"]}})
+    beside = rule(api, {**base, "who": {"bots": ["ops"]}})
+    draft = rule(api, {**base, "who": {"bots": ["ops"]}}, token="ops-test")
+    plain = rule(api, {**base, "who": {"everyone": True}})
+    with api.app.state.store.transaction() as c:
+        outside_only = json.dumps(
+            {"everyone": False, "all_bots": False, "groups": [], "bots": [], "people": [], "outside_editions": True}
+        )
+        c.execute("UPDATE org_rules SET who=? WHERE id IN (?,?)", (outside_only, alone["id"], draft["id"]))
+        c.execute(
+            "UPDATE org_rules SET who=json_set(who, '$.outside_editions', json('true')) WHERE id=?", (beside["id"],)
+        )
+        subject = O.OK_SUBJECT + draft["id"]
+        asked = K.ask_ok(
+            c, "bot:ops", "ana", O.OK_LINE, shows=[subject], subject=subject, content={"rule": draft["id"]}
+        )
+        before = {r["id"]: dict(r) for r in c.execute("SELECT * FROM org_rules")}
+        migration.up(c)
+        after = {r["id"]: dict(r) for r in c.execute("SELECT * FROM org_rules")}
+        for kept in (alone, draft):
+            assert after[kept["id"]]["status"] == "retired"
+            assert after[kept["id"]]["decided_by"] == H.TICO_ACTOR
+            assert after[kept["id"]]["version"] == before[kept["id"]]["version"] + 1
+        assert after[beside["id"]]["status"] == "active"
+        assert json.loads(after[beside["id"]]["who"])["bots"] == ["ops"]
+        assert not any("outside_editions" in row["who"] for row in after.values())
+        assert after[plain["id"]] == before[plain["id"]]
+        assert [r["id"] for r in O.matching(c, "bot:ops") if r["id"] in (alone["id"], beside["id"])] == [beside["id"]]
+        assert K.standing(c, asked["requirement_id"]) == K.WITHDRAWN
+    # History keeps the old Who and gains the retirement, by Tico, as its newest version.
+    seen = get(api, f"rules/{alone['id']}/history")["versions"]
+    assert [v["after"]["version"] for v in seen] == [2, 1]
+    assert (seen[0]["actor"], seen[0]["after"]["status"]) == (H.TICO_ACTOR, "retired")
+    assert seen[0]["before"]["who"]["outside_editions"] is True and "outside_editions" not in seen[0]["after"]["who"]

@@ -579,8 +579,32 @@ class TaskDetailTask(TaskFields):
 
 
 @answer
+class AssistantOkCited(TypedDict):
+    """The person's message an Assistant's OK was given on: open its chat at that message."""
+
+    message_id: str
+    conversation_id: str
+
+
+@answer
+class AssistantOkDelegation(TypedDict):
+    """An OK the person's own Assistant gave on their word (backend/assistant_oks.py): the line says "via assistant"."""
+
+    words: str
+    """Their words, as they were when the OK was written"""
+    cited: AssistantOkCited | None
+    """Their message, for a reader who may open that chat; null for anyone else"""
+    answer_id: str
+    """The answer this OK is (POST /api/v2/answers/{answer_id}/undo takes it back)"""
+    undone: bool
+    """Taken back since: the line stays, marked undone"""
+
+
+@answer
 class TaskDetailEvent(TypedDict):
     source: MessageSource
+    delegation: NotRequired[AssistantOkDelegation]
+    """On an OK the person's Assistant gave on their word: their words and the message they came from"""
 
 
 @answer
@@ -641,6 +665,8 @@ class TaskDetail(TypedDict):
     stopped_agent: NotRequired[StoppedAgent | None]
     """The agent this task is the stop notice for, when the reader may release it (POST /api/v2/bots/{bot}/release)"""
     mover: NotRequired[bool]
+    can_close: NotRequired[bool]
+    """Whether the reader may close the task now (POST /api/v2/tasks/{tid}/move to closed): false once it is closed"""
     runs: NotRequired[list[TaskRun]]
     run_model: NotRequired[TaskRunChoice | None]
     comment_delivery: NotRequired[CommentDelivery | None]

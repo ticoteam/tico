@@ -40,6 +40,9 @@ const show = (choices?: string[]) =>
   );
 
 const card = () => screen.getByRole('region', { name: 'Question' });
+// The card's first read of its hold has come back. A refetch while that read is in flight joins it rather than reading
+// again, so a decision made before it lands is never seen.
+const heldRead = () => waitFor(() => expect(queryClient.getQueryData(['rules', 'holds', 'one', 'h1'])).toEqual({ id: 'h1', state: 'held' }));
 
 describe('QuestionCard', () => {
   it('shows the offered answers and a tap answers the question on its task', async () => {
@@ -82,6 +85,7 @@ describe('QuestionCard', () => {
     show(['Yes']);
     expect(within(card()).getByText('Held')).toBeTruthy();
     expect(within(card()).queryByRole('button')).toBeNull();
+    await heldRead(); // else the refetch below joins that first read, which says held
     hold = { id: 'h1', state: 'sent' };
     await queryClient.refetchQueries({ queryKey: ['rules', 'holds', 'one', 'h1'] });
     await waitFor(() => expect(screen.queryByRole('region', { name: 'Question' })).toBeNull());
@@ -106,6 +110,7 @@ describe('QuestionCard', () => {
     const read = queryClient.getQueryCache().find({ queryKey: ['rules', 'holds', 'one', 'h1'] });
     expect(read?.observers[0]?.options.refetchInterval).toBe(5 * 60_000);
     expect(HELD_EVERY_MS).toBe(5 * 60_000);
+    await heldRead();
     hold = { id: 'h1', state: 'kept' };
     await queryClient.refetchQueries({ queryKey: ['rules', 'holds', 'one', 'h1'] });
     expect(await within(card()).findByRole('button', { name: 'Yes' })).toBeTruthy();

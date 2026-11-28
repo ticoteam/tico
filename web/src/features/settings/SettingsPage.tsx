@@ -88,7 +88,6 @@ const TAB: Record<string, SectionId> = {
 
 /* Old cards ('#/settings/<tab>/<card>') that have a place here: the section, and the part a hit lands on. */
 const CARD: Record<string, [SectionId, string]> = {
-  'settings-roadmaps': ['tasks', 'setting:roadmap'],
   'set-screening-card': ['security', 'setting:screening'],
   'settings-sleep': ['computers', 'setting:sleep'],
   'settings-tokens': ['account', 'setting:tokens'],
@@ -100,6 +99,7 @@ const CARD: Record<string, [SectionId, string]> = {
   'settings-team': ['general', 'setting:reports'],
   'set-repos': ['general', 'setting:repositories'],
   'tico-version': ['general', 'setting:version'],
+  'settings-assistant-pane': ['general', 'setting:assistant'],
 };
 
 const hashOf = (card = '') => card.slice(Math.max(0, card.indexOf('#')));

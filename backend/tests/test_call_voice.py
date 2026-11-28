@@ -2011,7 +2011,11 @@ def _backdate(api, call_id, column, seconds):
 def _quiet_voice(meet):
     """The voice ticker is off in these tests (the meet fixture): each test ticks it when it means to."""
     yield
-    meet.app.state.calls.voice.stop()
+    voice = meet.app.state.calls.voice
+    voice.stop()
+    # Stopping cancels a question still being thought about, and its "canceled" turn line is written off this thread
+    # (Voice._side): wait for it, or it can still hold a pooled connection when the connection guard checks.
+    assert voice.settle()
 
 
 # A call's pieces as speech recognition cuts them (#4916), made up: each piece's text and where its clip starts and

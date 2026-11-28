@@ -58,6 +58,10 @@ MARKER = Path("/etc/tico/cloud-machine.json")
 SUDOERS = Path("/etc/sudoers.d/tico-runner")
 UNIT = "tico-cloud-machine.service"
 UNIT_DIR = Path("/etc/systemd/system")
+# Whether this boot came through the old `python -m runner.cloud_machine boot` (runner/cloud_machine.py sets SHIM):
+# "runner" or "runner_support", under the machine's etc. The runner reads it (runner-rs/src/follow.rs BOOT_ENTRY) and
+# reports it beside its release, so Computers shows which computers still start through the old package.
+SHIM, ENTRY_FILE = "TICO_RUNNER_SHIM", Path("tico") / "boot-entry"
 APT = Path("/etc/apt")
 # The computer screen's programs (runner-rs/src/screen.rs, docs/install.md): the same packages, so one set of tools.
 DISPLAY_PACKAGES = ("xvfb", "x11vnc", "matchbox-window-manager")
@@ -346,11 +350,57 @@ def installed(m: Machine) -> bool:
     return all((m.unit_dir / f"tico-{job}.service").is_file() for job in JOBS)
 
 
-def boot(m: Machine | None, environ: dict[str, str]) -> int:
+def move_boot_unit(m: Machine, unit_dir: Path = UNIT_DIR) -> bool:
+    """Point a saved image's boot unit at `runner_support.cloud_machine` (images saved before it said
+    `runner.cloud_machine`, through the runner/ forwarder that is to be deleted) and daemon-reload. Runs at each boot,
+    as root; when the reload fails the old file goes back, so the next boot tries again. Returns whether it moved."""
+    from runner_support import release_update
+
+    path = unit_dir / UNIT
+    try:
+        if not path.is_file():
+            return False
+        before = path.read_bytes()
+        after = release_update.moved_unit(before, "runner.cloud_machine", "runner_support.cloud_machine")
+        if after is None:
+            return False
+        mode = path.stat().st_mode & 0o7777
+        release_update.replace_file(path, after, mode)
+    except (OSError, ValueError) as exc:
+        m.say(f"could not point {UNIT} at runner_support: {type(exc).__name__}")
+        return False
+
+    def reload() -> bool:
+        try:
+            return not m.system("systemctl", "daemon-reload").returncode
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+    if reload():
+        m.say(f"{UNIT} now starts python -m runner_support.cloud_machine")
+        return True
+    try:
+        release_update.replace_file(path, before, mode)
+    except OSError:
+        pass
+    reload()
+    m.say(f"systemctl daemon-reload failed; put {UNIT} back, the next boot tries again")
+    return False
+
+
+def boot(m: Machine | None, environ: dict[str, str], unit_dir: Path = UNIT_DIR) -> int:
     """One boot's work; 0 when there is nothing left to do, 1 to have systemd try again."""
     if m is None:
         print(f"no {MARKER}: not a Tico cloud machine, nothing to do")
         return 0
+    # The last boot's record goes first: a write that then fails leaves none, which the runner reports as not reported
+    # (never a stale "runner_support" after an old-module boot).
+    try:
+        (m.etc / ENTRY_FILE).unlink(missing_ok=True)
+        write_root_file(m.etc / ENTRY_FILE, ("runner" if environ.get(SHIM) else "runner_support") + "\n", 0o644)
+    except OSError as exc:
+        m.say(f"could not record how this boot started: {exc.strerror or type(exc).__name__}")
+    move_boot_unit(m, unit_dir)
     files = env_files(m.home, environ, m.etc / "environment")
     if not m.config.exists():
         code, hub, where = inputs(environ, files)
@@ -407,9 +457,10 @@ def unit_text(m: Machine) -> str:
             "[Service]",
             "Type=oneshot",
             f"WorkingDirectory={m.root}",
-            # `runner.cloud_machine`, not `runner_support.cloud_machine`: a saved image may boot a checkout on an older
-            # release, which has only runner/. Here runner/cloud_machine.py forwards it (runner/__init__.py).
-            f"ExecStart={m.python} -m runner.cloud_machine boot",
+            # `runner_support.cloud_machine`, not the legacy `runner.cloud_machine`: every release a machine may boot has
+            # runner_support/ (since 0.5.94; MIN_RUNNER_RELEASE is 0.6.0), and boot only moves a checkout forward.
+            # runner/cloud_machine.py only forwards for images saved earlier, until it is deleted. Do not go back.
+            f"ExecStart={m.python} -m runner_support.cloud_machine boot",
             "Restart=on-failure",
             "RestartSec=30",
             "Environment=PYTHONUNBUFFERED=1",
@@ -624,7 +675,9 @@ def main(argv=None) -> int:
             m = Machine.for_user(args.user, ROOT)
             base(m, release=checkout_release(ROOT))
             return 0
-        return boot(load(), dict(os.environ))
+        environ = dict(os.environ)
+        os.environ.pop(SHIM, None)  # boot's word only: what it starts did not come through the old package
+        return boot(load(), environ)
     except Refused as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

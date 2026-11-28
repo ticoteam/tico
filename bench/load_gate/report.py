@@ -97,6 +97,8 @@ def level_report(level, logs, flight, since, until, budget=None):
         why.append(f"a sender process used {sender['cpu_share_max']:.0%} of a CPU")
     if flight is None:
         why.append("no flight recorder window read from the server")
+    elif flight.get("flight_db"):  # the server's recorder file was missing or unreadable: its sections read empty
+        why.append(f"the server's flight recorder file was {flight['flight_db']}")
     out = {
         "level": level,
         "window": {"since": since, "until": until, "seconds": round(seconds, 1)},

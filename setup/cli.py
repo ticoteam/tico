@@ -71,11 +71,6 @@ def parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--caddy-visuals", choices=("0", "1"), help="explicit local Caddy visual serving; default off")
     p.add_argument(
-        "--reader-origin",
-        help="the Company page's own HTTPS origin, such as https://page.acme.example, served by "
-        "the Caddy front door (docs/company-page.md); empty clears it",
-    )
-    p.add_argument(
         "--runner-hostname",
         dest="runner_host",
         metavar="HOST",

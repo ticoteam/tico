@@ -740,3 +740,67 @@ def test_a_usage_read_that_works_tries_a_plan_past_due_at_once(api):
     with api.app.state.store.read() as c:
         hold = login_holds.get(c, "", login, "claude")
         assert hold and hold["until"] <= H.now() and hold["cut"] > H.now()
+
+
+WEEKLY = "You've hit your weekly limit · resets Dec 1, 5am (UTC)"
+
+
+@pytest.mark.parametrize(
+    ("notice", "week", "five", "lifted"),
+    [
+        (WEEKLY, 4, 0, True),  # TIDY, Nov 27: the week reset early, "Fresh week. 4% used"
+        (WEEKLY, 100, 0, False),
+        (WEEKLY, 4, 99.5, False),  # every window must have room
+        ("Model temporarily at capacity, overloaded", 4, 0, False),  # a busy model is not the plan's quota
+    ],
+    ids=["room-again", "week-full", "five-hour-full", "capacity"],
+)
+def test_a_usage_read_after_a_limit_with_room_again_ends_the_hold_for_one_probe(api, notice, week, five, lifted):
+    """While a plan is held no turn runs on it, so no turn could say its window reset early (a plan upgrade): 82 agents
+    waited days on a plan with room. A read asked after the limit with every window below it ends the hold as Try now
+    does, and keeps the window (`cut`) so a probe that meets the limit again puts it back."""
+    from backend import login_holds
+
+    setup(api)
+    company(api)
+    sid = add(api, "claude_login", full(), name=None)["id"]
+    m = computer(api, bot="ops")
+    pick(api, "ops", "claude", sid)
+    login = login_holds.subscription_login(sid)
+    with api.app.state.store.transaction() as c:
+        login_holds.record(c, "", login, "claude", H.shift(H.now(), seconds=-60), error=notice)
+        held = login_holds.get(c, "", login, "claude")["until"]
+    [job] = poll(api, m)["usage"]
+    read = {
+        "id": job["id"],
+        "state": "succeeded",
+        "seven_day": {"used_percent": week, "resets_at": at(days=6)},
+        "five_hour": {"used_percent": five, "resets_at": at(hours=4)},
+    }
+    post(api, f"runner-claude-logins/{sid}/usage", read, m["token"])
+    with api.app.state.store.read() as c:
+        hold = login_holds.get(c, "", login, "claude")
+    if lifted:
+        assert hold["until"] <= H.now() and hold["cut"] == held
+        assert listed(api)[0]["usage"]["used_pct"] == 4  # the row shows the read, not 100
+    else:
+        assert hold["until"] == held and not hold.get("cut")
+
+
+def test_a_usage_read_asked_before_the_limit_does_not_end_its_hold(api):
+    from backend import login_holds
+
+    setup(api)
+    company(api)
+    sid = add(api, "claude_login", full(), name=None)["id"]
+    m = computer(api, bot="ops")
+    pick(api, "ops", "claude", sid)
+    [job] = poll(api, m)["usage"]  # asked now; the limit is met while it is out
+    login = login_holds.subscription_login(sid)
+    with api.app.state.store.transaction() as c:
+        login_holds.record(c, "", login, "claude", H.shift(H.now(), seconds=5), error=WEEKLY)
+        held = login_holds.get(c, "", login, "claude")["until"]
+    read = {"id": job["id"], "state": "succeeded", "seven_day": {"used_percent": 4, "resets_at": at(days=6)}}
+    post(api, f"runner-claude-logins/{sid}/usage", read, m["token"])
+    with api.app.state.store.read() as c:
+        assert login_holds.get(c, "", login, "claude")["until"] == held

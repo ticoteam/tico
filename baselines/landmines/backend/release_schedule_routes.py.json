@@ -1,0 +1,5 @@
+{
+  "backend/release_schedule_routes.py": {
+    "no-install-closure": 1
+  }
+}

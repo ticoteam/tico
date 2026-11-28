@@ -99,6 +99,7 @@ mod run_diagnostics;
 mod runner;
 mod safegit;
 mod screen;
+mod session_sizes;
 mod sessions;
 mod sidejobs;
 mod signin;

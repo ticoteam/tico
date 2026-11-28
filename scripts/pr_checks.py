@@ -1537,8 +1537,8 @@ def image_checks(changed, root=ROOT):
     subprocess.run([sys.executable, "-c", found.group(1)], cwd=root, check=True)
 
 
-# The Rust lint and desktop app jobs check their own folders, so a merge queue group starts their VMs only when
-# its change touches one (scripts/rust_checks.sh lists the Rust crates). A diff that could not be read runs them all.
+# The Rust lint job checks its own folders, so a merge queue group starts its VM only when its change touches one
+# (scripts/rust_checks.sh lists the Rust crates). A diff that could not be read runs every job here.
 # The advisories job (scripts/osv_gate.py) scans the dependency inputs: the Python, npm and Cargo locks, both vendor
 # folders, the vendor and uv inventories and the dispositions in scripts/advisories/, and the gate, its pinned scanner and
 # its fixture. A uv pin a script changes reaches it through scripts/advisories/tools.json, which the drift gate
@@ -1547,7 +1547,6 @@ QUEUE_JOB_PATHS = {
     "rust_lint": re.compile(
         r"(runner-rs|relay-rs|tools/release-command|tools/trust-list-check|contracts/runner)/|scripts/rust_checks\.sh$"
     ),
-    "desktop": re.compile(r"app/"),
     "advisories": re.compile(
         r"(.*/)?(requirements[^/]*\.txt|package-lock\.json|Cargo\.lock)$|templates/employee-repo/ui/vendor/"
         r"|scripts/advisories/|scripts/tests/fixtures/advisories/|scripts/osv_gate\.py$|scripts/pinned_tool\.sh$"
@@ -1580,7 +1579,7 @@ def queue_jobs(changed):
 # nearer level and the shorter file. What it leaves out is listed in the job summary and in the plan
 # (narrow.left_transitive, narrow.left_over_budget), and narrow.dropped gives each left file its reason (depth or
 # budget), level and seconds. A light pull request also runs the Caddy job only when the change touches its own inputs
-# directly; a queue group keeps it, the contracts, the static checks on its merge commit and the Rust and desktop jobs
+# directly; a queue group keeps it, the contracts, the static checks on its merge commit and the Rust job
 # as they were.
 # What a queue group leaves out still runs before a release: release validation's incremental runs select with the full
 # rules above (the whole transitive closure) over every change since the last full validation, which runs once every 24

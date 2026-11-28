@@ -88,6 +88,53 @@ pub fn kind() -> &'static str {
     }
 }
 
+/// The machine's /etc: a cloud machine has `tico/cloud-machine.json` (runner_support/cloud_machine.py MARKER), its boot
+/// writes `tico/boot-entry` ("runner" or "runner_support", ENTRY_FILE) and its root boot unit is
+/// `systemd/system/tico-cloud-machine.service` (UNIT).
+#[cfg_attr(test, allow(dead_code))]
+const ETC: &str = "/etc";
+
+#[cfg(test)]
+thread_local! {
+    static ETC_AT: std::cell::RefCell<PathBuf> = std::cell::RefCell::new(PathBuf::from("/nonexistent/etc"));
+}
+
+fn etc() -> PathBuf {
+    #[cfg(test)]
+    return ETC_AT.with(|p| p.borrow().clone());
+    #[cfg(not(test))]
+    PathBuf::from(ETC)
+}
+
+/// Which package starts this runner, sent beside the release so Computers shows which computers still start through
+/// the legacy `runner/` package before it is deleted. "runner" when this start came through it (runner_support/__main__.py
+/// sets TICO_RUNNER_ENTRY from runner/__main__.py's word), when this cloud machine's last boot did, or when its boot unit
+/// still names the old module (its next boot needs it). On a cloud machine whose boot did not record a clear
+/// "runner_support" (a failed write, or no boot since this release), None: the server shows it as not reported, never as
+/// clear. Anywhere else, "runner_support".
+pub fn entry() -> Option<&'static str> {
+    if std::env::var("TICO_RUNNER_ENTRY").as_deref() == Ok("runner") {
+        return Some("runner");
+    }
+    let etc = etc();
+    if !etc.join("tico/cloud-machine.json").exists() {
+        return Some("runner_support");
+    }
+    let unit = std::fs::read_to_string(etc.join("systemd/system/tico-cloud-machine.service"))
+        .unwrap_or_default();
+    if unit.contains("-m runner.cloud_machine") {
+        return Some("runner");
+    }
+    match std::fs::read_to_string(etc.join("tico/boot-entry"))
+        .as_deref()
+        .map(str::trim)
+    {
+        Ok("runner") => Some("runner"),
+        Ok("runner_support") => Some("runner_support"),
+        _ => None,
+    }
+}
+
 /// launchd's job label, the systemd unit `scripts/tico-computer install` writes, or TICO_SUPERVISED=1 (service.py supervised).
 pub fn supervised() -> bool {
     let var = |k: &str| std::env::var(k).unwrap_or_default();
@@ -1492,6 +1539,11 @@ impl Follower {
         if s.features["runner_commit"] == true && !self.commit.is_empty() {
             body["commit"] = json!(self.commit);
         }
+        if s.features["runner_entry"] == true {
+            if let Some(entry) = entry() {
+                body["entry"] = json!(entry);
+            }
+        }
         body["update"] = json!({"state": s.state, "target": s.target, "error": s.error.chars().take(300).collect::<String>()});
     }
 
@@ -2469,6 +2521,67 @@ scope['main'](sys.argv[1:])
             s.features = json!({"runner_drain": true});
         }
         assert!(f.blocks_claims(true).await);
+    }
+
+    #[test]
+    fn the_release_report_says_whether_this_runner_started_through_the_old_runner_package() {
+        let etc =
+            std::env::temp_dir().join(format!("tico-entry-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(etc.join("tico")).unwrap();
+        std::fs::create_dir_all(etc.join("systemd/system")).unwrap();
+        let f = checkout_follower();
+        f.inner.lock().unwrap().desired = Some("0.6.341".into());
+        f.inner.lock().unwrap().features = json!({"runner_entry": true});
+        ETC_AT.with(|p| *p.borrow_mut() = etc.clone());
+        let said = |f: &Follower| {
+            let mut body = json!({});
+            f.fields(&mut body);
+            body.get("entry").cloned()
+        };
+        let (marker, boot, unit) = (
+            etc.join("tico/cloud-machine.json"),
+            etc.join("tico/boot-entry"),
+            etc.join("systemd/system/tico-cloud-machine.service"),
+        );
+        // Not a cloud machine: `python -m runner_support run`, or the Docker image running the binary itself.
+        std::env::set_var("TICO_RUNNER_ENTRY", "runner_support");
+        assert_eq!(said(&f), Some(json!("runner_support")));
+        std::env::remove_var("TICO_RUNNER_ENTRY");
+        assert_eq!(said(&f), Some(json!("runner_support")));
+        // `python -m runner run` (runner/__main__.py): the old package.
+        std::env::set_var("TICO_RUNNER_ENTRY", "runner");
+        assert_eq!(said(&f), Some(json!("runner")));
+        std::env::set_var("TICO_RUNNER_ENTRY", "runner_support");
+        // A cloud machine updated and restarted but not booted since this release: no boot record, so not clear.
+        std::fs::write(&marker, "{}").unwrap();
+        assert_eq!(said(&f), None);
+        // Its boot came through `python -m runner.cloud_machine boot`: the old package, read again at each report.
+        std::fs::write(&boot, "runner\n").unwrap();
+        assert_eq!(said(&f), Some(json!("runner")));
+        std::fs::write(&boot, "runner_support\n").unwrap();
+        assert_eq!(said(&f), Some(json!("runner_support")));
+        // A boot record it cannot trust (a half-written file): not clear.
+        std::fs::write(&boot, "").unwrap();
+        assert_eq!(said(&f), None);
+        // Its boot unit still names the old module, whatever the last boot said: its next boot needs the old package.
+        std::fs::write(&boot, "runner_support\n").unwrap();
+        std::fs::write(
+            &unit,
+            "[Service]\nExecStart=/home/user/tico/runtime/runner-venv/bin/python -m runner.cloud_machine boot\n",
+        )
+        .unwrap();
+        assert_eq!(said(&f), Some(json!("runner")));
+        std::fs::write(
+            &unit,
+            "[Service]\nExecStart=/home/user/tico/runtime/runner-venv/bin/python -m runner_support.cloud_machine boot\n",
+        )
+        .unwrap();
+        assert_eq!(said(&f), Some(json!("runner_support")));
+        // A server that does not take the field gets none (its heartbeat model refuses unknown fields).
+        f.inner.lock().unwrap().features = json!({});
+        assert_eq!(said(&f), None);
+        std::env::remove_var("TICO_RUNNER_ENTRY");
+        std::fs::remove_dir_all(&etc).ok();
     }
 
     #[tokio::test]

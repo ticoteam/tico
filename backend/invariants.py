@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable
 
-from . import flight, hook_relay, run_failures
+from . import flight, hook_relay, lifespan_workers, run_failures
 from .store import H
 
 log = logging.getLogger(__name__)
@@ -138,17 +138,9 @@ def long_holds(c, ctx):
     """Write-lock holds of LONG_HOLD_MS or more in the last hour (flight_events, kind long_hold), when there are more
     than LONG_HOLDS_PER_HOUR: the routes and code sites holding the one write lock, most holds first."""
     since = _hour_ago(ctx)
-    total = c.execute(
-        "SELECT count(*) FROM flight_events WHERE kind='long_hold' AND created_at>=?", (since,)
-    ).fetchone()[0]
-    if total <= LONG_HOLDS_PER_HOUR:
+    if flight.long_hold_count(c, since) <= LONG_HOLDS_PER_HOUR:
         return []
-    rows = c.execute(
-        "SELECT json_extract(detail,'$.route') AS route, json_extract(detail,'$.site') AS site, "
-        "count(*) AS n, max(json_extract(detail,'$.hold_s')) AS worst FROM flight_events "
-        "WHERE kind='long_hold' AND created_at>=? GROUP BY route, site ORDER BY n DESC LIMIT ?",
-        (since, LIMIT),
-    ).fetchall()
+    rows = flight.long_hold_sites(c, since, LIMIT)
     return [
         f"{row['route'] or 'a background job'} at {row['site'] or 'an unknown site'}: {row['n']} holds, "
         f"longest {row['worst']:g} s"
@@ -159,12 +151,7 @@ def long_holds(c, ctx):
 def runner_errors(c, ctx):
     """Runner routes whose 5xx answers in the last hour were more than RUNNER_ERROR_PERCENT of their requests, from at
     least RUNNER_MIN_REQUESTS requests (flight_requests: one row per minute, route and caller)."""
-    marks = ",".join("?" * len(RUNNER_ROUTES))
-    rows = c.execute(
-        f"SELECT route, sum(n) AS n, sum(errors) AS errors FROM flight_requests "
-        f"WHERE span=60 AND created_at>=? AND route IN ({marks}) GROUP BY route",
-        (_hour_ago(ctx), *RUNNER_ROUTES),
-    ).fetchall()
+    rows = flight.route_totals(c, _hour_ago(ctx), RUNNER_ROUTES)
     return [
         f"{row['route']}: {row['errors']} of {row['n']} answered with a 5xx"
         for row in rows
@@ -176,21 +163,21 @@ def recorder_drops(c, ctx):
     """Samples the flight recorder dropped in the last hour (flight_process: one row per minute). A drop is the
     measurement losing data, most on the bad days it exists to show."""
     since = _hour_ago(ctx)
-    totals = c.execute(
-        "SELECT coalesce(sum(dropped),0) AS dropped, coalesce(sum(requests),0) AS requests "
-        "FROM flight_process WHERE created_at>=?",
-        (since,),
-    ).fetchone()
+    totals = flight.drop_totals(c, since)
     dropped, taken = totals["dropped"], totals["requests"] + totals["dropped"]
     if dropped < DROPPED_MIN or dropped * 100 < DROPPED_PERCENT * taken:
         return []
-    rows = c.execute(
-        "SELECT created_at, dropped FROM flight_process WHERE created_at>=? AND dropped>0 ORDER BY dropped DESC LIMIT ?",
-        (since, LIMIT),
-    ).fetchall()
+    rows = flight.worst_drop_minutes(c, since, LIMIT)
     return [
         f"{datetime.fromtimestamp(row['created_at'], timezone.utc):%H:%M} UTC: {row['dropped']} dropped" for row in rows
     ]
+
+
+def worker_died(c, ctx):
+    """The server's background workers that died of an uncaught error since it started (backend/lifespan_workers.py
+    records each; the next start clears them). One range read on registry_metadata's key. `ctx` is not used: Health and
+    the death's own filing read it without a sweep (LIVE)."""
+    return lifespan_workers.dead(c, LIMIT)
 
 
 CHECKS = (
@@ -269,8 +256,20 @@ CHECKS = (
         "botops",
         recorder_drops,
     ),
+    Check(
+        "worker_died",
+        "Background worker stopped",
+        "A background worker of this server died of an error and does not run again until the server restarts.",
+        "The server log at the time named: the worker's error and traceback (\"Background worker <name> died\"). "
+        "Restarting the server starts it again; fix the cause first, or it dies again.",
+        "botops",
+        worker_died,
+    ),
 )
 BY_ID = {check.id: check for check in CHECKS}
+# Checks Health reads on each view rather than from the sweep's state: the sweep runs on the scheduler, and a dead
+# scheduler is one of the things `worker_died` reports. Their `read` must not use its ctx.
+LIVE = ("worker_died",)
 
 
 def _changed(row, hits):
@@ -333,25 +332,29 @@ def health_checks(c):
     from . import maintenance_health as MH
     from .maintenance_steps import check_health
 
+    def row_for(check, count, examples, since):
+        shown = f"{count}{'+' if count >= LIMIT else ''}"
+        more = f" and {count - len(examples)} more" if count > len(examples) else ""
+        when = f" Since {since} UTC." if since else ""
+        task = check_health.task_of(c, MH.signature("inv:" + check.id))
+        fixes = [{"label": "Open the alert", "href": "#/tasks/" + task, "tab": "", "click": ""}] if task else []
+        return {
+            "id": "invariant:" + check.id,
+            "label": check.label,
+            "status": "warn",
+            "summary": f"{check.says} {shown} found: {', '.join(examples)}{more}.{when}",
+            "fixes": fixes,
+        }
+
     out = []
     for row in c.execute("SELECT * FROM invariant_state WHERE firing=1 ORDER BY check_id"):
         check = BY_ID.get(row["check_id"])
-        if not check:
+        if not check or check.id in LIVE:
             continue
-        examples = json.loads(row["examples"] or "[]")
-        count = row["count"]
-        shown = f"{count}{'+' if count >= LIMIT else ''}"
-        more = f" and {count - len(examples)} more" if count > len(examples) else ""
         since = (row["started_firing_at"] or "")[:16].replace("T", " ")
-        task = check_health.task_of(c, MH.signature("inv:" + check.id))
-        fixes = [{"label": "Open the alert", "href": "#/tasks/" + task, "tab": "", "click": ""}] if task else []
-        out.append(
-            {
-                "id": "invariant:" + check.id,
-                "label": check.label,
-                "status": "warn",
-                "summary": f"{check.says} {shown} found: {', '.join(examples)}{more}. Since {since} UTC.",
-                "fixes": fixes,
-            }
-        )
-    return out
+        out.append(row_for(check, row["count"], json.loads(row["examples"] or "[]"), since))
+    for check_id in LIVE:
+        hits = BY_ID[check_id].read(c, None)
+        if hits:  # each hit names its own time
+            out.append(row_for(BY_ID[check_id], len(hits), hits[:EXAMPLES], ""))
+    return sorted(out, key=lambda row: row["id"])

@@ -154,9 +154,9 @@ jobs, registered once with **Add computer** in **Settings → Computers** (`scri
 
 | Job | Command | What it does |
 |---|---|---|
-| `team.tico.tico-bot` | `python -m runner run` (execs `tico-runner run`) | Heartbeats every 15 s with readiness, claims work for the bots assigned to this computer, runs each run in the bot's local repository with the local model CLI, streams output back |
-| `team.tico.tico-close-calls` | `python -m runner close-calls` | Every five minutes, imports available Close call and Notetaker meeting transcripts without fetching audio, using the local Close key (Ana's Mac only; `scripts/tico-computer install close-calls`) |
-| `team.tico.tico-importers` | `python -m runner importers` | Runs the meeting importers the owner turned on for this computer (Zoom, Google Meet, Granola), using credentials kept in `secrets/` here; see [Meetings](meetings.md#meeting-importers) (`scripts/tico-computer install importers`) |
+| `team.tico.tico-bot` | `python -m runner_support run` (execs `tico-runner run`) | Heartbeats every 15 s with readiness, claims work for the bots assigned to this computer, runs each run in the bot's local repository with the local model CLI, streams output back |
+| `team.tico.tico-close-calls` | `python -m runner_support close-calls` | Every five minutes, imports available Close call and Notetaker meeting transcripts without fetching audio, using the local Close key (Ana's Mac only; `scripts/tico-computer install close-calls`) |
+| `team.tico.tico-importers` | `python -m runner_support importers` | Runs the meeting importers the owner turned on for this computer (Zoom, Google Meet, Granola), using credentials kept in `secrets/` here; see [Meetings](meetings.md#meeting-importers) (`scripts/tico-computer install importers`) |
 
 A Linux runner (the Docker image) has no launchd: with `TICO_SIDE_JOBS=1` (set by the image) `tico-runner run` supervises `importers` (while Tico assigns importers to this computer) and
 `close-calls` (while the Close key is in `secrets/`) as child processes with restart and backoff
@@ -715,7 +715,6 @@ made or revoked is an `events` row (`token.create`, `token.revoke`).
 | `integrations/` | one page per outside system (what it is, how a bot uses it, rules, recipes) and the query lists; served as **Tools** and `tico tool show <service>`, with the learnings bots add |
 | `questions/` | the question sets the decision model answers (`tico_decision_ask`, `tico decision ask`, an automation's decide step, the meeting brain): one versioned JSON file per decision, with its thresholds |
 | `web/` | the web app (React, built by Vite into `build/web` and served at `/`); `desktop/` is the Electron app around it |
-| `app/` | the native macOS shell around hub.acme.example |
 | `infra/` | the EC2 stack, release packaging, deploy and restore scripts |
 | `scripts/` | `tico` (the teamwork CLI bots and people use), `tico-computer` (operate this computer), `hub` (`tico`'s old name), setup, publishing and maintenance |
 | `docs/` | team knowledge |

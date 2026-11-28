@@ -307,3 +307,22 @@ def test_asking_again_after_a_send_back_never_lets_the_task_move_on_between_the_
     assert (after["status"], after["stage_id"]) == ("open", row["stage_id"])
     assert K.standing(c, again["requirement_id"]) == K.WAITING
     assert K.standing(c, first["requirement_id"]) in (K.SENT_BACK, K.WITHDRAWN)
+
+
+def test_an_open_ok_of_the_retired_company_page_is_taken_back_and_others_wait_as_before(c):
+    import importlib
+
+    migration = importlib.import_module("backend.migrations.20261127081027_withdraw_retired_page_oks")
+    kept = _ask(c)
+    retired = {}
+    for kind in ("edition", "board"):
+        asked = K.ask_ok(c, SENDER, ANA, "Publish?", shows=["email:e1"], subject=f"hq_reply:{kind}", content=EMAIL)
+        c.execute("UPDATE ok_grants SET subject=? WHERE requirement_id=?", (f"{kind}:e1", asked["requirement_id"]))
+        retired[kind] = asked
+    assert {K.standing(c, a["requirement_id"]) for a in retired.values()} == {K.WAITING}
+    migration.up(c)
+    for asked in retired.values():
+        assert K.standing(c, asked["requirement_id"]) == K.WITHDRAWN
+        left = [r["requirement_id"] for r in H.task_view(c, asked["task_id"], ANA)["to_leave"]]
+        assert asked["requirement_id"] not in left
+    assert K.standing(c, kept["requirement_id"]) == K.WAITING

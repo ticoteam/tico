@@ -7,9 +7,9 @@ import boto3
 import pytest
 from botocore.config import Config
 
+from backend import blob_s3
 from backend.blobs import Blobs
 from backend.config import Settings
-from backend.downloads import Downloads
 
 
 def recorded(options):
@@ -72,7 +72,7 @@ def test_no_file_bucket_does_not_use_backup_keys(client_options, monkeypatch):
     calls, _ = client_options
     monkeypatch.setenv("LITESTREAM_ACCESS_KEY_ID", "testing")
     monkeypatch.setenv("LITESTREAM_SECRET_ACCESS_KEY", "testing")
-    Downloads(Settings(db_path=Path("/example/hub.db"))).s3
+    blob_s3.Sources(Settings(db_path=Path("/example/hub.db"))).s3
     assert calls == [("s3", {"region_name": None, "endpoint_url": None})]
 
 
@@ -122,7 +122,7 @@ def test_dedicated_file_keys_override_aws_and_backup_without_export(storage, cli
     assert dict(os.environ) == before
 
 
-@pytest.mark.parametrize("storage", [Downloads])
+@pytest.mark.parametrize("storage", [blob_s3.Sources])
 @pytest.mark.parametrize("key,secret", [("testing", "")])
 def test_empty_or_incomplete_file_keys_use_backup_pair(storage, key, secret, client_options, monkeypatch):
     calls, _ = client_options
@@ -155,7 +155,7 @@ def test_empty_storage_settings_are_unset(client_options, monkeypatch):
         monkeypatch.setenv(key, "")
     settings = Settings.from_env()
     assert not settings.blob_bucket and settings.upload_max_bytes == 2 * 1024**3
-    Downloads(settings).s3
+    blob_s3.Sources(settings).s3
     assert calls == [("s3", {"region_name": None, "endpoint_url": None})]
 
 
@@ -278,14 +278,13 @@ def test_write_probe_selects_first_writable_source(
     for kind in allowed:
         clients[kind].writable = True
     storage, store = storage_store(tmp_path)
-    downloads = Downloads(store.settings, s3_source=storage)
     before = dict(os.environ)
     storage.check_write(store)
     assert [kind for kind, _ in calls] == tried
     for _, options in calls:
         config = options['config']
         assert (config.connect_timeout, config.read_timeout, config.retries) == (5, 10, {'max_attempts': 2})
-    assert storage.s3 is downloads.s3 is clients[expected]
+    assert storage.s3 is clients[expected]
     assert write_health(store)['credentials'] == expected
     with store.read() as c:
         assert storage_view(c, store.settings)['credentials'] == expected
@@ -360,43 +359,13 @@ def test_denied_read_tries_other_source_once_without_switching_writes(
     assert storage.s3 is clients['keys']
 
 
-def test_download_reads_and_signing_use_the_source_that_can_read(tmp_path, monkeypatch, credential_clients):
-    import json
-
-    clients, _ = credential_clients
-    enable_pairs(monkeypatch, ['backup'])
-    clients['role'].writable = True
-    storage, store = storage_store(tmp_path)
-    downloads = Downloads(store.settings, s3_source=storage)
-    storage.check_write(store)
-    clients['role'].readable = False
-    clients['backup'].objects[downloads.prefix + 'latest.json'] = json.dumps(
-        {
-            'version': '0.3.11',
-            'app_kind': 'company',
-            'platforms': {
-                'darwin-aarch64': {
-                    'signature': 'sig',
-                    'url': 'https://acme.example/download/file/0.3.11/Tico.app.tar.gz',
-                }
-            },
-            'installers': {'mac': {'file': 'Tico.dmg'}},
-        }
-    ).encode()
-    clients['backup'].objects[downloads.prefix + '0.3.11/Tico.dmg'] = b'installer'
-    assert downloads.bucket_manifest()['version'] == '0.3.11'
-    assert downloads.file_url('0.3.11', 'Tico.dmg') == 'https://s3.example.com/backup'
-    assert downloads.s3 is storage.s3 is clients['role']
-
-
-def test_slow_reprobe_heals_without_restart_and_downloads_follow(tmp_path, monkeypatch, credential_clients):
+def test_slow_reprobe_heals_without_restart(tmp_path, monkeypatch, credential_clients):
     import threading
 
     clients, calls = credential_clients
     enable_pairs(monkeypatch, ['backup'])
     storage, store = storage_store(tmp_path)
-    downloads = Downloads(store.settings, s3_source=storage)
-    assert downloads.s3 is clients['backup']
+    assert storage.s3 is clients['backup']
     stop = threading.Event()
     waits = []
 
@@ -411,7 +380,7 @@ def test_slow_reprobe_heals_without_restart_and_downloads_follow(tmp_path, monke
     assert waits == [30]
     assert [kind for kind, options in calls if 'config' in options] == ['backup', 'role', 'backup', 'role']
     assert not storage._write_failed and not write_health(store)['error']
-    assert downloads.s3 is storage.s3 is clients['role']
+    assert storage.s3 is clients['role']
 
 
 def test_pending_cleanup_can_use_another_source_without_accumulating_probes(tmp_path, monkeypatch, credential_clients):

@@ -190,3 +190,12 @@ def test_migration_puts_the_built_in_bots_in_the_built_in_group_and_no_one_else(
         assert Groups.migrate(c, api.app.state.store.settings) is True
     assert teams_now(api) == {"botops": "built-in", "cmo": None}
     assert group(api, "built-in")["name"] == "General"
+
+
+def test_a_changed_group_answers_with_the_same_bot_labels_as_the_list(api):
+    """POST and PATCH answer the Group schema: `bot_slugs` beside `bots`, as GET /groups has it (the web keeps it)."""
+    made = send(api, "POST", "groups", {"name": "Marketing", "add": {"bots": ["ops"]}})
+    changed = send(api, "PATCH", "groups/marketing", {"add": {"bots": ["cpo"]}})
+    listed = group(api, "marketing")
+    assert made["bot_slugs"] == ["ops"]
+    assert changed["bots"] == listed["bots"] and changed["bot_slugs"] == listed["bot_slugs"] == ["cpo", "ops"]

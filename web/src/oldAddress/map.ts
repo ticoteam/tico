@@ -310,7 +310,7 @@ export const ROWS: readonly Row[] = [
   {
     page: 'Agent page',
     path: /^#\/bot\/([^/]+)(?:\/([^/]+))?(?:\/.*)?$/,
-    to: ([ref, tab]) => at(`/team/${seg(ref)}`, { tab: tab === 'settings' || tab === 'instructions' || tab === 'computer' ? tab : null }),
+    to: ([ref, tab]) => at(`/team/${seg(ref)}`, { tab: tab === 'settings' || tab === 'instructions' || tab === 'computer' || tab === 'model' ? tab : null }),
   },
   { page: 'Threads', path: /^#\/threads$/, to: () => '/threads' },
   {

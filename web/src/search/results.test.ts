@@ -5,7 +5,8 @@ import type { AnyAction, Ctx } from '@/actions';
 // The pieces, not the index, so this test does not load the whole registry.
 import { defineAction } from '@/actions/types';
 import { defineSearch } from './providers';
-import { actionHits, gather, highlight, rank, readRecent, remember, REMOTE_WAIT_MS, score, type Group } from './results';
+import { forgetRecentViews, noteView, setRecentHere } from '@/data';
+import { actionHits, empty, gather, highlight, rank, readRecent, remember, REMOTE_WAIT_MS, score, type Group } from './results';
 
 const ctx: Ctx = { router: {} as AnyRouter, queryClient: {} as Ctx['queryClient'], via: 'search' };
 const goTo = defineAction({
@@ -104,6 +105,56 @@ describe('search', () => {
     expect(readRecent().map((h) => h.key)).toEqual(['task:7', 'page:/settings']);
     const groups = await gather('', [tasks], [goTo], ctx, new AbortController().signal);
     expect(groups.map((g) => g.name)).toEqual(['Recent']);
+  });
+
+  it('opens with nothing typed on Recent views, the open view left out, then its own Recent items not already there', async () => {
+    const me = 'Tico Team\u0000human:chris';
+    setRecentHere(me, '');
+    noteView({ key: 'page:/tasks/product', to: '/tasks/product', trail: ['Tasks', 'Product'] });
+    noteView({ key: 'task:7', to: '/tasks/product?task=7', trail: ['Tasks', 'Product', 'Frost dates'] });
+    noteView({ key: 'page:/library/docs/d1', to: '/library/docs/d1', trail: ['Library', 'Docs', 'Release notes'] });
+    setRecentHere(me, 'page:/library/docs/d1');
+    remember({ key: 'page:/settings', title: 'Settings', run: { id: 'shell.goTo', input: { to: '/settings' } } });
+    remember({ key: 'page:/tasks/product', title: 'Tasks, Product', run: { id: 'shell.goTo', input: { to: '/tasks/product' } } });
+    remember({ key: 'task:7', title: 'Frost dates', run: { id: 'task.open', input: { task: 7 } } });
+    const groups = await gather('', [tasks], [goTo], ctx, new AbortController().signal);
+    expect(groups.map((g) => [g.name, g.hits.map((h) => h.title)])).toEqual([
+      ['Recent views', ['Tasks › Product › Frost dates', 'Tasks › Product']],
+      ['Recent', ['Settings']],
+    ]);
+    expect(groups[0]!.hits[0]!.run).toEqual({ id: 'shell.openView', input: { to: '/tasks/product?task=7' } });
+    // a word replaces them with results
+    expect((await gather('frost', [tasks], [], ctx, new AbortController().signal)).map((g) => g.name)).toEqual(['Tasks']);
+    forgetRecentViews();
+    setRecentHere('', '');
+    expect(empty([], readRecent()).map((g) => g.name)).toEqual(['Recent']);
+  });
+
+  it('leaves out of its own Recent only what opens a Recent views row: the same task or page, never a namesake', () => {
+    const views = [
+      { key: 'task:7', to: '/tasks/product?task=7', trail: ['Tasks', 'Product', 'Frost dates (renamed)'] },
+      { key: 'page:/tasks/product', to: '/tasks/product?owner=bot%3Aqa', trail: ['Tasks', 'Product'] },
+      { key: 'page:/threads/th1', to: '/threads/th1', trail: ['Threads', 'Launch'] },
+      { key: 'page:/library/d2', to: '/library/d2', trail: ['Library', 'Pricing'] },
+    ];
+    const recent = [
+      // the same task under its old name
+      { key: 'task:7', title: 'Frost dates', run: { id: 'task.open', input: { task: 7, list: 'search:frost' } } },
+      // another task that shares the new name
+      { key: 'task:8', title: 'Frost dates (renamed)', run: { id: 'task.open', input: { task: 8 } } },
+      { key: 'pipeline:product', title: 'Product', run: { id: 'tasks.open', input: { pipeline: 'product' } } },
+      { key: 'thread:th1', title: 'Launch', run: { id: 'threads.open', input: { thread: 'th1' } } },
+      { key: 'page:/tasks/product', title: 'Tasks, Product', run: { id: 'shell.goTo', input: { to: '/tasks/product' } } },
+      { key: 'doc:d2', title: 'Pricing', run: { id: 'docs.open', input: { doc: 'd2' } } },
+      // a doc that only shares a name with a thread in the list
+      { key: 'doc:d1', title: 'Launch', run: { id: 'docs.open', input: { doc: 'd1' } } },
+      // a goal opens a panel Search cannot place: kept
+      { key: 'goal:g1', title: 'Pricing', run: { id: 'goals.open', input: { goal: 'g1' } } },
+    ];
+    expect(empty(views, recent).map((g) => [g.name, g.hits.map((h) => h.key)])).toEqual([
+      ['Recent views', ['view:task:7', 'view:page:/tasks/product', 'view:page:/threads/th1', 'view:page:/library/d2']],
+      ['Recent', ['task:8', 'doc:d1', 'goal:g1']],
+    ]);
   });
 
   describe('servers wait for a pause in the typing', () => {

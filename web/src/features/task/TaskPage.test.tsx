@@ -1126,6 +1126,13 @@ describe('Details: the facts @s58', () => {
     expect(sent).toEqual([]);
   });
 
+  it('task.move says when a reopen is the Undo of a close, and only then', async () => {
+    serve(base);
+    expect(await run('task.move', { task: 't1', to: 'closed', undo: true }, { via: 'click' })).toMatchObject({ ok: false, error: 'bad_input: undo: takes back a close: to is reopen' });
+    expect(await run('task.move', { task: 't1', to: 'reopen', why: 'Undid the close', undo: true }, { via: 'click' })).toMatchObject({ ok: true });
+    expect(sent.at(-1)).toMatchObject({ url: '/api/v2/tasks/t1/move', body: { to: 'reopen', why: 'Undid the close', undo: true } });
+  });
+
   it('has no Follow, and puts someone in a role', async () => {
     // an older server still answers with followers: the facts show none of them
     serve(reads(task({ followers: [{ actor: 'human:bo', notify: 'live' }] } as Partial<TaskData>)));
