@@ -1498,10 +1498,11 @@ def _loosens_people_only(
 ) -> str | None:
     """The stage whose people-only OK the record would loosen, or None when it keeps every one. Loosening is: removing
     the OK (or its stage), moving it to another stage, changing what it checks, opening it to bots or giving it to a
-    bot, changing its settings (a page's document or bar, an item's numbers), or letting work run ahead of it: a stage that came after it now before it, or an on-enter action (filing a
+    bot, or letting work run ahead of it: a stage that came after it now before it, or an on-enter action (filing a
     linked task, queueing the PRs) added or changed on its stage or one before it. A bot that manages a pipeline may
-    change the rest of it, never a person's sign-off. A board owner or manager who is a person and not an Admin is held
-    the same way, except on an OK that names them (`named`)."""
+    change the rest of it (an OK's rubric included), never a person's sign-off. A board owner or manager who is a
+    person and not an Admin is held the same way, except on an OK that names them (`named`), and also may not change
+    its settings (a page's document or bar, an item's numbers): what someone else's approval checks is theirs."""
     me = pipeline_rights.canonical(conn, named) if named else ""
     old = [s for s in task_engine.stages(conn, pipeline_id) if s["kind"] == "work"]
     new: list[Row] = parsed["stages"]
@@ -1520,7 +1521,10 @@ def _loosens_people_only(
             if (
                 now["who_oks"] != "people_only"
                 or any(now.get(key) != req.get(key) for key in ("kind", "source", "condition"))
-                or (_as_dict(_loads(now.get("settings"))) or {}) != (_as_dict(_loads(req.get("settings"))) or {})
+                or (
+                    named is not None
+                    and (_as_dict(_loads(now.get("settings"))) or {}) != (_as_dict(_loads(req.get("settings"))) or {})
+                )
             ):
                 return str(stage["name"])
             person: object = now.get("person_id")
