@@ -148,6 +148,7 @@ EMPTY = (
     "subscription_assignments",
     "runner_harness_actions",
     "runner_harness_choices",
+    "runner_entries",
     "runner_versions",
     "start_places",
     "org_turn_waits",
