@@ -209,7 +209,12 @@ def test_new_bot_computer_visibility_keeps_hidden_bots_and_accounts_private(worl
         "overloaded",
         "turn_counts",
         "turn_summary",
+        # Which release it runs and how it starts, never the update's error text (#4374).
+        "version",
+        "release",
+        "update",
     }
+    assert "error" not in raw["update"]
     for section in ("repositories", "recent_errors"):
         failed, page = call(api, "tico_computer_list", {"computer": rid, "section": section}, token=tokens["stranger"])
         assert not failed and page["items"] == []

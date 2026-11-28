@@ -354,6 +354,17 @@ def view(row, server=None):
     }
 
 
+# What a bot reads about a computer it may not open (fleet_runner_routes computer_rows): which release it runs and how
+# its update stands, so `tico computer versions` tells a closed computer that reported from one that did not (#4374).
+# Never the update's error text, which can name paths on that computer.
+BOT_FIELDS = ("release", "kind", "state", "label", "outdated", "server_release", "update_state", "target", "min_runner")
+
+
+def bot_view(row, server=None):
+    found = view(row, server)
+    return {key: found[key] for key in BOT_FIELDS}
+
+
 def forget_entry(c, runner_id):
     """A heartbeat without `entry` (or without a release at all): how this runner starts is not known now."""
     c.execute("DELETE FROM runner_entries WHERE runner_id=?", (runner_id,))
