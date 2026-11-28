@@ -108,6 +108,9 @@ TAGS = {
 # Health page checks this step files another way, so the page reader leaves them out: `invariant:<id>` rows are the
 # production checks, which the invariant reader files as `inv:<id>`.
 PAGE_LEFT_OUT = {"invariant"}
+# A Can't tell row whose failed reads were another row's: bots whose tools could not be read may hold the denies that
+# Harness permissions files, so that finding neither clears nor files again while they cannot be read.
+CANT_TELL_HOLDS = {"harness_unread": ("harness_denies",)}
 FIX_PAGE = (
     "Agent Ops: open the check on Settings > Health for the detail, fix the cause it names, and the check clears on the "
     "next run. A fix only a person can make: one ❓ on this task to the person who can make it, with the link to the "
@@ -320,8 +323,10 @@ def _page_findings(c, ctx, notes, stuck=frozenset()):
     for check in page.get("checks", []):
         base = str(check.get("id", "")).split(":", 1)[0]
         if check.get("status") == "unknown":
-            # It could not read what it checks: its finding, if one is open, neither files again nor clears.
-            _unread(notes, f"page:{check.get('id')}")
+            # It could not read what it checks: its finding, if one is open, neither files again nor clears. A Can't tell
+            # row that stands for another row's reads (CANT_TELL_HOLDS) holds that row's finding too.
+            for held in (str(check.get("id")), *CANT_TELL_HOLDS.get(base, ())):
+                notes.setdefault("cant_tell", []).append(f"page:{held}")
             continue
         if check.get("status") not in ("warn", "bad") or base in PAGE_LEFT_OUT:
             continue
@@ -416,13 +421,14 @@ def apply(c, ctx, checked, found, notes):
     # that outage, so the aggregate is not cleared for it. Without the page's read this run, the offline state is left as it is.
     gone_sigs = set()
     unread = set(notes.get("unread", []))
+    cant_tell = set(notes.get("cant_tell", []))  # page checks that could not read: their findings hold as they are
     offline = notes.get("offline")
     silent = set(offline["silent"]) if offline is not None else set()
     named = _reg_get(c, OFFLINE_STATE) if offline is not None else {}
     stuck = set(offline.get("stuck", [])) if offline is not None else set()  # its own finding's: no aggregate names it
     held = {}
     for row in c.execute("SELECT key,signature,pending FROM health_findings WHERE present=1").fetchall():
-        if row["key"] in seen or _unread_key(row["key"], unread):
+        if row["key"] in seen or row["key"] in cant_tell or _unread_key(row["key"], unread):
             continue
         members = set(named.get(row["key"], []))
         if row["key"] in OFFLINE_KEYS and members & silent and not members & stuck:

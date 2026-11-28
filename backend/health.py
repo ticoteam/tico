@@ -2227,22 +2227,23 @@ def _backups(config, settings):
             "see the backup docs.",
             [fix],
         )
-    if mode == "remote" and not backup.get("checked_at"):
-        return _check(
-            "backups",
-            "Backups",
-            "unknown",
-            "This server has not read its backup location yet, so whether copies arrive is not known.",
-            [fix],
-        )
     if backup.get("listing_error"):
-        # The last read failed; the age rule above turns it to Look, then Broken, once it lasts past the warning time.
+        # The last read failed (a first one too, with no check time yet). The age rule above turns it to Look, then
+        # Broken, once it lasts past the warning time.
         return _check(
             "backups",
             "Backups",
             "unknown",
             f"Could not read the backup location at {_clock(backup.get('listing_failed_at') or H.now())} "
             f"({backup['listing_error']}). Newest copy known: {_clock(last) if last else 'none'}.",
+            [fix],
+        )
+    if mode == "remote" and not backup.get("checked_at"):
+        return _check(
+            "backups",
+            "Backups",
+            "unknown",
+            "This server has not read its backup location yet, so whether copies arrive is not known.",
             [fix],
         )
     if mode in ("local-only", "local"):
@@ -3044,8 +3045,10 @@ def _claimed_oks_check(c):
     try:
         waiting = len(support.claimed(c))
         refused = support.refused_lately(c)
-    except sqlite3.OperationalError as exc:
-        if "no such table" not in str(exc):  # a locked or failing database: nothing read, so nothing to say is fine
+    except sqlite3.DatabaseError as exc:  # OperationalError included; a corrupt file raises DatabaseError itself
+        if not isinstance(exc, sqlite3.OperationalError) or "no such table" not in str(
+            exc
+        ):  # a locked or failing database: nothing read, so nothing to say is fine
             return _check("claimed_oks", "OK'd sends", "unknown", f"Could not read OK'd sends ({type(exc).__name__}).")
         waiting = refused = 0  # an install that never made the tables: nothing was claimed
     said = []

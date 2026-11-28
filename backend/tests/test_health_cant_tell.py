@@ -95,6 +95,12 @@ def test_a_remote_backup_status_never_checked_cant_tell():
     assert health._backups({"backup": _remote(checked_at=H.now())}, REMOTE)["status"] == "ok"
 
 
+def test_a_first_backup_listing_that_failed_names_its_error_though_nothing_was_checked_yet():
+    failed = H.shift(H.now(), minutes=-2)
+    check = health._backups({"backup": _remote(listing_error="ConnectionError", listing_failed_at=failed)}, REMOTE)
+    assert check["status"] == "unknown" and "(ConnectionError)" in check["summary"]
+
+
 def test_the_backup_loop_records_when_and_how_its_listing_failed(tmp_path):
     from backend import replication
 
@@ -152,6 +158,13 @@ def test_an_okd_sends_read_error_other_than_a_missing_table_cant_tell(environmen
     check = health_of(api)[1]["claimed_oks"]
     assert check["status"] == "ok" and check["summary"] == "Nothing OK'd waits to be sent."
 
+    def corrupt(c):
+        raise sqlite3.DatabaseError("database disk image is malformed")
+
+    monkeypatch.setattr(support, "claimed", corrupt)
+    check = health_of(api)[1]["claimed_oks"]
+    assert check["status"] == "unknown" and check["summary"] == "Could not read OK'd sends (DatabaseError)."
+
 
 def test_bots_whose_tools_could_not_be_read_are_named_in_a_cant_tell_row(environment, monkeypatch):
     from backend import bot_tools
@@ -178,13 +191,14 @@ def test_bots_whose_tools_could_not_be_read_are_named_in_a_cant_tell_row(environ
     def unreadable(c, settings, bot, reads=None):
         raise RuntimeError("unreadable")
 
+    before = health_of(api)[0]
     monkeypatch.setattr(bot_tools, "listing", unreadable)
     body, checks = health_of(api)
     row = checks["harness_unread"]
     assert row["status"] == "unknown" and row["label"] == "Harness permissions"
     assert row["summary"] == "Could not read the tools of reviewer and scout."
     assert "harness_denies" not in checks
-    assert body["unknown"] == 1
+    assert body["unknown"] == before["unknown"] + 1  # other checks may already say unknown on a bare install
 
 
 def test_the_api_counts_unknown_apart_from_attention(environment, monkeypatch):

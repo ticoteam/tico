@@ -1158,8 +1158,9 @@ def _part_readers_write_nothing(api, runner, monkeypatch, hq=None, comments=None
             _, found, notes = check_health.gather(r, ctx)
         finally:
             r.execute("PRAGMA query_only=0")
-    # No reader failed. The page's offline record is a success, not a failure note.
-    assert {key: value for key, value in notes.items() if key != "offline"} == {}, notes
+    # No reader failed. The page's offline record is a success, not a failure note, and so are its Can't tell rows (a
+    # bare install has no backup state, models or never-stuck reading): the page read them.
+    assert {key: value for key, value in notes.items() if key not in ("offline", "cant_tell")} == {}, notes
     assert any(row["key"].startswith("event_stream:") for row in found)
 
 
@@ -2013,9 +2014,42 @@ def test_a_check_that_cannot_tell_neither_files_nor_clears_its_finding(environme
     page = {"checks": [slack]}
     monkeypatch.setattr(health, "view", lambda c, *a, **k: page)
     run(api)
+    run(api)  # a noisy check files on its second run
     assert finding(api, "page:slack")["present"] == 1
     tasks = task_count(api)
+    assert tasks > 0
     page["checks"] = [dict(slack, status="unknown", summary="The Slack service has not reported since 14:02 UTC.")]
     result = run(api)
     assert finding(api, "page:slack")["present"] == 1
     assert "page:slack" not in result["details"]["cleared"] and task_count(api) == tasks
+
+
+def test_bots_whose_tools_cannot_be_read_hold_the_harness_permissions_finding(environment, readers, monkeypatch):
+    """Harness permissions filed a deny; then the bot's tools cannot be read, so the denies row is gone and a Can't tell
+    row stands in. The denies finding stays open and is not cleared: an unread tool list is no fix."""
+    api, _ = built(environment)
+    denies = {
+        "id": "harness_denies",
+        "label": "Harness permissions",
+        "status": "warn",
+        "summary": "Scout cannot push.",
+        "fixes": [],
+    }
+    page = {"checks": [denies]}
+    monkeypatch.setattr(health, "view", lambda c, *a, **k: page)
+    run(api)
+    run(api)
+    assert finding(api, "page:harness_denies")["present"] == 1
+    tasks = task_count(api)
+    page["checks"] = [
+        {
+            "id": "harness_unread",
+            "label": "Harness permissions",
+            "status": "unknown",
+            "summary": "Could not read the tools of Scout.",
+            "fixes": [],
+        }
+    ]
+    result = run(api)
+    assert finding(api, "page:harness_denies")["present"] == 1
+    assert "page:harness_denies" not in result["details"]["cleared"] and task_count(api) == tasks
