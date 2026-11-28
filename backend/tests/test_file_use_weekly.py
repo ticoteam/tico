@@ -111,7 +111,7 @@ def ok(response):
 
 @pytest.fixture
 def now(monkeypatch):
-    """The clock file_use reads for its open window, moved by hand: `now[0] += seconds`."""
+    """The clock file_use reads for the gap that ends a showing, moved by hand: `now[0] += seconds`."""
     at = [1000.0]
     monkeypatch.setattr(file_use, "clock", lambda: at[0], raising=False)
     return at
@@ -174,13 +174,40 @@ def test_one_open_is_one_file_shown_however_many_requests_it_takes(api, now):
     assert api.get(f"/api/v2/files/{pdf}/versions/1", headers=headers()).status_code == 200
     assert query(api, opens, "ana-test")["rows"] == [["bot", 1], ["person", 1]]
 
-    # Past the window, a refused range and a later part are still no open; the next read from byte 0 is.
-    now[0] += file_use.OPEN_WINDOW_S
+    # After a pause, a refused range and a later part are still no open: the later part continues a showing (a paused
+    # video playing on) and the next read from byte 0 within the gap is the same one. After the gap, byte 0 is a new open.
+    now[0] += file_use.OPEN_GAP_S
     assert api.get(f"/api/v2/files/{pdf}", headers={**headers(), "Range": "bytes=99999-"}).status_code == 416
     assert api.get(f"/api/v2/files/{pdf}", headers={**headers(), "Range": "bytes=10-"}).status_code == 206
+    now[0] += 5
+    assert api.get(f"/api/v2/files/{pdf}", headers={**headers(), "Range": "bytes=0-"}).status_code == 206
     assert query(api, opens, "ana-test")["rows"] == [["bot", 1], ["person", 1]]
+    now[0] += file_use.OPEN_GAP_S
     assert api.get(f"/api/v2/files/{pdf}", headers={**headers(), "Range": "bytes=0-"}).status_code == 206
     assert query(api, opens, "ana-test")["rows"] == [["bot", 1], ["person", 2]]
+
+
+def test_closing_a_file_and_opening_it_again_a_minute_later_is_two_opens(api, now):
+    pdf = task_pdf(api)
+    opens = "SELECT who, actors, uses FROM files_use_weekly WHERE action = 'open'"
+
+    def show():
+        # One showing in the app: its info, then its bytes in parts, a second apart.
+        ok(api.get(f"/api/v2/files/{pdf}/info", headers=headers()))
+        now[0] += 1
+        assert api.get(f"/api/v2/files/{pdf}", headers={**headers(), "Range": "bytes=0-9"}).status_code == 206
+        now[0] += 1
+        assert api.get(f"/api/v2/files/{pdf}", headers={**headers(), "Range": "bytes=10-"}).status_code == 206
+        assert api.get(f"/api/v2/files/{pdf}/versions/1", headers=headers()).status_code == 200
+
+    show()
+    assert query(api, opens, "ana-test")["rows"] == [["person", 1, 1]]
+    now[0] += 60
+    show()
+    assert query(api, opens, "ana-test")["rows"] == [["person", 1, 2]]
+    now[0] += 600
+    show()
+    assert query(api, opens, "ana-test")["rows"] == [["person", 1, 3]]
 
 
 def test_the_agent_pages_made_recently_list_is_a_list(api):
