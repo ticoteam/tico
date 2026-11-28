@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { chatWindowWho, isChatWindow, openChatWindow, type TicoDesktop } from '@/desktop';
+import { canOpenChatWindow, chatWindowWho, isChatWindow, openChatWindow, type TicoDesktop } from '@/desktop';
 
 const ORIGIN = window.location.origin;
 
@@ -21,6 +21,7 @@ function fakeWin(start = 'about:blank') {
 
 afterEach(() => {
   delete (window as { tico?: TicoDesktop }).tico;
+  delete (window as { ticoNative?: unknown }).ticoNative;
   vi.restoreAllMocks();
 });
 
@@ -76,6 +77,41 @@ describe('opening an agent’s chat in its own window, in a browser', () => {
     expect(await openChatWindow('release-owner')).toBe('tab');
     expect(open).toHaveBeenLastCalledWith(`${ORIGIN}/team/release-owner?window=1`, '_blank');
   });
+
+  it('says so when the browser blocks the tab too', async () => {
+    vi.spyOn(window, 'open').mockReturnValue(null);
+    expect(await openChatWindow('release-owner')).toBe('blocked');
+  });
+
+  it('sends a reused window that a link took elsewhere back to the chat', async () => {
+    const win = fakeWin(`${ORIGIN}/tasks`);
+    vi.spyOn(window, 'open').mockReturnValue(win);
+    expect(await openChatWindow('release-owner')).toBe('window');
+    expect(win.location.href).toBe(`${ORIGIN}/team/release-owner?window=1`);
+    expect(win.focus).toHaveBeenCalled();
+  });
+
+  it('sends a reused window on another site back to the chat', async () => {
+    let sent = '';
+    const win = {
+      location: {
+        get href(): string {
+          throw new DOMException('cross-origin', 'SecurityError');
+        },
+        set href(to: string) {
+          sent = to;
+        },
+      },
+      focus: vi.fn(),
+    } as unknown as Window;
+    vi.spyOn(window, 'open').mockReturnValue(win);
+    expect(await openChatWindow('release-owner')).toBe('window');
+    expect(sent).toBe(`${ORIGIN}/team/release-owner?window=1`);
+  });
+
+  it('can open one in a browser', () => {
+    expect(canOpenChatWindow()).toBe(true);
+  });
 });
 
 describe('opening an agent’s chat in its own window, in the desktop app', () => {
@@ -93,10 +129,25 @@ describe('opening an agent’s chat in its own window, in the desktop app', () =
     expect(await openChatWindow('release-owner')).toBe('full');
   });
 
-  it('falls back to a browser window in an older app without the call', async () => {
+  it('can open one in an app with the call', () => {
+    (window as { tico?: unknown }).tico = { chatWindow: { open: vi.fn() } };
+    expect(canOpenChatWindow()).toBe(true);
+  });
+
+  // An older app hands a new window to the system browser, which has none of the app's sign-in: no window at all.
+  it('cannot open one in an older app without the call, and never falls back to a browser window', async () => {
     (window as { tico?: unknown }).tico = { companies: {} };
-    const open = vi.spyOn(window, 'open').mockReturnValue(fakeWin());
-    expect(await openChatWindow('release-owner')).toBe('window');
-    expect(open).toHaveBeenCalled();
+    const open = vi.spyOn(window, 'open');
+    expect(canOpenChatWindow()).toBe(false);
+    expect(await openChatWindow('release-owner')).toBe('unavailable');
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('cannot open one in the Tauri shell', async () => {
+    (window as { ticoNative?: unknown }).ticoNative = {};
+    const open = vi.spyOn(window, 'open');
+    expect(canOpenChatWindow()).toBe(false);
+    expect(await openChatWindow('release-owner')).toBe('unavailable');
+    expect(open).not.toHaveBeenCalled();
   });
 });

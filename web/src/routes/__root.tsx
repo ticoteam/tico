@@ -2,7 +2,7 @@ import { useInfiniteQuery, useQuery, type QueryClient } from '@tanstack/react-qu
 import { CatchBoundary, Link, Outlet, createRootRouteWithContext, useLocation, useRouter, useRouterState } from '@tanstack/react-router';
 import { Suspense, lazy, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { ActionsRoot, run } from '@/actions';
-import { chatWindowWho, isChatWindow, keepInSmallWindow, reportCallToDesktop, useCallWindow } from '@/desktop';
+import { canOpenChatWindow, chatWindowWho, isChatWindow, keepInSmallWindow, reportCallToDesktop, useCallWindow } from '@/desktop';
 import { AppActSheet, ticoRoomQuery } from '@/conversation';
 import {
   configQuery,
@@ -541,7 +541,7 @@ function AppMenu({ note }: { note: ReactNode }) {
         onMessage={() => setMessaging(true)}
         onCall={() => setCalling(true)}
         onAutomations={press('shell.goTo', { to: '/company/routines' })}
-        onPopOut={(m) => void run('team.popOut', { who: chatWindowWho(m.to) }, { via: 'click' })}
+        onPopOut={canOpenChatWindow() ? (m) => void run('team.popOut', { who: chatWindowWho(m.to) }, { via: 'click' }) : undefined}
         companyMenu={<CompanyRows name={name} all={companies} />}
         accountMenu={<AccountRows me={meMate} email={me?.email ?? ''} />}
       />

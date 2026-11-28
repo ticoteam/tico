@@ -284,22 +284,36 @@ export const isChatWindow = (pathname: string, search: string): boolean =>
 export const chatWindowWho = (pathname: string): string => decodeURIComponent(CHAT_PATH.exec(pathname)?.[1] ?? '');
 
 /** How the chat opened: the desktop app's own window, a browser window, a new tab (the browser blocked a window), or
-    not at all (the desktop app holds as many as it allows). */
-export type ChatWindowOpened = 'desktop' | 'window' | 'tab' | 'full';
+    not at all: the desktop app holds as many as it allows ('full'), the browser blocked the tab too ('blocked'), or an
+    older desktop app cannot ('unavailable', `canOpenChatWindow`). */
+export type ChatWindowOpened = 'desktop' | 'window' | 'tab' | 'full' | 'blocked' | 'unavailable';
+
+/** Whether this page can open an agent's chat in its own window. A browser can; the desktop app only with its
+    chatWindow call. An older desktop app (the Electron one without the call, or the Tauri shell) cannot: it sends a new
+    window to the system browser, which has none of the app's sign-in, so the control is hidden there. */
+export const canOpenChatWindow = (): boolean => {
+  const t = desktop();
+  return t ? !!t.chatWindow : !inOldDesktopApp();
+};
 
 /** Opens an agent's chat in its own window. The desktop app opens and keeps its own; a browser gets one window per
     agent, by name, so opening it again brings that window forward without loading it again. */
 export async function openChatWindow(agent: string): Promise<ChatWindowOpened> {
   const t = desktop();
   if (t?.chatWindow) return (await t.chatWindow.open(agent)) === 'full' ? 'full' : 'desktop';
+  if (!canOpenChatWindow()) return 'unavailable';
   const url = `${window.location.origin}/team/${encodeURIComponent(agent)}?window=1`;
-  // An empty address finds the window of that name, or makes a blank one; only a blank one is sent to the chat.
+  // An empty address finds the window of that name, or makes a blank one.
   const win = window.open('', `tico-chat-${agent.replace(/[^\w-]/g, '_')}`, 'popup,width=420,height=720');
-  if (!win) {
-    window.open(url, '_blank');
-    return 'tab';
+  if (!win) return window.open(url, '_blank') ? 'tab' : 'blocked';
+  // A blank one, or one a link took away from the chat (another origin reads as unknown), is sent to the chat.
+  let at = '';
+  try {
+    at = win.location.href;
+  } catch {
+    /* another origin's page */
   }
-  if (win.location.href === 'about:blank') win.location.href = url;
+  if (at !== url) win.location.href = url;
   win.focus();
   return 'window';
 }

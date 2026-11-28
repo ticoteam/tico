@@ -293,6 +293,15 @@ dropped and counted (`web.dropped`). Minutes become hours after two days and go 
 `web` section of `GET /api/v2/system/metrics` gives, per metric and screen, `n`, `p50`, `p75`, `p95`, `p99` and
 `max_ms`.
 
+### Usage events
+
+A feature's measure can need an event the server never sees, such as a window opening. The page sends it to
+`POST /api/v2/web-events` as `{"event": ..., <field>: <value>}`; the events and their one field are `WEB_EVENTS` in
+`backend/flight.py` (today `chat_window.opened` with `surface` `web` or `desktop`), and anything else is refused. Only a
+person's session may send. Each is written at once to `flight_events` (kind = the event, detail = the person's actor
+and the value), whether or not the recorder is on, and kept 90 days like other events; one person sends at most 10 a
+minute. The `events` section of `GET /api/v2/system/metrics` lists them, without the actor for a bot.
+
 With the recorder enabled, `Server-Timing` includes `sql` and `wait` durations alongside `auth` and `app`.
 Place GETs also include `prep`, `cards` and up to eight slowest `card-<template>` totals (repeated kinds summed; `card-page` for page pins, `card-hidden` for pins the caller can't read), capped at 300 added bytes.
 Slow metrics retain `sql_ms`, `wait_ms` and `queries`; rows recorded before the upgrade have null values.

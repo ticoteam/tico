@@ -1,6 +1,6 @@
 import * as z from 'zod/mini';
 import { defineAction, refusalFor, toldOf, type Ctx } from '@/actions';
-import { ApiError } from '@/api/client';
+import { api, ApiError } from '@/api/client';
 import { directoryQuery } from '@/data';
 import { openChatWindow } from '@/desktop';
 import { toast } from '@/kit/Toast';
@@ -115,9 +115,16 @@ export const popOutChat = defineAction({
     const opened = await openChatWindow(who);
     if (opened === 'tab') toast({ text: 'Your browser blocked a new window, so the chat opened in a new tab' });
     if (opened === 'full') toast({ text: 'Close a chat window first: six are open', kind: 'failed' });
+    if (opened === 'blocked') toast({ text: 'Your browser blocked the new window. Allow pop-ups for Tico and try again', kind: 'failed' });
+    if (opened === 'unavailable') toast({ text: 'Update the desktop app to open a chat in its own window', kind: 'failed' });
+    if (opened === 'desktop' || opened === 'window' || opened === 'tab') {
+      // the usage event the feature's measure reads (people who open a chat window, and where); never holds the press up
+      void api.post('/api/v2/web-events', { event: 'chat_window.opened', surface: opened === 'desktop' ? 'desktop' : 'web' }).catch(() => undefined);
+    }
     return opened;
   },
-  did: () => 'Opened the chat in a new window',
+  did: (_input, opened) =>
+    opened === 'desktop' || opened === 'window' || opened === 'tab' ? 'Opened the chat in a new window' : 'No new window opened',
 });
 
 export const ADD_STEPS = ['pick', 'new', 'template', 'person', 'cloud'] as const;

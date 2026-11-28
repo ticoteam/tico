@@ -431,6 +431,23 @@ describe('the root', () => {
     localStorage.clear();
   });
 
+  // An older desktop app sends a new window to the system browser, which has no sign-in: no mark there at all.
+  it.each([
+    ['a browser', () => undefined, true],
+    ['the desktop app with chat windows', () => Object.assign(fakeDesktop(), { chatWindow: { open: vi.fn() } }), true],
+    ['an older desktop app without them', () => fakeDesktop(), false],
+  ] as const)('in %s, an agent’s menu row offers its chat in a new window only where one can open', async (_where, setUp, offered) => {
+    localStorage.clear();
+    setUp();
+    const qa = { ...QA, reportsTo: 'human:maya' };
+    queryClient.setQueryData(['directory'], { actors: [MAYA, qa], byId: { [MAYA.id]: MAYA, [qa.id]: qa }, teams: [] });
+    show('/');
+    const nav = within(await screen.findByRole('navigation', { name: 'Main' }));
+    expect(await nav.findByRole('link', { name: 'QA Owner' })).toBeTruthy();
+    expect(!!nav.queryByRole('button', { name: 'Open QA Owner in new window' })).toBe(offered);
+    localStorage.clear();
+  });
+
   /* concept D (Nov 23): the menu's foot moved into its head. The pick is the company and you, and opens one menu. */
   it('the company and you at the menu’s head open one menu: Companies, this one’s settings, you with the theme, Sign out @s1189 @s1206', async () => {
     people(MAYA, QA);

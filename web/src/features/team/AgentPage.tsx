@@ -2,6 +2,7 @@ import { useInfiniteQuery, useQuery, useSuspenseQuery } from '@tanstack/react-qu
 import { useState, type ReactNode } from 'react';
 import { useAction } from '@/actions';
 import { meQuery, pageOwnersQuery, useActors, type Actor, type PageOwnerRow } from '@/data';
+import { canOpenChatWindow } from '@/desktop';
 import { useFollow } from '@/live/follow';
 import { Ago } from '@/kit/Ago';
 import { Avatar } from '@/kit/Avatar';
@@ -167,7 +168,7 @@ function AgentHead({
     // the new-window mark stands before the gear; the phone has no windows, so it shows only where the page has room
     actions: (
       <>
-        <IconButton icon="popout" label="Open in new window" onClick={() => void popOut.run({ who: slug })} />
+        {canOpenChatWindow() && <IconButton icon="popout" label="Open in new window" onClick={() => void popOut.run({ who: slug })} />}
         <IconButton
           icon="gear"
           label="Settings"
