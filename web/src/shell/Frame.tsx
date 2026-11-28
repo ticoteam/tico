@@ -2,6 +2,7 @@ import { Fragment, useEffect, useEffectEvent, useLayoutEffect, useRef, useState,
 import { motionLevel } from '@/motion';
 import { PhoneCards, foldPhoneCard, type PhoneCard } from '@/shell/phone';
 import { Dot } from '@/tico/dot';
+import { useTicoName } from '@/tico/look';
 import { useArrangement } from './arrangement';
 import { Icon } from '@/kit/Icon';
 import { CardsContext } from '@/kit/Popover';
@@ -146,6 +147,9 @@ function Sheets(p: FrameProps & { arr: Arrangement }) {
 
 function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWindowMode> }) {
   const { width, mode } = p.win;
+  // Tico's sheet goes by your own name for it
+  const tico = useTicoName();
+  const named = (id: SheetId, names: Record<SheetId, string>) => (id === 'tico' ? tico : names[id]);
   const [saved, update] = useSheetMemory();
   const [draft, setDraft] = useState<Saved | null>(null);
   /* the sheet opened by its edge, for this arrangement only */
@@ -469,15 +473,15 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
                 data-first={i === 0 || undefined}
                 data-edge={s.id}
                 data-act={act ? true : undefined}
-                aria-label={`Open ${s.id === 'chat' && bar ? bar.name : NAME[s.id]}`}
-                title={`Open ${s.id === 'chat' && bar ? bar.name : NAME[s.id]}`}
+                aria-label={`Open ${s.id === 'chat' && bar ? bar.name : named(s.id, NAME)}`}
+                title={`Open ${s.id === 'chat' && bar ? bar.name : named(s.id, NAME)}`}
                 onClick={() => {
                   onPress(s.id);
                   if (s.id === 'tico') typeToTico();
                 }}
               >
                 <span className="shell-edge-mark">{mark(s.id)}</span>
-                <span className="shell-edge-name">{s.id === 'chat' && bar ? bar.name : EDGE_NAME[s.id]}</span>
+                <span className="shell-edge-name">{s.id === 'chat' && bar ? bar.name : named(s.id, EDGE_NAME)}</span>
               </button>
             ) : null}
             {act ? (
@@ -506,7 +510,7 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
               role="separator"
               tabIndex={0}
               aria-orientation="vertical"
-              aria-label={`Resize ${NAME[s.id]}`}
+              aria-label={`Resize ${named(s.id, NAME)}`}
               aria-valuenow={Math.round(s.width)}
               aria-valuemin={s.min}
               aria-valuemax={s.dragMax}

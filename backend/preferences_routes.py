@@ -25,6 +25,12 @@ strategy_bot: Any = strategy_bot_module
 views: Any = views_module
 privacy: Any = task_privacy
 
+# A person's own name and look for their assistant (web/src/tico/look.ts): shown only to them, on their own screens.
+ASSISTANT_LOOK = "ui.assistant"
+DOT_COLORS = frozenset({"jade", "teal", "sky", "indigo", "violet", "rose", "coral", "gold"})
+DOT_SPRITES = frozenset({"pixel"})
+NAME_MAX = 40
+
 # The defers the web's Send can keep (preference compose.send_way): the durations its menu offers (ui/app/pill.ts).
 SEND_WAY_DEFERS = frozenset("defer:" + f for f in ("30m", "1h", "4h", "24h", "2d", "7d", "never"))
 
@@ -44,6 +50,7 @@ KEYS = frozenset(
         "meetings.auto_share",
         "ui.tracker_seen_at",
         "intros.seen",
+        ASSISTANT_LOOK,
         strategy_bot.HIDE_PREF,
     }
 )
@@ -89,6 +96,8 @@ def check(who: Any, key: str, value: object) -> None:
             when = H.parse_ts(at) if isinstance(at, str) else None
             if not INTRO_PAGE.fullmatch(page) or when is None or when.tzinfo is None:
                 raise Problem("validation", "intros.seen maps a page to an ISO-8601 date/time with a timezone", 422)
+    if key == ASSISTANT_LOOK:
+        check_look(cast(object, value))
     # Hide from my chart on the Strategy Owner: a person's own view.
     if key == strategy_bot.HIDE_PREF:
         views.human_only(who)
@@ -107,13 +116,37 @@ def seen_union(c: Any, actor: str, value: dict[str, str]) -> dict[str, str]:
     return kept
 
 
+def check_look(value: object) -> None:
+    """ui.assistant is null, or {name?, color?, sprite?}: a name of 1 to 40 characters, one of the eight Dot colors,
+    and the one sprite (or null for none)."""
+    if value is None:
+        return
+    if not isinstance(value, dict):
+        raise Problem("validation", ASSISTANT_LOOK + " is an object: name, color, sprite", 422)
+    look = cast(dict[str, object], value)
+    extra = set(look) - {"name", "color", "sprite"}
+    if extra:
+        raise Problem("validation", ASSISTANT_LOOK + " keeps only name, color and sprite", 422)
+    name = look.get("name")
+    if name is not None and not (isinstance(name, str) and 0 < len(name.strip()) <= NAME_MAX and name == name.strip()):
+        raise Problem("validation", f"{ASSISTANT_LOOK} name is 1 to {NAME_MAX} characters, trimmed", 422)
+    color = look.get("color")
+    if color is not None and color not in DOT_COLORS:
+        raise Problem("validation", ASSISTANT_LOOK + " color is one of " + ", ".join(sorted(DOT_COLORS)), 422)
+    sprite = look.get("sprite")
+    if sprite is not None and sprite not in DOT_SPRITES:
+        raise Problem(
+            "validation", ASSISTANT_LOOK + " sprite is " + " or ".join(sorted(DOT_SPRITES)) + ", or null", 422
+        )
+
+
 def register(app: "FastAPI", auth: Any, mutate: "Callable[..., Any]", store: Any) -> None:
     @app.get(
         "/api/v2/preferences/{key}",
         **api_v2(
             "Team",
             "getPreference",
-            "One of your own preferences (the keys clients keep: compose.send_way, ui.rails, org.history, org.mine, tasks.view, tasks.pins, pipeline.rail_hidden, chart.hide_strategy_bot, meetings.auto_share, ui.tracker_seen_at, intros.seen); null when unset",
+            "One of your own preferences (the keys clients keep: compose.send_way, ui.rails, org.history, org.mine, tasks.view, tasks.pins, pipeline.rail_hidden, chart.hide_strategy_bot, meetings.auto_share, ui.tracker_seen_at, intros.seen, ui.assistant); null when unset",
             "PreferenceValue",
         ),
     )

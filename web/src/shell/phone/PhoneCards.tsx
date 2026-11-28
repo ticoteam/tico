@@ -10,6 +10,7 @@ import { Icon } from '@/kit/Icon';
 import { coldOf, openOf, stuckToBottom, watchKeyboard, type Keys } from '@/lib';
 import { Dot } from '@/tico/dot';
 import { TICO_MARK } from '@/shell/layout';
+import { useTicoName } from '@/tico/look';
 import './phone.css';
 
 /** A link that opens a task over the page (`?task=`, or a task's own address), not a page of its own. */
@@ -94,6 +95,8 @@ function Tab({ name, label, on = false, onClick, children }: { name: string; lab
 
 export function PhoneCards({ page, tico, menu, chat, faces = {}, labels = {}, tucked = false, chatKey, onSearch, onCardChange }: PhoneCardsProps) {
   const router = useRouter({ warn: false });
+  // Tico's card and icon go by your own name for it
+  const ticoName = useTicoName();
   // a chat that opens comes up and one that ends goes down. An address that already names one (a shared link, a
   // reload) opens on it. A page's own chat (`tucked`) waits behind its icon unless the address names a chat.
   const second = !!chat;
@@ -261,7 +264,7 @@ export function PhoneCards({ page, tico, menu, chat, faces = {}, labels = {}, tu
           </div>
           {chat ? cardOf('chat', chat, labels.chat ?? 'Agent') : null}
           {cardOf('menu', menu, 'Menu')}
-          {cardOf('tico', tico, 'Tico')}
+          {cardOf('tico', tico, ticoName)}
           {/* what holds the bottom (a task's decision, kit Dock): above the bar, outside the page and the cards, so it is
               in reach with the chat up */}
           <div className="ph-dock" data-slot="dock" ref={setDock} />
@@ -269,7 +272,7 @@ export function PhoneCards({ page, tico, menu, chat, faces = {}, labels = {}, tu
             <Tab name="search" label="Search" onClick={() => onSearch?.()}>
               <Icon name="search" />
             </Tab>
-            <Tab name="tico" label="Tico" on={card === 'tico'} onClick={typeToTico}>
+            <Tab name="tico" label={ticoName} on={card === 'tico'} onClick={typeToTico}>
               <Dot size={TICO_MARK} />
             </Tab>
             <Tab name="company" label="Company" on={card === 'none' || card === 'menu'} onClick={toCompany}>
