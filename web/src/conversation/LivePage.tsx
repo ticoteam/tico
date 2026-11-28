@@ -184,7 +184,18 @@ function LiveFrame({ src, title, id, fallback, size, app }: { src: string; title
       ) : (
         <div ref={box} className={heard ? 'pcard lpage' : 'pcard lpage is-loading'}>
           <div className="lpage-view" style={{ height: height === null ? Math.min(LOADING_HEIGHT, max) : clampHeight(height, max) }}>
-            <iframe ref={cardRef} src={`${first}#tico-view=card&tico-size=${size}`} title={title} sandbox={sandbox} allow={ALLOW} loading="lazy" referrerPolicy="no-referrer" />
+            {/* The card never scrolls inside: a page taller than the card is cut and faded (Expand shows the rest), so
+                a wheel or a swipe over it scrolls the chat or sidebar around it, never the page hidden in it. */}
+            <iframe
+              ref={cardRef}
+              src={`${first}#tico-view=card&tico-size=${size}`}
+              title={title}
+              sandbox={sandbox}
+              allow={ALLOW}
+              loading="lazy"
+              referrerPolicy="no-referrer"
+              scrolling="no"
+            />
             {cut && <span className="lpage-fade" aria-hidden="true" />}
           </div>
           <span className="pcard-foot">
