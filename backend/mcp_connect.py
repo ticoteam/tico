@@ -614,14 +614,16 @@ def check(store: Any, vault: Any, tool_id: str) -> list[Json]:
             )
             rows.append(row | {"ok": ok})
         if listed is not None:
+            tool_names: list[str] = [t["name"] for t in listed]
+            listed_at: str = H.now()
             found = {
-                "names": [t["name"] for t in listed],
+                "names": tool_names,
                 "read_only": [t["name"] for t in listed if t["read_only"]],
-                "listed_at": H.now(),
+                "listed_at": listed_at,
                 "exact": True,  # names kept whole (NAME_MAX), never cut: set_only_reads trusts a long one only then
             }
             c.execute("UPDATE tools SET mcp_tools=? WHERE id=?", (encode(found), tool_id))
-            _suspend_dropped(c, tool_id, set(found["names"]), found["listed_at"])
+            _suspend_dropped(c, tool_id, set(tool_names), listed_at)
     rows.sort(key=lambda r: r["ok"])
     return rows
 
