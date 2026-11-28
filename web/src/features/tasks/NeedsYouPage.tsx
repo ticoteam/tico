@@ -120,13 +120,14 @@ function TaskRows({ items, pages }: { items: readonly FlowItem[]; pages: readonl
   );
 }
 
-function TaskSections({ read }: { read: ReturnType<typeof useFlowList> }) {
+/** `of`: which list `read` is (its query's params), so its end starts over when that changes. */
+function TaskSections({ read, of }: { read: ReturnType<typeof useFlowList>; of: Record<string, string | number> }) {
   const pages = read.data?.pages.map((page) => page.tasks);
   const items = new Map(pages?.flatMap((tasks) => tasks.map((task) => [task.id, flowTask(task)] as const)));
   return (
     <>
       <TaskRows items={[...items.values()]} pages={pages ?? []} />
-      <ReadOn more={read.hasNextPage ? () => read.fetchNextPage().then((r) => !r.isFetchNextPageError) : undefined} />
+      <ReadOn of={of} more={read.hasNextPage ? () => read.fetchNextPage().then((r) => !r.isFetchNextPageError) : undefined} />
     </>
   );
 }
@@ -145,7 +146,7 @@ function FlowShelf({ owner, shelf }: { owner?: string; shelf: 'snoozed' | 'done'
       </p>
     );
   if (!read.data?.pages[0]?.tasks.length) return <p className="flow-shelf-state">{shelf === 'done' ? 'No done tasks' : 'No snoozed tasks'}</p>;
-  return <TaskSections read={read} />;
+  return <TaskSections read={read} of={flowListParams(owner, shelf)} />;
 }
 
 function SnoozedAsk({ id, title, href, until }: { id: string; title: string; href?: string; until: string }) {
@@ -247,7 +248,7 @@ export function NeedsYouPage() {
       reads={[read]}
       className="tasks-page"
       sections={all
-        ? read.data?.pages[0]?.tasks.length ? <TaskSections read={read} /> : <Empty title="No work to claim" />
+        ? read.data?.pages[0]?.tasks.length ? <TaskSections read={read} of={flowListParams(undefined, 'open')} /> : <Empty title="No work to claim" />
         : <Mine sorting={waiting} />}
     />
   );

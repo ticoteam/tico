@@ -31,12 +31,24 @@ export function AllRows<T extends { id: string }>({
   return <>{list.map(draw)}</>;
 }
 
+interface ReadOnProps {
+  /** Which list this is (its query's params, a tag): a new list starts over, with no "Try again", read or watch kept
+      from the one before it. Not `more`, which callers make again on every draw. */
+  of: unknown;
+  more: (() => Promise<boolean>) | undefined;
+  look?: 'row' | 'col';
+}
+
 /**
  * Where a list ends while the server holds more of it. The next page is read as this comes near the screen, with no
  * click, and again after each page while the end stays near. It reads only when no read is running and none has
  * failed; a failed read leaves a "Try again" row. `more` resolves false when the read failed.
  */
-export function ReadOn({ more, look = 'row' }: { more: (() => Promise<boolean>) | undefined; look?: 'row' | 'col' }) {
+export function ReadOn({ of, ...rest }: ReadOnProps) {
+  return <ReadOnOf key={JSON.stringify(of) ?? ''} {...rest} />;
+}
+
+function ReadOnOf({ more, look = 'row' }: Omit<ReadOnProps, 'of'>) {
   const end = useRef<HTMLDivElement>(null);
   const busy = useRef(false);
   const [failed, setFailed] = useState(false);

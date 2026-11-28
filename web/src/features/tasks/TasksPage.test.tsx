@@ -1,7 +1,7 @@
 import { QueryClientProvider, QueryObserver } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRouteWithContext, createRoute, createRouter, Outlet, RouterProvider } from '@tanstack/react-router';
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { ActionsRoot } from '@/actions';
 import { keys, queryClient } from '@/data';
@@ -19,6 +19,7 @@ import { NeedsYouPage } from './NeedsYouPage';
 import { NeedsYouViews } from './NeedsYouViews';
 import { flowCountQuery, flowListParams, flowListQuery, flowQuery, listParams, loadMoreOf, pipelinesQuery, pipelineTasksQuery, refreshLoaded, STATUS_BACKSTOP_MS, useFlowCountRefresh, type Pipeline, type TaskItem } from './queries';
 import { TasksPage } from './TasksPage';
+import type { TasksSearch } from './search';
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 type VirtualLists = typeof VirtualListModule;
@@ -848,6 +849,82 @@ describe('Task lists run on, with no "more" @3535', () => {
     expect(reads).toBe(2);
     expect(screen.getByTitle('Fix the export')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+  });
+
+  it('a filter change starts the end over: no "Try again" or running read is kept from the list before (board and list)', async () => {
+    const near = watchNear();
+    const mine = keys.tasks.list(listParams('eng', { owner: ME }));
+    let pending: ((r: Reply) => void) | undefined;
+    const reads: string[] = [];
+    serve((url) => {
+      if (!url.includes('after=')) return { status: 200, body: {} };
+      reads.push(url);
+      // everyone's next page fails; mine's first one hangs until let go, its second comes in
+      if (url.includes('after=all')) return { status: 500, body: {} };
+      if (url.includes('after=mine') && !pending) return new Promise<Reply>((done) => (pending = done));
+      return { status: 200, body: { tasks: [task('m9', 99, 'Mine from the next page', 's2', { owner_id: ME })], cursor: 'c3' } };
+    });
+    let to: (s: TasksSearch) => void = () => {};
+    function Switch({ view }: { view: 'list' | 'board' }) {
+      const [search, setSearch] = useState<TasksSearch>({ view });
+      to = (s) => setSearch({ view, ...s });
+      return <TasksPage pipeline="eng" search={search} />;
+    }
+    for (const view of ['board', 'list'] as const) {
+      reads.length = 0;
+      pending = undefined;
+      seed([]);
+      queryClient.setQueryData(listKey, { tasks: many(20), cursor: 'c1', next_after: 'all' });
+      queryClient.setQueryData(mine, { tasks: [task('m1', 50, 'Mine', 's1', { owner_id: ME })], cursor: 'c2', next_after: 'mine' });
+      show(<Switch view={view} />, `/tasks/eng?view=${view}`);
+      await screen.findByTitle('Task 20');
+      await nearEnd();
+      expect(await screen.findByRole('button', { name: 'Try again' })).toBeTruthy();
+      // to a cached list that has more: its end is watched again, with no "Try again" from the list before
+      act(() => to({ owner: ME }));
+      await screen.findByTitle('Mine');
+      expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+      expect(near.watched()).toHaveLength(1);
+      await nearEnd();
+      await waitFor(() => expect(reads.filter((u) => u.includes('after=mine'))).toHaveLength(1));
+      // back to everyone's while mine's read is still running: that read does not hold its end
+      act(() => to({}));
+      await screen.findByTitle('Task 20');
+      expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+      await nearEnd();
+      await waitFor(() => expect(reads.filter((u) => u.includes('after=all'))).toHaveLength(2));
+      // and mine's read, let go, lands in mine's list
+      await act(async () => pending?.({ status: 200, body: { tasks: [task('m2', 51, 'Mine, read late', 's1', { owner_id: ME })], cursor: 'c3', next_after: 'mine2' } }));
+      act(() => to({ owner: ME }));
+      expect(await screen.findByTitle('Mine, read late')).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+      cleanup();
+    }
+  });
+
+  it('Needs you Snoozed and Done past 12 rows show every row, and read their next page as the end nears', async () => {
+    for (const view of ['snoozed', 'done'] as const) {
+      watchNear();
+      const reads: string[] = [];
+      const first = many(13).map((t) => ({ ...t, owner_id: ME, ...(view === 'done' ? { status: 'done' as const } : { snoozed: true }) }));
+      serve((url) => {
+        if (!url.includes(view === 'done' ? 'status=done' : 'snoozed=only')) return { status: 200, body: { items: [] } };
+        reads.push(url);
+        if (url.includes('after=p2')) return { status: 200, body: { tasks: [{ ...first[0]!, id: 'z1', number: 99, title: 'From the next page' }], cursor: 'c2' } };
+        return { status: 200, body: { tasks: first, cursor: 'c1', next_after: 'p2' } };
+      });
+      show(<NeedsYouViews view={view} />, `/needs-you?view=${view}`);
+      await screen.findByTitle('Task 13');
+      expect(titles()).toHaveLength(13);
+      noMore();
+      expect(reads.filter((u) => u.includes('after='))).toEqual([]);
+      await nearEnd();
+      expect(await screen.findByTitle('From the next page')).toBeTruthy();
+      expect(titles()).toHaveLength(13);
+      expect(reads.filter((u) => u.includes('after=p2'))).toHaveLength(1);
+      cleanup();
+      queryClient.removeQueries({ queryKey: ['tasks', 'flow'] });
+    }
   });
 
   it('Needs you and Archived past 12 rows show every row, with no "N more" or "Show more"', async () => {

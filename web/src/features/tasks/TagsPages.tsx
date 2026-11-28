@@ -240,7 +240,7 @@ export function TagPage({ tag }: { tag: string }) {
                 <AllRows list={done} height={ROW_H} draw={row} />
               </Section>
             )}
-            <ReadOn more={detail.next_offset != null ? () => more.run({ tag }).then((r) => r.ok) : undefined} />
+            <ReadOn of={tag} more={detail.next_offset != null ? () => more.run({ tag }).then((r) => r.ok) : undefined} />
           </>
         }
       />

@@ -138,15 +138,16 @@ function OpenPage({ pipeline, p, pipes, search, view, head }: PageProps & { view
     : undefined;
   const fold = (id: string, open: boolean) => setFolds(open ? folds.filter((x) => x !== id) : [...folds, id]);
   const more = cut ? () => loadMore(pipeline, filters) : undefined;
+  const of = listParams(pipeline, filters);
   const body: BodyProps | null = p
-    ? { p, rows, me, needs, folds, fold, more, countOf, picking, toggle, onNew: (stage) => setNewIn({ stage }), onEdit: () => void edit.run({ pipeline }) }
+    ? { p, rows, me, needs, folds, fold, more, of, countOf, picking, toggle, onNew: (stage) => setNewIn({ stage }), onEdit: () => void edit.run({ pipeline }) }
     : null;
   const bare = body && !body.rows.length && !filtered && <Bare p={body.p} board={view === 'board'} onNew={onNew} />;
 
   return (
     <>
       {view === 'board' ? (
-        <Board {...page} columns={bare || (body ? <Columns {...body} /> : null)} end={!bare && <ReadOn more={body?.more} look="col" />} />
+        <Board {...page} columns={bare || (body ? <Columns {...body} /> : null)} end={!bare && <ReadOn of={of} more={body?.more} look="col" />} />
       ) : (
         <List {...page} sections={bare || (body ? <Sections {...body} edit={p?.mayChange} /> : null)} />
       )}
@@ -302,6 +303,8 @@ interface BodyProps {
   fold: (stage: string, open: boolean) => void;
   /** Read the next page; resolves false when the read failed. Only while the server holds more than was read. */
   more: (() => Promise<boolean>) | undefined;
+  /** Which list `more` reads (its query's params): a filter change starts its end over. */
+  of: Record<string, string | number>;
   /** A stage's count: what was read when that is all, else the Floor's, else none. */
   countOf: (stage: string, loaded: number) => number | undefined;
   /** Select is on: the picked ids. A click picks instead of opening. */
@@ -466,7 +469,7 @@ function Columns({ p, rows, me, needs, folds, fold, countOf, picking, toggle }: 
   );
 }
 
-function Sections({ p, rows, needs, folds, fold, more, countOf, picking, toggle, onNew, onEdit, edit }: BodyProps & { edit?: boolean }) {
+function Sections({ p, rows, needs, folds, fold, more, of, countOf, picking, toggle, onNew, onEdit, edit }: BodyProps & { edit?: boolean }) {
   const cards = useCards();
   const groups = byStage(p.stages, rows);
   const none = p.stages.filter((s) => !groups.get(s.id)?.length);
@@ -518,7 +521,7 @@ function Sections({ p, rows, needs, folds, fold, more, countOf, picking, toggle,
             </Section>
           );
         })}
-      <ReadOn more={more} />
+      <ReadOn of={of} more={more} />
       <StageLine stages={none} countOf={countOf} />
     </>
   );
