@@ -5,10 +5,14 @@ no check (backend/task_comments_routes.py task_question, backend/task_rule_gate.
 
 import json
 import threading
+from types import SimpleNamespace
+
+import pytest
 
 from backend import org_rule_check
 from backend import org_rules as OR
 from backend.tests.helpers.api import headers
+from backend.tests.helpers.wait import wait_for
 from backend.tests.helpers.org_rule_check import (  # noqa: F401 - fixtures
     COLOR,
     checked_after,
@@ -222,3 +226,85 @@ def test_a_question_behind_more_late_checks_than_one_read_takes_is_still_in_the_
     said = [c["state"]["output"] for c in judge.calls]
     assert len(said) == 13
     assert any(asked in s for s in said[: org_rule_check._late_width(api.app.state.store)]), said
+
+
+@pytest.fixture
+def held(ruled, monkeypatch):
+    """The late checks' drain running on its own thread with every comment's call kept in the judge until `let_go` is
+    set (each one in the judge releases `in_judge`); a ❓'s call answers at once and sets `asked`."""
+    api, judge = ruled
+    color_rule(api, if_broken="warn")
+    task = task_for_ops(api)
+    monkeypatch.setattr(org_rule_check, "kick_late", lambda store, primary: None)
+    asked, let_go, in_judge = threading.Event(), threading.Event(), threading.Semaphore(0)
+    ended_before = []  # how many checks had ended (a comment's call times out after its deadline) when the ❓'s came
+    answer = judge.__call__
+
+    def slow_for_comments(state, questions, label=None):
+        if "launch note drafts" in state["output"]:
+            ended_before.append(len(events(api, "rules.unchecked")) + len(events(api, "rules.warned")))
+            asked.set()
+        elif "Step" in state["output"]:
+            in_judge.release()
+            let_go.wait(10)
+        return answer(state, questions, label)
+
+    api.app.state.judge = slow_for_comments
+    drain = threading.Thread(target=checked_after, args=(api,), daemon=True)
+    try:
+        yield SimpleNamespace(
+            api=api, task=task, asked=asked, let_go=let_go, drain=drain, in_judge=in_judge, ended_before=ended_before
+        )
+    finally:
+        let_go.set()
+        drain.join(15)
+
+
+def test_a_question_saved_while_other_checks_fill_their_lanes_is_judged_before_any_of_them_ends(held):
+    """QA, criterion 2 under a backlog: other checks never fill every lane and a lane is not held for a group's slowest
+    call, so a ❓ saved while slow checks are in the judge is judged at once, not after them."""
+    api, task, asked, let_go, drain = held.api, held.task, held.asked, held.let_go, held.drain
+    for n in range(8):
+        comment(api, task, f"Step {n} is done.")
+    drain.start()
+    width = org_rule_check._late_width(api.app.state.store)
+    for _ in range(max(1, width - 1)):
+        assert held.in_judge.acquire(timeout=10), "the comments' checks reach the judge"
+    assert question(api, task, "Which of the two launch note drafts goes out first?").status_code == 200
+    assert asked.wait(10), "the ❓ was judged"
+    assert held.ended_before == [0], "the ❓ was judged while every comment's call was still in the judge"
+    let_go.set()
+    drain.join(15)
+    assert sql(api, "SELECT count(*) AS n FROM org_rule_late")[0]["n"] == 0
+
+
+def test_a_question_past_its_deadline_behind_busy_lanes_is_recorded_unchecked_without_waiting_for_them(held):
+    """QA, criterion 2's 10 s under a backlog: a ❓ that can no longer start a call ending within 10 s of its save
+    (LATE_QUESTION_BUSY_SECONDS) is recorded unchecked (reason `busy`) while the calls ahead of it are still running,
+    and is never sent to the judge."""
+    api, task, asked, let_go, drain = held.api, held.task, held.asked, held.let_go, held.drain
+    K = org_rule_check
+    store = api.app.state.store
+    for n in range(8):
+        comment(api, task, f"Step {n} is done.")
+    drain.start()
+    for _ in range(max(1, K._late_width(store) - 1)):
+        assert held.in_judge.acquire(timeout=10), "the comments' checks reach the judge"
+    late = "Which of the two launch note drafts goes out first?"
+    assert question(api, task, late).status_code == 200
+    with store.transaction() as c:
+        c.execute(
+            "UPDATE org_rule_late SET created_at=? WHERE output LIKE ?",
+            (K.H.shift(K.H.now(), seconds=-(K.LATE_QUESTION_BUSY_SECONDS + 1)), f"%{late}%"),
+        )
+    [unchecked] = wait_for(
+        lambda: [e for e in events(api, "rules.unchecked") if e["operation"] == "question"], "the ❓ recorded unchecked"
+    )
+    assert len(events(api, "rules.unchecked")) == 1, "recorded before any call ahead of it ended"
+    assert unchecked["operation"] == "question" and unchecked["reason"] == "busy" and unchecked["late"] is True
+    assert not let_go.is_set(), "recorded while the calls ahead of it were still in the judge"
+    assert not asked.is_set(), "a ❓ past its deadline asks the judge nothing"
+    assert sql(api, "SELECT count(*) AS n FROM question_marks")[0]["n"] == 1, "the ❓ stays asked"
+    let_go.set()
+    drain.join(15)
+    assert not drain.is_alive()

@@ -66,6 +66,7 @@ import re
 import secrets
 import sqlite3
 import threading
+import time
 import weakref
 from types import SimpleNamespace
 from typing import Any, NamedTuple
@@ -2045,14 +2046,17 @@ def answer(gate):
 # tried again every LATE_RETRY_SECONDS until LATE_BUSY_SECONDS have passed since its write; only then is it recorded
 # unchecked (reason `busy`). `tries` counts the waits.
 # A bot's ❓ to a person has a deadline: its warning reaches the bot within 10 s of the save (spec "Bots' questions
-# checked after save"). Its check goes before every other one waiting, and it waits for a busy slot only so long that a
-# call started at the end of the wait still ends within the 10 s (LATE_QUESTION_BUSY_SECONDS); then it is recorded
-# unchecked, as a check before the save was when every slot was busy. Late checks run side by side, up to half the
-# call slots (`_late_width`), so a backlog clears in a fraction of the time and checks before a write still find a slot.
+# checked after save"). Its check goes before every other one waiting, and it starts a call only while one started then
+# still ends within the 10 s (LATE_QUESTION_BUSY_SECONDS since the save, counted from the save, not from a pass); past
+# that it is recorded unchecked at once, asking nothing, as a check before the save was when every slot was busy.
+# Late checks run side by side, up to half the call slots (`_late_width`), so a backlog clears in a fraction of the
+# time and checks before a write still find a slot. A lane frees as soon as its check ends (no group waits for its
+# slowest call), and one lane is kept for ❓s, so a backlog of other checks never holds a ❓ back.
 LATE_BUSY_SECONDS = 60
 LATE_RETRY_SECONDS = 1.0
 LATE_QUESTIONS = ("question", "chat_question")
 LATE_READ = 200  # late checks read from the queue at a time, ❓s first
+LATE_LOOK_SECONDS = 0.25  # with every lane busy, how often the queue is read again for a ❓
 LATE_QUESTION_SECONDS = 10
 LATE_QUESTION_BUSY_SECONDS = LATE_QUESTION_SECONDS - DEADLINES[RULE_LEVEL] - int(LATE_RETRY_SECONDS)
 LATE_KEYS = (
@@ -2170,54 +2174,107 @@ def _run_late_safely(store, primary, row):
         LOG.exception("A late rule check failed")
 
 
-def _run_side_by_side(store, primary, rows):
-    """Run these late checks at once, one thread each past the first, and wait for them all."""
-    others = []
-    for row in rows[1:]:
-        worker = threading.Thread(
-            target=_run_late_safely, args=(store, primary, row), name="org-rule-late", daemon=True
-        )
-        try:
-            worker.start()
-        except RuntimeError:  # no thread to be had: this one runs here, after the first
-            others.append(None)
-            _run_late_safely(store, primary, row)
+class _Expired(Exception):
+    """A ❓'s late check past its deadline (`_late_expired`)."""
+
+
+def _late_expired(row):
+    """Whether a ❓'s late check is past the time a call started now could still end within its 10 s
+    (LATE_QUESTION_BUSY_SECONDS since the save): it is then recorded unchecked, asking nothing."""
+    return _late_question(row) and row["created_at"] <= H.shift(H.now(), seconds=-LATE_QUESTION_BUSY_SECONDS)
+
+
+def _late_read(store):
+    with store.read() as c:
+        return [
+            dict(r)
+            for r in c.execute(
+                "SELECT * FROM org_rule_late"
+                " ORDER BY json_extract(verdict, '$.operation') IN (%s) DESC, created_at, rowid LIMIT ?"
+                % ",".join("?" * len(LATE_QUESTIONS)),
+                (*LATE_QUESTIONS, LATE_READ),
+            )
+        ]
+
+
+def _late_due(rows, tried, running, at):
+    """The waiting checks that may start now: not running, not yet tried in this pass, but a ❓ whose slot was busy is
+    tried again after LATE_RETRY_SECONDS (its deadline will not wait for the pass to end). ❓s first, then oldest."""
+    due = []
+    for row in rows:
+        if row["id"] in running:
             continue
-        others.append(worker)
-    _run_late_safely(store, primary, rows[0])
-    for worker in others:
-        if worker is not None:
-            worker.join()
+        last = tried.get(row["id"])
+        if last is not None and not (_late_question(row) and at - last >= LATE_RETRY_SECONDS):
+            continue
+        due.append(row)
+    return sorted(due, key=lambda r: not _late_question(r))
 
 
 def drain_late(store, primary):
-    """Run every late check waiting, each once in this pass: ❓s first, then oldest first, up to `_late_width` at a
-    time. The queue is read again before each group, so a ❓ saved meanwhile goes next. Returns how many ran."""
+    """Run every late check waiting, each once in this pass (a ❓ whose slot was busy again until its deadline): ❓s
+    first, then oldest first, up to `_late_width` at a time. A finished check frees its lane at once for the next one,
+    read again from the queue, so a ❓ saved meanwhile goes next and never waits for a whole group's slowest call. One
+    lane is kept for ❓s, so other checks never fill every lane. A ❓ past its deadline is recorded unchecked at once,
+    not after the calls ahead of it (`_late_expired`). Returns how many ran."""
     _, _, draining = _late_lane(store)
-    ran, tried = 0, set()
+    ran, tried, running, expired = 0, {}, {}, set()
+    finished = threading.Condition()
+
+    def one(row):
+        try:
+            _run_late_safely(store, primary, row)
+        finally:
+            with finished:
+                running.pop(row["id"], None)
+                finished.notify_all()
+
     with draining:
         while True:
-            with store.read() as c:
-                rows = [
-                    dict(r)
-                    for r in c.execute(
-                        "SELECT * FROM org_rule_late"
-                        " ORDER BY json_extract(verdict, '$.operation') IN (%s) DESC, created_at, rowid LIMIT ?"
-                        % ",".join("?" * len(LATE_QUESTIONS)),
-                        (*LATE_QUESTIONS, LATE_READ),
-                    )
-                ]
-            waiting = sorted((r for r in rows if r["id"] not in tried), key=lambda r: not _late_question(r))
-            group = waiting[: _late_width(store)]
-            if not group:
-                return ran
-            tried.update(r["id"] for r in group)
-            _run_side_by_side(store, primary, group)
-            ran += len(group)
+            rows = _late_read(store)
+            at = time.monotonic()
+            for row in rows:
+                if row["id"] not in running and row["id"] not in expired and _late_expired(row):
+                    expired.add(row["id"])
+                    running[row["id"]] = True
+                    one(row)  # asks nothing: recorded unchecked here
+                    ran += 1
+            width = _late_width(store)
+            others_most = max(1, width - 1)
+            with finished:
+                due = _late_due([r for r in rows if not _late_expired(r)], tried, running, at)
+                if not due and not running:
+                    return ran
+                start = []
+                others = sum(1 for question in running.values() if not question)
+                for row in due:
+                    if len(running) + len(start) >= width:
+                        break
+                    question = _late_question(row)
+                    if not question and others >= others_most:
+                        continue
+                    others += not question
+                    start.append(row)
+                for row in start:
+                    tried[row["id"]] = at
+                    running[row["id"]] = _late_question(row)
+                if not start:
+                    # Every lane busy, or nothing due yet: look again when a check ends, or shortly, for a ❓ saved
+                    # meanwhile or one whose deadline or retry comes.
+                    finished.wait(LATE_LOOK_SECONDS)
+                    continue
+            for row in start:
+                worker = threading.Thread(target=one, args=(row,), name="org-rule-late", daemon=True)
+                try:
+                    worker.start()
+                except RuntimeError:  # no thread to be had: this one runs here
+                    one(row)
+                ran += 1
 
 
-def _late_failed(store, saved):
-    """The verdict of a late check that could not run (a fault here): every rule it meets now, unchecked."""
+def _late_failed(store, saved, error="error"):
+    """The verdict of a late check that could not run (a fault here, or a ❓ past its deadline: `busy`): every rule it
+    meets now, unchecked."""
     with store.read() as c:
         rules = _rule_rows(R.matching(c, saved["author"], saved["recipients"], saved.get("place")))
     if not rules:
@@ -2227,7 +2284,7 @@ def _late_failed(store, saved):
         "rules": rules,
         "matched": sorted((r["id"], r["version"]) for r in rules),
         "outcome": "unchecked",
-        "error": "error",
+        "error": error,
         "broken": [],
         "call": None,
         "cached": False,
@@ -2240,6 +2297,8 @@ def run_late(store, primary, row):
     even one made a hold since: the write is already saved and is never taken back."""
     saved = json.loads(row["verdict"])
     try:
+        if _late_expired(row):
+            raise _Expired
         verdict = check_as(
             store,
             primary,
@@ -2255,6 +2314,8 @@ def run_late(store, primary, row):
             attempt_id=saved.get("attempt_id") or "",
             origin=saved.get("origin"),
         )
+    except _Expired:
+        verdict = _late_failed(store, saved, "busy")
     except Problem:
         verdict = _late_failed(store, saved)
     if (
