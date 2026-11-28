@@ -37,6 +37,7 @@ from .visuals import kit_for
 from .store import H, Problem, encode, repo_url
 from . import bot_home_merge
 from . import file_details
+from . import file_use
 from . import file_library
 from . import read_cache
 from . import task_privacy as privacy
@@ -3296,8 +3297,12 @@ def install_files(app, store, auth, blobs, mutate):
         media: bool = False,
     ):
         if media:
-            return files.made_recently(request.state.identity, bot, max(1, min(limit, LIST_MAX)))
-        return files.listing(request.state.identity, bot, max(1, min(limit, LIST_MAX)), cursor, q=q, kind=kind)
+            found = files.made_recently(request.state.identity, bot, max(1, min(limit, LIST_MAX)))
+            file_use.count(store, request.state.identity, "list")
+            return found
+        found = files.listing(request.state.identity, bot, max(1, min(limit, LIST_MAX)), cursor, q=q, kind=kind)
+        file_use.count(store, request.state.identity, "list")
+        return found
 
     @app.get(
         "/api/v2/bots/{bot}/files/mentions",
@@ -3381,10 +3386,9 @@ def install_files(app, store, auth, blobs, mutate):
 
         who = request.state.identity
         path = (body.path or "").replace("\\", "/").strip("/") or None
-        return mutate(
-            request,
-            body,
-            lambda c: file_reviews.review(
+
+        def work(c):
+            verdict = file_reviews.review(
                 c,
                 auth,
                 who,
@@ -3395,8 +3399,11 @@ def install_files(app, store, auth, blobs, mutate):
                 task=body.task,
                 verdict=body.verdict,
                 note=body.note.strip(),
-            ),
-        )
+            )
+            file_use.count_in(c, who.actor, "review")
+            return verdict
+
+        return mutate(request, body, work)
 
     @app.get(
         "/api/v2/files/{fid}/activity",
@@ -3415,7 +3422,9 @@ def install_files(app, store, auth, blobs, mutate):
         ),
     )
     def info(request: Request, fid: str):
-        return files.info(request.state.identity, fid)
+        found = files.info(request.state.identity, fid)
+        file_use.open_file(store, request.state.identity, fid)
+        return found
 
     @app.get(
         "/api/v2/files/{fid}/versions",
@@ -3438,7 +3447,10 @@ def install_files(app, store, auth, blobs, mutate):
         ),
     )
     def version_bytes(request: Request, fid: str, number: int):
-        return files.serve(request.state.identity, fid, number, request=request)
+        served = files.serve(request.state.identity, fid, number, request=request)
+        if request.method == "GET":
+            file_use.open_file(store, request.state.identity, fid, served)
+        return served
 
     from . import file_signings
 

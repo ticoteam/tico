@@ -1027,6 +1027,10 @@ def give_ok(
         (H.now(), person, answered.get("answer_id"), requirement_id),
     )
     H.event(conn, person, "ok.given", requirement_id, {"subject": row["subject"], "task": task_id})
+    if kind_of(row["subject"]) == "file":
+        from . import file_use
+
+        file_use.count_in(conn, person, "review")
     if step:
         step(conn, grant(conn, requirement_id), ctx)
     return answered.get("answer_id")

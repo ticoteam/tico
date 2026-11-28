@@ -1269,10 +1269,16 @@ def install_media(
             stored = c.execute("SELECT 1 FROM bot_files WHERE id=?", (bid,)).fetchone()
         if is_file_id(bid) or stored:
             try:
-                return files.serve(who, bid, v, request=request, derivative=derivative)
+                served = files.serve(who, bid, v, request=request, derivative=derivative)
             except Problem as exc:
                 if is_file_id(bid) or v not in (None, 1) or exc.status not in (403, 404):
                     raise
+            else:
+                if derivative is None and request.method == "GET":
+                    from . import file_use
+
+                    file_use.open_file(store, who, bid, served)
+                return served
         if v not in (None, 1):
             raise Problem("not_found", "File version not found", 404)
         with store.read() as c:
