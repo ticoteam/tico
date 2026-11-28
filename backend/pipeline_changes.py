@@ -153,7 +153,11 @@ def lines(c: sqlite3.Connection, pipeline_id: str, changes: Row) -> list[str]:
                     if key in req and key != "line"
                 ]
                 if "line" in req:
-                    out.append(f"changed the wording on {name} from {_word(c, 'line', req['line'][0])} to {words}")
+                    # The saved wording on both sides: a cleared one reads "none", never the old wording again.
+                    out.append(
+                        f"changed the wording on {name} from {_word(c, 'line', req['line'][0])} to "
+                        f"{_word(c, 'line', req['line'][1])}"
+                    )
                 if "position" in req:
                     out.append(f"moved {what} on {name} from {req['position'][0] + 1} to {req['position'][1] + 1}")
     return out
@@ -185,11 +189,21 @@ RULE = (
 )
 
 
-def _hours(timer: object) -> str:
-    """A rule's timer as a person reads it: "24 h", else as stored."""
+TIMER_KINDS = {"in_stage": "in the stage", "quiet": "quiet", "waiting_person": "waiting on a person"}
+
+
+def _timer_kind(timer: object) -> str:
+    return str(cast("dict[str, object]", timer).get("kind") or "") if isinstance(timer, dict) else ""
+
+
+def _hours(timer: object, kind: bool = False) -> str:
+    """A rule's timer as a person reads it: "24 h", or with `kind` what it counts ("24 h quiet"), else as stored."""
     found: dict[str, object] = cast("dict[str, object]", timer) if isinstance(timer, dict) else {}
     hours = found.get("hours")
-    return f"{hours:g} h" if isinstance(hours, int | float) else _word_plain(found or None)
+    if not isinstance(hours, int | float):
+        return _word_plain(found or None)
+    counts = str(found.get("kind") or "")
+    return f"{hours:g} h {TIMER_KINDS.get(counts, counts)}".rstrip() if kind else f"{hours:g} h"
 
 
 def _word_plain(value: object) -> str:
@@ -216,10 +230,14 @@ def rule_lines(c: sqlite3.Connection, pipeline_id: str, detail: Row) -> list[str
         return [f"added the rule {rule} on {on}"]
     if "retired" in changes:
         return [f"retired the rule {rule} on {on}"]
+    if "removed" in changes:
+        return [f"removed the rule {rule} from {on}"]
     out: list[str] = []
     if "timer" in changes:
-        old, new = changes["timer"]
-        out.append(f"changed the {rule} time on {on} from {_hours(old)} to {_hours(new)}")
+        old, new = cast("list[object]", changes["timer"])
+        # What it counts is named when that changed, so the two sides never read the same.
+        kinds = _timer_kind(old) != _timer_kind(new)
+        out.append(f"changed the {rule} time on {on} from {_hours(old, kinds)} to {_hours(new, kinds)}")
     for key, label in RULE:
         if key not in changes:
             continue

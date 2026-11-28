@@ -224,3 +224,72 @@ def test_the_log_says_where_each_stage_moved_and_what_an_approval_changed_from_a
         'changed "Ben OKs it" on Sign off: who OKs from people only to people, with exceptions',
         'changed "Ben OKs it" on Sign off: person from Ben to Ana',
     ]
+
+
+def test_a_board_owner_never_changes_what_someone_elses_approval_checks(c):
+    saved = _board(c)
+    page = {
+        "kind": "page",
+        "settings": {"document": "Spec", "rubric": "States the goal."},
+        "who_oks": "people_only",
+        "person_ids": [BEN, ANA],
+        "line": "Ben or Ana approve the spec",
+    }
+    saved["stages"][1]["requirements"].append(page)
+    saved = PS.save(c, BEN, saved)
+    for settings in (
+        {"document": "Spec", "rubric": "Anything goes."},
+        {"document": "Notes", "rubric": "States the goal."},
+    ):
+        changed = copy.deepcopy(saved)
+        changed["stages"][0]["name"] = "Inbox"  # a change she may make, refused with the rest of the save
+        changed["stages"][1]["requirements"][1]["settings"] = settings
+        with _refused("Sign off"):
+            PS.save(c, CARA, changed)
+    kept = PS.read(c, saved["id"])
+    assert kept["stages"][0]["name"] == "Intake"
+    assert kept["stages"][1]["requirements"][1]["settings"] == {"document": "Spec", "rubric": "States the goal."}
+    # Her own changes still save, and an Admin may change the approval.
+    renamed = copy.deepcopy(saved)
+    renamed["stages"][0]["name"] = "Inbox"
+    assert PS.save(c, CARA, renamed)["stages"][0]["name"] == "Inbox"
+    admin = PS.read(c, saved["id"])
+    admin["stages"][1]["requirements"][1]["settings"] = {"document": "Spec", "rubric": "Anything goes."}
+    assert PS.save(c, BEN, admin)["stages"][1]["requirements"][1]["settings"]["rubric"] == "Anything goes."
+
+
+def test_a_rule_moved_off_a_board_is_a_removal_in_its_log(c):
+    from backend import stage_rules as SR
+
+    saved = _board(c)
+    sign = saved["stages"][1]
+    rule = SR.add(c, CARA, {"name": "Nudge", "pipeline_id": saved["id"], "stages": [sign["id"]], **_TIMER})
+    assert _log(c, saved["id"])[0]["text"] == "Cara added the rule Nudge on Sign off"
+    SR.edit(c, BEN, rule["id"], {"pipeline_id": "", "stages": []}, SR.get(c, rule["id"])["revision"])
+    line = _log(c, saved["id"])[0]
+    assert line["text"] == "Ben removed the rule Nudge from Sign off"
+    assert [n.split(" [")[0] for n in _notices(c, CARA)][-1] == line["text"] + " on Operations."
+    assert [n.split(" [")[0] for n in _notices(c, "bot:manager")][-1] == line["text"] + " on Operations."
+
+
+def test_a_late_time_that_counts_something_else_says_so(c):
+    from backend import stage_rules as SR
+
+    saved = _board(c)
+    sign = saved["stages"][1]
+    assert SR.add_late(c, sign["id"], sign["name"], saved["id"], 24 * 60)
+    rule = SR.get(c, f"sr_late_{sign['id']}")
+    SR.edit(c, CARA, rule["id"], {"timer": {"kind": "quiet", "hours": 24}}, rule["revision"])
+    assert (
+        _log(c, saved["id"])[0]["text"] == "Cara changed the Late time on Sign off from 24 h in the stage to 24 h quiet"
+    )
+
+
+def test_a_cleared_wording_reads_none_not_the_old_wording(c):
+    from backend import pipeline_changes as PC
+
+    saved = _board(c)
+    sign = saved["stages"][1]
+    rid = sign["requirements"][0]["id"]
+    changes = {f"stages.{sign['id']}.requirements.{rid}.line": ["Ben OKs it", ""]}
+    assert PC.lines(c, saved["id"], changes) == ['changed the wording on Sign off from Ben OKs it to none']

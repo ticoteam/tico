@@ -1498,7 +1498,7 @@ def _loosens_people_only(
 ) -> str | None:
     """The stage whose people-only OK the record would loosen, or None when it keeps every one. Loosening is: removing
     the OK (or its stage), moving it to another stage, changing what it checks, opening it to bots or giving it to a
-    bot, or letting work run ahead of it: a stage that came after it now before it, or an on-enter action (filing a
+    bot, changing its settings (a page's document or bar, an item's numbers), or letting work run ahead of it: a stage that came after it now before it, or an on-enter action (filing a
     linked task, queueing the PRs) added or changed on its stage or one before it. A bot that manages a pipeline may
     change the rest of it, never a person's sign-off. A board owner or manager who is a person and not an Admin is held
     the same way, except on an OK that names them (`named`)."""
@@ -1517,8 +1517,10 @@ def _loosens_people_only(
             if not found or found[0]["id"] != stage["id"]:
                 return str(stage["name"])
             now = found[1]
-            if now["who_oks"] != "people_only" or any(
-                now.get(key) != req.get(key) for key in ("kind", "source", "condition")
+            if (
+                now["who_oks"] != "people_only"
+                or any(now.get(key) != req.get(key) for key in ("kind", "source", "condition"))
+                or (_as_dict(_loads(now.get("settings"))) or {}) != (_as_dict(_loads(req.get("settings"))) or {})
             ):
                 return str(stage["name"])
             person: object = now.get("person_id")
@@ -1752,11 +1754,27 @@ RULE_FIELDS = ("name", "stages", "event", "timer", "cond", "jev", "then", "then_
 def rule_changed(conn: "sqlite3.Connection", by: str, before: Row | None, after: Row | None) -> None:
     """A person's change to a rule in force on a pipeline (stage_rules: add, edit, retire, accept), such as a stage's
     Late time: the pipeline's Log records it (`pipeline.rule`, {path: [old, new]} as a save does) and its owner and
-    manager are told, as for a save. A company rule, Tico's own write and a change that changed nothing say nothing."""
+    manager are told, as for a save. A rule that moves off a pipeline (to another, or to the whole company) is a removal
+    on the one it left and an addition on the one it joined. A company rule, Tico's own write and a change that changed
+    nothing say nothing."""
+    was = str((before or {}).get("pipeline_id") or "")
+    now = str((after or {}).get("pipeline_id") or "")
+    if before and after and was != now:
+        if was:
+            _rule_logged(conn, by, was, before, None, removed=True)
+        if now:
+            _rule_logged(conn, by, now, None, after)
+        return
+    _rule_logged(conn, by, now or was, before, after)
+
+
+def _rule_logged(
+    conn: "sqlite3.Connection", by: str, pid: str, before: Row | None, after: Row | None, removed: bool = False
+) -> None:
+    """One pipeline's Log line and notice for a rule change on it (`rule_changed`)."""
     from . import pipeline_changes
 
     rule = after or before
-    pid = str((rule or {}).get("pipeline_id") or "")
     if by == SYSTEM or not rule or not pid:
         return
     live = [r if r and r.get("status") == "active" and not r.get("retired_at") else None for r in (before, after)]
@@ -1766,7 +1784,7 @@ def rule_changed(conn: "sqlite3.Connection", by: str, before: Row | None, after:
         key: [old, new] for key in RULE_FIELDS if (old := (live[0] or {}).get(key)) != (new := (live[1] or {}).get(key))
     }
     if live[0] is None or live[1] is None:
-        changes = {"added" if live[0] is None else "retired": [None, True]}
+        changes = {("removed" if removed else "retired") if live[1] is None else "added": [None, True]}
     if not changes:
         return
     detail: Row = {"rule": rule["id"], "name": rule.get("name"), "stages": rule.get("stages") or [], "changes": changes}
