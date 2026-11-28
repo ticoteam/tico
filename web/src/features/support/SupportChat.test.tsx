@@ -11,6 +11,10 @@ import type * as Failures from './failures';
 import { sendToSupport, ticketsQuery, type SupportList } from './queries';
 import { SupportChat } from './SupportChat';
 
+// Read with node's fs (tests load no CSS), as QuestionCard.test.tsx does.
+const fs = (await import(/* @vite-ignore */ 'node:' + 'fs')) as { readFileSync(file: URL, encoding: 'utf8'): string };
+const here = import.meta.url;
+
 vi.mock('@/search', () => ({ SearchDialog: () => null }));
 // No browser failures unless a test notes one: they stay for the module's life, and with any the preview is a capture.
 vi.mock('./failures', async (importOriginal) => ({ ...(await importOriginal<typeof Failures>()), browserFailures: vi.fn(() => []) }));
@@ -195,6 +199,32 @@ describe('Tico support', () => {
     expect(await screen.findByRole('button', { name: 'An agent is stuck' })).toBeTruthy();
     queryClient.setQueryData(['support', 'tickets'], { enabled: false, unread: 0, tickets: [] });
     expect(await screen.findByText('Tico support is off on this server')).toBeTruthy();
+  });
+});
+
+describe('Tico support starters @s3597', () => {
+  it('step away when the person clicks into the box, stay away while words are in it, and come back when they leave it empty', async () => {
+    const style = document.createElement('style');
+    style.textContent = fs.readFileSync(new URL('./support.css', here), 'utf8');
+    document.head.append(style);
+    try {
+      list = { enabled: true, unread: 0, tickets: [] };
+      show();
+      const starter = await screen.findByRole('button', { name: 'An agent is stuck' });
+      const box = (await screen.findByRole('textbox', { name: 'Message Tico support' })) as HTMLTextAreaElement;
+      const shown = () => getComputedStyle(starter.closest('.starters')!).display !== 'none';
+      expect(shown()).toBe(true);
+      act(() => box.focus());
+      expect(shown()).toBe(true);
+      fireEvent.pointerDown(box);
+      expect(shown()).toBe(false);
+      act(() => box.blur());
+      expect(shown()).toBe(true);
+      fireEvent.change(box, { target: { value: 'Help' } });
+      expect(shown()).toBe(false);
+    } finally {
+      style.remove();
+    }
   });
 });
 

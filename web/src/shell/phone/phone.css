@@ -102,8 +102,9 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
 .phone[data-typing]{transform:translateY(var(--vv-top))}
 .phone[data-typing]{padding-bottom:var(--kb)}
 .phone[data-typing]>.tabbar,.phone:is([data-typing="tico"],[data-typing="menu"],[data-typing="chat"])>.ph-dock{display:none}
-/* typing to Tico, the latest messages keep the room over the box: the tracker's row and the chips fold away */
-.phone[data-typing="tico"] .ly-tico .tracker,.phone[data-typing="tico"] .ly-tico .qchips{display:none}
+/* typing to Tico, the latest messages keep the room over the box: the tracker's row folds away. The chips are left to
+   the composer (Menu.css: a press, Tab or words put them away), so Tico's button opens with them still showing. */
+.phone[data-typing="tico"] .ly-tico .tracker{display:none}
 .phone[data-typing] :is(.ly-tico .chat-foot,.dock){padding-bottom:8px}
 .phone[data-typing="chat"] .ly-chat .chat-body{padding-bottom:8px}
 .phone[data-typing="page"] .chat-page>.chat-foot{padding-bottom:8px}

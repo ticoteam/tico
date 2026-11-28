@@ -118,6 +118,9 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true, 
   const [shownFor, setShownFor] = useState(`${me}:${id}`);
   const [filled, setFilled] = useState(fill);
   const [caret, setCaret] = useState<number | null>(null);
+  // The person moved into the box themselves (a press, Tab, or typing), not Tico putting the cursor there (Cmd+J, the
+  // phone's Tico button): the suggestions over the box step away until they leave it (`data-in`, Menu.css, support.css).
+  const [entered, setEntered] = useState(false);
   // The @ whose list was closed (Escape, a pick): it stays closed until another @ is typed.
   const [shut, setShut] = useState<number | null>(null);
   const [active, setActive] = useState(0);
@@ -206,6 +209,7 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true, 
 
   const type = (next: string, at: number | null) => {
     setText(next);
+    setEntered(true);
     writeDraft(me, id, next);
     setCaret(at);
     setActive(0);
@@ -291,7 +295,7 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true, 
           })}
         </div>
       )}
-      <div className={text ? 'composer is-typing' : 'composer'}>
+      <div className={text ? 'composer is-typing' : 'composer'} data-in={entered || undefined}>
         <textarea
           ref={box}
           className="composer-text"
@@ -302,7 +306,13 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true, 
           readOnly={sending}
           onChange={(e) => type(e.target.value, e.target.selectionStart)}
           onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
-          onBlur={() => setCaret(null)}
+          onBlur={() => {
+            setCaret(null);
+            setEntered(false);
+          }}
+          onPointerDown={() => setEntered(true)}
+          // Tab's key comes up in the box it moved to; Cmd+J's and the Tico button's focus brings no Tab
+          onKeyUp={(e) => e.key === 'Tab' && setEntered(true)}
           onKeyDown={onKey}
           // a pasted picture or file goes in the tray, not its name in the words
           onPaste={
