@@ -135,6 +135,7 @@ const RingCard = lazy(() => import('@/features/calls/exports').then((m) => ({ de
 const FileViewerHost = lazy(() => import('@/features/library/exports').then((m) => ({ default: m.FileViewerHost })));
 const SupportChat = lazy(() => import('@/features/support/exports').then((m) => ({ default: m.SupportChat })));
 const TeammateChat = lazy(() => import('@/features/team/exports').then((m) => ({ default: m.TeammateChat })));
+const ChatWindowChat = lazy(() => import('@/features/team/exports').then((m) => ({ default: m.ChatWindowChat })));
 const AddTeammate = lazy(() => import('@/features/team/exports').then((m) => ({ default: m.AddTeammate })));
 const TeamAccess = lazy(() => import('@/features/team/exports').then((m) => ({ default: m.TeamAccess })));
 const StartCall = lazy(() => import('@/features/calls/exports').then((m) => ({ default: m.StartCall })));
@@ -206,7 +207,7 @@ function ChatWindow({ who }: { who: string }) {
           <b>{name}</b>
         </header>
         <Suspense fallback={null}>
-          <TeammateChat who={who} />
+          <ChatWindowChat who={who} />
         </Suspense>
       </div>
       <ActionsRoot dot={dotEl} fold={foldSheet} />

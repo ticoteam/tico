@@ -183,6 +183,7 @@ vi.mock('@/features/tasks/routing', async () => {
 });
 vi.mock('@/features/team/exports', () => ({
   TeammateChat: ({ who }: { who: string }) => <p>chat with {who}</p>,
+  ChatWindowChat: ({ who }: { who: string }) => <p>chat with {who}</p>,
   AddTeammate: ({ team }: { team: string }) => <p>add teammate onto {team}</p>,
   TeamAccess: () => null,
 }));

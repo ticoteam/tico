@@ -1,9 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
+import { useEffect } from 'react';
 import { Conversation } from '@/conversation';
 import { meQuery, useActor } from '@/data';
 import { approvalCard, ChatQuestions, useApprovalCards } from '@/features/task/exports';
 import { chatAddress } from '@/lib';
 import { ReadFault } from '@/pagekinds';
+import { chatWindowOpened, chatWindowSent } from './chatWindowUsage';
 import { dmQuery } from './queries';
 
 /** Words an agent's empty chat offers to start with: they fill the box, never send. */
@@ -18,7 +20,7 @@ const startersFor = (template: string | undefined) => (template && NO_SIDEBAR_SK
  * root route can place it (the frame's chat place), so it is exported. On my own page there is none: I do not chat with
  * myself, and my assistant is Tico at the far left of every page (threads.js: the Assistant's own page is gone).
  */
-export function TeammateChat({ who }: { who: string }) {
+export function TeammateChat({ who, onSent }: { who: string; onSent?: () => void }) {
   const byKey = useActor(who);
   const byPerson = useActor(`human:${who}`);
   const actor = byKey ?? byPerson;
@@ -33,7 +35,13 @@ export function TeammateChat({ who }: { who: string }) {
   if (dm.isError) return <ReadFault what="The chat" reads={[dm]} />;
   if (!dm.data) return null;
   // A direct chat's @ reaches only its two members (the server refuses anyone else): the list offers just them.
-  return <Conversation id={dm.data} variant="page" title={actor.name} actor={actor.id} card={approvalCard} extra={approvals} foot={agent && <ChatQuestions thread={dm.data} agent={agent} />} starters={agent ? startersFor(actor.template) : undefined} mentionOnly={[actor.id]} />;
+  return <Conversation id={dm.data} variant="page" title={actor.name} actor={actor.id} card={approvalCard} extra={approvals} foot={agent && <ChatQuestions thread={dm.data} agent={agent} />} starters={agent ? startersFor(actor.template) : undefined} mentionOnly={[actor.id]} onSent={onSent} />;
+}
+
+/** The chat in an agent's own window (/team/<agent>?window=1): the same chat, and the window's usage events. */
+export function ChatWindowChat({ who }: { who: string }) {
+  useEffect(() => chatWindowOpened(who), [who]);
+  return <TeammateChat who={who} onSent={() => chatWindowSent(who)} />;
 }
 
 /** An agent's chat, by its slug. */

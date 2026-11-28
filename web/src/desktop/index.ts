@@ -283,12 +283,16 @@ export const chatWindowWho = (pathname: string): string => decodeURIComponent(CH
     older desktop app cannot ('unavailable', `canOpenChatWindow`). */
 export type ChatWindowOpened = 'desktop' | 'window' | 'tab' | 'full' | 'blocked' | 'unavailable';
 
+/** Inside the retired Tauri desktop app (app/, deleted from the code but maybe still installed): its bridge is
+    `window.ticoNative`, and it has no `window.tico`. */
+const inTauriApp = (): boolean => typeof window !== 'undefined' && !desktop() && (window as { ticoNative?: unknown }).ticoNative != null;
+
 /** Whether this page can open an agent's chat in its own window. A browser can; the desktop app only with its
-    chatWindow call. An older desktop app (without the call) cannot: it sends a new window to the system browser,
-    which has none of the app's sign-in, so the control is hidden there. */
+    chatWindow call. An older desktop app (Electron without the call, or the Tauri app) cannot: it sends a new window
+    to the system browser, which has none of the app's sign-in, so the control is hidden there. */
 export const canOpenChatWindow = (): boolean => {
   const t = desktop();
-  return !t || !!t.chatWindow;
+  return t ? !!t.chatWindow : !inTauriApp();
 };
 
 /** Opens an agent's chat in its own window. The desktop app opens and keeps its own; a browser gets one window per

@@ -21,6 +21,7 @@ function fakeWin(start = 'about:blank') {
 
 afterEach(() => {
   delete (window as { tico?: TicoDesktop }).tico;
+  delete (window as { ticoNative?: unknown }).ticoNative;
   vi.restoreAllMocks();
 });
 
@@ -136,6 +137,15 @@ describe('opening an agent’s chat in its own window, in the desktop app', () =
   // An older app hands a new window to the system browser, which has none of the app's sign-in: no window at all.
   it('cannot open one in an older app without the call, and never falls back to a browser window', async () => {
     (window as { tico?: unknown }).tico = { companies: {} };
+    const open = vi.spyOn(window, 'open');
+    expect(canOpenChatWindow()).toBe(false);
+    expect(await openChatWindow('release-owner')).toBe('unavailable');
+    expect(open).not.toHaveBeenCalled();
+  });
+  // The retired Tauri app may still be installed: its bridge is window.ticoNative, with no window.tico, and it too
+  // sends a new window to the system browser.
+  it('cannot open one in the Tauri app either, though it has no window.tico', async () => {
+    (window as { ticoNative?: unknown }).ticoNative = () => ({ postMessage: () => undefined });
     const open = vi.spyOn(window, 'open');
     expect(canOpenChatWindow()).toBe(false);
     expect(await openChatWindow('release-owner')).toBe('unavailable');

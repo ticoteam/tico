@@ -75,9 +75,9 @@ function serve(reply: (url: string) => Reply) {
 }
 
 const FROM = { page: 'tasks', label: 'Tasks', item: { kind: 'pipeline', id: 'engineering' } };
-const chat = (id: string) => <Conversation id={id} variant="side" title="Ana" actor="bot:qa" from={FROM} />;
-const show = () =>
-  render(chat(T), { wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider> });
+const chat = (id: string, onSent?: () => void) => <Conversation id={id} variant="side" title="Ana" actor="bot:qa" from={FROM} onSent={onSent} />;
+const show = (onSent?: () => void) =>
+  render(chat(T, onSent), { wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider> });
 
 const type = (text: string) => {
   const box = screen.getByRole('textbox', { name: 'Message Ana' });
@@ -201,6 +201,19 @@ describe('Conversation', () => {
     expect(row?.textContent).toContain('Reading Finance');
     emit('runs', [tool(3, 'Filing a task')]);
     expect(row?.textContent).toContain('Filing a task');
+  });
+
+  it('tells onSent of a message written, never of a failed one (a chat window counts the windows sent from)', async () => {
+    let fail = true;
+    const onSent = vi.fn();
+    serve(() => (fail ? { status: 500, body: { error: { code: 'boom', detail: 'Broke' } } } : { status: 200, body: msg(3, ME, 'Ship it') }));
+    show(onSent);
+    type('Ship it');
+    expect(await screen.findByText('Not sent')).toBeTruthy();
+    expect(onSent).not.toHaveBeenCalled();
+    fail = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(onSent).toHaveBeenCalledTimes(1));
   });
 
   it('keeps a failed send on screen, marked, and sends it again on Retry', async () => {

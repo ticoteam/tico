@@ -18,15 +18,13 @@ beforeEach(() => {
   toast.mockClear();
 });
 
-describe("opening an agent's chat in its own window records the usage event", () => {
-  it.each([
-    ['desktop', 'desktop'],
-    ['window', 'web'],
-    ['tab', 'web'],
-  ] as const)('a chat that opened (%s) sends chat_window.opened with %s', async (how, surface) => {
+describe("the press that opens an agent's chat window", () => {
+  // the window sends its own usage event when it first loads (chatWindowUsage.test.ts): a press that only brings an open
+  // window forward is no new window, so the press itself sends none
+  it.each(['desktop', 'window', 'tab'] as const)('one that opened (%s) says so and sends no usage event', async (how) => {
     opened.mockResolvedValueOnce(how);
     expect(await press('release-owner')).toBe(how);
-    expect(post).toHaveBeenCalledWith('/api/v2/web-events', { event: 'chat_window.opened', surface });
+    expect(post).not.toHaveBeenCalled();
     expect(popOutChat.did?.({ who: 'release-owner' }, how)).toBe('Opened the chat in a new window');
   });
 
@@ -36,11 +34,5 @@ describe("opening an agent's chat in its own window records the usage event", ()
     expect(post).not.toHaveBeenCalled();
     expect(toast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'failed' }));
     expect(popOutChat.did?.({ who: 'release-owner' }, how)).toBe('No new window opened');
-  });
-
-  it('a failed send never fails the press', async () => {
-    opened.mockResolvedValueOnce('window');
-    post.mockRejectedValueOnce(new Error('offline'));
-    expect(await press('release-owner')).toBe('window');
   });
 });

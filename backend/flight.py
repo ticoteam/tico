@@ -20,7 +20,8 @@ with ids (route templates only), no bodies, no setting values. Owners, admins an
 `GET /api/v2/system/metrics` (bots without the slow requests' actors), and owners and admins on the Health page.
 People's browsers add their own first-load and interaction times (LCP, INP) per screen through
 `POST /api/v2/web-timings`, kept as histogram buckets only (`flight_web`, made by its migration), and usage events a
-feature's measure needs through `POST /api/v2/web-events` (WEB_EVENTS), kept in flight_events with who sent them.
+feature's measure needs through `POST /api/v2/web-events` (WEB_EVENTS), kept with who sent them in flight_usage, a
+table no older reader knows (USAGE_SCHEMA).
 Retention: minutes for two days, then hours; requests, browser timings, slow requests and process rows 14 days, SQL,
 database and events 90 days (`sweep`, run by the scheduler's hourly sweep).
 """
@@ -110,9 +111,16 @@ WEB_TIMINGS_ROUTE = "POST /api/v2/web-timings"  # the browsers' own sends: liste
 WEB_MAX_MS = 60_000
 WEB_PER_MINUTE = 120  # readings one person sends in a minute, at most; the rest are dropped and counted
 WEB_BATCH = 20  # readings in one request, at most
-# Usage events a person's page sends (POST /api/v2/web-events): each event and the values its one field takes. Kept as
-# a flight event (kind = the event, detail = who and the value), so a feature's measure reads flight_events for 90 days.
-WEB_EVENTS = {"chat_window.opened": ("surface", ("web", "desktop"))}
+# Usage events a person's page sends (POST /api/v2/web-events): each event and its fields, each field the values it
+# takes (a tuple) or the pattern its text matches. Kept in flight_usage (USAGE_SCHEMA) for 90 days. An agent's chat
+# window sends `opened` once when it first loads (bringing an open one forward sends nothing) and `sent` with the first
+# message written in it, both with that window's own id: the measure is the share of windows with a `sent`.
+_CHAT_WINDOW = {
+    "surface": ("web", "desktop"),
+    "agent": re.compile(r"[\w.:-]{1,128}"),
+    "window": re.compile(r"[A-Za-z0-9-]{8,64}"),
+}
+WEB_EVENTS = {"chat_window.opened": _CHAT_WINDOW, "chat_window.sent": _CHAT_WINDOW}
 WEB_EVENTS_PER_MINUTE = 10  # events one person sends in a minute, at most; the rest are dropped
 
 _LITERAL = re.compile(r"'(?:[^']|'')*'")
@@ -1460,6 +1468,58 @@ def record_event(store, kind, detail, now=None):
         _event(c, kind, detail, now)
 
 
+# Usage events (WEB_EVENTS) name the person who sent them, so they are kept apart from flight_events: a reader of an
+# older release, after a rollback that keeps the flight file, returns flight_events' details to bots as they are, and
+# never reads this table. It is not one of TABLES, so no schema version drops it, and it is made where it is used.
+USAGE_SCHEMA = (
+    "CREATE TABLE IF NOT EXISTS flight_usage(id INTEGER PRIMARY KEY, created_at INTEGER NOT NULL, event TEXT NOT NULL, "
+    "actor TEXT NOT NULL, detail TEXT NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS flight_usage_event ON flight_usage(event, created_at)",
+)
+
+
+def _usage_table(c):
+    for statement in USAGE_SCHEMA:
+        c.execute(statement)
+
+
+def record_usage(store, event, actor, detail, now=None):
+    """One usage event (WEB_EVENTS) from `actor`, written at once, whether or not the recorder is on."""
+    with tables(store, write=True) as c:
+        _usage_table(c)
+        c.execute(
+            "INSERT INTO flight_usage(created_at,event,actor,detail) VALUES(?,?,?,?)",
+            (int(now or time.time()), event, actor, json.dumps(detail, separators=(",", ":"))),
+        )
+
+
+def _usage(c, now):
+    """The chat window measure over the last 7 and 28 days: people who opened one, windows opened (by surface), and the
+    windows a message was sent from. Counts only, never who: owners, admins and bots read it alike."""
+    if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='flight_usage'").fetchone():
+        return {}
+    out = {}
+    for days in (7, 28):
+        since = now - days * 86400
+        people, opened, web, sent = c.execute(
+            "SELECT count(DISTINCT actor), count(DISTINCT json_extract(detail,'$.window')), "
+            "count(DISTINCT CASE WHEN json_extract(detail,'$.surface')='web' THEN json_extract(detail,'$.window') END), "
+            "count(DISTINCT CASE WHEN EXISTS(SELECT 1 FROM flight_usage s WHERE s.event='chat_window.sent' "
+            "AND json_extract(s.detail,'$.window')=json_extract(o.detail,'$.window')) "
+            "THEN json_extract(detail,'$.window') END) "
+            "FROM flight_usage o WHERE event='chat_window.opened' AND created_at>=?",
+            (since,),
+        ).fetchone()
+        out[f"{days}d"] = {
+            "people": people,
+            "opened": opened,
+            "web": web,
+            "desktop": opened - web,
+            "with_message": sent,
+        }
+    return {"chat_window": out}
+
+
 def _main_file(c):
     for row in c.execute("PRAGMA database_list").fetchall():
         if row[1] == "main":
@@ -1815,6 +1875,8 @@ def sweep(store, now=None):
         c.execute("DELETE FROM flight_sql WHERE created_at<?", (long,))
         c.execute("DELETE FROM flight_db WHERE created_at<?", (long,))
         c.execute("DELETE FROM flight_events WHERE created_at<? AND kind<>'start'", (long,))
+        _usage_table(c)
+        c.execute("DELETE FROM flight_usage WHERE created_at<?", (long,))
         c.execute(
             "DELETE FROM flight_events WHERE kind='start' AND id NOT IN "
             "(SELECT id FROM flight_events WHERE kind='start' ORDER BY id DESC LIMIT 500)"
@@ -2089,7 +2151,7 @@ class Flight(threading.Thread):
 
 # ---------------------------------------------------------------------------- reading it back
 
-SECTIONS = ("requests", "slow", "process", "sql", "db", "events", "web")
+SECTIONS = ("requests", "slow", "process", "sql", "db", "events", "web", "usage")
 CALLERS = ("human", "bot", "runner", "service", "anonymous")
 
 
@@ -2357,6 +2419,8 @@ def _view(c, minutes, sections, now, since, until, routes, caller):
                 )
             ],
         }
+    if "usage" in sections:
+        out["usage"] = _usage(c, now)
     return out
 
 
@@ -2402,12 +2466,9 @@ def install(app, store, auth):
             )
         if who.role == "bot":
             # A slow request's actor names the person or bot who made it; a bot doing performance work needs the
-            # route and timing, not who was waiting. A usage event's actor is the same.
+            # route and timing, not who was waiting.
             for row in out.get("slow") or []:
                 row.pop("actor", None)
-            for row in (out.get("events") or {}).get("recent") or []:
-                if row.get("kind") in WEB_EVENTS:
-                    row.pop("actor", None)
         return out
 
     @app.get(SPEED_PATH)
@@ -2488,10 +2549,10 @@ def install(app, store, auth):
 
     @app.post("/api/v2/web-events", status_code=202)
     async def web_events(request: Request):
-        """A usage event from a person's page: {"event": one of WEB_EVENTS, <its field>: one of its values}, e.g.
-        {"event": "chat_window.opened", "surface": "web"}. Only people. Written to flight_events with who sent it, so a
-        feature's measure can count people and join what they did next; nothing else of the request is kept. Over
-        WEB_EVENTS_PER_MINUTE a minute from one person, the rest are dropped."""
+        """A usage event from a person's page: {"event": one of WEB_EVENTS, and exactly its fields}, e.g.
+        {"event": "chat_window.opened", "surface": "web", "agent": "qa", "window": "<the window's id>"}. Only people.
+        Written to flight_usage with who sent it, so a feature's measure can count people; nothing else of the request
+        is kept. Over WEB_EVENTS_PER_MINUTE a minute from one person, the rest are dropped."""
         who = request.state.identity
         auth.domain(who)
         if caller_kind(who) != "human":
@@ -2501,20 +2562,29 @@ def install(app, store, auth):
         except ValueError:
             raise Problem("event", 'The body is JSON: {"event": ..., ...}', 422) from None
         event = body.get("event") if isinstance(body, dict) else None
-        known = WEB_EVENTS.get(event) if isinstance(event, str) else None
-        if known is None or set(body) != {"event", known[0]} or body[known[0]] not in known[1]:
+        fields = WEB_EVENTS.get(event) if isinstance(event, str) else None
+        if fields is None or set(body) != {"event", *fields} or not all(_takes(v, body[f]) for f, v in fields.items()):
             raise Problem(
                 "event",
-                "event is one of: " + ", ".join(f"{e} with {f} ({' or '.join(v)})" for e, (f, v) in WEB_EVENTS.items()),
+                "event is one of: "
+                + ", ".join(f"{e} with {', '.join(f)}" for e, f in WEB_EVENTS.items())
+                + "; surface is web or desktop",
                 422,
             )
         actor = getattr(who, "actor", "") or ""
         kept = events_allowance.take(actor, 1)
         if kept:
             # Its own short write, not the recorder's minute: a measure needs every one, past the recorder's cap on
-            # events a minute, and with the recorder off. A press of a person's is rare; the allowance bounds it.
-            await asyncio.to_thread(record_event, store, event, {"actor": actor, known[0]: body[known[0]]})
+            # events a minute, and with the recorder off. A window opens rarely; the allowance bounds it.
+            await asyncio.to_thread(record_usage, store, event, actor, {f: body[f] for f in fields})
         return {"kept": kept}
+
+
+def _takes(allowed, value):
+    """Whether a usage event's field takes `value`: one of a tuple's values, or a text its pattern matches whole."""
+    if isinstance(allowed, tuple):
+        return value in allowed
+    return isinstance(value, str) and allowed.fullmatch(value) is not None
 
 
 class WebAllowance:
