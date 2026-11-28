@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { keys, queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
+import { nearEnd, watchNear } from '@/test/near';
 import { listParams, pipelinesQuery, shelfParams, type Pipeline, type Requester, type TaskItem } from './queries';
 import { RequestersDialog } from './Requesters';
 import { RoadmapPage } from './RoadmapPage';
@@ -147,6 +148,29 @@ describe('Roadmap @s2', () => {
     show(<RoadmapPage search={{}} />, '/roadmap');
     expect(await screen.findByText('No features yet')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'New feature' })).toBeTruthy();
+  });
+});
+
+describe('Roadmap runs on, with no "more" @3535', () => {
+  it('Now past 12 features shows every one, and the next page comes in as the end nears', async () => {
+    watchNear();
+    const reads: string[] = [];
+    serve((url) => {
+      if (!url.includes('after=next')) return { status: 200, body: {} };
+      reads.push(url);
+      return { status: 200, body: { tasks: [task('n99', 99, 'Feature 99', 'build')], cursor: 'c2' } };
+    });
+    const many = Array.from({ length: 13 }, (_, i) => task(`n${i}`, i + 1, `Feature ${i + 1}`, 'build'));
+    seed([]);
+    queryClient.setQueryData(keys.tasks.list(listParams('feat', {})), { tasks: many, cursor: 'c1', next_after: 'next' });
+    show(<RoadmapPage search={{}} />, '/roadmap');
+    const now = await screen.findByRole('region', { name: 'Now' });
+    expect(within(now).getAllByTitle(/^Feature \d+$/)).toHaveLength(13);
+    expect(screen.queryByRole('button', { name: /^\d+\+? more$|^More tasks$/ })).toBeNull();
+    expect(reads).toEqual([]);
+    await nearEnd();
+    expect(await within(screen.getByRole('region', { name: 'Now' })).findByTitle('Feature 99')).toBeTruthy();
+    expect(reads).toHaveLength(1);
   });
 });
 

@@ -302,9 +302,25 @@ def thread(world):
     return _ok(world.api("get", "/api/v2/threads/dm?with=human:omar", who=DANA), "the thread with Omar")["id"]
 
 
+def many(world):
+    """POST /_e2e/many?n=...: n more of Dana's Launch tasks in Plan, "Long list 1" to "Long list n", made oldest first."""
+
+    def make(n: int):
+        for i in range(1, n + 1):
+            title = f"Long list {i}"
+            _ok(
+                world.api("post", "/api/v2/tasks", {"title": title, "owner": DANA_ID, "pipeline": "launch"}, who=DANA),
+                title,
+            )
+        return JSONResponse({"made": n})
+
+    _route(world, "/_e2e/many", make, ["POST"])
+
+
 def seed(world):
     providers(world)
     asks(world)
+    many(world)
     made(world)
     turns(world)
     return {"mail": mail(world), "board": board(world), "thread": thread(world)}

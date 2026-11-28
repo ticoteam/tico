@@ -19,7 +19,7 @@ import { FilterItems, FilterMenu } from './FilterMenu';
 import { NewTask } from './NewTask';
 import { useNeedsYou } from './needs';
 import { Face, isPending, taskHref, waitsOnMe } from './parts';
-import { isFiltered, loadMore, loadMoreOf, pipelinesQuery, pipelineTasksQuery, shelfParams, shelfQuery, shelfTotal, type Filters, type Pipeline, type TaskItem } from './queries';
+import { isFiltered, listParams, loadMore, loadMoreOf, pipelinesQuery, pipelineTasksQuery, shelfParams, shelfQuery, shelfTotal, type Filters, type Pipeline, type TaskItem } from './queries';
 import { RequestersDialog } from './Requesters';
 import { byHorizon, HORIZONS, roadmapPipeline, stageName, trackOf, type Horizon } from './roadmap';
 import { filtersOf, type RoadmapSearch } from './search';
@@ -167,7 +167,7 @@ function Horizons({ p, rows, done, needs, folds, fold, cut, shippedCut, shippedC
     return (
       <Section name={name} count={count} open={!folds.includes(h)} onOpenChange={(o) => fold(h, o)} target={`horizon:${h}`}>
         <AllRows list={list} height={ROW_H} draw={(t) => <RoadmapRow key={t.id} t={t} p={p} needs={needs} />} />
-        {h === 'shipped' && <ReadOn more={moreShipped} />}
+        {h === 'shipped' && <ReadOn of={JSON.stringify(shelfParams(p.id, 'done', filters))} more={moreShipped} />}
       </Section>
     );
   };
@@ -179,7 +179,7 @@ function Horizons({ p, rows, done, needs, folds, fold, cut, shippedCut, shippedC
         return (
           <Fragment key={h}>
             {/* Now, Next and Later are one read: where they end, its next page comes in */}
-            {h === 'shipped' && <ReadOn more={more} />}
+            {h === 'shipped' && <ReadOn of={JSON.stringify(listParams(p.id, filters))} more={more} />}
             {horizon(h, name, list)}
           </Fragment>
         );

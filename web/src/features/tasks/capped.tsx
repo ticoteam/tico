@@ -32,11 +32,19 @@ export function AllRows<T extends { id: string }>({
 }
 
 /**
- * Where a list ends while the server holds more of it. The next page is read as this comes near the screen, with no
+ * Where a list ends while the server holds more of it. `of` names the list (its read's params): a filter that swaps the
+ * list under the same page starts a fresh end, so a failed or running read of the last list never holds up the new one.
+ */
+export function ReadOn({ of, ...end }: { of: string; more: (() => Promise<boolean>) | undefined; look?: 'row' | 'col' }) {
+  return <End key={of} {...end} />;
+}
+
+/**
+ * One list's end. The next page is read as this comes near the screen, with no
  * click, and again after each page while the end stays near. It reads only when no read is running and none has
  * failed; a failed read leaves a "Try again" row. `more` resolves false when the read failed.
  */
-export function ReadOn({ more, look = 'row' }: { more: (() => Promise<boolean>) | undefined; look?: 'row' | 'col' }) {
+function End({ more, look = 'row' }: { more: (() => Promise<boolean>) | undefined; look?: 'row' | 'col' }) {
   const end = useRef<HTMLDivElement>(null);
   const busy = useRef(false);
   const [failed, setFailed] = useState(false);

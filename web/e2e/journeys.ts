@@ -411,6 +411,58 @@ test("an approval card in an agent's chat opens the case over the agent's page; 
   clean(page);
 });
 
+// A long stage runs on in the page's own scroll to its last task, with no "N more" (task 3535). On a phone the board
+// runs down to the bottom bar: the point just above the bar is the board's, not blank page under it.
+test('a long stage runs on to its last task: the phone board reaches the bottom bar, the computer list scrolls to the end', async ({ browser, hub }) => {
+  const N = 130; // past the 100 rows after which only those near the screen are drawn
+  await call(hub, `/_e2e/many?n=${N}`, 'POST');
+  const titles = Array.from({ length: N }, (_, i) => `Long list ${i + 1}`);
+  const noMore = (page: Page) => expect(page.getByRole('button', { name: /^\d+\+? more$|^More tasks$|^Show more$/ })).toHaveCount(0);
+  /** Scroll a scroller down most of a screen at a time to its very end, as a person's thumb would; `title` is then on screen. */
+  const scrollTo = async (page: Page, scroller: string, title: string) => {
+    const box = page.locator(scroller).first();
+    for (let i = 0; i < 120; i++) {
+      const end = await box.evaluate((el) => {
+        el.scrollBy(0, el.clientHeight * 0.8);
+        return el.scrollTop + el.clientHeight >= el.scrollHeight - 1;
+      });
+      await page.waitForTimeout(50);
+      if (end) break;
+    }
+    await expect(page.getByTitle(title, { exact: true })).toBeInViewport();
+  };
+  // which stage the long list is in on screen: Plan, the first, holds them all
+  const last = titles.at(-1)!;
+
+  const phone = await open(browser, hub, '/tasks/launch?view=board', PHONE);
+  const plan = phone.locator('.col[data-target="stage:launch-plan"]');
+  await expect(plan.getByTitle(titles[0]!, { exact: true })).toBeVisible();
+  await noMore(phone);
+  // a fresh company's first visit shows a tip under the board, which may come a moment after the cards; a person puts
+  // it away once
+  const tip = phone.getByRole('button', { name: 'Got it' });
+  await tip.click();
+  await expect(tip).toBeHidden();
+  const reach = await phone.evaluate(() => {
+    const bar = document.querySelector('.tabbar')!.getBoundingClientRect();
+    const board = document.querySelector('.board')!;
+    const at = document.elementFromPoint(window.innerWidth / 2, bar.top - 4);
+    return { board: !!at && board.contains(at), gap: Math.round(bar.top - board.getBoundingClientRect().bottom), inner: getComputedStyle(board).overflowY };
+  });
+  expect(reach, 'the board runs down to the bar, with no blank band above it').toEqual({ board: true, gap: 0, inner: 'auto' });
+  // one scroller: the column holds no scrollbar of its own
+  expect(await plan.evaluate((col) => [col, ...col.querySelectorAll('*')].some((el) => el.scrollHeight > el.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(el).overflowY)))).toBe(false);
+  await scrollTo(phone, '.board', last);
+  await phone.screenshot({ path: test.info().outputPath('long-board-390.png') });
+  clean(phone);
+
+  const page = await open(browser, hub, '/tasks/launch?view=list');
+  await expect(page.getByTitle(titles[0]!, { exact: true })).toBeVisible();
+  await noMore(page);
+  await scrollTo(page, '.pk-body', last);
+  clean(page);
+});
+
 test('board: drag a card to another stage, and Move to does the same', async ({ browser, hub }) => {
   const [draft, date] = hub.facts.board.tasks;
   const page = await open(browser, hub, '/tasks/launch?view=board');

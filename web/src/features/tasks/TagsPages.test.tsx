@@ -8,6 +8,7 @@ import type { Task } from '@/api/schema';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
+import { nearEnd, watchNear } from '@/test/near';
 import { pipelinesQuery, tagQuery, tagsQuery, type Pipeline, type TaskItem } from './queries';
 import { TagPage, TagsPage } from './TagsPages';
 
@@ -197,6 +198,24 @@ describe('A tag @s4', () => {
     expect(await screen.findByTitle('The one after five hundred')).toBeTruthy();
     expect(screen.getByTitle('Fix the cart')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'More tasks' })).toBeNull();
+  });
+
+  it('past 12 tasks shows every one, and reads past the first 500 as the end nears, with no "more" @3535', async () => {
+    watchNear();
+    serve((url) =>
+      url === '/api/v2/tags/t1?offset=500'
+        ? { status: 200, body: { tag: tag('t1', 'bug'), editable: true, next_offset: null, tasks: [task('z', 900, 'The one after five hundred')] } }
+        : undefined,
+    );
+    const many = Array.from({ length: 13 }, (_, i) => task(`a${i}`, i + 1, `Tagged ${i + 1}`));
+    seedTag(tag('t1', 'bug'), many, { next_offset: 500 });
+    show(<TagPage tag="t1" />, '/tags/t1');
+    await screen.findByTitle('Tagged 13');
+    expect(screen.getAllByTitle(/^Tagged \d+$/)).toHaveLength(13);
+    expect(screen.queryByRole('button', { name: /^\d+\+? more$|^More tasks$/ })).toBeNull();
+    await nearEnd();
+    expect(await screen.findByTitle('The one after five hundred')).toBeTruthy();
+    expect(screen.getAllByTitle(/^Tagged \d+$/)).toHaveLength(13);
   });
 
   it('files a new task with the tag on it from the head + @s4', async () => {

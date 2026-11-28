@@ -36,6 +36,9 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
 
 /* the page kinds' scrollers end a little above the bar */
 .phone>.pg :is(.page-body:not(.board-wrap),.board,.tl-list,.set-nav,.set-body){padding-bottom:20px}
+/* the board scrolls inside its own box, which ends a little above the bar: the page's room for the bar (88px) is not
+   added under it, or the board stops short with a blank band (task 3535) */
+.phone>.pg .page-body.board-wrap{padding-bottom:0}
 .phone>.pg :is(.page-body,.tl-list):has(>*>.vl-space){padding-bottom:0}
 .phone>.pg :is(.page-body,.tl-list)>:has(>.vl-space){padding-bottom:20px}
 /* a message box that belongs to the page (an agent's own page, a thread) */

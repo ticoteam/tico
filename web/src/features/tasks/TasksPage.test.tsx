@@ -1,7 +1,7 @@
 import { QueryClientProvider, QueryObserver } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRouteWithContext, createRoute, createRouter, Outlet, RouterProvider } from '@tanstack/react-router';
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { ActionsRoot } from '@/actions';
 import { keys, queryClient } from '@/data';
@@ -849,6 +849,92 @@ describe('Task lists run on, with no "more" @3535', () => {
     expect(screen.getByTitle('Fix the export')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });
+
+  // A filter swaps the list under the same board: what the last list's end was doing (a failed read, a read still
+  // running) must not carry over to the new list's end.
+  describe('a filter that swaps the list starts its end afresh', () => {
+    const mine = keys.tasks.list(listParams('eng', { owner: ME }));
+    const Switch = () => {
+      const [owner, setOwner] = useState<string | undefined>(undefined);
+      return (
+        <>
+          <button type="button" onClick={() => setOwner(ME)}>
+            Only mine
+          </button>
+          <TasksPage pipeline="eng" search={owner ? { owner } : {}} />
+        </>
+      );
+    };
+    const both = () => {
+      seed([]);
+      queryClient.setQueryData(listKey, { tasks: many(20), cursor: 'c1', next_after: 'all-next' });
+      queryClient.setQueryData(mine, { tasks: [task('m1', 50, 'Mine to do', 's1')], cursor: 'm1', next_after: 'mine-next' });
+    };
+    const page2 = { status: 200, body: { tasks: [task('m2', 51, 'Mine on page two', 's2')], cursor: 'm2' } };
+
+    it('after the last list’s read failed: no "Try again", and the new list reads on as its end nears', async () => {
+      watchNear();
+      const reads: string[] = [];
+      serve((url) => {
+        if (url.includes('after=all-next')) return reads.push('all'), { status: 500, body: {} };
+        if (url.includes('after=mine-next')) return reads.push('mine'), page2;
+        return { status: 200, body: {} };
+      });
+      both();
+      show(<Switch />, '/tasks/eng');
+      await screen.findByTitle('Task 20');
+      await nearEnd();
+      await screen.findByRole('button', { name: 'Try again' });
+      fireEvent.click(screen.getByRole('button', { name: 'Only mine' }));
+      await screen.findByTitle('Mine to do');
+      expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+      await nearEnd();
+      expect(await screen.findByTitle('Mine on page two')).toBeTruthy();
+      expect(reads).toEqual(['all', 'mine']);
+    });
+
+    it('while the last list’s read still runs: the new list reads on as its end nears', async () => {
+      watchNear();
+      const reads: string[] = [];
+      serve((url) => {
+        if (url.includes('after=all-next')) return reads.push('all'), new Promise<Reply>(() => {}); // never answers
+        if (url.includes('after=mine-next')) return reads.push('mine'), page2;
+        return { status: 200, body: {} };
+      });
+      both();
+      show(<Switch />, '/tasks/eng');
+      await screen.findByTitle('Task 20');
+      await nearEnd();
+      await waitFor(() => expect(reads).toEqual(['all']));
+      fireEvent.click(screen.getByRole('button', { name: 'Only mine' }));
+      await screen.findByTitle('Mine to do');
+      await nearEnd();
+      expect(await screen.findByTitle('Mine on page two')).toBeTruthy();
+      expect(reads).toEqual(['all', 'mine']);
+    });
+  });
+
+  for (const view of ['snoozed', 'done'] as const)
+    it(`Needs you ${view === 'snoozed' ? 'Snoozed' : 'Done'} past 12 rows shows every row, and its next page comes in as the end nears`, async () => {
+      watchNear();
+      const reads: string[] = [];
+      const extra = view === 'done' ? { status: 'done' as const } : { snoozed: true };
+      serve((url) => {
+        if (!url.includes('/tasks?')) return { status: 200, body: { items: [] } };
+        reads.push(url);
+        if (url.includes('after=p2')) return { status: 200, body: { tasks: [task('z', 99, 'Task 99', 's1', { owner_id: ME, ...extra })], cursor: 'c2' } };
+        return { status: 200, body: { tasks: many(13).map((t) => ({ ...t, owner_id: ME, ...extra })), cursor: 'c1', next_after: 'p2' } };
+      });
+      show(<NeedsYouViews view={view} />, `/needs-you?view=${view}`);
+      await screen.findByTitle('Task 13');
+      expect(titles()).toHaveLength(13);
+      noMore();
+      expect(reads).toHaveLength(1);
+      await nearEnd();
+      expect(await screen.findByTitle('Task 99')).toBeTruthy();
+      expect(reads.at(-1)).toContain('after=p2');
+      expect(titles()).toHaveLength(14);
+    });
 
   it('Needs you and Archived past 12 rows show every row, with no "N more" or "Show more"', async () => {
     serve(() => ({ status: 200, body: { items: [] } }));

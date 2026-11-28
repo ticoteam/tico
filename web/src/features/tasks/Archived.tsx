@@ -38,7 +38,7 @@ export function ArchivedSections({ p, filters, shelves }: { p: Pipeline; filters
           measure={cards}
           draw={(t) => <ArchRow key={t.id} t={t} p={p} stage={t.stage_id ? names.get(t.stage_id) : undefined} />}
         />
-        <ReadOn more={page.next_after ? () => loadMoreOf(shelfParams(p.id, shelf, filters)) : undefined} />
+        <ReadOn of={JSON.stringify(shelfParams(p.id, shelf, filters))} more={page.next_after ? () => loadMoreOf(shelfParams(p.id, shelf, filters)) : undefined} />
       </Section>
     );
   });
