@@ -100,6 +100,13 @@ def kind_filter(kind):
     ), stored
 
 
+def plural_root(token):
+    """The word less a plural ending (cats, boxes), so its start matches the singular as well as the plural."""
+    if len(token) > 4 and token.endswith("es"):
+        return token[:-2]
+    return token[:-1] if len(token) > 3 and token.endswith("s") and not token.endswith("ss") else token
+
+
 def has_fts(c):
     return c.execute("SELECT 1 FROM sqlite_master WHERE name='file_text'").fetchone() is not None
 
@@ -590,7 +597,7 @@ class Library:
             "AND COALESCE(p.archived,0)=0 AND (" + kind_sql + ") {match} LIMIT ?"
         )
         if has_fts(c):
-            from .docs import Docs
+            from .docs import STOP
 
             query = select.format(
                 text="file_text.text",
@@ -600,8 +607,11 @@ class Library:
                 match="AND file_text MATCH ? ORDER BY bm25(file_text, 10.0, 1.0)",
             )
             seen, rows = set(), []
-            stemmed = [manual._stem(t) for t in tokens]
-            for n, expression in enumerate(Docs.expressions(stemmed)):
+            # The index has whole words (unicode61, no stemming): each query word, less a plural s, matches by its start.
+            stemmed = ['"' + plural_root(t) + '"*' for t in tokens]
+            wanted = [m for t, m in zip(tokens, stemmed) if t not in STOP] or stemmed
+            expressions = [" AND ".join(stemmed)] + ([" OR ".join(wanted)] if len(wanted) > 1 else [])
+            for n, expression in enumerate(expressions):
                 if every and n:
                     break
                 try:
