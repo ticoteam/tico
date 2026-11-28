@@ -626,6 +626,34 @@ test("a read that failed says why in the page's one line; a restart has no Try a
   expect(page.problems.filter((p) => p !== '503 GET /api/v2/usage')).toEqual([]);
 });
 
+test("Health: a check that can't tell sits under Needs a look, and the page never says every part is fine", async ({ browser, hub }) => {
+  // The server's answer counts unknown checks apart from attention (backend/health.py).
+  const real = await api<{ attention: number; unknown: number }>(hub, 'health');
+  expect(typeof real.unknown).toBe('number');
+  expect(typeof real.attention).toBe('number');
+  const page = await open(browser, hub, '/tasks');
+  await expect(page.locator('.pk-head h1')).toHaveText('Tasks');
+  // One check that could not read its data, the rest Fine
+  const health = {
+    checked: new Date().toISOString(),
+    attention: 0,
+    unknown: 1,
+    checks: [
+      { id: 'slack', label: 'Slack', status: 'unknown', summary: 'The Slack service has not reported since 14:02 UTC. Is it running?' },
+      { id: 'backups', label: 'Backups', status: 'ok', summary: 'Copied to S3.' },
+      { id: 'claimed_oks', label: "OK'd sends", status: 'ok', summary: "Nothing OK'd waits to be sent." },
+    ],
+  };
+  await page.route('**/api/v2/health', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(health) }));
+  await page.goto(`${hub.url}/settings/health`);
+  const look = page.getByRole('region', { name: 'Needs a look' });
+  await expect(look.getByTitle('Slack')).toContainText("Can't tell");
+  await expect(page.getByRole('region', { name: 'Fine' }).getByTitle("OK'd sends")).toBeVisible();
+  await expect(page.getByText('Every part is fine')).toHaveCount(0);
+  await page.screenshot({ path: test.info().outputPath('health-cant-tell-1440.png') });
+  clean(page);
+});
+
 test("phone: a case opening shows its page while it loads; its chat's card for the email raises the email with its Approve", async ({ browser, hub }) => {
   const { subject } = hub.facts.mail;
   const page = await open(browser, hub, '/tasks', PHONE);

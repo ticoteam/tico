@@ -2208,6 +2208,19 @@ def _backups(config, settings):
     # The loop writes checked_at every round, even when the listing fails; an old one means it has stopped or cannot reach
     # the backup location, so nothing it last reported (copies, lag) can be trusted.
     checked = _age_status(backup.get("checked_at"))
+    if not backup.get("checked_at") and backup.get("listing_error"):
+        # No listing has worked yet: the failures in a row are judged by when they began, by the same age rule.
+        failing = backup.get("listing_failing_since") or backup.get("listing_failed_at")
+        checked = _age_status(failing)
+        if checked != "ok":
+            return _check(
+                "backups",
+                "Backups",
+                checked,
+                f"Could not read the backup location since {_clock(failing)} ({backup['listing_error']}); it has "
+                "never been read.",
+                [fix],
+            )
     if checked != "ok":
         return _check(
             "backups",

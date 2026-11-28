@@ -101,6 +101,53 @@ def test_a_first_backup_listing_that_failed_names_its_error_though_nothing_was_c
     assert check["status"] == "unknown" and "(ConnectionError)" in check["summary"]
 
 
+def test_a_backup_listing_that_never_worked_turns_to_look_then_broken_as_its_failures_last(monkeypatch):
+    monkeypatch.delenv("TICO_BACKUP_SYNC_INTERVAL", raising=False)
+
+    def failing_for(minutes):
+        return _remote(
+            listing_error="ConnectionError",
+            listing_failed_at=H.shift(H.now(), minutes=-1),
+            listing_failing_since=H.shift(H.now(), minutes=-minutes),
+        )
+
+    assert health._backups({"backup": failing_for(3)}, REMOTE)["status"] == "unknown"
+    look = health._backups({"backup": failing_for(15)}, REMOTE)
+    assert look["status"] == "warn"
+    assert re.fullmatch(
+        f"Could not read the backup location since {CLOCK} \\(ConnectionError\\); it has never been read.",
+        look["summary"],
+    )
+    assert health._backups({"backup": failing_for(120)}, REMOTE)["status"] == "bad"
+
+
+def test_the_backup_loop_keeps_when_its_failures_in_a_row_began_until_a_listing_works(tmp_path):
+    from backend import replication
+
+    path = tmp_path / "status.json"
+
+    class Down:
+        def latest(self, levels):
+            raise ConnectionError("no route")
+
+    class Up:
+        def latest(self, levels):
+            return 1_700_000_000, 1
+
+    start = 1_700_000_000
+    replication.write_status(Down(), path, now=start)
+    replication.write_status(Down(), path, now=start + 3600)
+    saved = json.loads(path.read_text())
+    assert "checked_at" not in saved
+    assert saved["listing_failing_since"].startswith("2023-11-14T22:13:20")
+    assert saved["listing_failed_at"].startswith("2023-11-14T23:13:20")
+    replication.write_status(Up(), path, now=start + 7200)
+    saved = json.loads(path.read_text())
+    assert "listing_failing_since" not in saved and "listing_error" not in saved
+    replication.write_status(Down(), path, now=start + 7260)
+    assert json.loads(path.read_text())["listing_failing_since"].startswith("2023-11-15T00:14:20")
+
+
 def test_the_backup_loop_records_when_and_how_its_listing_failed(tmp_path):
     from backend import replication
 
