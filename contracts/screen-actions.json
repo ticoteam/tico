@@ -10640,6 +10640,11 @@
             "minLength": 1,
             "maxLength": 100,
             "description": "a stage id or name, or next, done or closed"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "move only if the task is still at this version"
           }
         },
         "required": [

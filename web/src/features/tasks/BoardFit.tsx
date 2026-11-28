@@ -38,7 +38,7 @@ const edge = (list: Element[]): Edge | null =>
 export function BoardFit({ shape }: { shape: string }) {
   const ref = useRef<HTMLSpanElement>(null);
   const [start, setStart] = useState(0);
-  const [edges, setEdges] = useState<{ wrap: HTMLElement; prev: Edge | null; next: Edge | null; end: number } | null>(null);
+  const [edges, setEdges] = useState<{ wrap: HTMLElement; prev: Edge | null; next: Edge | null; from: number; end: number } | null>(null);
 
   useLayoutEffect(() => {
     const inn = ref.current?.parentElement;
@@ -73,7 +73,7 @@ export function BoardFit({ shape }: { shape: string }) {
         inn.style.paddingRight = `${Math.max(0, avail - need(cols.slice(from), w))}px`;
         board.scrollLeft = (cols[from] as HTMLElement).offsetLeft - (cols[0] as HTMLElement).offsetLeft;
       } else board.scrollLeft = 0;
-      setEdges(more ? { wrap, prev: edge(cols.slice(0, from)), next: edge(cols.slice(end)), end } : null);
+      setEdges(more ? { wrap, prev: edge(cols.slice(0, from)), next: edge(cols.slice(end)), from, end } : null);
     };
     fit();
     if (typeof ResizeObserver === 'undefined') return;
@@ -104,8 +104,9 @@ export function BoardFit({ shape }: { shape: string }) {
     if (!wrap) return;
     const step = (e: Event) => {
       const dir = (e as CustomEvent<number>).detail;
+      // from the stage the board shows first now, not the one asked for: fewer stages may have clamped it
       const at = shown.current;
-      if (dir > 0 ? at?.next : at?.prev) setStart((s) => Math.max(0, s + dir));
+      if (at && (dir > 0 ? at.next : at.prev)) setStart(Math.max(0, at.from + dir));
     };
     wrap.addEventListener(BOARD_STEP, step);
     return () => wrap.removeEventListener(BOARD_STEP, step);
@@ -131,7 +132,7 @@ export function BoardFit({ shape }: { shape: string }) {
       {edges &&
         createPortal(
           <>
-            {arrow(edges.prev, 'is-prev', 'Earlier stages', Math.max(0, start - Math.max(1, edges.end - start)))}
+            {arrow(edges.prev, 'is-prev', 'Earlier stages', Math.max(0, edges.from - Math.max(1, edges.end - edges.from)))}
             {arrow(edges.next, 'is-next', 'Later stages', edges.end)}
           </>,
           edges.wrap,

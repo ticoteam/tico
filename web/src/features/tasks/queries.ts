@@ -333,9 +333,10 @@ export function stageNameOf(id: string, to: string): string | undefined {
 
 /**
  * Move a task to a stage: it shows there at once and is taken back if the server refuses (a requirement not met, a
- * newer version). The refusal's words are the error's message.
+ * newer version). The refusal's words are the error's message. `version` is the one the task must still be at (by
+ * default, the one on screen).
  */
-export async function moveTask(id: string, to: string): Promise<TaskItem> {
+export async function moveTask(id: string, to: string, version?: number): Promise<TaskItem> {
   const before = findTask(id);
   const stage = before ? stageIn(before.pipeline_id, to) : null;
   const shown = listsHolding(id);
@@ -345,7 +346,7 @@ export async function moveTask(id: string, to: string): Promise<TaskItem> {
     optimistic: (cur: TaskPage | undefined) =>
       stage && cur?.tasks ? patchRow(cur, id, (t) => ({ ...t, stage_id: stage.id, stage_since: now })) : cur,
     send: (idempotencyKey) =>
-      api.post<{ task: TaskItem }>(`/api/v2/tasks/${encodeURIComponent(id)}/move`, { to: stage?.id ?? to, version: before?.version }, { idempotencyKey }),
+      api.post<{ task: TaskItem }>(`/api/v2/tasks/${encodeURIComponent(id)}/move`, { to: stage?.id ?? to, version: version ?? before?.version }, { idempotencyKey }),
     settle: (cur: TaskPage | undefined, answer) =>
       cur?.tasks ? patchRow(cur, id, (t) => (answer.task.status === t.status ? { ...t, ...answer.task } : null)) : cur,
     revert: (cur: TaskPage | undefined) =>

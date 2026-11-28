@@ -39,11 +39,12 @@ export function useCardDrag(stages: readonly Stage[]): CardDrag {
   const slide = useRef<EdgeSlide | null>(null);
   const nameOf = (id: string | null) => stages.find((s) => s.id === id)?.name ?? '';
 
-  /** Take a drag's move back, only while the task is still where that move put it: a later move stands. */
-  const undo = (task: string, to: string, back: string) => {
+  /** Take a drag's move back, only while the task is still as that move left it (`version`, the move's own): a later
+      change stands, whether or not the task is on screen, and even when it has come back to the same stage. */
+  const undo = (task: string, to: string, back: string, version: number | undefined) => {
     const at = stageOfTask(task);
     if (at !== undefined && at !== to) return void toast({ text: `Not moved back: it's in ${nameOf(at) || 'another stage'} now`, kind: 'failed' });
-    void move.run({ task, to: back }).then((b) => b.ok && toast({ text: `Moved back to ${nameOf(back)}` }));
+    void move.run({ task, to: back, ...(version === undefined ? {} : { version }) }).then((b) => b.ok && toast({ text: `Moved back to ${nameOf(back)}` }));
   };
 
   const ref = useDrag({
@@ -73,10 +74,11 @@ export function useCardDrag(stages: readonly Stage[]): CardDrag {
       void move.run({ task, to }).then((r) => {
         if (!r.ok) return;
         announce(`${r.did} to ${name}`);
+        const version = (r.out as { version?: number } | undefined)?.version;
         toast({
           text: `Moved to ${name}`,
           timeout: UNDO_MS,
-          action: { label: 'Undo', run: () => undo(task, to, back) },
+          action: { label: 'Undo', run: () => undo(task, to, back, version) },
         });
       });
     },
@@ -106,9 +108,18 @@ interface EdgeSlide {
   stop: () => void;
 }
 
+/** How far to scroll `board` (dir -1 or 1) to bring the next stage that way to its left edge, where a phone's columns
+    snap: measured, so a folded stage's narrow strip is one step as much as an open column is. 0: none lies that way. */
+function nextStage(board: HTMLElement, dir: number): number {
+  const left = board.getBoundingClientRect().left + (parseFloat(getComputedStyle(board).scrollPaddingLeft) || 0);
+  const starts = [...board.querySelectorAll<HTMLElement>('.col')].map((c) => c.getBoundingClientRect().left - left);
+  const to = dir > 0 ? starts.find((x) => x > 1) : starts.findLast((x) => x < -1);
+  return to ?? 0;
+}
+
 /** Slide `board` a column at a time while a drag stays near its left or right edge. A computer's board, which BoardFit
-    fits to whole columns, brings in one more stage from that side; a phone's, which has no arrows, scrolls a column's
-    width. */
+    fits to whole columns, brings in one more stage from that side; a phone's, which has no arrows, scrolls to the next
+    stage that way. */
 function edgeSlide(board: HTMLElement | null): EdgeSlide {
   let dir = 0;
   let timer: ReturnType<typeof setInterval> | undefined;
@@ -116,9 +127,8 @@ function edgeSlide(board: HTMLElement | null): EdgeSlide {
     if (!board) return;
     const wrap = board.parentElement;
     if (wrap?.classList.contains('has-more')) return void wrap.dispatchEvent(new CustomEvent(BOARD_STEP, { detail: dir }));
-    const col = board.querySelector<HTMLElement>('.col:not(.is-fold)');
-    const gap = parseFloat(getComputedStyle(board.firstElementChild ?? board).columnGap) || 0;
-    board.scrollBy({ left: dir * ((col?.offsetWidth || board.clientWidth) + gap), behavior: 'smooth' });
+    const by = nextStage(board, dir);
+    if (by) board.scrollBy({ left: by, behavior: 'smooth' });
   };
   const stop = () => {
     clearInterval(timer);

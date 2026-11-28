@@ -103,10 +103,20 @@ export function useDrag(options: DragOptions) {
         stopTouch = () => {};
         if (state !== 'dragging') return;
         lifted?.remove();
-        // the browser may still turn the lifted finger into a click on the card: a drag never opens the task
-        const swallow = (e: Event) => e.preventDefault();
-        document.addEventListener('click', swallow, { capture: true, once: true });
-        setTimeout(() => document.removeEventListener('click', swallow, true), CLICK_AFTER_MS);
+        // the browser may still turn the lifted finger into a click: a drag never opens the task. Only that click: one
+        // that follows a new press (a tap on another card) is the person's own
+        const quit = new AbortController();
+        const off = { capture: true, signal: quit.signal };
+        document.addEventListener('pointerdown', () => quit.abort(), off);
+        document.addEventListener(
+          'click',
+          (e) => {
+            e.preventDefault();
+            quit.abort();
+          },
+          off,
+        );
+        setTimeout(() => quit.abort(), CLICK_AFTER_MS);
         finish(zone);
       };
       stopTouch = () => stop(null);

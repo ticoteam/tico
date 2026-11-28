@@ -48,10 +48,11 @@ Reopening a task that ended in a side stage returns it there.
 On the board, drag a card to another stage's column. On a phone, hold the card still for half a second, then drag
 it; held and let go without moving, it opens **Move to** instead. While a card drags, every stage of the pipeline
 shows along the bottom of the screen, so a stage whose column is off screen can still be reached, and holding the
-card at the board's left or right edge slides the board a column a second. A move made by dragging says "Moved to
-<stage>" with **Undo** for 8 seconds; Undo moves the task back only, not what the stage did when it arrived, and only
-while the task is still in that stage (moved on since, Undo leaves it and says where it is). A move the server
-refuses puts the card back and says why.
+card at the board's left or right edge brings in the next stage on that side, one a second (a folded stage counts as
+one). A move made by dragging says "Moved to <stage>" with **Undo** for 8 seconds; Undo moves the task back only, not
+what the stage did when it arrived, and only while the task is unchanged since that move: moved on since, even back to
+the same stage or off the board, Undo leaves it and says why. A move the server refuses puts the card back and says
+why.
 
 ### Pipeline and stage notes
 A pipeline and each of its stages can carry notes: what the team learned there, each with why, since when and its

@@ -416,6 +416,43 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
       expect(stageOf('a1')).toBe('sd');
     });
 
+    it("Undo asks the server to move it back only at the drag's own version: off the board, or back in that stage since, a later move stands", async () => {
+      const changed = { status: 409, body: { error: { code: 'task_changed', detail: 'The task changed since' } } };
+      serve((url, method) => (method === 'POST' && url.endsWith('/move') ? (posts.length === 1 ? moved('a1', 's2', 2) : changed) : { status: 404, body: {} }));
+      seed([task('a1', 7, 'Fix the export', 's1'), task('a2', 8, 'Write the notes', 's2')]);
+      show(<TasksPage pipeline="eng" search={{}} />, '/tasks/eng');
+      await screen.findByTitle('Fix the export');
+      lift(card('Fix the export'));
+      over(chip('Doing'));
+      fireEvent.drop(chip('Doing'), { dataTransfer: data });
+      expect(await screen.findByText('Moved to Doing')).toBeTruthy();
+      // moved on and back to Doing since (version 4): the screen shows it where the drag put it
+      act(() => queryClient.setQueryData(listKey, { tasks: [task('a1', 7, 'Fix the export', 's2', { version: 4 }), task('a2', 8, 'Write the notes', 's2')], cursor: 'c1' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+      await waitFor(() => expect(posts[1]).toEqual({ url: '/api/v2/tasks/a1/move', body: { to: 's1', version: 2 } }));
+      expect(((await screen.findByText('The task changed since')).closest('.toast') as HTMLElement).textContent).toBe("Couldn't move to Inbox: The task changed since");
+      await waitFor(() => expect(stageOf('a1')).toBe('s2'));
+      expect(screen.queryByText('Moved back to Inbox')).toBeNull();
+    });
+
+    it("Undo for a task that has left the board still sends the drag's version, so the server keeps a later move", async () => {
+      const changed = { status: 409, body: { error: { code: 'task_changed', detail: 'The task changed since' } } };
+      serve((url, method) => (method === 'POST' && url.endsWith('/move') ? (posts.length === 1 ? moved('a1', 's2', 2) : changed) : { status: 404, body: {} }));
+      seed([task('a1', 7, 'Fix the export', 's1'), task('a2', 8, 'Write the notes', 's2')]);
+      show(<TasksPage pipeline="eng" search={{}} />, '/tasks/eng');
+      await screen.findByTitle('Fix the export');
+      lift(card('Fix the export'));
+      over(chip('Doing'));
+      fireEvent.drop(chip('Doing'), { dataTransfer: data });
+      expect(await screen.findByText('Moved to Doing')).toBeTruthy();
+      // done elsewhere: it is no longer on this board
+      act(() => queryClient.setQueryData(listKey, { tasks: [task('a2', 8, 'Write the notes', 's2')], cursor: 'c1' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+      await waitFor(() => expect(posts[1]).toEqual({ url: '/api/v2/tasks/a1/move', body: { to: 's1', version: 2 } }));
+      expect(await screen.findByText(/The task changed since/)).toBeTruthy();
+      expect(screen.queryByText('Moved back to Inbox')).toBeNull();
+    });
+
     it("over another stage's column it reads Move to that stage; over its own column nothing lights up and nothing is saved", async () => {
       serve(() => ({ status: 404, body: {} }));
       seed([task('a1', 7, 'Fix the export', 's1')]);
@@ -549,33 +586,59 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
         expect(c.classList.contains('is-drag')).toBe(false);
       });
 
-      it('held at the edge of the screen, the board slides one column a second; back in the middle it stops', async () => {
-        await board();
+      it('held at the edge of the screen, the board slides to the next stage once a second, a folded one too; back in the middle it stops', async () => {
+        serve(() => ({ status: 404, body: {} }));
+        const stages = ['Inbox', 'Review', 'Doing'].map((name, i) => ({ id: `s${i + 1}`, name }));
+        seed([task('a1', 7, 'Fix the export', 's1'), task('a3', 9, 'Ship it', 's3')]);
+        queryClient.setQueryData(pipelinesQuery.queryKey, [{ ...PIPE, stages }]);
+        show(<TasksPage pipeline="eng" search={{}} />, '/tasks/eng');
+        await screen.findByTitle('Fix the export');
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
         const scroller = screen.getByRole('region', { name: 'Stages' });
+        // a phone's open column is 296px, Review's folded strip 40px, 10px apart; the board scrolls as asked
+        let scrolled = 0;
         const slides: number[] = [];
-        scroller.scrollBy = ((o: ScrollToOptions) => void slides.push(Math.sign(o.left ?? 0))) as typeof scroller.scrollBy;
+        scroller.scrollBy = ((o: ScrollToOptions) => {
+          slides.push(o.left ?? 0);
+          scrolled += o.left ?? 0;
+        }) as typeof scroller.scrollBy;
         scroller.getBoundingClientRect = () => DOMRect.fromRect({ x: 0, y: 100, width: 390, height: 600 });
         Object.defineProperty(scroller, 'clientWidth', { value: 390 });
+        const layout = [
+          { name: 'Inbox', x: 0, width: 296 },
+          { name: 'Review', x: 306, width: 40 },
+          { name: 'Doing', x: 356, width: 296 },
+        ];
+        for (const { name, x, width } of layout)
+          (document.querySelector(`.col[data-target="stage:${stages.find((st) => st.name === name)!.id}"]`) as HTMLElement).getBoundingClientRect = () =>
+            DOMRect.fromRect({ x: x - scrolled, y: 100, width, height: 600 });
+
         const c = card('Fix the export');
         touch('pointerDown', c, 100, 200);
         act(() => vi.advanceTimersByTime(500));
         touch('pointerMove', c, 385, 300);
         act(() => vi.advanceTimersByTime(999));
         expect(slides).toEqual([]);
+        // one stage a second: the folded Review, then Doing, each to the left edge; then nothing lies past
         act(() => vi.advanceTimersByTime(1));
-        expect(slides).toEqual([1]);
+        expect(slides).toEqual([306]);
         act(() => vi.advanceTimersByTime(1000));
-        expect(slides).toEqual([1, 1]);
+        expect(slides).toEqual([306, 50]);
+        act(() => vi.advanceTimersByTime(1000));
+        expect(slides).toEqual([306, 50]);
         touch('pointerMove', c, 200, 300);
         act(() => vi.advanceTimersByTime(3000));
-        expect(slides).toEqual([1, 1]);
+        expect(slides).toEqual([306, 50]);
+        // at the left edge it comes back the same way, Review first
         touch('pointerMove', c, 4, 300);
         act(() => vi.advanceTimersByTime(1000));
-        expect(slides).toEqual([1, 1, -1]);
+        expect(slides).toEqual([306, 50, -50]);
+        act(() => vi.advanceTimersByTime(1000));
+        expect(slides).toEqual([306, 50, -50, -306]);
         // let go nowhere: nothing moves, and the slide stops
         touch('pointerUp', c, 4, 300);
         act(() => vi.advanceTimersByTime(3000));
-        expect(slides).toEqual([1, 1, -1]);
+        expect(slides).toEqual([306, 50, -50, -306]);
         expect(posts).toEqual([]);
         expect(strip()).toBeNull();
       });
@@ -611,6 +674,41 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
           act(() => vi.advanceTimersByTime(2000));
           expect(more('is-prev')).toBe('+2');
           touch('pointerUp', c, 465, 300);
+        } finally {
+          width.mockRestore();
+        }
+      });
+
+      it("on a computer's paged board that has lost stages, the edge steps from the stages it shows now", async () => {
+        const width = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(470);
+        try {
+          serve(() => ({ status: 404, body: {} }));
+          const stages = ['Inbox', 'Doing', 'Review', 'Ship', 'Live'].map((name, i) => ({ id: `s${i + 1}`, name }));
+          queryClient.setQueryData(pipelinesQuery.queryKey, [{ ...PIPE, stages }]);
+          const rest = ['s2', 's3', 's4', 's5'].map((st, i) => task(`b${i}`, 20 + i, `Task ${i}`, st));
+          queryClient.setQueryData(listKey, { tasks: [task('a1', 7, 'Fix the export', 's1'), ...rest], cursor: 'c1' });
+          queryClient.setQueryData(['flow'], { count: 0, items: [] });
+          show(<TasksPage pipeline="eng" search={{ view: 'board' }} />, '/tasks/eng?view=board');
+          const more = (cls: string) => document.querySelector(`.board-more.${cls} .more-n`)?.textContent;
+          // page to the last stage: Live alone, four before it
+          fireEvent.click(await screen.findByRole('button', { name: 'Later stages' }));
+          fireEvent.click(await screen.findByRole('button', { name: 'Later stages' }));
+          await waitFor(() => expect(more('is-prev')).toBe('+4'));
+          // Ship and Live go: the board shows Review, the last one left, with two before it
+          act(() => queryClient.setQueryData(pipelinesQuery.queryKey, [{ ...PIPE, stages: stages.slice(0, 3) }]));
+          act(() => queryClient.setQueryData(listKey, { tasks: [task('a1', 7, 'Fix the export', 's1'), ...rest.slice(0, 2)], cursor: 'c1' }));
+          await waitFor(() => expect(more('is-prev')).toBe('+2'));
+          vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+          const scroller = screen.getByRole('region', { name: 'Stages' });
+          scroller.getBoundingClientRect = () => DOMRect.fromRect({ x: 0, y: 100, width: 470, height: 600 });
+          const c = card('Fix the export');
+          touch('pointerDown', c, 100, 200);
+          act(() => vi.advanceTimersByTime(500));
+          // the first second at the left edge brings Doing in
+          touch('pointerMove', c, 4, 300);
+          act(() => vi.advanceTimersByTime(1000));
+          expect(more('is-prev')).toBe('+1');
+          touch('pointerUp', c, 4, 300);
         } finally {
           width.mockRestore();
         }
