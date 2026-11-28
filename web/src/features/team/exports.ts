@@ -1,7 +1,7 @@
 // Teammates, teams and computers. The only file other code imports from this feature.
 export { TeamWho } from './TeamWho';
 export { validateTeamSearch, type TeamSearch } from './routing';
-export { TeammateChat, AgentChat } from './TeammateChat';
+export { TeammateChat, AgentChat, ChatWindowChat } from './TeammateChat';
 export { AgentPage } from './AgentPage';
 export { PersonPage } from './PersonPage';
 export { ComputerPage, type ComputerPageProps } from './ComputerPage';

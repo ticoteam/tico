@@ -18,6 +18,9 @@ export type UpdateState = { state: 'none' | 'downloading' | 'ready' | 'error'; v
 /** 'return': the person closed the small window and chose to go back to the call in the main window. */
 export type CallWindowState = 'open' | 'closed' | 'return';
 
+/** 'full': the app already holds as many chat windows as it allows for this company; none opened. */
+export type ChatWindowResult = 'open' | 'full';
+
 export interface TicoDesktop {
   /** Shell version, shown in Settings next to the server's. */
   version: string;
@@ -46,6 +49,10 @@ export interface TicoDesktop {
     onState(cb: (s: CallWindowState) => void): () => void;
     /** The call out in the small window for this company, if any: a page that loaded again learns it is out. */
     current(): Promise<string | null>;
+  };
+  chatWindow: {
+    /** An agent's chat (by slug) in its own window; opening it again brings the open one forward. */
+    open(agent: string): Promise<ChatWindowResult>;
   };
   /** This page is about to sign out: the app drops what it holds for the person (the count, the small call window).
       Carries nothing; the page redirects once it resolves. */

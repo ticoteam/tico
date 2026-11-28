@@ -87,6 +87,8 @@ export interface ConversationProps {
   canSend?: boolean;
   /** Over the messages of a chat drawn as the page: which chat this is, and the way out of it (an agent's session). */
   head?: ReactNode;
+  /** After a message from this box is written (an agent's chat window counts the windows a message was sent from). */
+  onSent?: () => void;
 }
 
 type Item =
@@ -260,7 +262,7 @@ function withExtra(rows: ChatMessage[], extra: ChatMessage[] | undefined, more: 
   return [...out, ...left];
 }
 
-export function Conversation({ id, variant, title, actor, session, from, starters, toDm, onMoved, foot, card, below, canPost = true, compose, extra, chat, mentionFirst, mentionOnly, task, view, canSend = true, head }: ConversationProps) {
+export function Conversation({ id, variant, title, actor, session, from, starters, toDm, onMoved, foot, card, below, canPost = true, compose, extra, chat, mentionFirst, mentionOnly, task, view, canSend = true, head, onSent }: ConversationProps) {
   useFollow(variant === 'tico' ? { conversation: id } : { thread: id });
 
   const { data: me } = useQuery(meQuery);
@@ -440,6 +442,7 @@ export function Conversation({ id, variant, title, actor, session, from, starter
     }).then((sent) => {
       // the org rules held it: said, as everywhere a message is held
       if (toDm && !sent && !failed) toast({ text: 'Held for a check' });
+      if (sent && !failed) onSent?.();
     });
   };
 

@@ -1,10 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
-import { useEffect, useState, type MouseEvent } from 'react';
+import { useEffect, useState } from 'react';
 import type { Call } from '@/api/schema';
 import { Conversation, ticoRoomQuery } from '@/conversation';
 import { meQuery, useDirectory, type Directory } from '@/data';
 import { threadQuery } from '@/features/threads/exports';
-import { followFromSmallWindow, smallWindowLink } from '@/desktop';
+import { keepInSmallWindow } from '@/desktop';
 import { Avatar } from '@/kit/Avatar';
 import { Count } from '@/kit/Count';
 import { Empty } from '@/kit/Empty';
@@ -48,7 +48,7 @@ export function CallSide({ room, ticoBeside = false }: CallSideProps) {
   const inCall = call?.participants.filter((p) => p.in_call) ?? [];
   const small = useSmallWindow();
   return (
-    <aside className="pane win-side" aria-label="Call chat" onClickCapture={small ? keepOnCall : undefined}>
+    <aside className="pane win-side" aria-label="Call chat" onClickCapture={small ? keepInSmallWindow : undefined}>
       <div className="cw-tabs">
         <Tabs
           label="Call"
@@ -92,18 +92,6 @@ function Chat({ call, me }: { call: Call; me: string | null }) {
   if (isTico) return <Conversation id={call.thread_id} variant="tico" />;
   const to = others.length === 1 ? nameOf(others[0]!) : thread.data?.title || 'everyone';
   return <Conversation id={call.thread_id} variant="task" title={to} />;
-}
-
-/** In the desktop app's small window a link never moves the window off its call (desktop smallWindowLink). */
-function keepOnCall(e: MouseEvent<HTMLElement>) {
-  const a = e.target instanceof Element ? e.target.closest('a[href]') : null;
-  if (!a || !e.currentTarget.contains(a)) return;
-  const link = smallWindowLink(a.getAttribute('href') ?? '', location.origin);
-  // a file chip opens as it does anywhere (a picture in the viewer, anything else in a new window the app hands on)
-  if (link.kind === 'file' && a.getAttribute('target') === '_blank') return;
-  e.preventDefault();
-  e.stopPropagation();
-  void followFromSmallWindow(link);
 }
 
 /** One in the call. An agent in a call that is on can be taken out at once, with Undo (old call-window.ts cwBotToggle). */

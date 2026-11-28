@@ -22,3 +22,8 @@
 /* the small call window (/call/<id>?window=1): the call page alone, the whole window */
 .shell-callwin{height:100dvh;display:flex;background:var(--ground)}
 .shell-callwin>.pane{flex:1;min-width:0;border-radius:0;box-shadow:none}
+
+/* an agent's chat in its own window (/team/<agent>?window=1): its head, then the chat, the whole window */
+.shell-chatwin{--surface:var(--sheet);height:100dvh;display:flex;flex-direction:column;background:var(--surface)}
+.shell-chatwin>:not(.side-head){flex:1;min-height:0}
+:root[data-desktop="mac"] .shell-chatwin>.side-head{padding-left:calc(max(var(--s-4),var(--desktop-inset-left)))}

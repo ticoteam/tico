@@ -5,7 +5,7 @@
 // --desktop-inset-left and --desktop-inset-top, the room to keep clear of the macOS window buttons at the window's top
 // left corner (0px elsewhere and in full screen, where <html data-desktop-fullscreen> is set).
 import { contextBridge, ipcRenderer } from 'electron';
-import type { CallWindowState, CompanyRef, TicoDesktop, UpdateState } from './bridge';
+import type { CallWindowState, ChatWindowResult, CompanyRef, TicoDesktop, UpdateState } from './bridge';
 
 const arg = (name: string): string => {
   const prefix = `--${name}=`;
@@ -44,6 +44,9 @@ const tico: TicoDesktop = {
     setOnTop: (on) => ipcRenderer.invoke('call:on-top', on) as Promise<void>,
     onState: listen<CallWindowState>('call:state'),
     current: () => ipcRenderer.invoke('call:current') as Promise<string | null>,
+  },
+  chatWindow: {
+    open: (agent) => ipcRenderer.invoke('chat:open', agent) as Promise<ChatWindowResult>,
   },
   signingOut: () => ipcRenderer.invoke('session:signing-out') as Promise<void>,
   app: {

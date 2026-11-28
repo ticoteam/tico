@@ -297,6 +297,19 @@ dropped and counted (`web.dropped`). Minutes become hours after two days and go 
 `web` section of `GET /api/v2/system/metrics` gives, per metric and screen, `n`, `p50`, `p75`, `p95`, `p99` and
 `max_ms`.
 
+### Usage events
+
+A feature's measure can need an event the server never sees, such as a window opening. The page sends it to
+`POST /api/v2/web-events` as `{"event": ..., <its fields>}`; the events and their fields are `WEB_EVENTS` in
+`backend/flight.py`, and anything else is refused. Today an agent's chat window sends `chat_window.opened` once when it
+first loads (bringing an open one forward sends nothing) and `chat_window.sent` with the first message written in it,
+each with `surface` (`web` or `desktop`), `agent` and the window's own id. Only a person's session may send. Each is
+written at once to `flight_usage` with the person's actor, whether or not the recorder is on, and kept 90 days; one
+person sends at most 10 a minute. `flight_usage` is not one of the recorder's seven tables: no older release reads it,
+so a rollback that keeps the flight file shows no one's actor to bots, and no schema version drops it. The `usage`
+section of `GET /api/v2/system/metrics` gives the measure as counts only (people, windows opened by surface, windows a
+message was sent from, over 7 and 28 days), the same for a bot.
+
 With the recorder enabled, `Server-Timing` includes `sql` and `wait` durations alongside `auth` and `app`.
 Place GETs also include `prep`, `cards` and up to eight slowest `card-<template>` totals (repeated kinds summed; `card-page` for page pins, `card-hidden` for pins the caller can't read), capped at 300 added bytes.
 Slow metrics retain `sql_ms`, `wait_ms` and `queries`; rows recorded before the upgrade have null values.
