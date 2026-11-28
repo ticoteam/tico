@@ -503,6 +503,11 @@ def test_computers_show_which_start_through_the_old_runner_package(api):
         "Before": ("not_reported", "Not reported"),
         "Gone": ("not_reported", "Not reported"),
     }
+    # The Computers page reads the operations list: it says the same.
+    assert {
+        row["label"]: (row["update"]["starts"], row["update"]["starts_label"])
+        for row in get(api, "operations")["computers"]
+    } == starts
     # A later report without the field (the runner went back to an older release) is not reported again, not stale.
     report(api, new, "0.3.0")
     assert (

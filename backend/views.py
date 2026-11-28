@@ -3056,7 +3056,7 @@ def install_views(app, store, auth, mutate, task_view):
         who = request.state.identity
         human_only(who)
         with store.read_transaction() as c:
-            machines, fleet = [], runner_versions.load(c)
+            machines, fleet, entries = [], runner_versions.load(c), runner_versions.entries(c)
             _, assigned = providers.runtimes_needed(c, store.settings)
             default = {providers.default_runtime(providers.load(c, store.settings))} - {""}
             run_on = providers.runtimes_run_on(c, store.settings)
@@ -3239,7 +3239,9 @@ def install_views(app, store, auth, mutate, task_view):
                         "shared_keys": shared,
                         "shared_with": shared_with,
                         "bot_runtimes": sorted(run_on.get(row["id"], ())),
-                        "update": runner_versions.view(fleet.get(row["id"])),
+                        # How its runner starts, as /v2/computers says it (R-2 waits on it).
+                        "update": runner_versions.view(fleet.get(row["id"]))
+                        | runner_versions.starts(entries.get(row["id"]), value["online"]),
                         "harness_actions": harness_recent.get(row["id"]) or [],
                         "harness_choices": harness_choice.get(row["id"]) or {},
                         "cloud_machine": cloud_of.get(row["id"]),
