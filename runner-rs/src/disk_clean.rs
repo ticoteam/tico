@@ -166,10 +166,19 @@ pub trait Sessions: Send + Sync + 'static {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<(PathBuf, u64)>> + Send + 'a>>;
 }
 
-/// Bytes removing `path` would free on the volume `workspace` is on; 0 for anything on another volume.
+/// Bytes removing `path` would free on the volume `workspace` is on; 0, so it is kept, for anything on another
+/// volume, a symlink, or a tree holding a mount point or a live file (socket, pipe, device): a recursive removal
+/// would reach into the mounted volume.
 pub fn size_on(path: &Path, workspace: &Path) -> u64 {
     match (device(path), real_root(workspace).and_then(|w| device(&w))) {
-        (Some(d), Some(w)) if d == w && !is_symlink(path) => walk(path, w).bytes,
+        (Some(d), Some(w)) if d == w && !is_symlink(path) => {
+            let tree = walk(path, w);
+            if tree.mount || tree.special {
+                0
+            } else {
+                tree.bytes
+            }
+        }
         _ => 0,
     }
 }
@@ -1621,6 +1630,18 @@ mod tests {
         assert!(size_on(&root.join("ws/sessions/bot-qa/t1"), &root.join("ws")) >= 8192);
         assert_eq!(size_on(&root.join("ws/link"), &root.join("ws")), 0);
         assert_eq!(size_on(&root.join("ws/missing"), &root.join("ws")), 0);
+        // A live pipe inside (as a mount point would be) keeps the whole tree.
+        let pipe = std::ffi::CString::new(
+            root.join("ws/sessions/bot-qa/t1/node_modules.sock")
+                .to_str()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(unsafe { libc::mkfifo(pipe.as_ptr(), 0o600) }, 0);
+        assert_eq!(
+            size_on(&root.join("ws/sessions/bot-qa/t1"), &root.join("ws")),
+            0
+        );
     }
 
     #[test]
