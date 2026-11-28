@@ -70,6 +70,7 @@ PINNED_CAUGHT = {
     61,
     62,
     63,
+    64,
 }
 # Case numbers whose failing checks must run in the light PR plan.
 # Case 33 is not pinned here: its test (level 2, 121 s) was the last file under the PR plan's 7200 s budget, and three
@@ -124,6 +125,7 @@ PINNED_CAUGHT_AT_PR = {
     61,
     62,
     63,
+    64,
 }
 
 
