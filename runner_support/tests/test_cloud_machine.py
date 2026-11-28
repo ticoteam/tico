@@ -516,3 +516,238 @@ def test_each_boot_records_whether_it_came_through_the_old_runner_package(machin
     monkeypatch.setattr(cm, "load", lambda: m)
     assert cm.main(["boot"]) == 0
     assert (machine.etc / "tico" / "boot-entry").read_text() == "runner\n" and "TICO_RUNNER_SHIM" not in os.environ
+
+
+# -- the move at the runner's start (machines that have not booted since the boot unit could move) -------------------
+
+
+def entry_file(etc):
+    return etc / "tico" / "boot-entry"
+
+
+def read_only(folder):
+    """A folder no new file can be written in: a real failed write, for the move's and the record's temp files."""
+    folder.chmod(0o555)
+    if os.access(folder, os.W_OK):
+        folder.chmod(0o755)
+        pytest.skip("root writes a read-only folder anyway")
+
+
+@pytest.mark.parametrize("last_boot", ["runner\n", None])
+def test_a_runner_start_moves_the_boot_unit_and_records_that_the_next_boot_uses_runner_support(
+    machine, tmp_path, last_boot
+):
+    # A machine booted through `python -m runner.cloud_machine` (or before boots wrote a record) and never since: its
+    # runner's start moves the unit, reloads systemd and records runner_support, so it reports clear with no reboot.
+    m, fake = machine()
+    units = tmp_path / "units"
+    old_boot_unit(m, units)
+    if last_boot:
+        entry_file(machine.etc).parent.mkdir(parents=True)
+        entry_file(machine.etc).write_text(last_boot)
+    assert cm.move_unit_now(m, units) == 0
+    assert (units / cm.UNIT).read_text() == cm.unit_text(m)
+    assert fake.calls.count(["systemctl", "daemon-reload"]) == 1
+    assert entry_file(machine.etc).read_text() == "runner_support\n"
+    assert oct(entry_file(machine.etc).stat().st_mode & 0o777) == "0o644"
+
+
+@pytest.mark.parametrize("how", ["reload fails", "write fails"])
+def test_a_failed_move_at_the_runner_start_keeps_the_old_unit_and_the_old_record(machine, tmp_path, how):
+    m, fake = machine()
+    units = tmp_path / "units"
+    text = old_boot_unit(m, units)
+    entry_file(machine.etc).parent.mkdir(parents=True)
+    entry_file(machine.etc).write_text("runner\n")
+    if how == "reload fails":
+        m.run = lambda command, **kw: subprocess.CompletedProcess(command, 1, "", "")
+    else:
+        read_only(units)
+    assert cm.move_unit_now(m, units) == 1
+    units.chmod(0o755)
+    assert (units / cm.UNIT).read_text() == text
+    assert entry_file(machine.etc).read_text() == "runner\n"
+
+
+def test_a_runner_start_records_runner_support_when_the_unit_already_moved(machine, tmp_path):
+    # The boot that came through the old package moved the unit: the next boot uses runner_support, so say so now.
+    m, fake = machine()
+    units = tmp_path / "units"
+    units.mkdir()
+    (units / cm.UNIT).write_text(cm.unit_text(m))
+    entry_file(machine.etc).parent.mkdir(parents=True)
+    entry_file(machine.etc).write_text("runner\n")
+    assert cm.move_unit_now(m, units) == 0
+    assert entry_file(machine.etc).read_text() == "runner_support\n"
+    assert fake.calls.count(["systemctl", "daemon-reload"]) == 1  # systemd confirms the unit before the record
+
+
+def test_an_already_moved_unit_gets_no_record_when_systemd_does_not_reload(machine, tmp_path):
+    # A rollback whose own write failed left the new text on disk unreloaded: the next start must not call it clear.
+    m, _ = machine()
+    units = tmp_path / "units"
+    units.mkdir()
+    (units / cm.UNIT).write_text(cm.unit_text(m))
+    entry_file(machine.etc).parent.mkdir(parents=True)
+    entry_file(machine.etc).write_text("runner\n")
+    m.run = lambda command, **kw: subprocess.CompletedProcess(command, 1, "", "")
+    assert cm.move_unit_now(m, units) == 1
+    assert entry_file(machine.etc).read_text() == "runner\n"
+
+
+def test_a_failed_reload_whose_rollback_also_fails_records_nothing(machine, tmp_path):
+    m, _ = machine()
+    units = tmp_path / "units"
+    old_boot_unit(m, units)
+    entry_file(machine.etc).parent.mkdir(parents=True)
+    entry_file(machine.etc).write_text("runner\n")
+    read_only(units)  # skips under root before the move starts
+    units.chmod(0o755)
+
+    def reload_fails_and_the_folder_fills(command, **kw):
+        units.chmod(0o555)  # the unit was written; the rollback's write now fails
+        return subprocess.CompletedProcess(command, 1, "", "")
+
+    m.run = reload_fails_and_the_folder_fills
+    assert cm.move_unit_now(m, units) == 1
+    units.chmod(0o755)
+    assert (units / cm.UNIT).read_text() == cm.unit_text(m)  # the rollback could not write
+    assert entry_file(machine.etc).read_text() == "runner\n"
+
+
+def test_a_failed_record_write_puts_the_old_unit_back(machine, tmp_path):
+    m, fake = machine()
+    units = tmp_path / "units"
+    text = old_boot_unit(m, units)
+    entry_file(machine.etc).parent.mkdir(parents=True)
+    entry_file(machine.etc).write_text("runner\n")
+
+    read_only(entry_file(machine.etc).parent)
+    assert cm.move_unit_now(m, units) == 1
+    entry_file(machine.etc).parent.chmod(0o755)
+    assert (units / cm.UNIT).read_text() == text
+    assert entry_file(machine.etc).read_text() == "runner\n"
+    assert fake.calls.count(["systemctl", "daemon-reload"]) == 2  # the move, then the rollback
+
+
+@pytest.mark.parametrize(
+    "unit",
+    [
+        "[Service]\nExecStart=/bin/true\n",
+        # systemd ignores a comment: naming the module there runs nothing through it.
+        "[Service]\n# was: /py -m runner_support.cloud_machine boot\nExecStart=/bin/true\n",
+    ],
+)
+def test_an_unrecognized_boot_unit_is_left_alone_and_records_nothing(machine, tmp_path, unit):
+    m, fake = machine()
+    units = tmp_path / "units"
+    units.mkdir()
+    (units / cm.UNIT).write_text(unit)
+    assert cm.move_unit_now(m, units) == 1
+    assert not entry_file(machine.etc).exists() and fake.calls == []
+
+
+def test_a_machine_with_no_boot_unit_records_nothing(machine, tmp_path):
+    m, _ = machine()
+    assert cm.move_unit_now(m, tmp_path / "units") == 1
+    assert not entry_file(machine.etc).exists()
+
+
+def test_the_move_unit_command_runs_as_root_on_the_marked_machine(machine, monkeypatch):
+    m, _ = machine()
+    moved = []
+    monkeypatch.setattr(cm, "load", lambda: m)
+    monkeypatch.setattr(cm, "move_unit_now", lambda mm: moved.append(mm) or 0)
+    monkeypatch.setattr(cm.os, "geteuid", lambda: 1000)
+    assert cm.main(["move-unit"]) == 2 and moved == []
+    monkeypatch.setattr(cm.os, "geteuid", lambda: 0)
+    assert cm.main(["move-unit"]) == 0 and moved == [m]
+    monkeypatch.setattr(cm, "load", lambda: None)
+    assert cm.main(["move-unit"]) == 0  # not a cloud machine: nothing to do
+
+
+class Sudo:
+    def __init__(self, code=0, raises=None):
+        self.calls, self.code, self.raises = [], code, raises
+
+    def __call__(self, command, **kw):
+        self.calls.append((command, kw))
+        if self.raises:
+            raise self.raises
+        return subprocess.CompletedProcess(command, self.code, "", "systemctl daemon-reload failed\n")
+
+
+UNIT_ENV = {"TICO_SYSTEMD_UNIT": "tico-bot.service"}  # scripts/tico-computer install's unit runs the runner
+
+
+def cloud_etc(tmp_path, unit, entry):
+    etc = tmp_path / "etc"
+    (etc / "tico").mkdir(parents=True)
+    (etc / "systemd" / "system").mkdir(parents=True)
+    (etc / "tico" / "cloud-machine.json").write_text("{}")
+    (etc / "systemd" / "system" / cm.UNIT).write_text(f"[Service]\nExecStart=/py -m {unit} boot\n")
+    if entry:
+        (etc / "tico" / "boot-entry").write_text(entry)
+    return etc
+
+
+@pytest.mark.parametrize(
+    "unit, entry",
+    [
+        ("runner.cloud_machine", "runner\n"),
+        ("runner.cloud_machine", None),
+        ("runner_support.cloud_machine", "runner\n"),
+        ("runner_support.cloud_machine", None),
+    ],
+)
+def test_the_runners_start_asks_root_to_move_whatever_is_still_old(tmp_path, unit, entry):
+    etc, run, said = cloud_etc(tmp_path, unit, entry), Sudo(), []
+    cm.move_at_start(UNIT_ENV, etc=etc, run=run, python="/py", root=tmp_path, say=said.append)
+    [(command, kw)] = run.calls
+    assert command == ["sudo", "-n", "/py", "-m", "runner_support.cloud_machine", "move-unit"]
+    assert kw["cwd"] == str(tmp_path) and kw["timeout"] > 0
+
+
+def test_the_runners_start_asks_nothing_when_all_is_moved_unsupervised_or_off_a_cloud_machine(tmp_path):
+    etc, run = cloud_etc(tmp_path, "runner_support.cloud_machine", "runner_support\n"), Sudo()
+    cm.move_at_start(UNIT_ENV, etc=etc, run=run, python="/py", root=tmp_path, say=print)
+    etc = cloud_etc(tmp_path / "by-hand", "runner.cloud_machine", None)
+    cm.move_at_start({}, etc=etc, run=run, python="/py", root=tmp_path, say=print)  # started by hand or by a test
+    (etc / "tico" / "cloud-machine.json").unlink()
+    (etc / "systemd" / "system" / cm.UNIT).write_text("ExecStart=/py -m runner.cloud_machine boot\n")
+    cm.move_at_start(UNIT_ENV, etc=etc, run=run, python="/py", root=tmp_path, say=print)
+    assert run.calls == []
+
+
+@pytest.mark.parametrize(
+    "run", [Sudo(code=1), Sudo(raises=subprocess.TimeoutExpired("sudo", 60)), Sudo(raises=FileNotFoundError("sudo"))]
+)
+def test_a_failed_move_at_the_runners_start_is_said_and_the_runner_still_starts(tmp_path, run):
+    etc, said = cloud_etc(tmp_path, "runner.cloud_machine", "runner\n"), []
+    cm.move_at_start(UNIT_ENV, etc=etc, run=run, python="/py", root=tmp_path, say=said.append)  # never raises
+    assert any("boot unit" in line for line in said)
+    assert (etc / "tico" / "boot-entry").read_text() == "runner\n"
+
+
+def test_a_failed_move_is_in_the_runner_log_even_when_the_runner_execs_at_once(tmp_path):
+    # The runner unit sends both streams to its log file and __main__ then execs the Rust runner: an unflushed line is
+    # lost with the Python process.
+    etc = cloud_etc(tmp_path, "runner.cloud_machine", "runner\n")
+    log = tmp_path / "runner.log"
+    script = (
+        "import os, subprocess, sys\n"
+        "from pathlib import Path\n"
+        "from runner_support import cloud_machine as cm\n"
+        "fail = lambda c, **kw: subprocess.CompletedProcess(c, 1, '', 'sudo: a password is required')\n"
+        f"cm.move_at_start({UNIT_ENV!r}, etc=Path({str(etc)!r}), run=fail, python='/py', root=Path('.'))\n"
+        "os.execv('/bin/true', ['true'])\n"
+    )
+    with log.open("w") as out:
+        subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=Path(cm.__file__).resolve().parents[1],
+            stdout=out,
+            stderr=out,
+            timeout=60,
+        )
+    assert "could not move the boot unit" in log.read_text()

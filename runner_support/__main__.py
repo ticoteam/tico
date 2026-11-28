@@ -56,6 +56,10 @@ def main(argv=None):
             from . import release_update
 
             release_update.move_at_start()
+            # A cloud machine's boot unit too, so it reports runner_support with no reboot (cloud_machine.py).
+            from . import cloud_machine
+
+            cloud_machine.move_at_start()
         engine.exec_binary(argv)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=Path.home() / ".config/tico/runner.json")

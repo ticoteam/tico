@@ -66,7 +66,11 @@ def started_with(monkeypatch, module, *, shim_env=None):
     monkeypatch.delenv("TICO_RUNNER_SHIM", raising=False)
     for key, value in (shim_env or {}).items():
         monkeypatch.setenv(key, value)
+    from runner_support import cloud_machine
+
     monkeypatch.setattr(release_update, "move_at_start", lambda: None)
+    moved = []
+    monkeypatch.setattr(cloud_machine, "move_at_start", lambda: moved.append(True))
     monkeypatch.setattr(engine, "prepare", lambda root, env: (Path("/stand-in/tico-runner"), ""))
     seen = {}
     real = engine.exec_binary
@@ -78,6 +82,7 @@ def started_with(monkeypatch, module, *, shim_env=None):
     except SystemExit:
         pass
     assert "TICO_RUNNER_SHIM" not in os.environ  # never handed on: a process the runner starts is not "through runner/"
+    assert moved == [True]  # a cloud machine's boot unit moves at every runner start (cloud_machine.move_at_start)
     return seen
 
 
