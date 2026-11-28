@@ -188,6 +188,8 @@ def apply(c, actor, source, p, roster, now=None, *, settings=None):
     done = {"adds": 0, "updates": 0, "restores": 0, "leaves": 0}
     managers = []
     touched = []
+    updated = []
+    moved = set()
     for a in p["adds"]:
         if any(x["email"] == a["email"] for x in people):
             continue
@@ -218,13 +220,7 @@ def apply(c, actor, source, p, roster, now=None, *, settings=None):
             row[field] = new
         people[i] = P._person(row)
         Access._sync_human(c, people[i])
-        H.event(
-            c,
-            actor,
-            "directory.person_updated",
-            u["id"],
-            {"email": u["email"], "source": source, "fields": sorted(u["changes"])},
-        )
+        updated.append(u)
         done["updates"] += 1
         touched.append(u["email"])
         if "manager" in u["changes"]:
@@ -262,7 +258,17 @@ def apply(c, actor, source, p, roster, now=None, *, settings=None):
             at = people[index[at]]["reports_to"] if at in index else ""
         if at == pid:
             continue
+        if (people[index[pid]].get("reports_to") or "") != boss["id"]:
+            moved.add(pid)
         people[index[pid]] = {**people[index[pid]], "reports_to": boss["id"]}
+    # Each update's event, written after the leaves so it is newer than their records. It names "manager" only when
+    # the sync moved the person: every sync sends the directory's manager again, and an unchanged one (or one this
+    # company has marked left, so not found) is not a change Restore should keep (backend/leaving.py moved_by_hand).
+    for u in updated:
+        fields = sorted(k for k in u["changes"] if k != "manager" or u["id"] in moved)
+        H.event(
+            c, actor, "directory.person_updated", u["id"], {"email": u["email"], "source": source, "fields": fields}
+        )
     Access._save_roster(c, {**roster, "people": people})
     return done, touched
 

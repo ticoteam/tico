@@ -127,6 +127,45 @@ def test_restore_after_a_directory_sync_moves_the_reports_back(api):
     assert bot_id(api, "ops")  # the bots are still there, without Ben's plan
 
 
+def directory_sync(api, **managers):
+    """A Google sync that lists Cara and Dee (linked to Google) with the directory's manager for each (an email)."""
+    with api.app.state.store.transaction() as c:
+        roster = views.roster(c)
+        people = [{**p, "directory": "google"} if p["id"] in ("cara", "dee") else p for p in roster["people"]]
+        roster = {**roster, "people": people}
+        Access._save_roster(c, roster)
+        records = [
+            {"email": f"{pid}@acme.example", "name": pid.title(), "title": "", "manager": boss, "active": True}
+            for pid, boss in managers.items()
+        ]
+        found = D.plan(roster, records, "google", "owner@acme.example", False)
+        D.apply(c, H.TICO_ACTOR, "google", found, roster, settings=api.app.state.store.settings)
+
+
+def test_restore_after_an_unchanged_directory_sync_moves_the_reports_back(api):
+    ben_leaves_with_a_plan_and_two_reports(api)
+    directory_sync(api, cara="ben@acme.example", dee="ben@acme.example")
+    post(api, "humans/ben", {"left": True})
+    # The directory still names Ben, who is marked left here: nothing moves, and that is not a change to keep.
+    directory_sync(api, cara="ben@acme.example", dee="ben@acme.example")
+    assert manager(api, "cara") == manager(api, "dee") == "ana"
+    back = post(api, "access/humans/ben", {"left": False})["restored"]
+    assert manager(api, "cara") == manager(api, "dee") == "ben"
+    assert sorted(r["id"] for r in back["reports"]) == ["cara", "dee"]
+
+
+def test_restore_keeps_a_report_the_directory_gave_a_new_manager(api):
+    ben_leaves_with_a_plan_and_two_reports(api)
+    directory_sync(api, cara="ben@acme.example", dee="ben@acme.example")
+    post(api, "humans/ben", {"left": True})
+    # The directory now puts Dee under Cara: a real reassignment, which Restore keeps.
+    directory_sync(api, cara="ben@acme.example", dee="cara@acme.example")
+    assert manager(api, "dee") == "cara"
+    back = post(api, "access/humans/ben", {"left": False})["restored"]
+    assert manager(api, "dee") == "cara" and manager(api, "cara") == "ben"
+    assert [r["id"] for r in back["reports"]] == ["cara"]
+
+
 def test_restore_leaves_a_report_moved_away_and_back_by_hand(api):
     ben_leaves_with_a_plan_and_two_reports(api)
     post(api, "humans/ben", {"left": True})
