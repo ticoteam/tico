@@ -20,7 +20,7 @@ import type {
   TagDetail,
   TagList,
 } from '@/api/schema';
-import { keys, needsYouRead, queryClient, quietRoot, write } from '@/data';
+import { keys, needsYouRead, queryClient, quietRoot, withoutSending, write } from '@/data';
 import { toast } from '@/kit/Toast';
 import { newId } from '@/lib';
 
@@ -1046,7 +1046,8 @@ export const flowQuery = queryOptions({
       items.push(flowItemOf(it, t));
       order.push(t.id);
     }
-    return { count: items.length + requests.length, items, requests, task_ids: [...named], waits, approvals: [...approvals.values()], asks, order, sorting, sortingUntil, itemIds: needs.map((it) => it.id) };
+    // an answer still being sent stays out of a read that lands before its reply
+    return withoutSending<Flow>({ count: items.length + requests.length, items, requests, task_ids: [...named], waits, approvals: [...approvals.values()], asks, order, sorting, sortingUntil, itemIds: needs.map((it) => it.id) });
   },
 });
 

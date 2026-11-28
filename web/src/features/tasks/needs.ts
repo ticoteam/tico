@@ -1,8 +1,8 @@
 import { useQuery, type QueryKey } from '@tanstack/react-query';
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
-import { queryClient } from '@/data';
+import { keepOut, letIn, queryClient } from '@/data';
 import { hearPlaces, heldRow, holdRow, keptOrder, type ListRow } from '@/lib';
-import { flowCountQuery, flowQuery, type Flow } from './queries';
+import { flowCountQuery, flowQuery, type Flow, type FlowItem } from './queries';
 
 /* One dot, one meaning: a task waits on the person when Needs you names it (GET /api/v2/needs-you), never by its turn
    alone. Every place that marks a task with the Dot reads this one set: a board's cards and column counts, a pipeline's
@@ -144,14 +144,110 @@ const READS: readonly QueryKey[] = [flowQuery.queryKey, flowCountQuery.queryKey]
 /** Stops what Needs you was reading (the revert is synchronous), so no read begun before lands over what follows. */
 const stop = () => READS.forEach((queryKey) => void queryClient.cancelQueries({ queryKey, exact: true }));
 
-/** An answer to `wait` on `task` given (null: all of it): it leaves Needs you's reads now (needsYouWithout). Returns
-    the undo for an answer never taken: each read as it was, unless a newer read landed since. */
-export function leaveNeedsYou(task: string, wait: string | null = null): () => void {
+/** Which answer a read keeps out while it is sent (data keepOut). */
+const sendingKey = (task: string, wait: string | null) => `${task} ${wait ?? ''}`;
+
+/** In `ids`, `id` put back before the first id that followed it in `was` and is still there (else last). */
+const placedIn = <T,>(ids: readonly T[], id: T, was: readonly T[]): T[] => {
+  const next = was.slice(was.indexOf(id) + 1).find((x) => ids.includes(x));
+  const j = next === undefined ? -1 : ids.indexOf(next);
+  return j < 0 ? [...ids, id] : [...ids.slice(0, j), id, ...ids.slice(j)];
+};
+
+/** `was`'s entries that `gave` names put back into `cur` where `cur` lacks them (by `same`), each before the first entry
+    of `cur` that followed it in `was` or is new since (so ahead of what came in meanwhile); what `cur` has stays. */
+const putBack = <T,>(cur: readonly T[], was: readonly T[], gave: (x: T) => boolean, same: (x: T, y: T) => boolean): T[] => {
+  let out = [...cur];
+  for (const x of was.filter(gave)) {
+    if (out.some((y) => same(x, y))) continue;
+    const after = was.slice(was.indexOf(x) + 1);
+    const j = out.findIndex((y) => after.some((z) => same(z, y)) || !was.some((z) => same(z, y)));
+    out = j < 0 ? [...out, x] : [...out.slice(0, j), x, ...out.slice(j)];
+  }
+  return out;
+};
+
+/** `row` as `before` had it, holding only what `task` waits on again (`left`, what the task waits on after the refusal;
+    null, not read: what was refused, by `gave`): its ❓ that still wait, and the approval it stands for when that
+    still waits, else the next one that does, else none. So a ❓ answered elsewhere while the refused answer was sent
+    does not come back with the row. */
+const restored = (task: string, row: FlowItem, before: Flow, left: readonly string[] | null, gave: (r: string) => boolean): FlowItem => {
+  const waits = (r: string) => (left ? left.includes(r) : gave(r));
+  const stands = !!row.ask?.requirement && waits(row.ask.requirement);
+  const other = stands ? undefined : before.approvals?.find((a) => a.id === task && waits(a.ask.requirement));
+  const base = stands ? row : (other ?? { ...row, ask: undefined, about: undefined });
+  const questions = row.questions?.filter((q) => waits(q.id));
+  // a ❓'s line goes with it
+  const dropped = row.questions?.some((q) => !waits(q.id) && q.line === base.reason);
+  return { ...base, questions: questions?.length ? questions : undefined, ...(dropped && { reason: undefined }) };
+};
+
+/** The answer to `wait` on `task` (null: all of it) that was refused, as `before` had it, put back into `cur` (a list
+    read since): its ask in what the task waits on, its approval, its Agent bar line, its ❓ on the row, the row itself
+    when `cur` lists it no more, and its Dot (`task_ids`) when only a grouped row named the task. Everything `cur` read
+    since stays (a newer ask on the task, the task's newer data); the row goes back before the first row that followed
+    it then and is still listed. A row put back whole holds only what the task waits on again: an ask answered
+    elsewhere meanwhile (a ❓ another session answered) stays gone from it. */
+export function needsYouWith(task: string, wait: string | null, before: Flow, cur: Flow): Flow {
+  const gave = (r: string) => wait === null || r === wait;
+  const was = latestOf(before);
+  const row = before.items.find((w) => w.id === task);
+  const at = cur.items.findIndex((w) => w.id === task);
+  const waits = cur.waits && before.waits?.[task] && {
+    ...cur.waits,
+    [task]: putBack(cur.waits[task] ?? [], before.waits[task], gave, (x, y) => x === y),
+  };
+  let items = cur.items;
+  let order = cur.order;
+  if (row && at < 0) {
+    const next = was.slice(was.indexOf(task) + 1).find((id) => cur.items.some((w) => w.id === id) || cur.order?.includes(id));
+    const i = next === undefined ? -1 : cur.items.findIndex((w) => w.id === next);
+    const back = restored(task, row, before, waits?.[task] ?? null, gave);
+    items = i < 0 ? [...cur.items, back] : [...cur.items.slice(0, i), back, ...cur.items.slice(i)];
+    if (cur.order && !cur.order.includes(task)) order = placedIn(cur.order, task, was);
+  } else if (row) {
+    const now = cur.items[at]!;
+    // the row stood for the refused approval: it does again, with what was read since
+    const stood = !!row.ask?.requirement && gave(row.ask.requirement);
+    const asked = row.questions?.filter((q) => gave(q.id)) ?? [];
+    const questions = asked.length ? putBack(now.questions ?? [], row.questions ?? [], (q) => gave(q.id), (x, y) => x.id === y.id) : now.questions;
+    // the ❓'s line, taken from the row with it
+    const reason = now.reason ?? (asked.some((q) => q.line === row.reason) ? row.reason : undefined);
+    const back = { ...now, ...(stood && { ask: row.ask, about: row.about }), ...(questions && { questions }), ...(reason !== undefined && { reason }) };
+    items = cur.items.map((w, i) => (i === at ? back : w));
+  }
+  return {
+    ...cur,
+    items,
+    count: items === cur.items ? cur.count : items.length + (cur.requests?.length ?? 0),
+    ...(order && { order }),
+    ...(cur.task_ids && !cur.task_ids.includes(task) && (row || before.task_ids?.includes(task)) && { task_ids: placedIn(cur.task_ids, task, before.task_ids ?? was) }),
+    ...(waits && { waits }),
+    ...(cur.approvals && { approvals: putBack(cur.approvals, before.approvals ?? [], (a) => a.id === task && gave(a.ask.requirement), (x, y) => x.id === y.id && x.ask.requirement === y.ask.requirement) }),
+    ...(cur.asks && { asks: putBack(cur.asks, before.asks ?? [], (a) => a.task === task && gave(a.wait), (x, y) => x.task === y.task && x.wait === y.wait) }),
+  };
+}
+
+/** An answer to `wait` on `task` given (null: all of it; `how`: Approve or Request changes, which its card and row show
+    while it is sent): it leaves Needs you's reads now (needsYouWithout), and stays out of every list read that lands
+    until its reply is heard (settleNeedsYou, or the undo), worked out on each read, so an ask that read adds stays.
+    Returns the undo for an answer never taken: each read as it was, or, where a newer read landed since, the task put
+    back into it (needsYouWith), so it is listed again even when the read after the refusal fails. */
+export function leaveNeedsYou(task: string, wait: string | null = null, how?: 'ok' | 'no'): () => void {
   stop();
   const change = needsYouWithout(task, wait);
-  const was = READS.map((key) => queryClient.getQueryData(key));
-  const now = READS.map((key) => queryClient.setQueryData(key, (cur: unknown) => (cur === undefined ? cur : change(cur))));
-  return () => READS.forEach((key, i) => queryClient.getQueryData(key) === now[i] && queryClient.setQueryData(key, was[i]));
+  const key = sendingKey(task, wait);
+  keepOut(key, { task, how, change: (cur) => (isNeedsYouRead(cur) && !('wakeAt' in (cur as object)) ? needsYouWithout(task, wait, cur as Flow)(cur) : change(cur)) });
+  const was = READS.map((k) => queryClient.getQueryData(k));
+  const now = READS.map((k) => queryClient.setQueryData(k, (cur: unknown) => (cur === undefined ? cur : change(cur))));
+  return () => {
+    letIn(key);
+    READS.forEach((k, i) => {
+      const cur = queryClient.getQueryData(k);
+      if (cur === now[i]) queryClient.setQueryData(k, was[i]);
+      else if (i === 0 && cur && was[0] && isNeedsYouRead(was[0])) queryClient.setQueryData(k, needsYouWith(task, wait, was[0] as Flow, cur as Flow));
+    });
+  };
 }
 
 /** The answer's reply heard: what was read meanwhile is stopped, what the server took (`gone`) stays out of the list
@@ -159,6 +255,7 @@ export function leaveNeedsYou(task: string, wait: string | null = null): () => v
     took out). The only reads of Needs you after an answer. */
 export function settleNeedsYou(gone?: { task: string; wait: string | null }): void {
   stop();
+  if (gone) letIn(sendingKey(gone.task, gone.wait));
   if (gone) queryClient.setQueryData(flowQuery.queryKey, (cur) => (cur === undefined ? cur : (needsYouWithout(gone.task, gone.wait)(cur) as Flow)));
   for (const queryKey of READS) void queryClient.invalidateQueries({ queryKey, exact: true, refetchType: gone ? 'active' : 'all' });
 }

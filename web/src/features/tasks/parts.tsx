@@ -23,6 +23,13 @@ export function markOf(t: Pick<TaskItem, 'id' | 'stuck'>, needs: ReadonlySet<str
   return t.stuck ? <StoppedMark /> : null;
 }
 
+/** An Approve or Request changes on the task being sent, where its row or card would say what it waits on. */
+export const Answering = ({ how }: { how: 'ok' | 'no' }) => (
+  <span className="answering" role="status">
+    {how === 'ok' ? 'Approving…' : 'Sending back…'}
+  </span>
+);
+
 /** The ladder brought the task to a person: stopped. */
 export const StoppedMark = () => (
   <span className="stuck" title="Stopped">

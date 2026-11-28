@@ -104,6 +104,9 @@ const askerOf = (t: TaskData, r: TaskRequirement) => r.asked_by ?? t.owner_id;
 const pageKey = (r: TaskRequirement) =>
   r.approval?.page_version ?? r.page?.page_version ?? `${r.approval?.file_id ?? r.page?.file_id ?? ''}@${r.approval?.version ?? r.page?.version ?? ''}`;
 
+/** Why an answer to a task that moved while it was open was not taken. */
+const CHANGED = 'Not approved: the task changed while you had it open. Check it again, then approve.';
+
 interface AnswerProps {
   t: TaskData;
   r: TaskRequirement;
@@ -161,8 +164,11 @@ export function Answer({ t, r, onAsking, hold }: AnswerProps) {
     const res = await approve.run({ task: t.id, requirement: r.requirement_id, shown: preview?.hash ?? null, ...(drawn && { key: drawn }) });
     hold?.(res.ok ? null : r);
     if (!res.ok) {
-      // It moved under the person: read it again, say Changed, and wait for a new press.
-      if (res.error?.startsWith('task_changed') && here.current) return void shown.refetch();
+      // It moved under the person: say it was not taken, read it again, and wait for a new press.
+      if (res.error?.startsWith('task_changed') && here.current) {
+        void shown.refetch();
+        return refused(res, CHANGED);
+      }
       return refused(res);
     }
     // The answer to take back: a plain answer names it; an OK bound to what was shown leaves it on the task's request.

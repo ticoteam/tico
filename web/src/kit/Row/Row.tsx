@@ -26,7 +26,8 @@ export function Row({ className, selected, unread, target, title, href, children
   const cls = ['row', className, selected && 'is-selected', unread && 'is-unread'].filter(Boolean).join(' ');
   if (href === undefined) {
     return (
-      <div className={cls} title={title} data-target={target}>
+      // a row with nothing to open may still say it is busy (an answer on its task being sent)
+      <div className={cls} title={title} data-target={target} aria-busy={rest['aria-busy']} aria-disabled={rest['aria-disabled']}>
         {children}
       </div>
     );

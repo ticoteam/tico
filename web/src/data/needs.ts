@@ -1,3 +1,4 @@
+import { useSyncExternalStore } from 'react';
 import { api } from '@/api/client';
 import type { NeedsYou, NeedsYouItem } from '@/api/schema';
 import { queryClient } from './query-client';
@@ -40,4 +41,51 @@ export async function needsYouRead(signal?: AbortSignal): Promise<{ items: Needs
 export function asksGone(ids: readonly string[]): void {
   if (!ids.length) return;
   queryClient.setQueryData<{ asks?: { id: string }[] }>(['flow'], (f) => (f?.asks?.some((a) => ids.includes(a.id)) ? { ...f, asks: f.asks.filter((a) => !ids.includes(a.id)) } : f));
+}
+
+/** An answer being sent: its task, what it says (`ok` Approve, `no` Request changes; none for a reply), and the change
+    that takes it out of a Needs you read (features/tasks needsYouWithout, worked out on each read it is given). */
+export interface Sending {
+  task: string;
+  how?: 'ok' | 'no';
+  change: (read: unknown) => unknown;
+}
+
+/** Answers being sent, by `<task> <wait>`. A read that lands before an answer's reply still lists it, so each is applied
+    to every read until the reply is heard: the row never comes back as if nothing was pressed. */
+const sending = new Map<string, Sending>();
+const heard = new Set<() => void>();
+const told = () => heard.forEach((h) => h());
+
+// The list dropped (a sign-out, a new team, the cache cleared): nothing read later is the list an answer was given on.
+queryClient.getQueryCache().subscribe((e) => {
+  if (e.type === 'removed' && e.query.queryKey.length === 1 && e.query.queryKey[0] === 'flow' && sending.size) {
+    sending.clear();
+    told();
+  }
+});
+
+/** Keeps the answer on every Needs you read until it is let go (the reply heard, taken or refused). */
+export function keepOut(key: string, answer: Sending): void {
+  sending.set(key, answer);
+  told();
+}
+
+/** The answer's reply heard: the reads after it are the server's own. */
+export function letIn(key: string): void {
+  if (sending.delete(key)) told();
+}
+
+/** A Needs you read with every answer still being sent taken out of it. */
+export const withoutSending = <T>(read: T): T => [...sending.values()].reduce<unknown>((r, a) => a.change(r), read) as T;
+
+const hear = (h: () => void) => {
+  heard.add(h);
+  return () => void heard.delete(h);
+};
+
+/** What an answer being sent on `task` says (`ok`, `no`), else null: its card and row show it is being sent. */
+export function useSendingAnswer(task: string): 'ok' | 'no' | null {
+  const how = () => [...sending.values()].find((a) => a.task === task && a.how)?.how ?? null;
+  return useSyncExternalStore(hear, how, how);
 }

@@ -13,10 +13,10 @@ import { forgetPlaces, hearListClicks, openTasksOver } from '@/lib';
 import { dragTo } from '@/test/drag';
 import type * as VirtualListModule from '@/kit/VirtualList';
 import { ArchivedSections } from './Archived';
-import { leaveNeedsYou, needsYouWithout, useNeedsYou } from './needs';
+import { leaveNeedsYou, needsYouWith, needsYouWithout, settleNeedsYou, useNeedsYou } from './needs';
 import { NeedsYouPage } from './NeedsYouPage';
 import { NeedsYouViews } from './NeedsYouViews';
-import { flowCountQuery, flowListParams, flowListQuery, flowQuery, listParams, loadMoreOf, pipelinesQuery, pipelineTasksQuery, refreshLoaded, STATUS_BACKSTOP_MS, useFlowCountRefresh, type Pipeline, type TaskItem } from './queries';
+import { flowCountQuery, flowListParams, flowListQuery, flowQuery, listParams, loadMoreOf, pipelinesQuery, pipelineTasksQuery, refreshLoaded, STATUS_BACKSTOP_MS, useFlowCountRefresh, type Flow, type Pipeline, type TaskItem } from './queries';
 import { TasksPage } from './TasksPage';
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
@@ -228,6 +228,26 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
     fireEvent.click(screen.getByTitle('Fix the export'));
     await waitFor(() => expect(router.state.location.search).toEqual({ task: 7, list: 'eng' }));
     expect(router.state.location.pathname).toBe('/tasks/eng');
+  });
+
+  it.each([
+    ['board', 'ok', 'Approving…'],
+    ['list', 'no', 'Sending back…'],
+  ] as const)('on the %s, a task whose answer is being sent says so and cannot be opened until its reply @approvals', async (view, how, says) => {
+    serve(() => ({ status: 200, body: {} }));
+    seed([task('a1', 7, 'Fix the export', 's1')]);
+    show(<TasksPage pipeline="eng" search={{ view }} />, `/tasks/eng?view=${view}`);
+    const shown = () => screen.getByTitle('Fix the export');
+    await screen.findByTitle('Fix the export');
+    act(() => void leaveNeedsYou('a1', 'r1', how));
+    await waitFor(() => expect(within(shown()).getByText(says)).toBeTruthy());
+    // on the list, beside the title, not in the mark's one-icon track (hidden on a phone)
+    if (view === 'list') expect(within(shown()).getByText(says).closest('.row-pills')).toBeTruthy();
+    expect(shown().closest('a')).toBeNull();
+    expect(shown().closest('[aria-busy="true"]')).toBeTruthy();
+    act(() => settleNeedsYou({ task: 'a1', wait: 'r1' }));
+    await waitFor(() => expect(shown().closest('a')?.getAttribute('href')).toBe('/tasks/eng/7'));
+    expect(within(shown()).queryByText(says)).toBeNull();
   });
 
   it('a list row opens its task under the pipeline', async () => {
@@ -973,6 +993,154 @@ describe('Needs you @s5 @s112', () => {
     leaveNeedsYou('t1', 'qmark:t1');
     expect(queryClient.getQueryData<{ count: number }>(flowQuery.queryKey)?.count).toBe(1);
     expect(queryClient.getQueryData<{ count: number }>(flowCountQuery.queryKey)?.count).toBe(1);
+  });
+
+  it('two answers in flight each keep their own row out of a list read that lands meanwhile, until their own reply @approvals', async () => {
+    const need = (id: string, n: number) => ({ kind: 'ask', id: `v:${id}`, task_id: id, requirement_id: `r-${id}`, line: 'Send it?', since: ago(5),
+      task: { id, number: n, title: `Task ${n}`, pipeline_id: 'eng' }, ask: { kind: 'ok', requirement_id: `r-${id}`, asked_by: 'bot:so' } });
+    // what the server lists: all three until it takes an answer
+    let listed = ['t1', 't2', 't3'];
+    serve((url) => (url.includes('/needs-you?limit=') ? { status: 200, body: { items: listed.map((id, n) => need(id, n + 1)), next: null } } : { status: 200, body: { items: [] } }));
+    const ids = () => queryClient.getQueryData<{ task_ids: string[] }>(flowQuery.queryKey)?.task_ids;
+    const readAgain = () => queryClient.refetchQueries({ queryKey: flowQuery.queryKey, exact: true });
+    await queryClient.fetchQuery(flowQuery);
+    const undoFirst = leaveNeedsYou('t1', 'r-t1');
+    leaveNeedsYou('t2', 'r-t2');
+    expect(ids()).toEqual(['t3']);
+    await readAgain(); // the five-minute read, begun after both presses, lands before either reply
+    expect(ids()).toEqual(['t3']);
+    // the first refused: its row is the server's again; the second is still being sent, and stays out
+    undoFirst();
+    settleNeedsYou();
+    await readAgain();
+    expect(ids()).toEqual(['t1', 't3']);
+    // the second taken: the read after its reply is the server's own
+    listed = ['t1', 't3'];
+    settleNeedsYou({ task: 't2', wait: 'r-t2' });
+    await readAgain();
+    expect(ids()).toEqual(['t1', 't3']);
+  });
+
+  it('an answer being sent takes out only what it answers: a read that adds another ask on the task keeps its row @approvals', async () => {
+    const need = (id: string, rid: string) => ({ kind: 'ask', id: `v:${rid}`, task_id: id, requirement_id: rid, line: 'Send it?', since: ago(5),
+      task: { id, number: 1, title: 'Task 1', pipeline_id: 'eng' }, ask: { kind: 'ok', requirement_id: rid, asked_by: 'bot:so' } });
+    let listed = [need('t1', 'r1')];
+    serve((url) => (url.includes('/needs-you?limit=') ? { status: 200, body: { items: listed, next: null } } : { status: 200, body: { items: [] } }));
+    const read = () => queryClient.getQueryData<{ task_ids: string[]; waits: Record<string, string[]> }>(flowQuery.queryKey);
+    await queryClient.fetchQuery(flowQuery);
+    leaveNeedsYou('t1', 'r1'); // its only ask then: the row goes
+    expect(read()?.task_ids).toEqual([]);
+    listed = [need('t1', 'r1'), need('t1', 'r2')]; // a second ask on it arrives while the first answer is sent
+    await queryClient.refetchQueries({ queryKey: flowQuery.queryKey, exact: true });
+    expect(read()?.task_ids).toEqual(['t1']);
+    expect(read()?.waits.t1).toEqual(['r2']);
+  });
+
+  describe('another ask on the task arriving while an answer is sent @approvals', () => {
+    const need = (id: string, rid: string) => ({ kind: 'ask', id: `v:${rid}`, task_id: id, requirement_id: rid, line: `Send ${rid}?`, since: ago(5),
+      task: { id, number: 1, title: 'Task 1', pipeline_id: 'eng' }, ask: { kind: 'ok', requirement_id: rid, asked_by: 'bot:so' } });
+    let listed: ReturnType<typeof need>[] = [];
+    let down = false;
+    const serveList = () =>
+      serve((url) => (!url.includes('/needs-you?limit=') ? { status: 200, body: { items: [] } } : down ? { status: 400, body: { error: 'down' } } : { status: 200, body: { items: listed, next: null } }));
+    const readAgain = () => act(() => queryClient.refetchQueries({ queryKey: flowQuery.queryKey, exact: true }));
+    beforeEach(() => {
+      listed = [need('t1', 'r1')];
+      down = false;
+    });
+
+    it.each([
+      ['Approve', 'ok', 'Approving…'],
+      ['Request changes', 'no', 'Sending back…'],
+    ] as const)('%s: the row kept listed by the new ask says so and opens nothing until the reply', async (_, how, says) => {
+      serveList();
+      show(<NeedsYouPage />, '/needs-you');
+      const row = () => document.querySelector('.flow-row .task');
+      await waitFor(() => expect(row()?.closest('a')).toBeTruthy());
+      act(() => void leaveNeedsYou('t1', 'r1', how));
+      listed = [need('t1', 'r1'), need('t1', 'r2')];
+      await readAgain();
+      await waitFor(() => expect(within(row() as HTMLElement).getByText(says)).toBeTruthy());
+      expect(row()?.closest('a')).toBeNull();
+      expect(row()?.getAttribute('aria-busy')).toBe('true');
+      act(() => settleNeedsYou({ task: 't1', wait: 'r1' }));
+      await waitFor(() => expect(row()?.closest('a')).toBeTruthy());
+      expect(within(row() as HTMLElement).queryByText(says)).toBeNull();
+    });
+
+    it.each([['ok'], ['no']] as const)('%s refused, the read after it failing: the refused ask comes back and the new one stays', async (how) => {
+      serveList();
+      const read = () => queryClient.getQueryData<Flow>(flowQuery.queryKey);
+      await queryClient.fetchQuery(flowQuery);
+      const undo = leaveNeedsYou('t1', 'r1', how);
+      listed = [need('t1', 'r1'), need('t1', 'r2')];
+      await readAgain();
+      expect(read()?.waits?.t1).toEqual(['r2']);
+      down = true;
+      act(() => {
+        undo();
+        settleNeedsYou();
+      });
+      await waitFor(() => expect(queryClient.getQueryState(flowQuery.queryKey)?.fetchStatus).toBe('idle'));
+      expect(read()?.waits?.t1).toEqual(['r1', 'r2']);
+      expect(read()?.task_ids).toEqual(['t1']);
+      expect(read()?.approvals?.filter((a) => a.id === 't1').map((a) => a.ask.requirement)).toEqual(['r1', 'r2']);
+      // the row stands for the refused ask again, as it did before the press
+      expect(read()?.items.find((w) => w.id === 't1')?.ask?.requirement).toBe('r1');
+    });
+
+    it.each([['ok'], ['no']] as const)('%s refused after a ❓ on the task was answered elsewhere, the read after it failing: the row comes back without the ❓', async (how) => {
+      const question = { kind: 'question', id: 'qmark:q1', task_id: 't1', from_id: 'bot:so', line: 'Cc the landlord too?', choices: ['Yes'], since: ago(4),
+        task: { id: 't1', number: 1, title: 'Task 1', pipeline_id: 'eng' } } as unknown as ReturnType<typeof need>;
+      listed = [need('t1', 'r1'), question];
+      serveList();
+      const read = () => queryClient.getQueryData<Flow>(flowQuery.queryKey);
+      await queryClient.fetchQuery(flowQuery);
+      expect(read()?.items.find((w) => w.id === 't1')?.questions?.map((q) => q.id)).toEqual(['qmark:q1']);
+      const undo = leaveNeedsYou('t1', 'r1', how);
+      listed = [need('t1', 'r1')]; // another session answers the ❓; the approval being sent keeps the task out
+      await readAgain();
+      expect(read()?.items.some((w) => w.id === 't1')).toBe(false);
+      down = true;
+      act(() => {
+        undo();
+        settleNeedsYou();
+      });
+      await waitFor(() => expect(queryClient.getQueryState(flowQuery.queryKey)?.fetchStatus).toBe('idle'));
+      expect(read()?.waits?.t1).toEqual(['r1']);
+      const back = read()?.items.find((w) => w.id === 't1');
+      expect(back?.ask?.requirement).toBe('r1');
+      expect(back?.questions ?? []).toEqual([]); // the answered ❓ stays gone: no card for it under the row
+      expect(back?.reason).not.toBe('Cc the landlord too?');
+      expect(read()?.count).toBe(1);
+    });
+  });
+
+  it('refused after the list moved on, for a task only a grouped row named: its Dot comes back @approvals', () => {
+    const before = { count: 1, items: [], requests: [], task_ids: ['t1', 't3'], waits: { t1: ['r1'], t3: ['r3'] }, approvals: [], asks: [] } as unknown as Flow;
+    const cur = { count: 1, items: [], requests: [], task_ids: ['t3', 't4'], waits: { t3: ['r3'], t4: ['r4'] }, approvals: [], asks: [] } as unknown as Flow;
+    const back = needsYouWith('t1', 'r1', before, cur);
+    expect(back.task_ids).toEqual(['t1', 't3', 't4']);
+    expect(back.waits).toEqual({ t1: ['r1'], t3: ['r3'], t4: ['r4'] });
+    expect(back.count).toBe(1); // a grouped task is no row of its own
+  });
+
+  it('refused after the list moved on and dropped its row: the row put back holds only what still waits @approvals', () => {
+    const row = { id: 't1', number: 1, title: 'Task 1', reason: 'Which day?', ask: { kind: 'ok', by: 'bot:so', shows: [], requirement: 'r1' },
+      questions: [{ id: 'qmark:q1', line: 'Which day?', choices: [], by: 'bot:so' }] };
+    const r2 = { id: 't1', number: 1, title: 'Task 1', reason: 'Send r2?', ask: { kind: 'ok', by: 'bot:so', shows: [], requirement: 'r2' } };
+    const before = { count: 1, items: [row], requests: [], task_ids: ['t1'], order: ['t1'], waits: { t1: ['r1', 'qmark:q1', 'r2'] }, approvals: [row, r2], asks: [] } as unknown as Flow;
+    const cur = { count: 0, items: [], requests: [], task_ids: [], order: [], waits: {}, approvals: [], asks: [] } as unknown as Flow;
+    // the ❓ was refused (the approvals were answered elsewhere): the row is the ❓ alone
+    const q = needsYouWith('t1', 'qmark:q1', before, cur).items[0];
+    expect(q?.ask).toBeUndefined();
+    expect(q?.questions?.map((x) => x.id)).toEqual(['qmark:q1']);
+    // r2 was refused: the row stands for r2, with no ❓ and not the ❓'s line
+    const back = needsYouWith('t1', 'r2', before, cur);
+    expect(back.items[0]?.ask?.requirement).toBe('r2');
+    expect(back.items[0]?.questions).toBeUndefined();
+    expect(back.items[0]?.reason).toBe('Send r2?');
+    expect(back.waits?.t1).toEqual(['r2']);
   });
 
   it('a long Needs you, opened past its cap, measures each row it draws, so a ❓ card never overlaps the rows below', async () => {

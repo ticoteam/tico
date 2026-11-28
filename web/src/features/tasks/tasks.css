@@ -46,6 +46,9 @@ html[data-layout="cards"] .tk-item>.tk-more{display:none}
 html[data-layout="cards"] .tasks-page.pk-list .filter-row[data-phone]{display:flex}
 .card.is-selected{--surface:var(--selected);background:var(--selected)}
 .row-mark>.check,.card-marks>.check{min-height:0}
+/* an answer on the task being sent: dimmed, and nothing to press until its reply */
+.card[aria-busy=true],.task[aria-busy=true]{opacity:.55;cursor:default}
+.answering{color:var(--muted);white-space:nowrap}
 
 /* a stage head's "+" and "⋯" show under a pointer (parts.css .ib-ghost), and stay while their menu is open */
 .stage-head .ib-ghost[aria-expanded="true"]{opacity:1}

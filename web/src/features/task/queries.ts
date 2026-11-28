@@ -256,7 +256,7 @@ export function answerAsk(id: string, rid: string, value: 'ok' | 'no', note?: st
   });
   // Needs you takes this ask out at once: the task, its Dot and the counts too once it was the task's last there; once
   // answered, it is read again (settleNeedsYou)
-  const undo = leaveNeedsYou(id, rid);
+  const undo = leaveNeedsYou(id, rid, value);
   const answer = write<TaskResult>({
     key: shownIn(id),
     optimistic: patch(id, answered),
