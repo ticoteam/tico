@@ -1250,9 +1250,48 @@ def test_a_computer_reads_the_status_only_of_tasks_it_ran_that_bots_session_for(
     response = post(api, path, asked, 'runner-test')
     assert response.status_code == 200, response.text
     # Another bot's lane, another computer's turn and an unknown task are left out, not refused.
-    assert response.json() == {'sessions': [{'bot': 'cmo', 'task': tid, 'status': 'done'}]}
+    assert [(r['bot'], r['task'], r['status']) for r in response.json()['sessions']] == [('cmo', tid, 'done')]
     assert post(api, path, asked, 'bot-test').status_code == 403
     assert post(api, path, {'sessions': [{'bot': 'cmo', 'task': tid}] * 501}, 'runner-test').status_code == 422
+
+
+def test_a_session_task_says_its_owner_and_when_that_bots_last_turn_in_its_lane_ended(prepared):
+    """A low disk takes idle session worktrees of open tasks away, other bots' tasks first (runner-rs/src/disk_clean.rs):
+    the computer reads each task's owner and when the bot's last turn in that task's lane on this computer ended."""
+    api, tid, other = prepared
+    with api.app_state.store.transaction() as c:
+        job = c.execute("SELECT job_id FROM attempts WHERE id='a1'").fetchone()[0]
+        for aid, bot, lane, created, finished in (
+            ('a2', 'cmo', 'task:' + tid, '2026-11-20T09:00:00+00:00', '2026-11-20T10:00:00+00:00'),
+            ('a3', 'cmo', 'task:' + tid, '2026-11-25T07:00:00+00:00', '2026-11-25T08:00:00+00:00'),
+            # Another bot's turn on the same task is not this bot's worktree's use.
+            ('a4', 'cpo', 'task:' + tid, '2026-11-26T07:00:00+00:00', '2026-11-26T08:00:00+00:00'),
+            # Still running: when it started.
+            ('a5', 'cmo', 'task:' + other, '2026-11-26T05:00:00+00:00', None),
+        ):
+            c.execute(
+                "INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,"
+                "finished_at,lane) VALUES(?,?,?,'r1',1,?,?,?,?,?,?)",
+                (
+                    aid,
+                    job,
+                    bot,
+                    'synthetic-' + aid,
+                    'running' if finished is None else 'completed',
+                    H.now(),
+                    created,
+                    finished,
+                    lane,
+                ),
+            )
+    asked = {'sessions': [{'bot': 'cmo', 'task': tid}, {'bot': 'cmo', 'task': other}]}
+    response = post(api, 'runners/me/session-tasks', asked, 'runner-test')
+    assert response.status_code == 200, response.text
+    got = {r['task']: (r['owner'], r['last_turn_at']) for r in response.json()['sessions']}
+    assert got == {
+        tid: ('bot:cmo', '2026-11-25T08:00:00+00:00'),
+        other: ('bot:cpo', '2026-11-26T05:00:00+00:00'),
+    }
 
 
 def test_readiness_skips_a_private_worktree_it_cannot_read_and_keeps_the_ones_its_bot_can(prepared):

@@ -1062,6 +1062,152 @@ pub async fn remove(main: &Path, path: &Path, task: &str, turn: &Env) -> bool {
     gone.unwrap_or(false)
 }
 
+/// A session worktree of an open task whose bot has had no turn in its lane for this long may go on a low disk: the
+/// next turn on the task makes it again (`ensure`).
+pub const IDLE_EVICT_S: f64 = 24.0 * 3600.0;
+
+/// The session worktrees of open tasks a low disk may take away, as (bot, task) in the order they go: those whose
+/// bot's last turn in the task's lane here ended `IDLE_EVICT_S` or more ago and none of whose turns runs, other bots'
+/// tasks before the bot's own, then the longest idle first. Read from the server's `session-tasks` rows; a row
+/// without an owner or a last turn (an older server) never goes, nor does a private meeting's.
+pub fn idle_order(
+    rows: &[Value],
+    now: f64,
+    running: &HashSet<(String, String)>,
+) -> Vec<(String, String)> {
+    let mut idle: Vec<(bool, f64, String, String)> = vec![];
+    for row in rows {
+        let (bot, task) = (text_of(&row["bot"]), text_of(&row["task"]));
+        let (owner, last) = (
+            text_of(&row["owner"]),
+            crate::util::parse_iso(&text_of(&row["last_turn_at"])),
+        );
+        if task.starts_with(PRIVATE)
+            || CLOSED.contains(&text_of(&row["status"]).as_str())
+            || owner.is_empty()
+            || last <= 0.0
+            || now - last < IDLE_EVICT_S
+            || running.contains(&(bot.clone(), lane_of_folder(&task)))
+        {
+            continue;
+        }
+        idle.push((owner == format!("bot:{bot}"), last, bot, task));
+    }
+    idle.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    idle.into_iter()
+        .map(|(_, _, bot, task)| (bot, task))
+        .collect()
+}
+
+/// Take an open task's idle session worktree and branch away on a low disk, only when nothing in it is unsaved: no
+/// change, no commit no remote has, and no ignored file outside build folders (a draft a turn kept out of Git). The
+/// next turn on the task checks it out again. True when gone.
+pub async fn remove_idle(main: &Path, path: &Path, task: &str, turn: &Env) -> bool {
+    if !path.exists() || crate::repo_safety::outside_installation(path).is_err() {
+        return false;
+    }
+    let env = crate::safegit::environment(turn);
+    let ignored = g(
+        path,
+        &env,
+        &[
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+            "-z",
+        ],
+        60,
+    )
+    .await;
+    if !ignored.is_ok_and(|o| {
+        o.ok()
+            && o.stdout
+                .split('\0')
+                .all(|n| n.is_empty() || crate::worktrees::build_file(n))
+    }) {
+        return false;
+    }
+    // `remove` checks HEAD, then deletes the task's branch: a branch moved off HEAD (a detached worktree) may hold
+    // commits no remote has, and those would lose their only name. A missing branch keeps the worktree too.
+    let branch = format!("refs/heads/{BRANCH}{task}");
+    let ahead = g(
+        main,
+        &env,
+        &["rev-list", "--count", &branch, "--not", "--remotes"],
+        15,
+    )
+    .await;
+    if !ahead.is_ok_and(|o| o.ok() && o.stdout.trim() == "0") {
+        return false;
+    }
+    remove(main, path, task, turn).await
+}
+
+/// The `session-tasks` request bodies that ask about every found session folder, at most 500 (the route's limit) each.
+#[allow(clippy::type_complexity)]
+fn session_queries(found: &[((String, String), PathBuf)]) -> Vec<Value> {
+    found
+        .chunks(500)
+        .map(|chunk| {
+            let sessions: Vec<Value> = chunk
+                .iter()
+                .map(|((b, t), _)| json!({"bot": b, "task": t}))
+                .collect();
+            json!({"sessions": sessions})
+        })
+        .collect()
+}
+
+/// Whether a turn of `bot` could be using its session worktree for `task`: one in the task's lane, or one in any
+/// lane whose claim is the task.
+fn session_in_use(lanes: &Lanes, bot: &str, task: &str) -> bool {
+    let lane = lane_of_folder(task);
+    lanes
+        .attempts
+        .lock()
+        .unwrap()
+        .values()
+        .any(|t| t.bot == bot && (t.lane == lane || t.on(task)))
+}
+
+/// One idle session worktree's removal on a low disk (`Runner::evict_idle_sessions`): with its lane taken if free,
+/// nothing waiting to upload from it, and its checkout's git lock held, checked again for a turn after that lock
+/// (a claim may arrive while another Git step holds it). The bytes it freed, or None when it stays.
+#[allow(clippy::too_many_arguments)]
+pub async fn evict_one(
+    lanes: &Lanes,
+    state: &crate::state::State,
+    main: &Path,
+    path: &Path,
+    bot: &str,
+    task: &str,
+    workspace: &Path,
+    env: &Env,
+) -> Option<u64> {
+    let _lane = lanes
+        .lane(bot, &lane_of_folder(task))
+        .try_lock_owned()
+        .ok()?;
+    if session_in_use(lanes, bot, task) || crate::files_publish::pending_under(state, path) {
+        return None;
+    }
+    if crate::repo_safety::outside_installation(main).is_err() {
+        return None;
+    }
+    // Only space on the workspace volume counts; a worktree elsewhere frees none of it and stays.
+    let bytes = crate::disk_clean::size_on(path, workspace);
+    if bytes == 0 {
+        return None;
+    }
+    let _git = lanes.git_lock(main).lock_owned().await;
+    if session_in_use(lanes, bot, task) || crate::files_publish::pending_under(state, path) {
+        return None;
+    }
+    remove_idle(main, path, task, env).await.then_some(bytes)
+}
+
 /// Take an ended private meeting's worktree and branch away, whatever is in it: nothing there is ever kept. True when gone.
 pub async fn remove_private(main: &Path, path: &Path, name: &str, turn: &Env) -> bool {
     if crate::repo_safety::outside_installation(main).is_err()
@@ -2510,15 +2656,13 @@ impl Runner {
         }
     }
 
-    /// Take away the session checkouts of finished tasks that no turn's end will (service.py sweep_sessions).
-    pub async fn sweep_sessions(&self, assignments: &[Value]) {
-        {
-            let mut after = self.lanes.swept_after.lock().unwrap();
-            if after.is_some_and(|a| Instant::now() < a) {
-                return;
-            }
-            *after = Some(Instant::now() + Duration::from_secs(SESSION_SWEEP_S));
-        }
+    /// Each bot this computer hosts (with its config) and the session worktrees found for it, as ((bot, folder),
+    /// path), sorted.
+    #[allow(clippy::type_complexity)]
+    fn session_folders(
+        &self,
+        assignments: &[Value],
+    ) -> (HashMap<String, Value>, Vec<((String, String), PathBuf)>) {
         let mine = self.config.runner_id();
         let configs: HashMap<String, Value> = assignments
             .iter()
@@ -2528,7 +2672,7 @@ impl Runner {
             .map(|e| (text_of(&e["bot"]), e["config"].clone()))
             .collect();
         if configs.is_empty() {
-            return;
+            return (configs, vec![]);
         }
         let root = self.config.projects_dir().join("sessions");
         let mut found: Vec<((String, String), PathBuf)> = vec![];
@@ -2559,6 +2703,89 @@ impl Runner {
                 }
             }
         }
+        (configs, found)
+    }
+
+    /// On a low disk (disk_clean.rs), take away session worktrees of open tasks whose bot has been idle in them a day
+    /// (`idle_order`) and that hold nothing unsaved (`remove_idle`), other bots' tasks first, until `enough`. Each
+    /// lane is taken only if free, and its checkout's git lock is held while the worktree goes. Each one removed,
+    /// with the bytes it freed on the workspace volume.
+    pub async fn evict_idle_sessions(
+        &self,
+        enough: &(dyn Fn() -> bool + Send + Sync),
+    ) -> Vec<(PathBuf, u64)> {
+        let mut gone = vec![];
+        let (configs, found) = self.session_folders(&self.assignments_seen());
+        let found: Vec<_> = found
+            .into_iter()
+            .filter(|((_, task), _)| !task.starts_with(PRIVATE))
+            .collect();
+        if found.is_empty() || enough() {
+            return gone;
+        }
+        // Every folder is asked about, 500 at a time (the route's limit), before any is ordered: other bots' tasks go
+        // first across all of them.
+        let mut rows: Vec<Value> = vec![];
+        for body in session_queries(&found) {
+            let Ok(reply) = self
+                .client
+                .post("runners/me/session-tasks", &body, None)
+                .await
+            else {
+                return gone;
+            };
+            rows.extend(reply["sessions"].as_array().cloned().unwrap_or_default());
+        }
+        let running: HashSet<(String, String)> = self
+            .lanes
+            .attempts
+            .lock()
+            .unwrap()
+            .values()
+            .map(|t| (t.bot.clone(), t.lane.clone()))
+            .collect();
+        let workspace = self.config.projects_dir();
+        let env = crate::env::process_environment();
+        for (bot, task) in idle_order(&rows, crate::util::epoch_s(), &running) {
+            if enough() {
+                break;
+            }
+            let Some((_, path)) = found.iter().find(|((b, t), _)| *b == bot && *t == task) else {
+                continue;
+            };
+            let main = local_path(&self.config, &bot, &configs[&bot]);
+            if let Some(bytes) = evict_one(
+                &self.lanes,
+                &self.state,
+                &main,
+                path,
+                &bot,
+                &task,
+                &workspace,
+                &env,
+            )
+            .await
+            {
+                log(&format!(
+                    "Tico runner: {bot}: disk low; removed the worktree of open task {task}, idle a day with nothing unsaved ({:.1} MB); its next turn makes it again",
+                    bytes as f64 / 1e6
+                ));
+                gone.push((path.clone(), bytes));
+            }
+        }
+        gone
+    }
+
+    /// Take away the session checkouts of finished tasks that no turn's end will (service.py sweep_sessions).
+    pub async fn sweep_sessions(&self, assignments: &[Value]) {
+        {
+            let mut after = self.lanes.swept_after.lock().unwrap();
+            if after.is_some_and(|a| Instant::now() < a) {
+                return;
+            }
+            *after = Some(Instant::now() + Duration::from_secs(SESSION_SWEEP_S));
+        }
+        let (configs, found) = self.session_folders(assignments);
         if found.is_empty() {
             return;
         }
@@ -2631,9 +2858,110 @@ impl Runner {
     }
 }
 
+impl crate::disk_clean::Sessions for Runner {
+    fn evict_idle<'a>(
+        &'a self,
+        enough: &'a (dyn Fn() -> bool + Send + Sync),
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<(PathBuf, u64)>> + Send + 'a>> {
+        Box::pin(self.evict_idle_sessions(enough))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_low_disk_asks_about_every_session_folder_not_only_the_first_500() {
+        let found: Vec<((String, String), PathBuf)> = (0..1201)
+            .map(|i| {
+                (
+                    ("qa".to_string(), format!("t{i:04}")),
+                    PathBuf::from(format!("/s/t{i:04}")),
+                )
+            })
+            .collect();
+        let bodies = session_queries(&found);
+        let sizes: Vec<usize> = bodies
+            .iter()
+            .map(|b| b["sessions"].as_array().unwrap().len())
+            .collect();
+        assert_eq!(sizes, vec![500, 500, 201]);
+        assert_eq!(
+            bodies[2]["sessions"][200],
+            json!({"bot": "qa", "task": "t1200"})
+        );
+    }
+
+    #[test]
+    fn a_low_disk_takes_open_tasks_worktrees_idle_a_day_other_bots_tasks_first_longest_idle_first()
+    {
+        let now = crate::util::parse_iso("2026-11-27T12:00:00+00:00");
+        let row = |bot: &str, task: &str, status: &str, owner: &str, last: &str| json!({"bot": bot, "task": task, "status": status, "owner": owner, "last_turn_at": last});
+        let rows = vec![
+            row(
+                "qa",
+                "own-old",
+                "open",
+                "bot:qa",
+                "2026-11-20T12:00:00+00:00",
+            ),
+            row(
+                "qa",
+                "dev-recent",
+                "open",
+                "bot:dev",
+                "2026-11-26T12:00:01+00:00",
+            ),
+            row(
+                "qa",
+                "dev-a-day",
+                "open",
+                "bot:dev",
+                "2026-11-26T12:00:00+00:00",
+            ),
+            row(
+                "qa",
+                "pm-old",
+                "open",
+                "bot:pm",
+                "2026-11-22T12:00:00+00:00",
+            ),
+            row("qa", "own-day", "snoozed", "bot:qa", "2026-11-25T12:00:00Z"),
+            // A finished task's worktree is the ordinary sweep's, not this one's.
+            row(
+                "qa",
+                "done-old",
+                "done",
+                "bot:dev",
+                "2026-11-01T12:00:00+00:00",
+            ),
+            // A turn running in its lane keeps it.
+            row(
+                "qa",
+                "running",
+                "open",
+                "bot:dev",
+                "2026-11-01T12:00:00+00:00",
+            ),
+            // An older server says neither the owner nor the last turn: kept.
+            json!({"bot": "qa", "task": "older-server", "status": "open"}),
+            row("qa", "no-owner", "open", "", "2026-11-01T12:00:00+00:00"),
+            row(
+                "qa",
+                "private-abc",
+                "open",
+                "bot:dev",
+                "2026-11-01T12:00:00+00:00",
+            ),
+        ];
+        let running = HashSet::from([("qa".to_string(), "task:running".to_string())]);
+        let got: Vec<String> = idle_order(&rows, now, &running)
+            .into_iter()
+            .map(|(_, task)| task)
+            .collect();
+        assert_eq!(got, vec!["pm-old", "dev-a-day", "own-old", "own-day"]);
+    }
 
     #[test]
     fn a_runners_sweep_removes_only_the_copies_it_recorded_and_never_follows_a_link() {

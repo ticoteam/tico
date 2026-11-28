@@ -93,13 +93,20 @@ anyone. It removes only what nothing can still need, in this order, and stops on
 4. `git worktree prune` in Tico's own base clones under `repos/`, one at a time and only while no fetch holds that
    clone. It never runs `git gc`: repacking a large clone takes longer than the computer's Git time limit, leaves
    partial packs when stopped, and holds the clone while other bots' worktree steps wait.
+5. Session worktrees (`sessions/bot-<slug>/<task>`, [Sessions](sessions.md)) of open tasks whose bot has had no turn
+   in that task's lane on this computer for 24 hours, other bots' tasks first, then the longest idle. One goes only
+   when no turn of its bot is in its lane or on its task (checked again once its checkout's Git lock is held),
+   nothing in it is a mount point (a same-volume bind mount included) or a live socket, pipe or device, and every folder in it could be read, no file in it waits to upload (an upload queue
+   that cannot be read counts as waiting), and Git shows no change, no commit that is on no remote on HEAD or on its
+   `tico-session/<task>` branch, and no ignored file outside build folders; its branch goes with it. The next turn on
+   the task checks it out again. A server that does not say a task's owner and last turn keeps them all.
 
-It never touches an open task's folder, package caches in the home folder, a git checkout itself, a bot's repository,
+It never touches an open task's folder under `tasks/`, package caches in the home folder, a git checkout itself, a bot's repository,
 credentials, the runner's state or configuration, or Docker images and volumes. It never follows a symlink, never
 removes anything on another volume or under a mount point, and never cleans a folder inside the Tico install. Each
 removal is logged with its kind and size; only space freed on the workspace volume is counted. The computer's
-readiness report carries the last clean-up (`disk_cleanup`: when, free space before and after, bytes per kind, and
-whether the disk is still low), and Health's disk warning names what it freed. What is left is for the disk to grow
+readiness report carries the last clean-up (`disk_cleanup`: when, free space before and after, count and bytes per
+kind, `idle_session_worktree` for step 5, and whether the disk is still low), and Health's disk warning names what it freed. What is left is for the disk to grow
 (a cloud machine Tico hosts grows its own) or for a person. Agent Ops never deletes files by hand: it reads Health and
 asks a person only about what is outside this list.
 

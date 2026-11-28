@@ -680,7 +680,7 @@ impl Runner {
 
     /// Readiness and the heartbeat. `full` re-reads this computer's bots from the server; without it the last
     /// answer stands and the heartbeat goes only when `forced`, changed, or HEARTBEAT_LIVE_S has passed.
-    pub async fn maintain(&self, full: bool, forced: bool) -> Result<(), ApiError> {
+    pub async fn maintain(self: &Arc<Self>, full: bool, forced: bool) -> Result<(), ApiError> {
         // First, so a panic later in this pass (or one that keeps recurring here) is still sent.
         crate::panics::report(&self.client).await;
         let repository_rows = if full {
@@ -820,6 +820,7 @@ impl Runner {
                 &self.client,
                 self.lanes.clone(),
                 self.worktrees.clone(),
+                Some(self.clone()),
             );
         }
         if let Some(cleanup) = self.disk_clean.report() {
@@ -1811,7 +1812,11 @@ mod tests {
         std::fs::write(&path, json!({"url": url, "token": "t", "runner_id": "r1", "projects_dir": dir.join("projects")}).to_string()).unwrap();
         let config = Config::load(&path).unwrap();
         let client = Client::new(&config.url(), &config.token(), 5, 0).unwrap();
-        let runner = Runner::new(config, client, State::open(&dir.join("state")).unwrap());
+        let runner = Arc::new(Runner::new(
+            config,
+            client,
+            State::open(&dir.join("state")).unwrap(),
+        ));
         crate::panics::note_for_test("src/drive.rs", 4242);
         // The rest of the pass finds no server: only what it sent first matters here.
         let _ = tokio::time::timeout(
