@@ -231,11 +231,20 @@ def test_a_question_behind_more_late_checks_than_one_read_takes_is_still_in_the_
 @pytest.fixture
 def held(ruled, monkeypatch):
     """The late checks' drain running on its own thread with every comment's call kept in the judge until `let_go` is
-    set (each one in the judge releases `in_judge`); a ❓'s call answers at once and sets `asked`."""
+    set (each one in the judge releases `in_judge`); a ❓'s call answers at once and sets `asked`. While a test holds
+    `reads`, the drain reads nothing from the queue (a read under way finishes first), so writes made meanwhile reach
+    it together."""
     api, judge = ruled
     color_rule(api, if_broken="warn")
     task = task_for_ops(api)
     monkeypatch.setattr(org_rule_check, "kick_late", lambda store, primary: None)
+    reads, read = threading.Lock(), org_rule_check._late_read
+
+    def gated_read(store):
+        with reads:
+            return read(store)
+
+    monkeypatch.setattr(org_rule_check, "_late_read", gated_read)
     asked, let_go, in_judge = threading.Event(), threading.Event(), threading.Semaphore(0)
     ended_before = []  # how many checks had ended (a comment's call times out after its deadline) when the ❓'s came
     answer = judge.__call__
@@ -253,7 +262,14 @@ def held(ruled, monkeypatch):
     drain = threading.Thread(target=checked_after, args=(api,), daemon=True)
     try:
         yield SimpleNamespace(
-            api=api, task=task, asked=asked, let_go=let_go, drain=drain, in_judge=in_judge, ended_before=ended_before
+            api=api,
+            task=task,
+            asked=asked,
+            let_go=let_go,
+            drain=drain,
+            in_judge=in_judge,
+            ended_before=ended_before,
+            reads=reads,
         )
     finally:
         let_go.set()
@@ -291,12 +307,16 @@ def test_a_question_past_its_deadline_behind_busy_lanes_is_recorded_unchecked_wi
     for _ in range(max(1, K._late_width(store) - 1)):
         assert held.in_judge.acquire(timeout=10), "the comments' checks reach the judge"
     late = "Which of the two launch note drafts goes out first?"
-    assert question(api, task, late).status_code == 200
-    with store.transaction() as c:
-        c.execute(
-            "UPDATE org_rule_late SET created_at=? WHERE output LIKE ?",
-            (K.H.shift(K.H.now(), seconds=-(K.LATE_QUESTION_BUSY_SECONDS + 1)), f"%{late}%"),
-        )
+    # The ❓ is saved and its queue row backdated in two writes; the drain must not read it between them (it would
+    # then start the ❓'s call on the lane kept for ❓s), so it reads nothing until both are done.
+    with held.reads:
+        assert question(api, task, late).status_code == 200
+        with store.transaction() as c:
+            backdated = c.execute(
+                "UPDATE org_rule_late SET created_at=? WHERE output LIKE ?",
+                (K.H.shift(K.H.now(), seconds=-(K.LATE_QUESTION_BUSY_SECONDS + 1)), f"%{late}%"),
+            ).rowcount
+        assert backdated == 1, "the ❓'s check is queued, not yet run"
     [unchecked] = wait_for(
         lambda: [e for e in events(api, "rules.unchecked") if e["operation"] == "question"], "the ❓ recorded unchecked"
     )
