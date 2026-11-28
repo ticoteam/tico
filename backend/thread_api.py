@@ -1250,7 +1250,11 @@ def install(app, store, auth, mutate, rule_check):
         )
 
         def work(c):
-            threads._own_say(c, *threads._actor_of(viewer), message_id)
+            own = threads._own_say(c, *threads._actor_of(viewer), message_id)
+            if body.text in (own.get("body"), org_rule_check.unwarned(own.get("body") or "")):
+                # Unchanged words (a warned message's own, without its warning line) are no edit: nothing is checked,
+                # saved or asked again, and the message stays as it is.
+                return _pages_as_read(c, auth, who, _thread_message(own))
             gate = org_rule_check.apply(
                 c,
                 rc,

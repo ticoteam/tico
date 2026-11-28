@@ -1,5 +1,6 @@
 -- A Warn rule's break of a bot's write (backend/rule_breaks.py): one row per rule, linked to the message it was on when
 -- there is one, and the answer a person gave it ("Yes, block" is `block`, "Don't block" is `pass`), saved on the rule.
+-- `retired`: 1 once its message was edited (answered, it stays on the rule; its id still says who reads its words).
 -- `bot_told`: after a "Yes, block", 1 when the bot was told, 0 when it could not be (it lost the private task).
 CREATE TABLE IF NOT EXISTS org_rule_breaks(
   id TEXT PRIMARY KEY,
@@ -16,7 +17,8 @@ CREATE TABLE IF NOT EXISTS org_rule_breaks(
   answered_by TEXT,
   answered_at TEXT,
   note TEXT,
-  bot_told INTEGER
+  bot_told INTEGER,
+  retired INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS org_rule_breaks_rule ON org_rule_breaks(rule_id, created_at);
 CREATE INDEX IF NOT EXISTS org_rule_breaks_message ON org_rule_breaks(message_id) WHERE message_id <> '';

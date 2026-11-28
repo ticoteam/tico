@@ -8,9 +8,13 @@ and the answer is saved on the rule. The stored setting stays `warn`; its label 
   The write's route links the rows to the message it saved (`link`), or to its task (`link_task`, an ask for an OK has
   no message of its own); a mail or a Slack post keeps its rows on the rule alone, answered from the Rules page.
 - Edited (`retire`, from threads.edit_message): a message's unanswered breaks go, off it and off the rule; an answered
-  one stays on the rule and leaves the message. The edit is checked, and asked about, on its own.
-- Read: a break's first line, note and where it was show only to a reader who may read that message (or task) now.
-  Anyone else who may list the rule's breaks sees the answer and the date, and the break still counts in the tally.
+  one stays on the rule and leaves the message (`retired`), still read by that message's readers only. The edit is
+  checked, and asked about, on its own. An unchanged edit is no edit: nothing is checked or saved.
+- Never posted (`unposted`): a reply the turn's completion did not post (already sent, refused, a full queue) keeps no
+  break, so no first line is kept without the message whose readers it belongs to.
+- Read: a break's first line, note and where it was show only to a reader who may read that message now, as the chat
+  reader checks it (the chat's members, then the message's own task and privacy), else its chat and task. Anyone
+  else who may list the rule's breaks sees the answer and the date, and the break still counts in the tally.
 - Answered (`answer`): by a person it went to, or by an Admin or an editor of the rule (`org_rules.may_manage`), never
   a bot. One answer per break: a second is refused with who gave the first.
   - "Don't block" (`pass`): saved; the message stays and the bot is not told.
@@ -135,23 +139,40 @@ def drop(c: Any, gate: Row | None) -> None:
         )
 
 
+def unposted(c: Any, gate: Row | None) -> None:
+    """A gate's breaks for a reply that was never posted (no message linked): they go, unasked."""
+    ids: list[str] = list(gate.get("breaks") or []) if gate else []
+    if ids:
+        c.execute(
+            "DELETE FROM org_rule_breaks WHERE answer IS NULL AND message_id='' AND id IN (SELECT value FROM json_each(?))",
+            (json.dumps(ids),),
+        )
+
+
 def retire(c: Any, message: str) -> None:
     """An edited message's breaks: unanswered ones go, off it and off the rule; an answered one stays on the rule (its
-    tally) and leaves the message. The edit's own breaks are linked after this, by the edit's route."""
+    tally) and leaves the message (`retired`): it keeps the message's id, so only that message's readers read its
+    words. The edit's own breaks are linked after this, by the edit's route."""
     if not message:
         return
-    c.execute("DELETE FROM org_rule_breaks WHERE message_id=? AND answer IS NULL", (message,))
-    c.execute("UPDATE org_rule_breaks SET message_id='' WHERE message_id=?", (message,))
+    c.execute("DELETE FROM org_rule_breaks WHERE message_id=? AND answer IS NULL AND retired=0", (message,))
+    c.execute("UPDATE org_rule_breaks SET retired=1 WHERE message_id=? AND retired=0", (message,))
 
 
-def readable(c: Any, who: Any, row: Row) -> bool:
-    """Whether `who` may read the write a break is about, now: its message, else its task. A break on neither (a mail,
+def readable(c: Any, auth: Any, who: Any, row: Row) -> bool:
+    """Whether `who` may read the write a break is about, now, as the chat reader checks it: its message (the chat's
+    members first, then the message's task and privacy), else its chat and its task. A break on none of them (a mail,
     a Slack post) is the rule's own, read by whoever may list the rule's breaks."""
     from . import task_privacy as _task_privacy
+    from . import threads as _threads
 
     P: Any = _task_privacy
+    T: Any = _threads
+    v: Any = T.viewer(auth, who)
     if row.get("message_id"):
-        return bool(P.message_readable(c, P.actor(who), {"id": row["message_id"]}))
+        return bool(T.readable(c, v, str(row["message_id"])))
+    if row.get("conversation_id") and not T.readable(c, v, str(row["conversation_id"])):
+        return False
     if row.get("task_id"):
         task = H.task(c, row["task_id"])
         return bool(task) and bool(P.task_readable(c, who, task))
@@ -172,7 +193,7 @@ def _row(c: Any, break_id: str) -> Row:
 def _asked(c: Any, row: Row) -> set[str]:
     """The people it went to, and the person its ❓ waits on (given to someone else since, they answer it)."""
     people: set[str] = set(json.loads(row.get("recipients") or "[]"))
-    if row.get("message_id"):
+    if row.get("message_id") and not row.get("retired"):
         people |= {
             r[0] for r in c.execute("SELECT person_id FROM question_marks WHERE message_id=?", (row["message_id"],))
         }
@@ -183,7 +204,7 @@ def may_answer(c: Any, auth: Any, who: Any, row: Row, ctx: Any = None) -> bool:
     if getattr(who, "role", "") == "bot":
         return False
     if getattr(who, "actor", "") in _asked(c, row):
-        return readable(c, who, row)  # a person who lost the message since does not answer it
+        return readable(c, auth, who, row)  # a person who lost the message since does not answer it
     if auth is None or row.get("rule_who") is None:
         return False
     from . import org_rules as _org_rules
@@ -200,7 +221,7 @@ def _name(c: Any, actor: object) -> str:
 def view(c: Any, auth: Any, who: Any, row: Row, ctx: Any = None, shown: bool | None = None) -> Row:
     """One break as its reader reads it. Its first line, note and where it was only for a reader of that write now
     (`shown`: the caller already knows, as the timeline does for the messages it shows)."""
-    seen = readable(c, who, row) if shown is None else shown
+    seen = readable(c, auth, who, row) if shown is None else shown
     undoable = (
         on()
         and row.get("answered_by") == getattr(who, "actor", None)
@@ -288,7 +309,7 @@ def _block(c: Any, who: Any, row: Row) -> None:
     """The message leaves its person's Needs you, and its bot is woken where it wrote, with the rule and the note. A bot
     that can no longer read the private task is not told, by no other way either (a chat message or a notice would
     carry the task's words out of it): the break records that it was not told."""
-    if row.get("message_id"):
+    if row.get("message_id") and not row.get("retired"):  # an edited message's ❓ is about its new words
         cleared = c.execute(
             "UPDATE question_marks SET cleared_at=?, cleared_reason='rule_block', cleared_by_id=? "
             "WHERE message_id=? AND cleared_at IS NULL",
@@ -342,7 +363,7 @@ def for_messages(c: Any, auth: Any, who: Any, message_ids: list[str]) -> dict[st
     rows: list[Any] = c.execute(
         "SELECT b.*, r.text AS rule_text, r.who AS rule_who FROM org_rule_breaks b "
         "LEFT JOIN org_rules r ON r.id=b.rule_id "
-        "WHERE b.message_id IN (SELECT value FROM json_each(?))"
+        "WHERE b.retired=0 AND b.message_id IN (SELECT value FROM json_each(?))"
         + ("" if on() else " AND b.answer='block'")
         + " ORDER BY b.created_at, b.rowid",
         (json.dumps(ids),),

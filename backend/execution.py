@@ -8311,6 +8311,12 @@ class Execution:
                                     **({"task": task["id"]} if task else {}),
                                 },
                             )
+                    if rule_gate and rule_gate.get("breaks"):
+                        from . import rule_breaks
+
+                        # A reply not posted (already sent, refused, a full queue) keeps no break: its first line
+                        # would outlive the only message whose readers may read it.
+                        rule_breaks.unposted(c, rule_gate)
             # A reply that opens with ❓ was meant as a question, but typed words mark nothing: kept on the run or
             # posted plain, nobody's Needs you shows it. Its bot is woken once to ask with a real ❓.
             if task and not held:

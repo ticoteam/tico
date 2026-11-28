@@ -365,7 +365,7 @@ def test_an_answered_break_stays_on_the_rule_but_leaves_an_edited_message(ruled)
     assert answer(api, first["id"], "pass").status_code == 200
     edit_message(api, posted["id"], PLAIN)
     [kept] = breaks(api)
-    assert (kept["id"], kept["answer"], kept["message_id"]) == (first["id"], "pass", "")
+    assert (kept["id"], kept["answer"], kept["message_id"], kept["retired"]) == (first["id"], "pass", posted["id"], 1)
     assert get(api, f"rules/{made['id']}/breaks")["tally"] == {"breaks": 1, "block": 0, "pass": 1, "open": 0}
 
 
@@ -460,3 +460,59 @@ def test_a_post_naming_its_task_as_a_list_saves_the_break_on_that_task(ruled):
     assert r.status_code == 200, r.text
     [b] = breaks(api)
     assert (b["message_id"], b["task_id"]) == (r.json()["id"], task["id"])
+
+
+def test_a_rule_reader_outside_a_direct_chat_sees_the_answer_but_not_its_words(ruled):
+    api, _ = ruled
+    made = color_rule(api, if_broken="warn")
+    ask_direct(api, to="ana")  # Ops and Ana's own chat: Ben, a bot administrator, is not in it
+    view = get(api, f"rules/{made['id']}/breaks", token="ben-test")
+    [b] = view["breaks"]
+    assert (b["first_line"], b["note"], b["message_id"], b["conversation_id"]) == ("", None, None, None)
+    assert view["tally"]["breaks"] == 1, "still counted"
+    [own] = get(api, f"rules/{made['id']}/breaks")["breaks"]
+    assert own["first_line"] == COLORED, "Ana, in the chat, reads it"
+
+
+def test_an_answered_break_of_an_edited_direct_message_still_hides_its_words_from_outside_the_chat(ruled):
+    api, _ = ruled
+    made = color_rule(api, if_broken="warn")
+    asked = ask_direct(api, to="ana")
+    [first] = breaks(api)
+    assert answer(api, first["id"], "pass", note="Fine between us").status_code == 200
+    edit_message(api, asked["id"], PLAIN)
+    [kept] = breaks(api)
+    assert (kept["id"], kept["answer"], kept["retired"]) == (first["id"], "pass", 1)
+    view = get(api, f"rules/{made['id']}/breaks", token="ben-test")
+    [b] = view["breaks"]
+    assert (b["first_line"], b["note"], b["conversation_id"]) == ("", None, None)
+    assert view["tally"] == {"breaks": 1, "block": 0, "pass": 1, "open": 0}
+    rows = get(api, f"threads/{asked['conversation_id']}/timeline?flat=1")["messages"]
+    assert [m.get("rule_breaks") for m in rows if m["id"] == asked["id"]] == [None], "it left the edited message"
+
+
+def test_an_end_of_turn_reply_that_is_never_posted_keeps_no_break(ruled, monkeypatch):
+    from backend.tests.helpers.api import post as api_post, setup_attempt
+
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    r, _, attempt = setup_attempt(api)
+    api_post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t"}, r["token"])
+    monkeypatch.setattr(H, "unless_queue_full", lambda c, write: (None, True))  # the bot's held queue is full
+    api_post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {"outcome": "completed", "text": "Acme's favorite color is teal.", "last_seq": 0},
+        token=r["token"],
+    )
+    assert breaks(api) == []
+
+
+def test_an_unchanged_edit_asks_nothing_again(ruled):
+    api, _ = ruled
+    made = color_rule(api, if_broken="warn")
+    posted = post_in(api, task_chat(api, task_for_ops(api)), COLORED)
+    [first] = breaks(api)
+    edit_message(api, posted["id"], COLORED)
+    assert [b["id"] for b in breaks(api)] == [first["id"]]
+    assert get(api, f"rules/{made['id']}/breaks")["tally"]["breaks"] == 1
