@@ -1070,6 +1070,10 @@ def lesson_problems(text, rule_ids, exists):
     ids = {row["id"] for row in rows}
     if not rows:
         return [f"{LESSONS}: no lesson rows found"]
+    counts = collections.Counter(row["id"] for row in rows)
+    for lesson_id, count in counts.items():
+        if count > 1:
+            problems.append(f"{LESSONS} {lesson_id} appears {count} times; give each lesson its own id")
     for row in rows:
         where = f"{LESSONS} {row['id']}"
         incidents = split_incidents(row["incidents"])
