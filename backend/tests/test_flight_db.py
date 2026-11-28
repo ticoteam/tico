@@ -43,9 +43,11 @@ def hub_flight_rows(store):
 
 
 def make_old_hub_tables(c):
-    """What a server before the flight file (and before the drop migration) had in its own database."""
+    """What a server before the flight file (and before the drop migration) had in its own database: never
+    flight_usage, which only the flight file has."""
     for statement in flight.SCHEMA:
-        c.execute(statement)
+        if statement not in flight.USAGE_SCHEMA:
+            c.execute(statement)
 
 
 def flight_rows(db_path):
