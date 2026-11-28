@@ -904,6 +904,35 @@ describe('Settings › People: joining, left and adds @s1073', () => {
     expect(sent).toEqual([]);
   });
 
+  it('reopened, Remove shows nothing from the last list and stays off until the fresh one loads', async () => {
+    const before = { ...NOTHING, plans: [{ id: 's1', name: 'Company Max', kind: 'Claude', bots: [bot('builder', 'Builder')] }], bots: [bot('builder', 'Builder')] };
+    let calls = 0;
+    let answer: (r: Reply) => void = () => {};
+    serve((url) => {
+      if (url === '/api/v2/access') return ok(FULL);
+      if (url !== '/api/v2/humans/p2/leaving') return undefined;
+      calls += 1;
+      return calls === 1 ? ok(before) : new Promise<Reply>((done) => (answer = done));
+    });
+    show(<People open="p2" />, '/settings/people');
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+    let dlg = await screen.findByRole('alertdialog', { name: 'Remove Ben Sample?' });
+    await within(dlg).findByRole('button', { name: "Remove, and stop 1 bot's model" });
+    fireEvent.click(within(dlg).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+    dlg = await screen.findByRole('alertdialog', { name: 'Remove Ben Sample?' });
+    await waitFor(() => expect(calls).toBe(2));
+    // The plan was disconnected since: the old list must not stand in for the new one.
+    expect(within(dlg).queryByTestId('leaving')).toBeNull();
+    const press = within(dlg).getByRole('button', { name: 'Remove' }) as HTMLButtonElement;
+    expect(press.disabled).toBe(true);
+    answer(ok(NOTHING));
+    await waitFor(() => expect((within(dlg).getByRole('button', { name: 'Remove' }) as HTMLButtonElement).disabled).toBe(false));
+    expect(within(dlg).queryByTestId('leaving')).toBeNull();
+    expect(sent).toEqual([]);
+  });
+
   it('Restore says which plan went and which bots to set to it again', async () => {
     const restored = {
       name: 'Cal Former',

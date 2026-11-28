@@ -159,11 +159,25 @@ def moved_by_hand(c: Any, rid: str, after: int) -> bool:
     return False
 
 
+def where_left(c: Any, rid: str, to: str, after: int) -> list[str]:
+    """The managers removals since the event at rowid `after` may have left `rid` with, who that removal moved to `to`:
+    `to`, then, if `to` has left since and their removal moved `rid` on, that manager, and so on up the chain. (If `to`
+    is back since, their restore moved `rid` back to them.)"""
+    chain: list[str] = []
+    while to not in chain:
+        chain.append(to)
+        found = last_record(c, to) if to else None
+        if not found or found[1] <= after or rid not in (found[0].get("reports") or []):
+            break
+        to, after = found[0].get("to") or "", found[1]
+    return chain
+
+
 def restore(c: Any, people: list[Row], pid: str) -> Row:
     """Move `pid`'s reports back to them, in `people` (the caller's list, mutated), and say what could not come back.
     A report someone gave a manager by hand since the removal stays where they put them, as does one whose manager is
-    no longer the one Remove moved them to. A report who has left since moves back too, so restoring two people in
-    either order rebuilds the chart between them."""
+    no longer the one Remove (or a later removal of that manager) moved them to. A report who has left since moves back
+    too, so restoring two people in either order, after removing them in either order, rebuilds the chart between them."""
     found = last_record(c, pid)
     kept: Row = found[0] if found else {}
     after = found[1] if found else 0
@@ -172,7 +186,10 @@ def restore(c: Any, people: list[Row], pid: str) -> Row:
     ids: list[str] = kept.get("reports") or []
     for rid in ids:
         i = index.get(rid)
-        if i is None or (people[i].get("reports_to") or "") != (kept.get("to") or "") or moved_by_hand(c, rid, after):
+        # Still where Remove put them, or where a later removal of that manager moved them on (Cara leaves, then
+        # Ben: Dee went to Ben, then on to Ana, and restoring Cara first brings Dee back from Ana).
+        put = where_left(c, rid, kept.get("to") or "", after)
+        if i is None or (people[i].get("reports_to") or "") not in put or moved_by_hand(c, rid, after):
             continue
         people[i] = {**people[i], "reports_to": pid}
         if not people[i].get("hidden"):

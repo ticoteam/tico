@@ -26,6 +26,8 @@ export const leavingQuery = (pid: string) =>
     queryKey: ['settings', 'leaving', pid],
     queryFn: ({ signal }) => api.get<Leaving>(`/api/v2/humans/${encodeURIComponent(pid)}/leaving`, { signal }),
     staleTime: 0,
+    // Nothing kept after the dialog closes: each opening reads what removing them moves now.
+    gcTime: 0,
   });
 
 const count = (n: number, one: string, many: string) => (n === 1 ? `1 ${one}` : `${n} ${many}`);

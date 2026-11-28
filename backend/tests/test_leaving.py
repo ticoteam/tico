@@ -158,15 +158,28 @@ def test_restore_names_the_bots_of_each_plan(api):
 
 
 def test_restoring_a_chain_in_either_order_rebuilds_it(api):
-    """Ana > Ben > Cara > Dee. Ben leaves, then Cara: restoring them in either order puts the chart back."""
-    for first, then in (("ben", "cara"), ("cara", "ben")):
-        chart(api, ben="ana", cara="ben", dee="cara")
-        post(api, "humans/ben", {"left": True})
-        post(api, "humans/cara", {"left": True})
-        assert manager(api, "dee") == "ana"
-        post(api, f"access/humans/{first}", {"left": False})
-        post(api, f"access/humans/{then}", {"left": False})
-        assert (manager(api, "ben"), manager(api, "cara"), manager(api, "dee")) == ("ana", "ben", "cara"), first
+    """Ana > Ben > Cara > Dee. Ben and Cara leave in either order: restoring them in either order puts the chart back."""
+    for gone in (("ben", "cara"), ("cara", "ben")):
+        for first, then in (("ben", "cara"), ("cara", "ben")):
+            chart(api, ben="ana", cara="ben", dee="cara")
+            for pid in gone:
+                post(api, f"humans/{pid}", {"left": True})
+            assert manager(api, "dee") == "ana"
+            post(api, f"access/humans/{first}", {"left": False})
+            post(api, f"access/humans/{then}", {"left": False})
+            got = (manager(api, "ben"), manager(api, "cara"), manager(api, "dee"))
+            assert got == ("ana", "ben", "cara"), (gone, first)
+
+
+def test_restore_after_two_removals_keeps_a_report_moved_by_hand_in_between(api):
+    """Cara leaves (Dee to Ben), Ben leaves (Dee on to Ana), then someone gives Dee to Ana by hand: Cara's restore
+    leaves Dee where that person put them."""
+    chart(api, ben="ana", cara="ben", dee="cara")
+    post(api, "humans/cara", {"left": True})
+    post(api, "humans/ben", {"left": True})
+    post(api, "humans/dee", {"reports_to": "ana"})
+    post(api, "access/humans/cara", {"left": False})
+    assert manager(api, "dee") == "ana"
 
 
 def operated_by(api, slug, person):

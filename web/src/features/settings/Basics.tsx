@@ -288,7 +288,10 @@ function PersonOpen({ p, mayEdit, youOwn, ownerName }: { p: AccessPerson; mayEdi
     then the reports, the waits, the message bot and the groups. A person with nothing to move sees the plain dialog. */
 function RemoveDialog({ p, onClose }: { p: AccessPerson; onClose: () => void }) {
   const seen = useQuery(leavingQuery(p.id));
-  const v = seen.data;
+  // Only a list read for this opening counts: a cached one from an earlier opening may name plans or bots that have
+  // changed since, so while a fresh read is in flight the dialog shows nothing from it and Remove stays off.
+  const fresh = seen.isSuccess && !seen.isFetching;
+  const v = fresh ? seen.data : undefined;
   const moves = movesAnything(v);
   return (
     <Dialog
@@ -310,7 +313,7 @@ function RemoveDialog({ p, onClose }: { p: AccessPerson; onClose: () => void }) 
           <Button
             variant="primary"
             // Remove waits for the list: the person removing someone sees what goes before it goes.
-            disabled={!seen.isSuccess}
+            disabled={!fresh}
             onClick={() => {
               onClose();
               void act('settings.removePerson', { person: p.id });

@@ -662,6 +662,26 @@ test('settings: Remove lists the plan, its bot and the report that move; Restore
   }
 });
 
+test('settings: someone with nothing to move gets the plain Remove dialog and a plain Remove', async ({ browser, hub }) => {
+  // Quinn joined just now: no plan, no reports, no open tasks or asks, no message bot, no group to lead.
+  const added = await post<{ person: string }>(hub, 'access/humans', { email: `quinn-${Date.now()}@acme.example`, name: 'Quinn' });
+  for (const options of [PHONE, DESKTOP]) {
+    const page = await open(browser, hub, `/settings/people?open=${added.person}`, options);
+    await page.getByRole('button', { name: 'Remove', exact: true }).click();
+    const dialog = page.getByRole('alertdialog', { name: 'Remove Quinn?' });
+    await expect(dialog).toContainText('They can no longer sign in. Their tasks and messages stay.');
+    const press = dialog.getByRole('button', { name: 'Remove', exact: true });
+    await expect(press).toBeEnabled();
+    await expect(dialog.getByTestId('leaving')).toHaveCount(0);
+    await expect(dialog.getByTestId('leaving-error')).toHaveCount(0);
+    await page.screenshot({ path: test.info().outputPath(`remove-plain-${options.viewport!.width}.png`) });
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+    await expect(dialog).toHaveCount(0);
+    clean(page);
+    await page.context().close();
+  }
+});
+
 test("a read that failed says why in the page's one line; a restart has no Try again (it is read again by itself)", async ({ browser, hub }) => {
   const page = await open(browser, hub, '/tasks');
   await expect(page.locator('.pk-head h1')).toHaveText('Tasks');
