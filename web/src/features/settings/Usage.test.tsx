@@ -57,7 +57,7 @@ async function pick(box: HTMLElement, name: RegExp) {
 }
 
 const NO_USAGE_CHOICES = { departments: [], dimensions: {}, labels: {} };
-const FIG = { runs: 0, input_tokens: 0, cached_tokens: 0, cache_write_tokens: 0, output_tokens: 0, est_cost_usd: 0, subscription_equiv_usd: 0, low_estimate_runs: 0, unpriced_runs: 0 };
+const FIG = { runs: 0, input_tokens: 0, cached_tokens: 0, cache_write_tokens: 0, output_tokens: 0, est_cost_usd: 0, subscription_equiv_usd: 0, low_estimate_runs: 0, unpriced_runs: 0, empty_runs: 0, empty_usd: 0, cold_runs: 0, cold_usd: 0, cold_cache_write_tokens: 0 };
 const NONE = { daily_usd: null, hourly_usd: null, per_30m_usd: null, weekly_usd: null };
 const LIM = {
   ...NONE,
@@ -153,6 +153,32 @@ describe('Usage › an agent, opened', () => {
     expect(await screen.findByRole('img', { name: 'Tokens by kind' })).toBeTruthy();
     expect(screen.getByText('90%').parentElement?.textContent).toBe('90% from cache');
     expect(screen.getByTitle('Plan the launch')).toBeTruthy();
+    // No empty and no cold runs: both counts still read, as zeros.
+    expect(screen.getByText('changed nothing', { exact: false }).textContent).toBe('0 changed nothing');
+    expect(screen.getByText('cold starts', { exact: false }).textContent).toBe('0 cold starts');
+  });
+
+  it('says how many runs changed nothing and how many were cold starts, and what each cost', async () => {
+    serve(() => ({ status: 200, body: { from: '', to: '', totals: FIG, rows: [] } }));
+    const one = {
+      ...FIG,
+      bot: 'builder',
+      name: 'Builder',
+      runs: 3,
+      est_cost_usd: 5,
+      empty_runs: 1,
+      empty_usd: 2,
+      cold_runs: 1,
+      cold_usd: 1.5,
+      cold_cache_write_tokens: 6_300_000,
+    };
+    queryClient.setQueryData(usageQuery('7d', 'bot').queryKey, { from: '2026-11-13', to: '2026-11-19', choices: NO_USAGE_CHOICES, totals: one, rows: [one] });
+    queryClient.setQueryData(usageQuery('7d', 'day').queryKey, { from: '2026-11-13', to: '2026-11-19', choices: NO_USAGE_CHOICES, totals: one, rows: [] });
+    queryClient.setQueryData(agentUsageQuery('7d', 'builder').queryKey, { totals: one, tasks: [], models: [] });
+    show(<UsagePage search={{ open: 'builder' }} />, '/company/usage?open=builder');
+    expect(await screen.findByRole('img', { name: 'Tokens by kind' })).toBeTruthy();
+    expect(screen.getByText('changed nothing', { exact: false }).textContent).toBe('1 changed nothing · $2.00');
+    expect(screen.getByText('cold start', { exact: false }).textContent).toBe('1 cold start · $1.50 (6.3M tokens re-written)');
   });
 });
 

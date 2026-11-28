@@ -46,6 +46,27 @@ SCHEMAS.update(
                     "description": "Priced runs whose estimate may be low: the model "
                     "charges more for long prompts and the runner did not report every request's tokens",
                 },
+                "empty_runs": {"type": "integer", "description": "Runs that changed nothing: no write Tico counts"},
+                "empty_usd": {
+                    "type": "number",
+                    "description": "API-equivalent spend of the runs that changed nothing (estimate plus subscription), exact "
+                    "to the nano-dollar (1e-9 USD) and unrounded, so rows add up to the totals",
+                },
+                "cold_runs": {
+                    "type": "integer",
+                    "description": "Cold starts: runs that resumed a session more than an hour after the bot's last run on "
+                    "the same task settled, measured to the run's start. The rule is elapsed time; past the provider's "
+                    "1-hour cache, the prompt is likely written to the cache again",
+                },
+                "cold_usd": {
+                    "type": "number",
+                    "description": "API-equivalent spend of the cold starts, each whole run (estimate plus subscription), exact "
+                    "to the nano-dollar (1e-9 USD) and unrounded, so rows add up to the totals",
+                },
+                "cold_cache_write_tokens": {
+                    "type": "integer",
+                    "description": "Cache-write tokens the cold starts' runners reported (0 where the runtime reports none)",
+                },
             }
         ),
         "Usage": obj(
