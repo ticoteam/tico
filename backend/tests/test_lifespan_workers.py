@@ -219,19 +219,26 @@ def test_the_outbound_loops_are_told_to_stop_before_the_workers_end_and_joined_a
 
     # A rehearsal copy runs the outbound, webhook and Finance loops' way out without the scheduler.
     app = create_app(dataclasses.replace(api_settings(tmp_path), rehearsal=True))
-    calls = []
-    monkeypatch.setattr(background, "stop_all", lambda timeout=background.STOP_WAIT: calls.append(timeout))
+    release = threading.Event()
+    loop = background.Loop("test-outbound-shutdown", lambda: None)
     seen_at_stop = []
 
     async def inbound(stop):
         await stop.wait()
-        seen_at_stop.append(list(calls))
+        seen_at_stop.append(loop.stopped())
+        release.set()
 
     monkeypatch.setattr(app.state.inbound, "loop", inbound)
-    with served(app):
-        pass
-    assert seen_at_stop == [[0]], "signalled with the other stops, before a worker ended"
-    assert calls == [0, background.STOP_WAIT], "and joined once the workers ended"
+    try:
+        with served(app):
+            # The thread cannot end during the first stop. Only the inbound worker can release it.
+            loop.start(lambda _halt: release.wait())
+        assert seen_at_stop == [True], "signalled with the other stops, before a worker ended"
+        assert not loop.threads, "shutdown joined and cleared the thread after the inbound worker ended"
+    finally:
+        release.set()
+        loop.stop()
+        background._loops.remove(loop)
 
 
 def test_a_thread_call_of_a_cancelled_worker_is_still_waited_for_and_named(monkeypatch, caplog):
