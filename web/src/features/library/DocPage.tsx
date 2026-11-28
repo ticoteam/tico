@@ -129,6 +129,15 @@ function OneDoc({ id, search }: { id: string; search: DocSearch }) {
   );
 }
 
+/** A doc's text in another page's place (the constitution on Rules): typable by whoever may change it, as on its own
+    page, else read. Nothing until it is read. */
+export function DocText({ id }: { id: string }) {
+  const doc = useQuery(docQuery(id)).data;
+  const owner = useQuery(meQuery).data?.role === 'owner';
+  if (!doc) return null;
+  return <div className="lib">{owner || !doc.locked ? <TypeHere doc={doc} /> : <Markdown text={unTitled(doc.body, doc.title)} />}</div>;
+}
+
 /** The text as it reads; pressed (or reached by Tab), the same place takes typing, and leaving it saves. A refused
     save keeps what was typed. A link in the text still opens. */
 function TypeHere({ doc }: { doc: Doc }) {

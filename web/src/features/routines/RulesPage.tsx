@@ -5,9 +5,7 @@ import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
 import { Field } from '@/kit/Field';
-import { Icon } from '@/kit/Icon';
 import { Link } from '@/kit/Link';
-import { Row } from '@/kit/Row';
 import { MenuItem } from '@/kit/Menu';
 import { LinksEntry } from '@/features/company/exports';
 import { pipelinesQuery, type Pipeline } from '@/features/tasks/routing';
@@ -16,7 +14,7 @@ import { hasWho, ROUTINES, RULES, type RuleTab } from './actions';
 import { CompanyRules, holdsOf, OrgRuleRow, partiesOf, PartyPick } from './CompanyRules';
 import { Find, press, pressOut, RemoveItem, Rows, RuleRow, useConfirmRemove, useName } from './parts';
 import { ReadDocument } from './ReadDocument';
-import { constitutionQuery, dueQuery, holdsQuery, orgRulesQuery, routinesQuery, ruleGroupsQuery, stageRulesQuery, teamsQuery } from './queries';
+import { dueQuery, holdsQuery, orgRulesQuery, routinesQuery, ruleGroupsQuery, stageRulesQuery, teamsQuery } from './queries';
 import { RulePanel } from './RulePanel';
 import type { DueDate, Group, OrgRule, Routine, StageRule } from './types';
 import { agentWords, dayWords, runnerOf, stageParts, triggerWords } from './words';
@@ -25,13 +23,13 @@ import './routines.css';
 /* Rules (pages/3-company/rules.js): one List, eight tabs on `?tab=`. Every rule is one dense row with no title; a row
    opens its rule in `?panel=` (`org:<id>`, `stage:<id>`, a due date's `due:<id>`), where it is read, changed or
    removed. Wakes and routines on tasks are routines: their rows open the routine on Routines. The constitution, a doc
-   only people change, heads Company. The head's "⋯" adds a due date or a document to read for outside rules, or makes
+   only people change, heads Company's left column and reads in its place. The head's "⋯" adds a due date or a document to read for outside rules, or makes
    words into a rule (the Rules owner drafts it and asks one OK). */
 
 export interface RulesSearch {
   tab?: Exclude<RuleTab, ''>;
   panel?: string;
-  /** Company: whose rules, a party (`group:<id>`, `bot:<id>`, `human:<id>`); none is Everyone. */
+  /** Company: whose rules, a party (`group:<id>`, `bot:<id>`, `human:<id>`), or `constitution`; none is Everyone. */
   who?: string;
   /** Any tab: the words searched for. */
   q?: string;
@@ -152,23 +150,8 @@ function useTeamName() {
 function CompanyTab({ search, confirm, asked }: TabProps) {
   return (
     <Page search={search} asked={asked} state="ready" empty="No rules yet">
-      <Constitution />
       <CompanyRules who={search.who ?? '*'} panel={search.panel} confirm={confirm} q={search.q} />
     </Page>
-  );
-}
-
-/** The constitution at the root of Rules: the locked doc only people change. Nothing until the company has one. */
-function Constitution() {
-  const doc = useQuery(constitutionQuery).data;
-  if (!doc) return null;
-  return (
-    <Row className="rule rr-law" title={doc.title} href={`/library/${encodeURIComponent(doc.id)}`} target="constitution">
-      <span className="rule-how" title="Only people change it">
-        <Icon name="lock" />
-      </span>
-      <span className="row-title">{doc.title}</span>
-    </Row>
   );
 }
 

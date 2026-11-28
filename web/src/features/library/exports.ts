@@ -1,6 +1,7 @@
 // Library: Docs, a doc, Files, Skills, Tools and Contacts. The only file other code imports from this feature.
 export { ContactsPage } from './ContactsPage';
-export { DocPage } from './DocPage';
+// A doc's text in another page's place (the constitution on Rules).
+export { DocPage, DocText } from './DocPage';
 export { DocsPage } from './DocsPage';
 export { FilesPage } from './FilesPage';
 // A file anywhere: `files.view` shows a picture over the page (FileViewerHost, mounted once at the root) and opens any

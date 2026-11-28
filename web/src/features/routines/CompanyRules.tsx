@@ -5,15 +5,17 @@ import { Icon } from '@/kit/Icon';
 import { Row } from '@/kit/Row';
 import { Segmented } from '@/kit/Segmented';
 import { Select } from '@/kit/Select';
+import { DocText } from '@/features/library/exports';
 import { Section } from '@/pagekinds';
-import { RULES } from './actions';
+import { LAW, RULES } from './actions';
 import { actorKey, Face, press, RemoveItem, RuleRow, type How } from './parts';
-import { holdsQuery, orgRulesQuery, partiesOf, reachQuery, teamsQuery } from './queries';
+import { constitutionQuery, holdsQuery, orgRulesQuery, partiesOf, reachQuery, teamsQuery } from './queries';
 import type { Group, OrgRule, Reach, ReachBook, ReachMode, RuleHold } from './types';
 import { orgParts } from './words';
 
-/* Rules › Company (rules.js rulesBody): who on the left (Everyone, then each team and its members), what applies to
-   them on the right: their reach and daily limits, their rules, and what they take from their team and from Everyone. */
+/* Rules › Company (rules.js rulesBody): who on the left (the constitution, Everyone, then each team and its members),
+   what applies to them on the right: their reach and daily limits, their rules, and what they take from their team and
+   from Everyone. The constitution reads in that place, under what it is for. */
 
 const MODES: { value: ReachMode; label: string }[] = [
   { value: 'open', label: 'Anyone' },
@@ -128,6 +130,7 @@ export function CompanyRules({ who, panel, confirm, q }: { who: string; panel?: 
   const teams = useQuery(teamsQuery).data ?? [];
   const reach = useQuery(reachQuery).data;
   const holds = useQuery(holdsQuery).data;
+  const law = useQuery(constitutionQuery).data;
   const name = useNamer();
   const forParty = (p: string) => rules.filter((r) => partiesOf(r.who).includes(p));
   const myTeams = who.startsWith('group:') || who === '*' ? [] : teams.filter((g) => members(g).includes(who));
@@ -147,12 +150,13 @@ export function CompanyRules({ who, panel, confirm, q }: { who: string; panel?: 
   const own = forParty(who);
   const everyone = who === '*' ? [] : forParty('*');
   const exceptions = who === '*' && reach ? reach.settings.filter((s) => s.party !== '*') : [];
-  const choices = [{ value: '*', label: 'Everyone' }, ...teams.flatMap((g) => [{ value: `group:${g.id}`, label: g.name }, ...members(g).map((m) => ({ value: m, label: name(m) }))])];
-  if (!choices.some((c) => c.value === who)) choices.push({ value: who, label: name(who) });
+  const choices = [...(law ? [{ value: LAW, label: law.title }] : []), { value: '*', label: 'Everyone' }, ...teams.flatMap((g) => [{ value: `group:${g.id}`, label: g.name }, ...members(g).map((m) => ({ value: m, label: name(m) }))])];
+  if (who !== LAW && !choices.some((c) => c.value === who)) choices.push({ value: who, label: name(who) });
 
   return (
     <div className="split">
       <div className="scope-col" role="navigation" aria-label="Whose rules">
+        {law && <ScopeRow party={LAW} name={law.title} n={0} on={who === LAW} lead={<Icon name="lock" />} />}
         <ScopeRow party="*" name="Everyone" n={forParty('*').length} on={who === '*'} lead={<Icon name="company" />} />
         {teams.map((g) => {
           const party = `group:${g.id}`;
@@ -169,45 +173,61 @@ export function CompanyRules({ who, panel, confirm, q }: { who: string; panel?: 
         <div className="scope-select">
           <Select label="Whose rules" labelHidden options={choices} value={who} onValueChange={(v) => void press('rules.pickScope', { who: v })} />
         </div>
-        {reach && <Limits party={who} reach={reach} name={name} />}
-        <Section name="Rules" count={own.length} target={`section:rules:${who}`}>
-          {rows(own)}
-        </Section>
-        {myTeams.map((g) => {
-          const list = forParty(`group:${g.id}`);
-          return list.length ? (
-            <Section key={g.id} name={`From ${g.name}`} count={list.length}>
-              {rows(list)}
+        {who === LAW ? (
+          law && <Constitution id={law.id} />
+        ) : (
+          <>
+            {reach && <Limits party={who} reach={reach} name={name} />}
+            <Section name="Rules" count={own.length} target={`section:rules:${who}`}>
+              {rows(own)}
             </Section>
-          ) : null;
-        })}
-        {everyone.length > 0 && (
-          <Section name="From Everyone" count={everyone.length}>
-            {rows(everyone)}
-          </Section>
-        )}
-        {exceptions.length > 0 && (
-          <Section name="Exceptions" count={exceptions.length} target="section:exceptions">
-            {exceptions.flatMap((s) =>
-              (Object.keys(FIELDS) as (keyof typeof FIELDS)[])
-                .filter((f) => s[f] != null)
-                .map((f) => (
-                  <RuleRow
-                    key={`${s.party}:${f}`}
-                    how="set"
-                    parts={[name(s.party), FIELDS[f], valueWords(f, s[f])]}
-                    to={RULES}
-                    search={{ who: s.party }}
-                    cols={{ who: true }}
-                    who={s.party.startsWith('group:') ? null : s.party}
-                    target={`reach:${s.party}:${f}`}
-                  />
-                )),
+            {myTeams.map((g) => {
+              const list = forParty(`group:${g.id}`);
+              return list.length ? (
+                <Section key={g.id} name={`From ${g.name}`} count={list.length}>
+                  {rows(list)}
+                </Section>
+              ) : null;
+            })}
+            {everyone.length > 0 && (
+              <Section name="From Everyone" count={everyone.length}>
+                {rows(everyone)}
+              </Section>
             )}
-          </Section>
+            {exceptions.length > 0 && (
+              <Section name="Exceptions" count={exceptions.length} target="section:exceptions">
+                {exceptions.flatMap((s) =>
+                  (Object.keys(FIELDS) as (keyof typeof FIELDS)[])
+                    .filter((f) => s[f] != null)
+                    .map((f) => (
+                      <RuleRow
+                        key={`${s.party}:${f}`}
+                        how="set"
+                        parts={[name(s.party), FIELDS[f], valueWords(f, s[f])]}
+                        to={RULES}
+                        search={{ who: s.party }}
+                        cols={{ who: true }}
+                        who={s.party.startsWith('group:') ? null : s.party}
+                        target={`reach:${s.party}:${f}`}
+                      />
+                    )),
+                )}
+              </Section>
+            )}
+          </>
         )}
       </div>
     </div>
+  );
+}
+
+/** The constitution in the right column: what it is for, then its text, typable by the people who may change it. */
+function Constitution({ id }: { id: string }) {
+  return (
+    <section className="rr-law" data-target="constitution" aria-label="Constitution">
+      <p className="rr-law-note">The constitution is only editable by humans and applies to any rule created in the system, to make sure rules added don't violate this.</p>
+      <DocText id={id} />
+    </section>
   );
 }
 
