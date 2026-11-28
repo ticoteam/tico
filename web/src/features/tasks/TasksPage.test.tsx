@@ -1088,6 +1088,32 @@ describe('Needs you @s5 @s112', () => {
       // the row stands for the refused ask again, as it did before the press
       expect(read()?.items.find((w) => w.id === 't1')?.ask?.requirement).toBe('r1');
     });
+
+    it.each([['ok'], ['no']] as const)('%s refused after a ❓ on the task was answered elsewhere, the read after it failing: the row comes back without the ❓', async (how) => {
+      const question = { kind: 'question', id: 'qmark:q1', task_id: 't1', from_id: 'bot:so', line: 'Cc the landlord too?', choices: ['Yes'], since: ago(4),
+        task: { id: 't1', number: 1, title: 'Task 1', pipeline_id: 'eng' } } as unknown as ReturnType<typeof need>;
+      listed = [need('t1', 'r1'), question];
+      serveList();
+      const read = () => queryClient.getQueryData<Flow>(flowQuery.queryKey);
+      await queryClient.fetchQuery(flowQuery);
+      expect(read()?.items.find((w) => w.id === 't1')?.questions?.map((q) => q.id)).toEqual(['qmark:q1']);
+      const undo = leaveNeedsYou('t1', 'r1', how);
+      listed = [need('t1', 'r1')]; // another session answers the ❓; the approval being sent keeps the task out
+      await readAgain();
+      expect(read()?.items.some((w) => w.id === 't1')).toBe(false);
+      down = true;
+      act(() => {
+        undo();
+        settleNeedsYou();
+      });
+      await waitFor(() => expect(queryClient.getQueryState(flowQuery.queryKey)?.fetchStatus).toBe('idle'));
+      expect(read()?.waits?.t1).toEqual(['r1']);
+      const back = read()?.items.find((w) => w.id === 't1');
+      expect(back?.ask?.requirement).toBe('r1');
+      expect(back?.questions ?? []).toEqual([]); // the answered ❓ stays gone: no card for it under the row
+      expect(back?.reason).not.toBe('Cc the landlord too?');
+      expect(read()?.count).toBe(1);
+    });
   });
 
   it('refused after the list moved on, for a task only a grouped row named: its Dot comes back @approvals', () => {
@@ -1097,6 +1123,24 @@ describe('Needs you @s5 @s112', () => {
     expect(back.task_ids).toEqual(['t1', 't3', 't4']);
     expect(back.waits).toEqual({ t1: ['r1'], t3: ['r3'], t4: ['r4'] });
     expect(back.count).toBe(1); // a grouped task is no row of its own
+  });
+
+  it('refused after the list moved on and dropped its row: the row put back holds only what still waits @approvals', () => {
+    const row = { id: 't1', number: 1, title: 'Task 1', reason: 'Which day?', ask: { kind: 'ok', by: 'bot:so', shows: [], requirement: 'r1' },
+      questions: [{ id: 'qmark:q1', line: 'Which day?', choices: [], by: 'bot:so' }] };
+    const r2 = { id: 't1', number: 1, title: 'Task 1', reason: 'Send r2?', ask: { kind: 'ok', by: 'bot:so', shows: [], requirement: 'r2' } };
+    const before = { count: 1, items: [row], requests: [], task_ids: ['t1'], order: ['t1'], waits: { t1: ['r1', 'qmark:q1', 'r2'] }, approvals: [row, r2], asks: [] } as unknown as Flow;
+    const cur = { count: 0, items: [], requests: [], task_ids: [], order: [], waits: {}, approvals: [], asks: [] } as unknown as Flow;
+    // the ❓ was refused (the approvals were answered elsewhere): the row is the ❓ alone
+    const q = needsYouWith('t1', 'qmark:q1', before, cur).items[0];
+    expect(q?.ask).toBeUndefined();
+    expect(q?.questions?.map((x) => x.id)).toEqual(['qmark:q1']);
+    // r2 was refused: the row stands for r2, with no ❓ and not the ❓'s line
+    const back = needsYouWith('t1', 'r2', before, cur);
+    expect(back.items[0]?.ask?.requirement).toBe('r2');
+    expect(back.items[0]?.questions).toBeUndefined();
+    expect(back.items[0]?.reason).toBe('Send r2?');
+    expect(back.waits?.t1).toEqual(['r2']);
   });
 
   it('a long Needs you, opened past its cap, measures each row it draws, so a ❓ card never overlaps the rows below', async () => {

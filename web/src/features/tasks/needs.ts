@@ -2,7 +2,7 @@ import { useQuery, type QueryKey } from '@tanstack/react-query';
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import { keepOut, letIn, queryClient } from '@/data';
 import { hearPlaces, heldRow, holdRow, keptOrder, type ListRow } from '@/lib';
-import { flowCountQuery, flowQuery, type Flow } from './queries';
+import { flowCountQuery, flowQuery, type Flow, type FlowItem } from './queries';
 
 /* One dot, one meaning: a task waits on the person when Needs you names it (GET /api/v2/needs-you), never by its turn
    alone. Every place that marks a task with the Dot reads this one set: a board's cards and column counts, a pipeline's
@@ -167,22 +167,43 @@ const putBack = <T,>(cur: readonly T[], was: readonly T[], gave: (x: T) => boole
   return out;
 };
 
+/** `row` as `before` had it, holding only what `task` waits on again (`left`, what the task waits on after the refusal;
+    null, not read: what was refused, by `gave`): its ❓ that still wait, and the approval it stands for when that
+    still waits, else the next one that does, else none. So a ❓ answered elsewhere while the refused answer was sent
+    does not come back with the row. */
+const restored = (task: string, row: FlowItem, before: Flow, left: readonly string[] | null, gave: (r: string) => boolean): FlowItem => {
+  const waits = (r: string) => (left ? left.includes(r) : gave(r));
+  const stands = !!row.ask?.requirement && waits(row.ask.requirement);
+  const other = stands ? undefined : before.approvals?.find((a) => a.id === task && waits(a.ask.requirement));
+  const base = stands ? row : (other ?? { ...row, ask: undefined, about: undefined });
+  const questions = row.questions?.filter((q) => waits(q.id));
+  // a ❓'s line goes with it
+  const dropped = row.questions?.some((q) => !waits(q.id) && q.line === base.reason);
+  return { ...base, questions: questions?.length ? questions : undefined, ...(dropped && { reason: undefined }) };
+};
+
 /** The answer to `wait` on `task` (null: all of it) that was refused, as `before` had it, put back into `cur` (a list
     read since): its ask in what the task waits on, its approval, its Agent bar line, its ❓ on the row, the row itself
     when `cur` lists it no more, and its Dot (`task_ids`) when only a grouped row named the task. Everything `cur` read
     since stays (a newer ask on the task, the task's newer data); the row goes back before the first row that followed
-    it then and is still listed. */
+    it then and is still listed. A row put back whole holds only what the task waits on again: an ask answered
+    elsewhere meanwhile (a ❓ another session answered) stays gone from it. */
 export function needsYouWith(task: string, wait: string | null, before: Flow, cur: Flow): Flow {
   const gave = (r: string) => wait === null || r === wait;
   const was = latestOf(before);
   const row = before.items.find((w) => w.id === task);
   const at = cur.items.findIndex((w) => w.id === task);
+  const waits = cur.waits && before.waits?.[task] && {
+    ...cur.waits,
+    [task]: putBack(cur.waits[task] ?? [], before.waits[task], gave, (x, y) => x === y),
+  };
   let items = cur.items;
   let order = cur.order;
   if (row && at < 0) {
     const next = was.slice(was.indexOf(task) + 1).find((id) => cur.items.some((w) => w.id === id) || cur.order?.includes(id));
     const i = next === undefined ? -1 : cur.items.findIndex((w) => w.id === next);
-    items = i < 0 ? [...cur.items, row] : [...cur.items.slice(0, i), row, ...cur.items.slice(i)];
+    const back = restored(task, row, before, waits?.[task] ?? null, gave);
+    items = i < 0 ? [...cur.items, back] : [...cur.items.slice(0, i), back, ...cur.items.slice(i)];
     if (cur.order && !cur.order.includes(task)) order = placedIn(cur.order, task, was);
   } else if (row) {
     const now = cur.items[at]!;
@@ -195,10 +216,6 @@ export function needsYouWith(task: string, wait: string | null, before: Flow, cu
     const back = { ...now, ...(stood && { ask: row.ask, about: row.about }), ...(questions && { questions }), ...(reason !== undefined && { reason }) };
     items = cur.items.map((w, i) => (i === at ? back : w));
   }
-  const waits = cur.waits && before.waits?.[task] && {
-    ...cur.waits,
-    [task]: putBack(cur.waits[task] ?? [], before.waits[task], gave, (x, y) => x === y),
-  };
   return {
     ...cur,
     items,
