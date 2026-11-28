@@ -497,6 +497,28 @@ test("an agent answering: an @mention in a task's comments shows it got it, its 
   clean(dm);
 });
 
+test('Listening: a watch with 250 matches shows 100 of 250; Show more reads on, a page at a time, to all 250 and is gone', async ({ browser, hub }) => {
+  const { id } = await call<{ id: string }>(hub, '/_e2e/listening?count=250', 'POST');
+  const page = await open(browser, hub, `/company/listening?watch=${encodeURIComponent(id)}`);
+  const cursors: (string | null)[] = [];
+  page.on('request', (r) => {
+    const url = new URL(r.url());
+    if (url.pathname === '/api/v2/listening/items') cursors.push(url.searchParams.get('cursor'));
+  });
+  const more = page.getByRole('button', { name: 'Show more' });
+  await expect(page.getByText('Showing 100 of 250')).toBeVisible();
+  await more.click();
+  await expect(page.getByText('Showing 200 of 250')).toBeVisible();
+  await more.click();
+  await expect(page.getByText('Showing 250 of 250')).toBeVisible();
+  await expect(more).toHaveCount(0);
+  // the two later pages were read by two cursors, each the one the page before gave
+  expect(new Set(cursors.filter(Boolean)).size).toBe(2);
+  const shown = await sql<{ n: number }>(hub, `SELECT COUNT(*) AS n FROM listening_items WHERE automation_id='${id}'`);
+  expect(shown[0]?.n).toBe(250);
+  clean(page);
+});
+
 test('a thread: send a message; archive a mail row', async ({ browser, hub }) => {
   const page = await open(browser, hub, `/threads/${hub.facts.thread}`);
   const box = page.getByRole('textbox', { name: 'Message Omar' });

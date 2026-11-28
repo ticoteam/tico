@@ -1,6 +1,8 @@
 """Listing what a listening gathered (GET /api/v2/listening/items, backend/listening.py): pages that follow a cursor
 to the end, the true total and counts by status, and filters by source and gathered time."""
 
+import base64
+import json
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
@@ -102,28 +104,69 @@ def test_since_and_until_list_what_was_gathered_in_between_since_included_until_
     assert page(api, aid, since="2026-11-10")["total"] == 2  # a date is its midnight, UTC
 
 
-def test_paging_while_items_are_sent_and_new_ones_arrive_repeats_and_skips_nothing(api):
-    """Offset paging fails this both ways: the sent item on page one shifts the rest up (a skip), the new item pushes
-    them down (a repeat)."""
+def offset_page(api, aid, status, offset, limit):
+    """What offset paging would answer now: the order the route uses, skipping `offset` rows."""
+    with api.app.state.store.read() as c:
+        return [
+            r[0]
+            for r in c.execute(
+                "SELECT id FROM listening_items WHERE automation_id=? AND status=? "
+                "ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?",
+                (aid, status, limit, offset),
+            )
+        ]
+
+
+def read_on(api, aid, first, status, limit):
+    """The ids of page one, then of every later page the cursor reads."""
+    seen, cursor = [i["id"] for i in first["items"]], first["next_cursor"]
+    for _ in range(20):
+        if not cursor:
+            return seen
+        later = page(api, aid, status=status, limit=limit, cursor=cursor)
+        seen += [i["id"] for i in later["items"]]
+        cursor = later["next_cursor"]
+    raise AssertionError("still a next_cursor after 20 pages")
+
+
+def kept_30(api):
     aid = made(api)
     source = source_id(api, aid)
     fill(api, source, range(30))
     mark(api, "kept")
+    return aid, source
+
+
+def test_an_item_leaving_an_earlier_page_while_paging_skips_nothing(api):
+    """An item on page one is sent after page one is read. Offset paging then skips the first item of page two."""
+    aid, _ = kept_30(api)
     first = page(api, aid, status="kept", limit=10)
-    at_first = set(ordered(api, aid, "kept"))
-    on_page_one, on_page_three = first["items"][0]["id"], ordered(api, aid, "kept")[25]
-    mark(api, "sent", "id IN (?, ?)", (on_page_one, on_page_three))
+    before = ordered(api, aid, "kept")
+    gone = first["items"][0]["id"]
+    mark(api, "sent", "id=?", (gone,))
+    by_offset = [i["id"] for i in first["items"]] + [
+        n for at in (10, 20) for n in offset_page(api, aid, "kept", at, 10)
+    ]
+    assert before[10] not in by_offset  # the scenario does catch offset paging
+    seen = read_on(api, aid, first, "kept", 10)
+    assert len(seen) == len(set(seen)) == 30
+    assert seen == before
+
+
+def test_an_item_arriving_ahead_while_paging_repeats_nothing(api):
+    """A newer item arrives after page one is read. Offset paging then repeats the last item of page one."""
+    aid, source = kept_30(api)
+    first = page(api, aid, status="kept", limit=10)
+    before = ordered(api, aid, "kept")
     fill(api, source, [99], when=START + timedelta(hours=1))
     mark(api, "kept", "native_id='99'")
-    seen = [i["id"] for i in first["items"]]
-    cursor, left = first["next_cursor"], 10
-    while cursor and (left := left - 1):
-        later = page(api, aid, status="kept", limit=10, cursor=cursor)
-        seen += [i["id"] for i in later["items"]]
-        cursor = later["next_cursor"]
-    assert not cursor
-    assert len(seen) == len(set(seen))
-    assert at_first - {on_page_one, on_page_three} <= set(seen)
+    by_offset = [i["id"] for i in first["items"]] + [
+        n for at in (10, 20, 30) for n in offset_page(api, aid, "kept", at, 10)
+    ]
+    assert by_offset.count(before[9]) == 2  # the scenario does catch offset paging
+    seen = read_on(api, aid, first, "kept", 10)
+    assert len(seen) == len(set(seen)) == 30
+    assert seen == before
 
 
 def test_a_few_items_come_on_one_page_and_none_give_an_empty_last_page(api):
@@ -137,6 +180,11 @@ def test_a_few_items_come_on_one_page_and_none_give_an_empty_last_page(api):
     assert (len(exact["items"]), exact["next_cursor"]) == (3, None)
 
 
+def made_cursor(at, rowid):
+    raw = json.dumps([at, rowid]).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
 def test_a_broken_cursor_a_backwards_range_or_another_listenings_source_is_refused_by_name(api):
     aid = made(api)
     fill(api, source_id(api, aid), range(3))
@@ -145,6 +193,9 @@ def test_a_broken_cursor_a_backwards_range_or_another_listenings_source_is_refus
     for query, param in (
         ({"cursor": "not-a-cursor"}, "cursor"),
         ({"cursor": "eyJ4IjoxfQ"}, "cursor"),  # base64 of a JSON object, not a position
+        ({"cursor": made_cursor("not a time", 5)}, "cursor"),
+        ({"cursor": made_cursor("2026-11-02T07:30:00.000000Z", 2**63)}, "cursor"),  # past what SQLite binds
+        ({"cursor": made_cursor("2026-11-02T07:30:00.000000Z", True)}, "cursor"),
         ({"since": "2026-11-09", "until": "2026-11-03"}, "since"),
         ({"since": "yesterday"}, "since"),
         ({"until": "soon"}, "until"),

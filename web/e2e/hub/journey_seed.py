@@ -15,7 +15,8 @@ Launch task on which the Engineering Lead asks Dana a ❓, two numbered question
 calls it, so the others' Needs you holds the two emails alone) and POST /_e2e/made (a task on which the Engineering Lead
 made a video, two pictures and a page; only the journey that looks at them calls it) and POST /_e2e/turn (an agent's
 next run, as the fake runner runs it: `step=start` claims and starts it and writes the first words of its reply,
-`step=done` completes it with the whole reply, or with none when `text` is empty).
+`step=done` completes it with the whole reply, or with none when `text` is empty) and POST /_e2e/listening (a
+watch of Dana's that gathered `count` matches; only the Matches journey calls it).
 """
 
 import base64
@@ -285,6 +286,41 @@ def turns(world):
     _route(world, "/_e2e/turn", turn, ["POST"])
 
 
+def listening(world):
+    """POST /_e2e/listening?count=250: a watch Dana owns (one Reddit search) that gathered `count` matches,
+    saved 200 to a call as a source's reader saves them. It answers the watch's id."""
+
+    def watch(count: int = 250):
+        trigger = {
+            "type": "listening",
+            "sources": [{"id": "s1", "kind": "search", "site": "reddit", "target": "standup tools"}],
+            "rules": [],
+            "limits": [{"count": 5, "per": "day"}],
+            "at": "08:00",
+            "tz": "UTC",
+        }
+        note = {"id": "tell", "type": "action", "do": "note", "args": {"text": "{{listening.text}}"}}
+        body = {"name": "Standup tools", "owner": "person:" + DANA_ID, "trigger": trigger, "steps": [note]}
+        made = _ok(world.api("post", "/api/v2/automations", body, who=DANA), "the watch")
+        sources = _ok(world.api("get", f"/api/v2/listening/sources?automation={made['id']}", who=DANA), "its sources")
+        source = sources["sources"][0]["id"]
+        posts = [
+            {
+                "native_id": str(n),
+                "url": f"https://acme.example/post/{n}",
+                "author": "@host",
+                "text": f"Post {n} on standups",
+            }
+            for n in range(count)
+        ]
+        for at in range(0, count, 200):
+            save = {"status": "ok", "error": "", "items": posts[at : at + 200]}
+            _ok(world.api("post", f"/api/v2/listening/sources/{source}/items", save, who=DANA), "its matches")
+        return JSONResponse({"id": made["id"]})
+
+    _route(world, "/_e2e/listening", watch, ["POST"])
+
+
 def providers(world):
     _ok(
         world.api(
@@ -307,4 +343,5 @@ def seed(world):
     asks(world)
     made(world)
     turns(world)
+    listening(world)
     return {"mail": mail(world), "board": board(world), "thread": thread(world)}

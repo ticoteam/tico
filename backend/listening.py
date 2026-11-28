@@ -1183,12 +1183,17 @@ def item_cursor(row):
     return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
 
 
+ROWID_RANGE = range(-(2**63), 2**63)  # what SQLite can bind; a number outside it is no rowid
+
+
 def _after(cursor):
+    """The position a next_cursor names: a gathered time and a rowid, each checked, so a made-up one is a 422."""
     try:
         at, rowid = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
-        if isinstance(at, str) and type(rowid) is int:
+        if isinstance(at, str) and type(rowid) is int and rowid in ROWID_RANGE:
+            datetime.fromisoformat(at.replace("Z", "+00:00"))
             return at, rowid
-    except (binascii.Error, ValueError, TypeError, UnicodeDecodeError):
+    except (binascii.Error, ValueError, TypeError, UnicodeDecodeError, OverflowError):
         pass
     raise Problem(
         "validation", "cursor is not one this list gave; pass next_cursor as it came", 422, extra={"param": "cursor"}
