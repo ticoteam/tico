@@ -1007,13 +1007,18 @@ def register_placement(
         turn_counts = summaries(c, [r["id"] for r in runners], settings, limits)
         loads = load_statuses(c, [r["id"] for r in runners])
         entries = runner_versions.entries(c)
+        versions, wanted = runner_versions.load(c), runner_versions.desired()["version"]
         for r in runners:
             counts = turn_counts[r["id"]]
             turns = {"turn_counts": counts, "turn_summary": describe_turns(counts)}
             detailed = everyone or r["owner_id"] == mine or r["accepts_member_bots"]
             if not detailed:
                 if who.role == "bot":
-                    # Discovery and load do not grant access to repositories, logs or operator identity.
+                    # Discovery and load do not grant access to repositories, logs or operator identity. Its release
+                    # and how it starts do: without them a closed computer reads as one that never reported (#4374).
+                    update = runner_versions.bot_view(versions.get(r["id"]))
+                    update.update(runner_versions.starts(entries.get(r["id"]), r["id"] in online))
+                    update["wanted_release"] = wanted
                     rows.append(
                         {
                             "id": r["id"],
@@ -1021,6 +1026,9 @@ def register_placement(
                             "online": r["id"] in online,
                             "platform": r["platform"] or "",
                             "accepts_member_bots": False,
+                            "version": r["version"] or "",
+                            "release": update["release"],
+                            "update": update,
                             **loads[r["id"]],
                             **turns,
                         }

@@ -534,3 +534,26 @@ def test_computers_show_which_start_through_the_old_runner_package(api):
         headers={"Authorization": f"Bearer {old['token']}"},
     )
     assert refused.status_code == 422
+
+
+def test_a_bot_reads_each_computers_release_and_how_it_starts(api):
+    """`tico computer versions` run by a bot listed a computer closed to it (a bot's own cloud computer, owned by its
+    operator) with no release, no update state and "Not reported", although the computer reported both (#4374). A bot
+    sees each computer's release, runner version, update state and how it starts; the update's error text, its owner,
+    repositories and bots stay with the people who may read them."""
+    from backend.tests.helpers.tasks_board import bot_token
+
+    closed = runner(api, operator="ben", label="Builder (cloud)")
+    update = {"state": "failed", "target": "0.3.0", "error": "cannot write /home/ben/tico"}
+    report(api, closed, "0.3.0", kind="linux", entry="runner", update=update)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET accepts_member_bots=0 WHERE id=?", (closed["runner_id"],))
+    bot = bot_token(api)
+    row = next(r for r in get(api, "computers", token=bot)["computers"] if r["id"] == closed["runner_id"])
+    assert row["release"] == "0.3.0" and row["version"] == "test"
+    assert row["update"]["starts"] == "old_package"
+    assert row["update"]["starts_label"] == "Starts through the old runner package"
+    assert row["update"]["state"] == "current" and row["update"]["update_state"] == "failed"
+    assert row["update"]["wanted_release"] == "0.3.0"
+    assert "error" not in row["update"]
+    assert not {"owner_id", "bots", "repositories", "readiness"} & set(row)
