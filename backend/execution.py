@@ -373,7 +373,7 @@ SAVED_SESSION_RUN = (
     "AND runner_id IS NOT NULL AND thread_id IS NOT NULL AND thread_id<>''"
 )
 LATEST_SESSION_RUN_SQL = (
-    "SELECT runner_id,thread_id,message_id,created_at FROM attempts "
+    "SELECT id,runner_id,thread_id,message_id,created_at,handed_runtime FROM attempts "
     f"WHERE bot_id=? AND computer_session_key=? AND {SAVED_SESSION_RUN} ORDER BY created_at DESC,rowid DESC LIMIT 1"
 )
 
@@ -383,22 +383,46 @@ def latest_session_run(c, bot, key):
     return c.execute(LATEST_SESSION_RUN_SQL, (bot, key)).fetchone()
 
 
+def latest_session_subscription(c, bot, key, runtime):
+    """Subscription id of the latest saved session run for (bot, key, runtime), or None when none exists."""
+    if not runtime:
+        return None
+    last = c.execute(
+        "SELECT id FROM attempts "
+        f"WHERE bot_id=? AND computer_session_key=? AND handed_runtime=? AND {SAVED_SESSION_RUN} "
+        "ORDER BY created_at DESC,rowid DESC LIMIT 1",
+        (bot, key, runtime),
+    ).fetchone()
+    if not last:
+        return None
+    given = model_subscriptions.handed(c, last["id"], runtime)
+    return given["subscription_id"] if given else ""
+
+
+def session_subscription_switched(c, bot, key, runtime, subscription_id):
+    """Whether this turn switches the subscription paying for (bot, key, runtime) from the last saved session."""
+    prev = latest_session_subscription(c, bot, key, runtime)
+    return prev is not None and prev != (subscription_id or "")
+
+
 def session_computer(c, bot, key):
     return c.execute(
         "SELECT runner_id,fence FROM session_computers WHERE bot_id=? AND session_key=?", (bot, key)
     ).fetchone()
 
 
-def claim_session_fence(c, aid, bot, key, runner_id):
+def claim_session_fence(c, aid, bot, key, runner_id, switched=False):
     """Offer the next fence without advancing it for a lease handed back before start."""
     c.execute("UPDATE attempts SET computer_session_key=? WHERE id=?", (key, aid))
     previous = session_computer(c, bot, key)
-    return previous["fence"] + (previous["runner_id"] != runner_id) if previous else 0
+    return previous["fence"] + (previous["runner_id"] != runner_id or bool(switched)) if previous else 0
 
 
-def fork_source_current(c, bot, config, source):
+def fork_source_current(c, bot, config, source, subscription_id=None, runtime=None):
     key = run_session_key(c, bot, config, source)
     if not key:
+        return False
+    if subscription_id is not None and session_subscription_switched(c, bot, key, runtime, subscription_id):
         return False
     home = session_computer(c, bot, key)
     if not home:
@@ -1878,7 +1902,9 @@ CONTINUATION_ORDER = (
     "a.created_at DESC,a.rowid DESC"
 )
 CONTINUATION_FIELDS = (
-    f"a.runner_id,thread_id,CASE WHEN {CONTINUATION_SOURCE} THEN result END AS source,"
+    f"a.id,a.runner_id,a.handed_runtime,thread_id,"
+    f"CASE WHEN {CONTINUATION_SOURCE} THEN result END AS source,"
+    "json_extract(result,'$.quota_continue')=1 AS quota_continue,"
     "CASE WHEN a.runner_id<>'' AND r.id IS NULL THEN json_extract(a.wake,'$.burst') IS NOT TRUE ELSE 0 END AS retired"
 )
 CONTINUATION_FROM = "FROM attempts a LEFT JOIN runners r ON r.id=a.runner_id AND r.revoked_at IS NULL"
@@ -2079,6 +2105,20 @@ def held_before_start(c, row):
 
 def limit_until(c, bot, since):
     """An absolute provider deadline wins over a later status refresh on another lane."""
+    if agent_subscriptions.picks(c, bot):
+        from .shared_bots import follow
+
+        row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
+        place = c.execute(PLACE_SQL, (bot,)).fetchone()
+        runner = c.execute(RUNNER_SQL, (place["runner_id"],)).fetchone() if place and place["runner_id"] else None
+        if row and runner:
+            filled = providers.fill(providers.load(c), follow(c, bot, json.loads(row["config"] or "{}")))
+            payment = agent_subscriptions.for_runner(c, runner, bot, filled, enforce_live_limit=False)
+            if payment is not None:
+                if payment.subscription is not None:
+                    return ""
+                if payment.until is not None:
+                    return login_holds._iso(payment.until)
     last = last_limit(c, bot)
     hold = login_holds.for_attempt(c, last['id']) if last else {}
     return hold.get('until') or H.shift(since, seconds=limit_cooldown(c, bot))
@@ -5981,6 +6021,7 @@ class Execution:
         org_turns.observe(c, self.store.settings, detailed=False)
         # What woke this turn, the bot's profile and how the release policy let it go, for its run record
         # (backend/wake_presets.py). A job released to fork the bot's latest session names it to a runner that can.
+        next_sub_id = payment.subscription["id"] if payment and payment.subscription else ""
         job = c.execute("SELECT wake_class,hold_until,release,released FROM jobs WHERE id=?", (row["id"],)).fetchone()
         fresh_recovery = compute_pool.fresh_recovery(job)
         fork = (
@@ -5988,7 +6029,12 @@ class Execution:
             if not fresh_recovery and runner_forks(runner)
             else None
         )
-        fork_thread = fork["thread_id"] if fork and fork_source_current(c, row["bot_id"], config, fork) else None
+        fork_thread = (
+            fork["thread_id"]
+            if fork
+            and fork_source_current(c, row["bot_id"], config, fork, subscription_id=next_sub_id, runtime=handed[0])
+            else None
+        )
         fresh_session = fresh_recovery or (
             runner_starts_fresh(runner) and wake_presets.fresh_session(job, stale_fork=bool(fork and not fork_thread))
         )
@@ -6249,7 +6295,21 @@ class Execution:
             msg = self.fold_behind(c, row, aid, msg, task["id"], followed, lane)
         # The model's capacity stopped this job's turn after it acted: the runner continues that same thread, or holds
         # the run for review when it no longer has it (runner-rs/src/execute.rs CONTINUE_LOST).
-        continue_thread = continuation_thread(c, row['id']) if not (source and payment is not None) else ""
+        # A quota-paused turn that switches to another subscription starts a fresh session on the new plan instead of
+        # forcing the exhausted plan's thread across subscriptions.
+        cont = continuation_run(c, row["id"]) if not (source and payment is not None) else None
+        continue_thread = ""
+        failover_fresh = False
+        if cont:
+            if source:
+                continue_thread = source["thread_id"]
+            else:
+                prev_sub = model_subscriptions.handed(c, cont["id"], cont["handed_runtime"] or handed[0])
+                prev_sub_id = prev_sub["subscription_id"] if prev_sub else ""
+                if cont["quota_continue"] and prev_sub_id != next_sub_id:
+                    failover_fresh = True
+                else:
+                    continue_thread = cont["thread_id"] or ""
         if continue_thread:
             msg = {
                 **msg,
@@ -6259,6 +6319,13 @@ class Execution:
                     if capacity_continuation(c, row['id'])
                     else '\n\nTico: continue the same saved session after the source interruption. Check prior work and finish only what remains.'
                 ),
+            }
+        elif failover_fresh:
+            msg = {
+                **msg,
+                "body": msg["body"]
+                + "\n\nTico: the previous attempt on another plan hit its usage limit, so this turn starts a fresh "
+                "session on a new plan. Check prior work and finish only what remains.",
             }
         # A bot limited to one task (scoped_sql) carries only that task's work: its waiting notes stay where they are
         # for a run after the scope is released.
@@ -6381,11 +6448,12 @@ class Execution:
                 wire_config, row["bot_id"], task, task["session_task_id"] if task else None, conversation
             )
             home = session_computer(c, row["bot_id"], key)
-            session_fence = claim_session_fence(c, aid, row["bot_id"], key, runner["id"])
-            # Only a turn landing on another computer than the session's last one starts fresh and needs the replay.
+            switched_sub = session_subscription_switched(c, row["bot_id"], key, handed[0], next_sub_id)
+            session_fence = claim_session_fence(c, aid, row["bot_id"], key, runner["id"], switched=switched_sub)
+            # A turn landing on another computer or another subscription starts fresh and needs the replay.
             if (
                 home
-                and home["runner_id"] != runner["id"]
+                and (home["runner_id"] != runner["id"] or switched_sub)
                 and not (row["bot_id"] == self.store.settings.assistant_bot and conv["scope"] == "personal")
             ):
                 # From the run the checkpoint covers; with no checkpoint, no lower bound (the epoch and page cap bound it).
@@ -7208,11 +7276,19 @@ class Execution:
                 },
             }
         if key := row["computer_session_key"]:
+            current_sub = model_subscriptions.handed(c, aid, row["handed_runtime"])
+            switched_sub = session_subscription_switched(
+                c,
+                row["bot_id"],
+                key,
+                row["handed_runtime"],
+                current_sub["subscription_id"] if current_sub else "",
+            )
             c.execute(
                 "INSERT INTO session_computers(bot_id,session_key,runner_id,fence) VALUES(?,?,?,0) "
                 "ON CONFLICT(bot_id,session_key) DO UPDATE SET runner_id=excluded.runner_id,fence=fence+1 "
-                "WHERE session_computers.runner_id<>excluded.runner_id",
-                (row["bot_id"], key, row["runner_id"]),
+                "WHERE session_computers.runner_id<>excluded.runner_id OR ?",
+                (row["bot_id"], key, row["runner_id"], 1 if switched_sub else 0),
             )
         c.execute("UPDATE attempts SET state='running',started_at=? WHERE id=?", (H.now(), aid))
         task_reads.run_moved(c, aid)
@@ -8873,6 +8949,37 @@ class Execution:
                 primary_gateway=started_gateway,
                 ended_gateway=ran_gateway,
             )
+        paid_next = None
+        exhausted_sub = None
+        if not check and not ran and not superseded and not stopped and limited:
+            from .shared_bots import follow
+
+            exhausted_sub = model_subscriptions.handed(c, aid, runtime)
+            bot_cfg = follow(c, row["bot_id"], json.loads(config[0] or "{}") if config else {})
+            filled_cfg = providers.fill(providers.load(c, self.store.settings), bot_cfg)
+            place = c.execute(PLACE_SQL, (row["bot_id"],)).fetchone()
+            runner_row = c.execute(
+                RUNNER_SQL, (place["runner_id"] if place and place["runner_id"] else row["runner_id"],)
+            ).fetchone()
+            paid_next = (
+                agent_subscriptions.for_runner(c, runner_row, row["bot_id"], filled_cfg, enforce_live_limit=False)
+                if runner_row is not None
+                else agent_subscriptions.resolve(c, row["bot_id"], runtime, model, enforce_live_limit=False)
+            )
+        pool_failover = bool(
+            paid_next is not None
+            and paid_next.subscription is not None
+            and (not exhausted_sub or paid_next.subscription["id"] != exhausted_sub["subscription_id"])
+        )
+        wait_hold = login_hold
+        if paid_next is not None and paid_next.subscription is None and paid_next.until:
+            earliest_iso = login_holds._iso(paid_next.until)
+            held_row = (
+                login_holds.get(c, "", login_holds.subscription_login(paid_next.held_subscription), runtime)
+                if paid_next.held_subscription
+                else {}
+            )
+            wait_hold = held_row if held_row else {"until": earliest_iso, "reset": True}
         if reset_wait or unstarted and body.primary_held and body.limited and not body.fallback:
             # The primary's hold keeps the bot off that fallback until it ends (`failed_fallback`, `stuck`).
             login_hold = (
@@ -8887,7 +8994,8 @@ class Execution:
         if (
             source_pause
             and not recovery
-            and login_hold
+            and wait_hold
+            and not pool_failover
             and (
                 quota_continue
                 or body.fallback
@@ -8900,7 +9008,7 @@ class Execution:
                 )
             )
         ):
-            note_reset_wait(c, row, login_hold, 'Provider quota paused this turn; continue its saved session at reset.')
+            note_reset_wait(c, row, wait_hold, 'Provider quota paused this turn; continue its saved session at reset.')
         # A turn signed in with a company subscription: a refusal is that subscription's, never the computer's login.
         subscription = (
             model_subscriptions.turn_rejected(
@@ -9089,10 +9197,52 @@ class Execution:
                     "to_runtime": runtime,
                 },
             )
+        elif limited and pool_failover:
+            assert paid_next is not None and paid_next.subscription is not None
+            hit = H.now()
+            src = login_holds.source(c, aid, runtime, body, "", row["runner_id"])
+            c.execute(
+                "UPDATE attempts SET result=json_set(result,'$.limit_source',json(?)) WHERE id=?",
+                (encode(src), aid),
+            )
+            exhausted_row = model_subscriptions.row(c, exhausted_sub["subscription_id"]) if exhausted_sub else None
+            exhausted_name = exhausted_row["name"] if exhausted_row else runtime
+            next_name = paid_next.subscription["name"]
+            if requeue:
+                focus = f"{exhausted_name} hit its usage limit at {hit[11:16]}; queued work continues on {next_name}"
+                if (H.status(c, row["bot_id"]) or {}).get("state") == "limited":
+                    relieve(
+                        c, self.store.settings, H.TICO_ACTOR, row["bot_id"], "Pool switched to another plan", free=focus
+                    )
+                else:
+                    settle_status(c, row["bot_id"], "idle", focus, claimed=row["created_at"])
+            else:
+                settle_status(
+                    c,
+                    row["bot_id"],
+                    "crashed",
+                    f"{exhausted_name} hit its usage limit at {hit[11:16]} after the run had acted; this run is saved for review",
+                    claimed=row["created_at"],
+                    stop=aid,
+                )
+            H.event(
+                c,
+                H.TICO_ACTOR,
+                "attempt.limited_failover",
+                aid,
+                {
+                    "bot": row["bot_id"],
+                    "job_id": row["job_id"],
+                    "runtime": runtime,
+                    "from_subscription": exhausted_sub["subscription_id"] if exhausted_sub else "",
+                    "to_subscription": paid_next.subscription["id"],
+                    "requeued": requeue,
+                },
+            )
         elif limited:
             streak = limit_streak(c, row["bot_id"])
             hit = H.now()
-            retry = login_hold.get("until") or H.shift(hit, seconds=limit_cooldown(c, row["bot_id"]))
+            retry = wait_hold.get("until") or H.shift(hit, seconds=limit_cooldown(c, row["bot_id"]))
             src = {}
             if any(gateway.cap_reached(error) for error in limit_errors(c, aid)):
                 # The Tico AI Gateway's monthly cap for the company's key (clients/gateway.py): said as it is.
@@ -9103,8 +9253,8 @@ class Execution:
             elif tico_code == gateway.RATE_LIMITED:
                 focus = f"Tico AI Gateway rate limited at {hit[11:16]}; retrying after {retry[:10]} {retry[11:16]} UTC"
             elif (
-                gateway.out_of_credit(login_hold.get("error"))
-                if login_hold
+                gateway.out_of_credit(wait_hold.get("error"))
+                if wait_hold
                 else any(gateway.out_of_credit(error) for error in limit_errors(c, aid))
             ):
                 # The turn ended on the company's credit, not a login's limit (login_holds.after_turn): its minute.
@@ -9147,8 +9297,8 @@ class Execution:
                 said = login_holds.label(src, at=hit[11:16], primary_until=primary_until)
                 if src.get("kind") == login_holds.PAYMENT_KIND:
                     focus = login_holds.payment_words(c, src, retry)
-                elif login_hold.get("reset") or (
-                    not login_hold
+                elif wait_hold.get("reset") or (
+                    not wait_hold
                     and body.limit_resets_at
                     and provider_reset(last_limit(c, row["bot_id"]), H.parse_ts(hit))
                 ):
@@ -9158,7 +9308,7 @@ class Execution:
                         + " when it resets"
                     )
                 else:
-                    third = (login_hold["streak"] if login_hold else streak) >= LIMIT_STRIKES
+                    third = (wait_hold["streak"] if wait_hold else streak) >= LIMIT_STRIKES
                     focus = (
                         said
                         + (", third in a row" if third else "")

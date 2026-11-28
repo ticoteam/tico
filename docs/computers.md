@@ -498,8 +498,9 @@ Choose **Subscription** when you pay for a plan, such as ChatGPT or Claude:
 - You sign in with the plan's account in the browser. There is no key to copy.
 - The plan pays for the runs. The chip shows how much of the week's allowance is left ("N% left"), and use of the same
   account outside Tico lowers it too ([What "% left" means](#what--left-means)).
-- An agent using a provider pool can pick another eligible plan when one runs out. An agent pinned to a single plan
-  waits for that plan to reset.
+- An agent using a provider pool switches immediately to another eligible plan when one runs out, starting a fresh
+  session seeded with the task checkpoint and recent conversation history (runs with irreversible actions stay held
+  for review). An agent pinned to a single plan waits for that plan to reset.
 
 Choose **API key** when you pay the provider for each use:
 
