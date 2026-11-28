@@ -60,6 +60,9 @@ Tico's own releases (ticoteam/tico) go out on their own, at any hour, run by `.g
 - **By hand.** `gh workflow run train.yml --ref main` runs one step now (promote, then ship or validate, validating a
   red or cancelled head again), even with `RELEASE_TRAINS` off. `python3 scripts/release_train.py status` (with
   `GITHUB_TOKEN`, and the install variables to see them) shows the next step, the approvals and what each install runs.
+- **Open tabs.** A tab opened before a release keeps working for 2 days after it: the server image carries the page
+  files of the releases before it (`scripts/carry_web_assets.py`, given the previous release by `ci.yml`), and Release
+  validation checks that the previous release's own files are in it. Nothing needs doing by hand.
 
 ### A new line
 

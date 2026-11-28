@@ -276,6 +276,7 @@ jobs:
             TICO_VERSION=${{ needs.candidate.outputs.version }}
             TICO_COMMIT=${{ needs.candidate.outputs.sha }}
             TICO_REPOSITORY=${{ github.repository }}
+            PREVIOUS_RELEASE=ghcr.io/ticoteam/tico:${{ needs.candidate.outputs.previous }}
           outputs: type=image,name=ghcr.io/ticoteam/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.platform }}
           cache-to: type=gha,scope=${{ matrix.image }}-${{ matrix.platform }},mode=max
@@ -520,6 +521,31 @@ jobs:
           images="$images,runner=ghcr.io/ticoteam/tico-runner@$(cat "$d/tico-runner-amd64")"
           images="$images,updater=ghcr.io/ticoteam/tico-updater@$(cat "$d/tico-updater-amd64")"
           { echo "TICO_RELEASE_IMAGES=$images"; echo "TICO_RELEASE_VERSION=$CANDIDATE_VERSION"; } >> "$GITHUB_ENV"
+      # A tab opened on the previous release keeps working: every page file that release built itself is in this server
+      # image (scripts/carry_web_assets.py). The files it had carried may have expired, so only its own are required.
+      - if: matrix.part == 'product'
+        name: The server image carries the previous release's page files
+        run: |
+          export LC_ALL=C
+          d="$RUNNER_TEMP/digests"
+          own() {
+            docker run --rm --entrypoint python3 "$1" -c 'import json, os
+          web = "/opt/tico/build/web"
+          try:
+              carried = json.load(open(f"{web}/carried-assets.json"))["carried"]
+          except FileNotFoundError:
+              carried = {}
+          for name in sorted(set(os.listdir(f"{web}/assets")) - set(carried)):
+              print(name)'
+          }
+          new="ghcr.io/ticoteam/tico@$(cat "$d/tico-amd64")"
+          # Listed to files first: a failed listing stops the step instead of comparing nothing.
+          own "ghcr.io/ticoteam/tico:$PREVIOUS_RELEASE" > "$RUNNER_TEMP/previous-own" || { echo "::error::Could not list the page files of $PREVIOUS_RELEASE"; exit 1; }
+          docker run --rm --entrypoint ls "$new" /opt/tico/build/web/assets > "$RUNNER_TEMP/new-assets" || { echo "::error::Could not list the server image's page files"; exit 1; }
+          [ -s "$RUNNER_TEMP/previous-own" ] || { echo "::error::$PREVIOUS_RELEASE lists no page files of its own"; exit 1; }
+          sort -o "$RUNNER_TEMP/new-assets" "$RUNNER_TEMP/new-assets"
+          missing="$(comm -23 "$RUNNER_TEMP/previous-own" "$RUNNER_TEMP/new-assets")"
+          [ -z "$missing" ] || { echo "::error::Page files of $PREVIOUS_RELEASE missing from the server image (was PREVIOUS_RELEASE passed to its build?): $missing"; exit 1; }
       - name: Write the python part's junit report (xunit1), for the shard timings
         if: matrix.part == 'python'
         run: |
