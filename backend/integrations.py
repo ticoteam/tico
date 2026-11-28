@@ -447,11 +447,28 @@ def install_integrations(app, store, auth, mutate):
 
     @app.get("/api/v2/tools/{service}")
     def integration(request: Request, service: str):
-        page = resolve(service, request.state.identity)
+        from . import api_tools
+
+        who = request.state.identity
+        vault = getattr(app.state, "vault", None)
+        admins = vault.admins if vault is not None else store.settings.credential_admins
+        try:
+            page = resolve(service, who)
+        except Problem as exc:
+            # An MCP server kept in Tools (no catalog page, no bot.yaml entry) still shows its Only reads marks.
+            with store.read() as c:
+                marks = api_tools.only_reads_named(c, who, service, admins, auth)
+            if exc.code != "not_found" or not marks:
+                raise
+            item = {"service": marks[0]["tool_id"], "title": marks[0]["tool"], "connections": [], "bots": []}
+            page = custom_page(item) | {"kind": "mcp", "summary": "An MCP server kept in Tools"}
         with store.read() as c:
             notes = learnings(c, page["service"])
             page = named(c, page)
-        return {**page, "learnings": notes}
+            marks = api_tools.only_reads_named(c, who, service, admins, auth)
+            if not marks and page["service"] != service:
+                marks = api_tools.only_reads_named(c, who, page["service"], admins, auth)
+        return {**page, "learnings": notes, "only_reads": marks}
 
     @app.get("/api/v2/tools/{service}/queries")
     @app.get("/api/v2/integrations/{service}/queries", deprecated=True)  # rc.1 CLI (dbquery)

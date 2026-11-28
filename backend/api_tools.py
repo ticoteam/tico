@@ -73,7 +73,7 @@ import re
 import sqlite3
 import threading
 from datetime import date, datetime, timedelta, timezone
-from typing import Literal, NamedTuple
+from typing import Annotated, Literal, NamedTuple
 
 from fastapi import Query, Request
 from pydantic import ConfigDict, Field, SecretStr
@@ -843,6 +843,71 @@ def _call_view(row):
     }
 
 
+def _mark_rows(c, tool_id, floor=None, before=None, limit=RECENT):
+    """An MCP tool's Only reads changes (backend/mcp_connect.py `set_only_reads`), newest first, as activity rows: who
+    marked or unmarked which names. Anyone who may see the tool sees them, as its page shows each mark with who made
+    it. `before` is an activity cursor's (at, id)."""
+    sql, args = "SELECT * FROM events WHERE action='tool.only_reads_changed' AND target=?", [tool_id]
+    if floor:
+        sql, args = sql + " AND created_at>=?", args + [floor]
+    if before:
+        sql, args = sql + " AND created_at<=?", args + [before[0]]
+    rows = []
+    for ev in c.execute(sql + " ORDER BY created_at DESC, id DESC LIMIT ?", (*args, limit + 1)):
+        ident = "mark:" + ev["id"]
+        if before and (ev["created_at"], ident) >= before:
+            continue
+        try:
+            said = json.loads(ev["detail"] or "{}")
+        except ValueError:
+            said = {}
+        said = said if isinstance(said, dict) else {}
+        parts = [
+            f"Only reads {verb}: {', '.join(str(n) for n in said.get(key) or [])}"
+            for key, verb in (("added", "on"), ("removed", "off"), ("suspended", "suspended, no longer listed"))
+            if said.get(key)
+        ]
+        rows.append(
+            {
+                "id": ident,
+                "kind": "mark",
+                "actor": ev["actor"],
+                "bot": None,
+                "result": "marked",
+                "detail": "; ".join(parts) or "Only reads changed",
+                "at": ev["created_at"],
+            }
+        )
+    return rows[:limit]
+
+
+def only_reads_named(c, who, name, admins, auth=None):
+    """The Only reads marks, with who made them, of each MCP tool `name` names (its id, service or name) that `who`
+    may see: what `tico tool show <tool>` lists (backend/integrations.py)."""
+    key = str(name or "").strip().lower()
+    out = []
+    for tool in c.execute(
+        "SELECT * FROM tools WHERE mcp_url IS NOT NULL AND (id=? OR lower(service)=? OR lower(name)=?) ORDER BY name, id",
+        (key, key, key),
+    ):
+        if kind_of(tool) != "api" or not visible(c, who, tool, admins, auth):
+            continue
+        used = mcp_connect.marked(tool)
+        out += [
+            {
+                "tool": tool["name"],
+                "tool_id": tool["id"],
+                "name": m["name"],
+                "by": str(m.get("by") or ""),
+                "at": str(m.get("at") or ""),
+                # False once a check dropped it (or the vendor no longer lists it): shown, never used for Read.
+                "active": m["name"] in used,
+            }
+            for m in mcp_connect.only_reads(tool)
+        ]
+    return out
+
+
 def _call_visible(c, who, auth, admin, row):
     if admin or row["actor"] == who.actor or (row["bot"] and who.actor == "bot:" + row["bot"]):
         return True
@@ -877,6 +942,8 @@ def detail(c, who, tool_id, admins, auth=None):
             recent.append(_call_view(row))
             if len(recent) == RECENT:
                 break
+    if _field(tool, "mcp_url"):
+        recent = sorted(recent + _mark_rows(c, tool_id), key=lambda r: (r["at"], r["id"]), reverse=True)[:RECENT]
     state = state_of(c, tool, keys)
     out = {
         "tool": _tool_view(tool),
@@ -958,6 +1025,8 @@ def activity(c, who, tool_id, admins, auth, cursor="", limit=50, result="", sinc
                         "at": row["used_at"],
                     }
                 )
+    if not result:
+        rows += _mark_rows(c, tool_id, floor, (at, last) if cursor else None, ACTIVITY_MAX * 2)
     rows.sort(key=lambda r: (r["at"], r["id"]), reverse=True)
     shown = rows[:limit]
     more = len(rows) > limit
@@ -1302,6 +1371,17 @@ class ToolUpdate(Contract):
     # Whether it holds records Tico reads in the background (backend/item_sources/jira.py `integration`): `outside` (the
     # vendor owns them) or `tico`; '' for neither. An administrator's to set.
     record_owner: Literal["", "outside", "tico"] | None = None
+    # An MCP tool's Only reads, the whole list: tool names its server sends no readOnlyHint for that a bot at Read may
+    # call (backend/mcp_connect.py `set_only_reads`). An administrator's to set.
+    only_reads: list[Annotated[str, Field(min_length=1, max_length=200)]] | None = Field(default=None, max_length=500)
+    # Or just these names marked (on) and unmarked (off), leaving every other mark as it is: what the Tools switch sends,
+    # so a page loaded before another administrator's change never undoes it.
+    only_reads_on: list[Annotated[str, Field(min_length=1, max_length=200)]] | None = Field(
+        default=None, max_length=500
+    )
+    only_reads_off: list[Annotated[str, Field(min_length=1, max_length=200)]] | None = Field(
+        default=None, max_length=500
+    )
     # Who can see it: null is Everyone, an audience Only listed (`set_audience`). Left out, it stays as it is.
     audience: AccessAudience | None = None
 
@@ -1467,9 +1547,25 @@ def create_tool(c, who, body, admins, vault=None):
     return _tool_view(tool_row(c, tool["id"]))
 
 
+ONLY_READS_ADMIN = "Only an administrator marks MCP tools Only reads"
+ONLY_READS_FIELDS = ("only_reads", "only_reads_on", "only_reads_off")
+
+
+def _marks_asked(body):
+    return any(getattr(body, f) is not None for f in ONLY_READS_FIELDS)
+
+
 def update_tool(c, who, tool_id, body, admins, auth=None):
     """A tool's settings, and its Who can see it (`audience`, which the owner may change too)."""
-    asked = body.model_dump(exclude_none=True, exclude={"audience", "everyone_reads", "record_owner"})
+    if _marks_asked(body) and not _admin(c, who, admins):
+        raise Problem("forbidden", ONLY_READS_ADMIN, 403)
+    if body.only_reads is not None and (body.only_reads_on is not None or body.only_reads_off is not None):
+        raise Problem(
+            "only_reads", "Send only_reads (the whole list) or only_reads_on and only_reads_off, not both", 422
+        )
+    asked = body.model_dump(
+        exclude_none=True, exclude={"audience", "everyone_reads", "record_owner", *ONLY_READS_FIELDS}
+    )
     audience_set = "audience" in body.model_fields_set
     if asked or not audience_set or getattr(who, "role", "") != "owner":
         # Its service, address, check or delivery: on an ads, payments or CRM tool a person's own (tool_access Rule P).
@@ -1502,6 +1598,11 @@ def update_tool(c, who, tool_id, body, admins, auth=None):
             )
         c.execute("UPDATE tools SET record_owner=?,updated_at=? WHERE id=?", (body.record_owner, H.now(), tool_id))
         H.event(c, who.actor, "tool.record_owner_changed", tool_id, {"after": body.record_owner})
+        tool = dict(tool_row(c, tool_id))
+    if _marks_asked(body):
+        mcp_connect.set_only_reads(
+            c, who.actor, tool, body.only_reads, on=body.only_reads_on or (), off=body.only_reads_off or ()
+        )
         tool = dict(tool_row(c, tool_id))
     fields = {k: v for k, v in _clean(asked).items()}
     merged = tool | fields
@@ -2414,10 +2515,18 @@ def install(app, store, auth, settings):
     )
     def update_api_tool(request: Request, tool_id: str, body: ToolUpdate):
         """A tool's settings and its Who can see it (`audience`: null for Everyone, or an audience for Only listed)."""
+
+        def authorize(c, w):
+            if _marks_asked(body) and not _admin(c, w, vault().admins):
+                raise Problem("forbidden", ONLY_READS_ADMIN, 403)  # said as itself, not as any other setting
+            setter(c, w)
+
         return change(
             request,
-            _Receipt(body, omit_none=("record_owner",)),  # a retry from before record_owner fingerprints the same
-            setter,
+            _Receipt(
+                body, omit_none=("record_owner", *ONLY_READS_FIELDS)
+            ),  # a retry from before them fingerprints the same
+            authorize,
             lambda c: update_tool(c, request.state.identity, tool_id, body, vault().admins, auth),
         )
 

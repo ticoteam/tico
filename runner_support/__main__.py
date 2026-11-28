@@ -3,6 +3,7 @@
 import argparse
 import fcntl
 import json
+import os
 import signal
 import sys
 from pathlib import Path
@@ -47,6 +48,9 @@ def main(argv=None):
     if command:
         from . import engine
 
+        # Which package started this (runner/__main__.py sets the shim's word): the Rust runner reports it beside its
+        # release (runner-rs/src/follow.rs entry). Taken out here, so nothing the runner starts later inherits it.
+        os.environ["TICO_RUNNER_ENTRY"] = "runner" if os.environ.pop("TICO_RUNNER_SHIM", "") else "runner_support"
         if command == "run":
             # The runner's own start, under launchd or systemd: point an older install's jobs at runner_support.
             from . import release_update

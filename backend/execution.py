@@ -4324,6 +4324,8 @@ class Execution:
             self.readiness_reported(c, who.runner_id, readiness)
         if body.release:
             runner_versions.record(c, who.runner_id, body)
+        else:
+            runner_versions.forget_entry(c, who.runner_id)
         if body.mail_agent_instructions:
             from .views import roster
 

@@ -509,12 +509,22 @@ export interface Computer {
   may_manage?: boolean;
   gateway_fallback?: boolean;
   cloud_machine?: { size?: string; placement?: string; shared?: boolean } | null;
+  /** How its runner starts (backend/runner_versions.py STARTS): absent from a server from before it, so not reported. */
+  update?: { starts?: Starts; starts_label?: string } | null;
   readiness?: {
     disk?: { free_bytes?: number; total_bytes?: number };
     /** Each AI tool on it, as it last reported: installed, signed in ('ready'), and this week's use. */
     runtimes?: Record<string, Runtime | undefined>;
     harnesses?: Record<string, { runtime?: string; name?: string } | undefined>;
   } | null;
+}
+
+export type Starts = 'old_package' | 'runner_support' | 'not_reported';
+
+/** How a computer's runner starts; anything the server did not say is not reported, never clear. */
+export function computerStarts(c: Pick<Computer, 'update'>): Starts {
+  const s = c.update?.starts;
+  return s === 'old_package' || s === 'runner_support' ? s : 'not_reported';
 }
 
 export interface Runtime {

@@ -102,7 +102,10 @@ def test_computer_restart_finds_the_computer_by_name_and_versions_says_who_runs_
         tool("tico_computer_restart", api, computer="nowhere")
 
     code, got = cli(monkeypatch, api, "computer", "versions")
-    assert got["summary"] == "Server 0.6.0-rc.3 (idle); computers: 1 current, 1 failed."
+    assert got["summary"] == (
+        "Server 0.6.0-rc.3 (idle); computers: 1 current, 1 failed. Starts through the old runner package: 0; "
+        "through runner_support: 0; not reported: 2."
+    )
     assert got["computers"][1] == {
         "computer": "Ana's Mac",
         "id": "r2",
@@ -111,12 +114,33 @@ def test_computer_restart_finds_the_computer_by_name_and_versions_says_who_runs_
         "runner_version": "0.5.1",
         "state": "failed",
         "wanted": "0.6.0-rc.3",
+        "starts": "Not reported",
         "error": "disk full",
     }
     # Only the Owner reads the server's own update; an admin still sees the computers.
     api.routes[("GET", "system/update")] = APIError("forbidden", "Only the owner sees update progress", 403)
     got = tool("tico_computer_versions", api)
-    assert got["server"] is None and got["summary"] == "computers: 1 current, 1 failed."
+    assert got["server"] is None and got["summary"].startswith("computers: 1 current, 1 failed. ")
+
+
+def test_computer_versions_counts_which_computers_still_start_through_the_old_runner_package(monkeypatch):
+    def computer(n, starts):
+        update = {"state": "current"} | ({"starts": starts} if starts else {})
+        return {"id": f"r{n}", "label": f"C{n}", "online": True, "release": "0.6.341", "update": update}
+
+    rows = [computer(1, "old_package"), computer(2, "runner_support"), computer(3, "runner_support"), computer(4, "")]
+    api = Api({("GET", "computers"): {"computers": rows}, ("GET", "system/update"): APIError("no", "Owner only", 403)})
+    got = tool("tico_computer_versions", api)
+    assert [line["starts"] for line in got["computers"]] == [
+        "Starts through the old runner package",
+        "Starts through runner_support",
+        "Starts through runner_support",
+        "Not reported",  # a server from before the report sends no `starts`
+    ]
+    assert got["starts"] == {"old_package": 1, "runner_support": 2, "not_reported": 1}
+    assert got["summary"] == (
+        "computers: 4 current. Starts through the old runner package: 1; through runner_support: 2; not reported: 1."
+    )
 
 
 def test_upgrade_commands_reach_the_installation_routes(monkeypatch):

@@ -17,7 +17,8 @@ derived from the vault's data key, and names the tool, the grant subject and wha
 Every call also re-reads the subject's level, so taking a level away stops the next call, not the next run.
 
 At Read with only a Read and write key, the proxy lets through GET, HEAD and OPTIONS, and a POST only as MCP calls that
-read (`MCP_READS`, and `tools/call` of a tool the server's own tools/list marked `readOnlyHint`). A bot held at Read on a
+read (`MCP_READS`, and `tools/call` of a tool the server's own tools/list marked `readOnlyHint` or an administrator marked
+Only reads, backend/mcp_connect.py `only_reads`). A bot held at Read on a
 tool whose keys go to computers is sent here too, when the tool has an API address (backend/api_tools.py
 `computer_way`), and so is a write key of an ads, payments or CRM tool (`proxy_policy`), its writes gated.
 
@@ -52,7 +53,8 @@ SAFE = frozenset(('GET', 'HEAD', 'OPTIONS'))
 METHODS = ['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE']
 MAX_BODY = 25 * 1024 * 1024
 # MCP over HTTP is JSON-RPC in POST bodies. At Read with only a Read and write key these calls pass, as reads: the
-# session's own set-up and listings, and `tools/call` of a tool the server's own tools/list marked readOnlyHint.
+# session's own set-up and listings, and `tools/call` of a tool the server's own tools/list marked readOnlyHint or an
+# administrator marked Only reads (read from the tool's row on every call, so it holds across a restart).
 MCP_READS = frozenset(
     (
         'initialize',
@@ -282,16 +284,17 @@ def rpc_calls(body):
     return out
 
 
-def mcp_write(tool_id, calls, known=READ_ONLY_TOOLS):
-    """'' when every call only reads, else the first call that may write, named for the refusal."""
+def mcp_write(tool_id, calls, known=READ_ONLY_TOOLS, marked=frozenset()):
+    """'' when every call only reads, else the first call that may write, named for the refusal. A tool only reads when
+    its server marked it (`known`) or an administrator did (`marked`)."""
     for method, params in calls:
         if method is None or method in MCP_READS or method.startswith('notifications/'):
             continue
         if method == 'tools/call':
             name = str(params.get('name') or '')
-            if name and name in known.get(tool_id, ()):
+            if name and (name in known.get(tool_id, ()) or name in marked):
                 continue
-            return f'the MCP tool {name or "(unnamed)"}, which its server does not mark read-only'
+            return f'the MCP tool {name or "(unnamed)"}'
         return f'the MCP call {method}'
     return ''
 
@@ -437,6 +440,11 @@ def outgoing_query(query, tool, key, params=None):
 
 
 def read_only_detail(who, name, mcp=''):
+    if mcp.startswith('the MCP tool '):
+        return (
+            f"{who}'s level on {name} is Read, and {mcp} is not marked read-only by its server. If it only reads, an "
+            f'administrator can mark it Only reads in Tools > {name}; otherwise set Read and write.'
+        )
     if mcp:
         return (
             f"{who}'s level on {name} is Read: GET calls and MCP calls that only read, and {mcp} may write. "
@@ -486,7 +494,7 @@ def install(app, store):
                 reconnect_tasks.called(c, tool_id, status)  # Key rejected opens its Reconnect task, Working ends it
             rule_links.record(c, gate)  # the write's rule check, in the same transaction as its row (in a savepoint)
 
-    def gated(subject, tool_id, name, method, body, calls, key, unread, hinted):
+    def gated(subject, tool_id, name, method, body, calls, key, unread, hinted, marked):
         """The write's rule check, or None for a retry under an Idempotency-Key whose event is already logged (read
         first: no judge call, no second event). `unread`: a POST over the gate's 1 MB limit that no parse read, so
         whether it only reads is unknown: recorded unchecked, never judged or counted as a write."""
@@ -501,7 +509,7 @@ def install(app, store):
             else:
                 # Calls that may write go first, so the calls the check reads (CALLS_READ) never leave one out.
                 output = rule_links.proxy_output(
-                    name, method, body, calls, lambda call: bool(mcp_write(hinted, [call], GATE_READ_ONLY))
+                    name, method, body, calls, lambda call: bool(mcp_write(hinted, [call], GATE_READ_ONLY, marked))
                 )
                 found = rule_links.check_as(
                     store, getattr(app.state, 'judge', None), subject, subject, '', link, 'tool_call', output
@@ -556,6 +564,8 @@ def install(app, store):
             who = api_tools._label(c, subject) if reads_only else ''
             if reads_only and method not in SAFE and method != 'POST':
                 return (403, 'forbidden', read_only_detail(who, name), log), None
+            from . import mcp_connect
+
             # An MCP tool's sign-in has no stored key: its access token is fetched below.
             key = None if credential['kind'] == 'oauth' else vault.cipher.decrypt(c, credential)
             return None, {
@@ -567,6 +577,7 @@ def install(app, store):
                 'subject': subject,
                 'level': level,
                 'reads_only': reads_only,
+                'marked': mcp_connect.marked(tool),
                 'who': who,
                 'name': name,
             }
@@ -653,17 +664,22 @@ def install(app, store):
         # What the gate takes of that parse is `gate_calls`, below.
         small = total <= rule_links.MAX_JUDGED
         calls = rpc_calls(b''.join(chunks)) if method == 'POST' and (small or ready['reads_only']) else None
+        url = tool['base_url'].rstrip('/') + '/' + rest.lstrip('/')
+        query = outgoing_query(query, tool, key, auth['query'] if auth else None)
+        url += ('?' + query) if query else ''
+        # The gate's MCP read exemption, and the read-only hints it trusts, need the final address (the key's own query
+        # parameters included) to be exactly the tool's MCP address.
+        mcp = rule_links.mcp_endpoint(tool, url)
+        # An administrator's Only reads marks count as reads only there, at Read and at the gate alike.
+        marked = ready['marked'] if mcp else frozenset()
         if ready['reads_only'] and method == 'POST':
             # A POST passes at Read only as MCP calls that only read.
-            write = mcp_write(tool_id, calls) if calls is not None else 'not MCP'
+            write = mcp_write(tool_id, calls, marked=marked) if calls is not None else 'not MCP'
             if write:
                 detail = read_only_detail(ready['who'], ready['name'], '' if calls is None else write)
                 await log(403, 'refused', detail)
                 return refused(403, 'forbidden', detail)
         listing = bool(calls) and any(m == 'tools/list' for m, _ in calls)
-        url = tool['base_url'].rstrip('/') + '/' + rest.lstrip('/')
-        query = outgoing_query(query, tool, key, auth['query'] if auth else None)
-        url += ('?' + query) if query else ''
         if method != 'GET' and tool.get('record_owner'):
             from . import outbound_sms
 
@@ -671,9 +687,6 @@ def install(app, store):
                 detail = outbound_sms.SMS_PROXY_REFUSAL
                 await log(403, 'refused', detail)
                 return refused(403, 'outbound_required', detail)
-        # The gate's MCP read exemption, and the read-only hints it trusts, need the final address (the key's own query
-        # parameters included) to be exactly the tool's MCP address.
-        mcp = rule_links.mcp_endpoint(tool, url)
         # The gate's hints belong to this MCP address of this tool as made: a tool made again under the same id starts
         # with none.
         hinted = (tool_id, tool.get('mcp_url') or '', tool.get('created_at') or '')
@@ -691,7 +704,7 @@ def install(app, store):
         if (
             method not in SAFE
             and not TS.vendor_read(tool.get('service'), method, urlsplit(url).path, url)
-            and not (mcp and gate_calls is not None and not mcp_write(hinted, gate_calls, GATE_READ_ONLY))
+            and not (mcp and gate_calls is not None and not mcp_write(hinted, gate_calls, GATE_READ_ONLY, marked))
         ):
             # The destination checked and pinned, a write meets the org rules on its names only (the tool, the method,
             # MCP methods and tools, a JSON body's key names: never a value) before it is forwarded with the key
@@ -714,6 +727,7 @@ def install(app, store):
                 idem if 0 < len(idem) <= 200 else '',
                 unread,
                 hinted,
+                marked,
             )
         client = httpx.AsyncClient(
             transport=getattr(app.state, 'tool_proxy_transport', None),

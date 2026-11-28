@@ -1178,6 +1178,22 @@
      "default": null,
      "title": "Device Id"
     },
+    "entry": {
+     "anyOf": [
+      {
+       "enum": [
+        "runner",
+        "runner_support"
+       ],
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Entry"
+    },
     "kind": {
      "anyOf": [
       {

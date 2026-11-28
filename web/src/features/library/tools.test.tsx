@@ -1422,6 +1422,53 @@ describe('Tools', () => {
     expect(params(back)).toEqual(expected);
   });
 
+  it("lists an MCP tool's tools: the vendor's reads, and Only reads switches for administrators only", async () => {
+    const mcp = {
+      url: 'https://mcp.example.com/mcp',
+      transport: 'http',
+      auth: 'token',
+      header: 'Authorization',
+      tools: 4,
+      read_only: 1,
+      names: ['list_sources', 'get_growth_rows', 'push_growth_rows', 'back_again'],
+      read_only_names: ['list_sources'],
+      only_reads: [
+        { name: 'get_growth_rows', by: 'human:p1', at: '2026-12-02T00:00:00Z', listed: true, active: true },
+        { name: 'old_export', by: 'human:p1', at: '2026-12-01T00:00:00Z', listed: false, active: false },
+        // Dropped by a check and listed again: kept, but off until marked afresh.
+        { name: 'back_again', by: 'human:p1', at: '2026-12-01T00:00:00Z', listed: true, active: false },
+      ],
+      listed_at: null,
+      signed_in_by: null,
+      signed_in_at: null,
+      client: null,
+    };
+    const sent = serve();
+    queryClient.setQueryData(['directory'], { actors: people, byId: Object.fromEntries(people.map((p) => [p.id, p])) });
+    openApi({ mcp, keys: [KEY] });
+    expect(await screen.findByRole('button', { name: '4 tools, 1 read-only, 1 marked' })).toBeTruthy();
+    expect(screen.getByText('Read-only (vendor)')).toBeTruthy();
+    expect(screen.getByText('no longer listed, not used')).toBeTruthy();
+    expect(screen.queryByRole('switch', { name: 'list_sources: Only reads' })).toBeNull();
+    expect(screen.queryByRole('switch', { name: 'old_export: Only reads' })).toBeNull();
+    expect(screen.getByRole('switch', { name: 'get_growth_rows: Only reads' }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('switch', { name: 'back_again: Only reads' }).getAttribute('aria-checked')).toBe('false');
+    // Each switch sends only its own name, so a stale page never puts back a mark another administrator removed.
+    fireEvent.click(screen.getByRole('switch', { name: 'push_growth_rows: Only reads' }));
+    await waitFor(() => expect(writes(sent)).toEqual([{ url: '/api/v2/api-tools/t1', method: 'PATCH', body: { only_reads_on: ['push_growth_rows'] } }]));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove old_export mark' }));
+    await waitFor(() => expect(writes(sent).at(-1)).toEqual({ url: '/api/v2/api-tools/t1', method: 'PATCH', body: { only_reads_off: ['old_export'] } }));
+  });
+
+  it('shows who marked a tool Only reads, with no switch, to someone who is not an administrator', async () => {
+    serve();
+    queryClient.setQueryData(['directory'], { actors: people, byId: Object.fromEntries(people.map((p) => [p.id, p])) });
+    const mcp = { url: 'https://mcp.example.com/mcp', transport: 'http', auth: 'token', header: 'Authorization', tools: 1, read_only: 0, names: ['get_growth_rows'], read_only_names: [], only_reads: [{ name: 'get_growth_rows', by: 'human:p1', at: '2026-12-02T00:00:00Z', listed: true, active: true }], listed_at: null, signed_in_by: null, signed_in_at: null, client: null };
+    openApi({ mcp, can_manage: false });
+    expect(await screen.findByText('Only reads (marked by Pat Sample)')).toBeTruthy();
+    expect(screen.queryByRole('switch')).toBeNull();
+  });
+
   it('replaces a key: the value is only sent, never kept @s914 @s840', async () => {
     const FAKE = 'sk-new-fake-0000';
     const sent = serve();

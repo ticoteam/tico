@@ -10,6 +10,7 @@ import {
   classifyPaste,
   connectMailbox,
   editApiTool,
+  setOnlyReads,
   editInbox,
   editSource,
   editWebsite,
@@ -881,6 +882,16 @@ export const toolsEditApi = defineAction({
   run: (_ctx, { tool, ...change }) => editApiTool(tool, change),
   did: () => 'Saved',
   target: (i) => api(i.tool),
+});
+
+export const toolsSetOnlyReads = defineAction({
+  id: 'tools.setOnlyReads',
+  title: "Mark an MCP tool's tools Only reads",
+  kind: 'change',
+  input: z.strictObject({ tool: id, name: z.string().check(z.minLength(1), z.maxLength(200)), on: z.boolean() }),
+  run: (_ctx, i) => setOnlyReads(i.tool, i.name, i.on),
+  did: () => 'Saved',
+  target: (i) => ({ kind: 'tool-can', id: `api:${i.tool}` }),
 });
 
 export const toolsSetKeyExpiry = defineAction({

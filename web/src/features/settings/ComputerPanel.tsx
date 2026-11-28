@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useRouter } from '@tanstack/react-router';
 import { useState } from 'react';
 import { run } from '@/actions/run';
-import { agentsQuery, computersQuery, modelName, whoHref, type AgentRow, type Computer } from '@/features/team/routing';
+import { agentsQuery, computerStarts, computersQuery, modelName, whoHref, type AgentRow, type Computer } from '@/features/team/routing';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
@@ -113,6 +113,7 @@ export function ComputerPanel({ id, onClose }: { id: string; onClose: () => void
             {c.cloud_machine?.placement && <LabelValue label="Place">{c.cloud_machine.placement}</LabelValue>}
             {c.platform && <LabelValue label="Platform">{c.platform}</LabelValue>}
             {c.version && <LabelValue label="Version">{c.version}</LabelValue>}
+            <LabelValue label="Starts">{computerStarts(c) === 'not_reported' ? 'Not reported' : c.update?.starts_label}</LabelValue>
             {c.screen_available && (
               <Line label="Screen">
                 <Segmented

@@ -14,6 +14,7 @@ import { Pill } from '@/kit/Pill';
 import { useCards } from '@/kit/Popover';
 import { Row } from '@/kit/Row';
 import { Segmented } from '@/kit/Segmented';
+import { Switch } from '@/kit/Switch';
 import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
 import { GithubConnection } from '@/features/start/exports';
@@ -493,6 +494,26 @@ function ApiToolView({ id, row }: { id: string; row: ToolIndexRow | undefined })
   const manage = !!t?.can_manage;
   const last = t?.checks[0];
   const names = mcp?.names ?? [];
+  // Read bots may call a tool its server marks read-only, or one an administrator marked Only reads.
+  const vendorReads = new Set(mcp?.read_only_names ?? []);
+  const marks = new Map((mcp?.only_reads ?? []).map((m) => [m.name, m]));
+  const unlisted = (mcp?.only_reads ?? []).filter((m) => !m.listed);
+  // A mark is used only while active: the vendor still lists it and no check dropped it since (then it needs marking again).
+  const isActive = (m: { listed: boolean; active?: boolean } | undefined) => !!m && (m.active ?? m.listed);
+  const activeMarks = (mcp?.only_reads ?? []).filter(isActive).length;
+  const markOnly = (n: string, on: boolean) => void press('tools.setOnlyReads', { tool: id, name: n, on }, 'Not saved');
+  const reads = (n: string) => {
+    if (vendorReads.has(n)) return <Pill>Read-only (vendor)</Pill>;
+    const m = marks.get(n);
+    if (manage && m && !m.listed) return <Button variant="quiet" aria-label={`Remove ${n} mark`} onClick={() => markOnly(n, false)}>Remove</Button>;
+    if (manage) return <Switch label={`${n}: Only reads`} labelHidden checked={isActive(m)} onCheckedChange={(on) => markOnly(n, on)} />;
+    if (!m || !isActive(m)) return null;
+    return <Pill title={m.at ? `Marked ${when(m.at)}` : undefined}>{m.by ? `Only reads (marked by ${actors.find((a) => a.id === m.by)?.name ?? m.by})` : 'Only reads'}</Pill>;
+  };
+  const showList = () => {
+    setAllNames(true);
+    document.querySelector(`[data-target="tool-can:api:${id}"]`)?.scrollIntoView({ behavior: 'smooth' });
+  };
 
   // One tap where the server signs in for us; a key otherwise.
   const connect = async () => {
@@ -538,7 +559,13 @@ function ApiToolView({ id, row }: { id: string; row: ToolIndexRow | undefined })
             <LabelValue label="Address">
               <Code>{mcp ? host(mcp.url) : host(t.tool.base_url)}</Code>
             </LabelValue>
-            {mcp?.tools != null && <LabelValue label="Tools">{mcp.read_only ? `${mcp.tools}, ${mcp.read_only} read-only` : String(mcp.tools)}</LabelValue>}
+            {mcp?.tools != null && (
+              <LabelValue label="Tools">
+                <Button variant="quiet" onClick={showList}>
+                  {[`${mcp.tools} tools`, mcp.read_only ? `${mcp.read_only} read-only` : '', activeMarks ? `${activeMarks} marked` : ''].filter(Boolean).join(', ')}
+                </Button>
+              </LabelValue>
+            )}
             {t.settings?.map((s) => (
               <LabelValue key={s.id} label={s.name} onEdit={manage ? () => setDialog({ is: 'setting', setting: s }) : undefined}>
                 {s.value}
@@ -620,14 +647,23 @@ function ApiToolView({ id, row }: { id: string; row: ToolIndexRow | undefined })
         )
       }
       can={
-        names.length > 0 && (
+        (names.length > 0 || unlisted.length > 0) && (
           <>
+            {manage && <Dim>Agents at Read may call tools that only read. Only mark a tool you know only reads: agents at Read will be able to call it.</Dim>}
             {(allNames ? names : names.slice(0, 8)).map((n) => (
               <div key={n} className="row arow" title={n}>
                 <span className="row-title is-code">{n}</span>
+                {reads(n)}
               </div>
             ))}
             {!allNames && names.length > 8 && <More onClick={() => setAllNames(true)}>{`${names.length - 8} more`}</More>}
+            {unlisted.map((m) => (
+              <div key={m.name} className="row arow" title={m.name}>
+                <span className="row-title is-code">{m.name}</span>
+                <Dim>no longer listed, not used</Dim>
+                {reads(m.name)}
+              </div>
+            ))}
           </>
         )
       }
