@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
-import { agentsQuery, computersQuery } from '@/features/team/routing';
+import { agentsQuery, computerStarts, computersQuery } from '@/features/team/routing';
 import { Empty } from '@/kit/Empty';
 import { Icon } from '@/kit/Icon';
 import { ComputerPanel, agentsOnComputer, computerKind, computerState } from './ComputerPanel';
@@ -15,8 +15,13 @@ export function ComputerList({ open }: { open?: string }) {
   // Old links put the bare id in the address.
   const opened = live.find((c) => open === c.id || open === `computer:${c.id}`);
   if (!live.length) return <Empty icon="computer" title="No computers yet" />;
+  // runner/ (the old runner package) can be deleted only once the first and last counts are 0.
+  const count = (s: string) => live.filter((c) => computerStarts(c) === s).length;
   return (
     <div className="computer-list">
+      <p className="set-cmd-note" role="status" aria-label="How computers start">
+        Starts through the old runner package: {count('old_package')} · through runner_support: {count('runner_support')} · not reported: {count('not_reported')}
+      </p>
       <div className="tbl-head g-computer" aria-hidden="true">
         <span>Computer</span>
         <span>Kind</span>

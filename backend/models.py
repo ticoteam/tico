@@ -1900,6 +1900,9 @@ class Heartbeat(Contract):
     # The commit it runs: an image's release-manifest.json, else its checkout's HEAD; "" when it cannot say.
     commit: str | None = Field(default=None, pattern=r"^([0-9a-f]{40}|[0-9a-f]{64})?$")
     kind: Literal["mac", "linux", "docker"] | None = None
+    # Which package started it: "runner" through the legacy runner/ package (runner/__main__.py, runner/cloud_machine.py),
+    # else "runner_support". Sent once runners/desired says runner_entry; None from an older runner.
+    entry: Literal["runner", "runner_support"] | None = None
     update: "RunnerUpdate | None" = None
     # A restart a person asked for that has not happened yet (runner-rs runner.rs): sent until the runner restarts.
     restart: "RunnerRestart | None" = None

@@ -75,18 +75,33 @@ def computer_restart(api, args):
     }
 
 
+# How each computer's runner starts (backend/runner_versions.py STARTS); a server from before it says nothing: not reported.
+STARTS = {
+    "old_package": "Starts through the old runner package",
+    "runner_support": "Starts through runner_support",
+    "not_reported": "Not reported",
+}
+
+
+def _starts(update):
+    found = update.get("starts")
+    return found if found in STARTS else "not_reported"
+
+
 @tool(
     "tico_computer_versions",
     "Which Tico release this server runs and, for each computer, the release and runner version it runs and whether "
-    "it is current, updating, behind or failed (with the error). The server's own update state is the Owner's. "
+    "it is current, updating, behind or failed (with the error), and whether it starts through the old runner package, "
+    "through runner_support or has not reported it. The server's own update state is the Owner's. "
     "Example: tico computer versions",
     {},
 )
 def computer_versions(api, args):
     person = _as_person(api)
-    rows = []
+    rows, starts = [], {key: 0 for key in STARTS}
     for r in _computers(person):
         update = r.get("update") if isinstance(r.get("update"), dict) else {}
+        starts[_starts(update)] += 1
         line = {
             "computer": r.get("label"),
             "id": r.get("id"),
@@ -95,6 +110,7 @@ def computer_versions(api, args):
             "runner_version": r.get("version"),
             "state": update.get("state") or "unknown",
             "wanted": update.get("wanted_release") or update.get("target") or r.get("wanted"),
+            "starts": STARTS[_starts(update)],
         }
         if update.get("error"):
             line["error"] = update["error"]
@@ -111,7 +127,10 @@ def computer_versions(api, args):
     words = ", ".join(f"{n} {s}" for s, n in sorted(states.items())) or "no computers"
     return {
         "summary": (f"Server {server.get('running')} ({server.get('state')}); " if server else "")
-        + f"computers: {words}.",
+        + f"computers: {words}. Starts through the old runner package: {starts['old_package']}; "
+        f"through runner_support: {starts['runner_support']}; not reported: {starts['not_reported']}.",
+        # runner/ can be deleted only once old_package and not_reported are both 0 (backend/runner_versions.py STARTS).
+        "starts": starts,
         "server": {k: server.get(k) for k in ("running", "state", "from", "to", "message", "previous") if k in server}
         if server
         else None,

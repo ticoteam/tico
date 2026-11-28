@@ -4,6 +4,7 @@ from . import built_on
 from . import cloud_machines
 from .call_sessions import CLOSED_COMPLETION, VoicePhase, closed_attempt
 from . import runner_online
+from . import runner_versions
 from . import run_header
 from . import org_rule_check
 from . import placement as placing
@@ -1043,6 +1044,7 @@ def register_placement(
                     **turns,
                 }
             )
+            rows[-1]["update"].update(runner_versions.starts(runner_versions.load(c).get(r["id"]), r["id"] in online))
         return rows
 
     register(

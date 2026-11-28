@@ -58,6 +58,10 @@ MARKER = Path("/etc/tico/cloud-machine.json")
 SUDOERS = Path("/etc/sudoers.d/tico-runner")
 UNIT = "tico-cloud-machine.service"
 UNIT_DIR = Path("/etc/systemd/system")
+# Whether this boot came through the old `python -m runner.cloud_machine boot` (runner/cloud_machine.py sets SHIM):
+# "runner" or "runner_support", under the machine's etc. The runner reads it (runner-rs/src/follow.rs BOOT_ENTRY) and
+# reports it beside its release, so Computers shows which computers still start through the old package.
+SHIM, ENTRY_FILE = "TICO_RUNNER_SHIM", Path("tico") / "boot-entry"
 APT = Path("/etc/apt")
 # The computer screen's programs (runner-rs/src/screen.rs, docs/install.md): the same packages, so one set of tools.
 DISPLAY_PACKAGES = ("xvfb", "x11vnc", "matchbox-window-manager")
@@ -389,6 +393,10 @@ def boot(m: Machine | None, environ: dict[str, str], unit_dir: Path = UNIT_DIR) 
     if m is None:
         print(f"no {MARKER}: not a Tico cloud machine, nothing to do")
         return 0
+    try:
+        write_root_file(m.etc / ENTRY_FILE, ("runner" if environ.get(SHIM) else "runner_support") + "\n", 0o644)
+    except OSError as exc:
+        m.say(f"could not record how this boot started: {exc.strerror or type(exc).__name__}")
     move_boot_unit(m, unit_dir)
     files = env_files(m.home, environ, m.etc / "environment")
     if not m.config.exists():
@@ -664,7 +672,9 @@ def main(argv=None) -> int:
             m = Machine.for_user(args.user, ROOT)
             base(m, release=checkout_release(ROOT))
             return 0
-        return boot(load(), dict(os.environ))
+        environ = dict(os.environ)
+        os.environ.pop(SHIM, None)  # boot's word only: what it starts did not come through the old package
+        return boot(load(), environ)
     except Refused as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

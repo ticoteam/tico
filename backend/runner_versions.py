@@ -32,6 +32,14 @@ LABELS = {
     "incompatible": "Incompatible (bots paused)",
     "unknown": "Release not reported",
 }
+# How a computer's runner starts (its report's `entry`), for deleting the legacy runner/ package (#4343): only a computer
+# online now that said runner_support is clear. One that says nothing (a release from before the report) or is offline
+# is not reported, never clear.
+STARTS = {
+    "old_package": "Starts through the old runner package",
+    "runner_support": "Starts through runner_support",
+    "not_reported": "Not reported",
+}
 
 
 def clean(value):
@@ -97,8 +105,9 @@ def record(c, runner_id, body):
         moved = before["update_changed_at"] or before["update_since"] or now
     c.execute(
         "INSERT INTO runner_versions(runner_id,release,kind,update_state,update_target,update_error,reported_at,"
-        "commit_sha,update_since,update_running,update_handed_back,update_changed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
-        "ON CONFLICT(runner_id) DO UPDATE SET release=excluded.release,kind=excluded.kind,"
+        "commit_sha,update_since,update_running,update_handed_back,update_changed_at,entry) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(runner_id) DO UPDATE SET release=excluded.release,kind=excluded.kind,entry=excluded.entry,"
         "update_state=excluded.update_state,update_target=excluded.update_target,update_error=excluded.update_error,"
         "reported_at=excluded.reported_at,commit_sha=excluded.commit_sha,update_since=excluded.update_since,"
         "update_running=excluded.update_running,update_handed_back=excluded.update_handed_back,"
@@ -116,6 +125,7 @@ def record(c, runner_id, body):
             running,
             handed_back,
             moved,
+            body.entry or "",
         ),
     )
     nudge(c, runner_id)
@@ -336,6 +346,14 @@ def view(row, server=None):
         else row.get("update_error") or "",
         "min_runner": MIN_RUNNER_RELEASE,
     }
+
+
+def starts(row, online):
+    """How this computer's runner starts, from its stored version row: old_package, runner_support or not_reported (no
+    row, a report without `entry`, or offline now)."""
+    entry = (row or {}).get("entry") or ""
+    found = "not_reported" if not online or not entry else "old_package" if entry == "runner" else "runner_support"
+    return {"starts": found, "starts_label": STARTS[found]}
 
 
 def health_check(computers, server=None):

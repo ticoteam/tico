@@ -6,6 +6,10 @@
 - `python -m runner.cloud_machine boot` (runner/cloud_machine.py): cloud machine images saved before the boot unit said
   `python -m runner_support.cloud_machine boot`.
 
+Each start through one of these says so: the runner reports `entry` beside its release, and Settings > Computers and
+`tico computer versions` count the computers that start through the old package, through runner_support, or have not
+reported it. Delete this package only once the first and last counts are both 0.
+
 Every other module of runner_support/ is imported by its own name. The other `runner.<module>` forwarders were removed
 because no supported release predates the move to runner_support/ (first shipped in v0.5.94).
 """

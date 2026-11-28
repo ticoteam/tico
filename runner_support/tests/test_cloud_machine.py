@@ -485,3 +485,23 @@ def test_an_unreadable_hub_release_skips_the_catch_up(machine, monkeypatch, body
 def test_hub_release_reads_healthz_and_strips_a_leading_v():
     assert cm.hub_release(HUB + "/", Healthz({"release": "v0.6.64"})) == "0.6.64"
     assert cm.hub_release(HUB, Healthz({"release": "0.7.0-rc.1"})) == "0.7.0-rc.1"
+
+
+def test_each_boot_records_whether_it_came_through_the_old_runner_package(machine, monkeypatch):
+    # `python -m runner.cloud_machine boot` (an image saved before v0.6.315) sets TICO_RUNNER_SHIM; the runner reads
+    # the file and reports it beside its release (runner-rs/src/follow.rs entry).
+    m, _ = machine()
+    assert cm.boot(m, {"TICO_RUNNER_SHIM": "1"}) == 0
+    assert (machine.etc / "tico" / "boot-entry").read_text() == "runner\n"
+    m, _ = machine()
+    assert cm.boot(m, {}) == 0
+    assert (machine.etc / "tico" / "boot-entry").read_text() == "runner_support\n"
+    # The boot service's own start hands the word to boot() and takes it out of what boot starts.
+    monkeypatch.setenv("TICO_RUNNER_SHIM", "1")
+    for key in (cm.TOKEN, cm.HUB, cm.FILE):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(cm.os, "geteuid", lambda: 0)
+    m, _ = machine()
+    monkeypatch.setattr(cm, "load", lambda: m)
+    assert cm.main(["boot"]) == 0
+    assert (machine.etc / "tico" / "boot-entry").read_text() == "runner\n" and "TICO_RUNNER_SHIM" not in os.environ

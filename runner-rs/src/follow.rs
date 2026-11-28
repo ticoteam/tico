@@ -88,6 +88,35 @@ pub fn kind() -> &'static str {
     }
 }
 
+/// Where a cloud machine's boot says whether it came through the old `python -m runner.cloud_machine boot`
+/// (runner_support/cloud_machine.py ENTRY_FILE): "runner" or "runner_support".
+#[cfg_attr(test, allow(dead_code))]
+const BOOT_ENTRY: &str = "/etc/tico/boot-entry";
+
+#[cfg(test)]
+thread_local! {
+    static BOOT_ENTRY_AT: std::cell::RefCell<PathBuf> = std::cell::RefCell::new(PathBuf::from("/nonexistent/boot-entry"));
+}
+
+fn boot_entry_path() -> PathBuf {
+    #[cfg(test)]
+    return BOOT_ENTRY_AT.with(|p| p.borrow().clone());
+    #[cfg(not(test))]
+    PathBuf::from(BOOT_ENTRY)
+}
+
+/// "runner" when this runner, or the cloud machine boot that started it, came through the legacy `runner/` package
+/// (runner_support/__main__.py sets TICO_RUNNER_ENTRY from runner/__main__.py's word), else "runner_support". Sent
+/// beside the release so Computers shows which computers still start that way before runner/ is deleted.
+pub fn entry() -> &'static str {
+    let boot = std::fs::read_to_string(boot_entry_path()).unwrap_or_default();
+    if std::env::var("TICO_RUNNER_ENTRY").as_deref() == Ok("runner") || boot.trim() == "runner" {
+        "runner"
+    } else {
+        "runner_support"
+    }
+}
+
 /// launchd's job label, the systemd unit `scripts/tico-computer install` writes, or TICO_SUPERVISED=1 (service.py supervised).
 pub fn supervised() -> bool {
     let var = |k: &str| std::env::var(k).unwrap_or_default();
@@ -1492,6 +1521,9 @@ impl Follower {
         if s.features["runner_commit"] == true && !self.commit.is_empty() {
             body["commit"] = json!(self.commit);
         }
+        if s.features["runner_entry"] == true {
+            body["entry"] = json!(entry());
+        }
         body["update"] = json!({"state": s.state, "target": s.target, "error": s.error.chars().take(300).collect::<String>()});
     }
 
@@ -2469,6 +2501,43 @@ scope['main'](sys.argv[1:])
             s.features = json!({"runner_drain": true});
         }
         assert!(f.blocks_claims(true).await);
+    }
+
+    #[test]
+    fn the_release_report_says_whether_this_runner_started_through_the_old_runner_package() {
+        let dir =
+            std::env::temp_dir().join(format!("tico-entry-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = checkout_follower();
+        f.inner.lock().unwrap().desired = Some("0.6.341".into());
+        f.inner.lock().unwrap().features = json!({"runner_entry": true});
+        let boot = dir.join("boot-entry");
+        BOOT_ENTRY_AT.with(|p| *p.borrow_mut() = boot.clone());
+        let said = |f: &Follower| {
+            let mut body = json!({});
+            f.fields(&mut body);
+            body.get("entry").cloned()
+        };
+        // `python -m runner_support run`, the boot file absent (not a cloud machine): runner_support.
+        std::env::set_var("TICO_RUNNER_ENTRY", "runner_support");
+        assert_eq!(said(&f), Some(json!("runner_support")));
+        // `python -m runner run` (runner/__main__.py): the old package.
+        std::env::set_var("TICO_RUNNER_ENTRY", "runner");
+        assert_eq!(said(&f), Some(json!("runner")));
+        // A cloud machine whose boot came through `python -m runner.cloud_machine boot`, its runner through
+        // runner_support: still the old package, read again at each report.
+        std::env::set_var("TICO_RUNNER_ENTRY", "runner_support");
+        std::fs::write(&boot, "runner\n").unwrap();
+        assert_eq!(said(&f), Some(json!("runner")));
+        std::fs::write(&boot, "runner_support\n").unwrap();
+        assert_eq!(said(&f), Some(json!("runner_support")));
+        // Started some other way (the Docker image runs the binary itself): not through the old package.
+        std::env::remove_var("TICO_RUNNER_ENTRY");
+        assert_eq!(said(&f), Some(json!("runner_support")));
+        // A server that does not take the field gets none (its heartbeat model refuses unknown fields).
+        f.inner.lock().unwrap().features = json!({});
+        assert_eq!(said(&f), None);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]
