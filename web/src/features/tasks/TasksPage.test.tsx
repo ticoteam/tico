@@ -13,10 +13,10 @@ import { forgetPlaces, hearListClicks, openTasksOver } from '@/lib';
 import { dragTo } from '@/test/drag';
 import type * as VirtualListModule from '@/kit/VirtualList';
 import { ArchivedSections } from './Archived';
-import { leaveNeedsYou, needsYouWithout, settleNeedsYou, useNeedsYou } from './needs';
+import { leaveNeedsYou, needsYouWith, needsYouWithout, settleNeedsYou, useNeedsYou } from './needs';
 import { NeedsYouPage } from './NeedsYouPage';
 import { NeedsYouViews } from './NeedsYouViews';
-import { flowCountQuery, flowListParams, flowListQuery, flowQuery, listParams, loadMoreOf, pipelinesQuery, pipelineTasksQuery, refreshLoaded, STATUS_BACKSTOP_MS, useFlowCountRefresh, type Pipeline, type TaskItem } from './queries';
+import { flowCountQuery, flowListParams, flowListQuery, flowQuery, listParams, loadMoreOf, pipelinesQuery, pipelineTasksQuery, refreshLoaded, STATUS_BACKSTOP_MS, useFlowCountRefresh, type Flow, type Pipeline, type TaskItem } from './queries';
 import { TasksPage } from './TasksPage';
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
@@ -241,6 +241,8 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
     await screen.findByTitle('Fix the export');
     act(() => void leaveNeedsYou('a1', 'r1', how));
     await waitFor(() => expect(within(shown()).getByText(says)).toBeTruthy());
+    // on the list, beside the title, not in the mark's one-icon track (hidden on a phone)
+    if (view === 'list') expect(within(shown()).getByText(says).closest('.row-pills')).toBeTruthy();
     expect(shown().closest('a')).toBeNull();
     expect(shown().closest('[aria-busy="true"]')).toBeTruthy();
     act(() => settleNeedsYou({ task: 'a1', wait: 'r1' }));
@@ -1032,6 +1034,69 @@ describe('Needs you @s5 @s112', () => {
     await queryClient.refetchQueries({ queryKey: flowQuery.queryKey, exact: true });
     expect(read()?.task_ids).toEqual(['t1']);
     expect(read()?.waits.t1).toEqual(['r2']);
+  });
+
+  describe('another ask on the task arriving while an answer is sent @approvals', () => {
+    const need = (id: string, rid: string) => ({ kind: 'ask', id: `v:${rid}`, task_id: id, requirement_id: rid, line: `Send ${rid}?`, since: ago(5),
+      task: { id, number: 1, title: 'Task 1', pipeline_id: 'eng' }, ask: { kind: 'ok', requirement_id: rid, asked_by: 'bot:so' } });
+    let listed: ReturnType<typeof need>[] = [];
+    let down = false;
+    const serveList = () =>
+      serve((url) => (!url.includes('/needs-you?limit=') ? { status: 200, body: { items: [] } } : down ? { status: 400, body: { error: 'down' } } : { status: 200, body: { items: listed, next: null } }));
+    const readAgain = () => act(() => queryClient.refetchQueries({ queryKey: flowQuery.queryKey, exact: true }));
+    beforeEach(() => {
+      listed = [need('t1', 'r1')];
+      down = false;
+    });
+
+    it.each([
+      ['Approve', 'ok', 'Approving…'],
+      ['Request changes', 'no', 'Sending back…'],
+    ] as const)('%s: the row kept listed by the new ask says so and opens nothing until the reply', async (_, how, says) => {
+      serveList();
+      show(<NeedsYouPage />, '/needs-you');
+      const row = () => document.querySelector('.flow-row .task');
+      await waitFor(() => expect(row()?.closest('a')).toBeTruthy());
+      act(() => void leaveNeedsYou('t1', 'r1', how));
+      listed = [need('t1', 'r1'), need('t1', 'r2')];
+      await readAgain();
+      await waitFor(() => expect(within(row() as HTMLElement).getByText(says)).toBeTruthy());
+      expect(row()?.closest('a')).toBeNull();
+      expect(row()?.getAttribute('aria-busy')).toBe('true');
+      act(() => settleNeedsYou({ task: 't1', wait: 'r1' }));
+      await waitFor(() => expect(row()?.closest('a')).toBeTruthy());
+      expect(within(row() as HTMLElement).queryByText(says)).toBeNull();
+    });
+
+    it.each([['ok'], ['no']] as const)('%s refused, the read after it failing: the refused ask comes back and the new one stays', async (how) => {
+      serveList();
+      const read = () => queryClient.getQueryData<Flow>(flowQuery.queryKey);
+      await queryClient.fetchQuery(flowQuery);
+      const undo = leaveNeedsYou('t1', 'r1', how);
+      listed = [need('t1', 'r1'), need('t1', 'r2')];
+      await readAgain();
+      expect(read()?.waits?.t1).toEqual(['r2']);
+      down = true;
+      act(() => {
+        undo();
+        settleNeedsYou();
+      });
+      await waitFor(() => expect(queryClient.getQueryState(flowQuery.queryKey)?.fetchStatus).toBe('idle'));
+      expect(read()?.waits?.t1).toEqual(['r1', 'r2']);
+      expect(read()?.task_ids).toEqual(['t1']);
+      expect(read()?.approvals?.filter((a) => a.id === 't1').map((a) => a.ask.requirement)).toEqual(['r1', 'r2']);
+      // the row stands for the refused ask again, as it did before the press
+      expect(read()?.items.find((w) => w.id === 't1')?.ask?.requirement).toBe('r1');
+    });
+  });
+
+  it('refused after the list moved on, for a task only a grouped row named: its Dot comes back @approvals', () => {
+    const before = { count: 1, items: [], requests: [], task_ids: ['t1', 't3'], waits: { t1: ['r1'], t3: ['r3'] }, approvals: [], asks: [] } as unknown as Flow;
+    const cur = { count: 1, items: [], requests: [], task_ids: ['t3', 't4'], waits: { t3: ['r3'], t4: ['r4'] }, approvals: [], asks: [] } as unknown as Flow;
+    const back = needsYouWith('t1', 'r1', before, cur);
+    expect(back.task_ids).toEqual(['t1', 't3', 't4']);
+    expect(back.waits).toEqual({ t1: ['r1'], t3: ['r3'], t4: ['r4'] });
+    expect(back.count).toBe(1); // a grouped task is no row of its own
   });
 
   it('a long Needs you, opened past its cap, measures each row it draws, so a ❓ card never overlaps the rows below', async () => {

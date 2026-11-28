@@ -1,6 +1,7 @@
 import { useInfiniteQuery, useMutation, useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { Link, useLocation } from '@tanstack/react-router';
 import { useEffect, useRef, useSyncExternalStore, type SyntheticEvent } from 'react';
+import { useSendingAnswer } from '@/data';
 import { hearPlaces, heldRow, holdRow } from '@/lib';
 import { QuestionCard, RequestCard } from '@/features/task/exports';
 import { Button, FillContext } from '@/kit/Button';
@@ -12,7 +13,7 @@ import { useFollow } from '@/live/follow';
 import { List, ReadFault, Section } from '@/pagekinds';
 import { Capped, LIST_CAP, LIST_SHOW, PHONE_ROW_H, RowMore, ROW_H } from './capped';
 import { useNeedsYouDrawn } from './needs';
-import { Blocks, Face } from './parts';
+import { Answering, Blocks, Face } from './parts';
 import { flowListParams, flowListQuery, flowOriginQuery, flowQuery, flowSnoozedAsksQuery, flowTask, unsnoozeFlowAsk, useContactNames, useNeedsYouSort, type Flow, type FlowItem, type FlowRequest } from './queries';
 import './tasks.css';
 
@@ -85,15 +86,19 @@ function FlowRow({ it, mine, contact }: { it: FlowItem; mine: boolean; contact?:
   const title = it.about || it.title;
   // a ❓'s card under the row asks it: the row does not say it again
   const reason = it.questions?.some((q) => q.line === it.reason) ? undefined : it.reason;
+  // an Approve or Request changes on the task being sent, while another ask keeps its row listed: said, and not a link
+  const sending = useSendingAnswer(it.id);
   return (
     <div className="flow-row">
       <TaskRow
         title={title}
-        href={`/task/${it.number ?? encodeURIComponent(it.id)}`}
+        href={sending ? undefined : `/task/${it.number ?? encodeURIComponent(it.id)}`}
         target={`task:${it.number ?? it.id}`}
         mark={mine && <FlowMark />}
         late={it.late}
-        pills={<>{reason && reason !== title && <span className="flow-reason" title={reason}>{reason}</span>}{contact && <span className="pill flow-contact" title={contact}>{contact}</span>}<Blocks t={it} /></>}
+        aria-busy={sending ? true : undefined}
+        aria-disabled={sending ? true : undefined}
+        pills={<>{sending && <Answering how={sending} />}{reason && reason !== title && <span className="flow-reason" title={reason}>{reason}</span>}{contact && <span className="pill flow-contact" title={contact}>{contact}</span>}<Blocks t={it} /></>}
         avatar={<Face actor={it.owner_id} />}
         at={it.since}
       />

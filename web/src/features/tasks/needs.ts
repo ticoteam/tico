@@ -147,43 +147,67 @@ const stop = () => READS.forEach((queryKey) => void queryClient.cancelQueries({ 
 /** Which answer a read keeps out while it is sent (data keepOut). */
 const sendingKey = (task: string, wait: string | null) => `${task} ${wait ?? ''}`;
 
-/** The task's row, what it waits on, its approvals and its asks, as `before` had them, put back into `cur` (a list read
-    since): an answer refused after the list moved on. Rows read since stay; the row goes back before the first row
-    that followed it then and is still listed. */
-export function needsYouWith(task: string, before: Flow, cur: Flow): Flow {
+/** In `ids`, `id` put back before the first id that followed it in `was` and is still there (else last). */
+const placedIn = <T,>(ids: readonly T[], id: T, was: readonly T[]): T[] => {
+  const next = was.slice(was.indexOf(id) + 1).find((x) => ids.includes(x));
+  const j = next === undefined ? -1 : ids.indexOf(next);
+  return j < 0 ? [...ids, id] : [...ids.slice(0, j), id, ...ids.slice(j)];
+};
+
+/** `was`'s entries that `gave` names put back into `cur` where `cur` lacks them (by `same`), each before the first entry
+    of `cur` that followed it in `was` or is new since (so ahead of what came in meanwhile); what `cur` has stays. */
+const putBack = <T,>(cur: readonly T[], was: readonly T[], gave: (x: T) => boolean, same: (x: T, y: T) => boolean): T[] => {
+  let out = [...cur];
+  for (const x of was.filter(gave)) {
+    if (out.some((y) => same(x, y))) continue;
+    const after = was.slice(was.indexOf(x) + 1);
+    const j = out.findIndex((y) => after.some((z) => same(z, y)) || !was.some((z) => same(z, y)));
+    out = j < 0 ? [...out, x] : [...out.slice(0, j), x, ...out.slice(j)];
+  }
+  return out;
+};
+
+/** The answer to `wait` on `task` (null: all of it) that was refused, as `before` had it, put back into `cur` (a list
+    read since): its ask in what the task waits on, its approval, its Agent bar line, its ❓ on the row, the row itself
+    when `cur` lists it no more, and its Dot (`task_ids`) when only a grouped row named the task. Everything `cur` read
+    since stays (a newer ask on the task, the task's newer data); the row goes back before the first row that followed
+    it then and is still listed. */
+export function needsYouWith(task: string, wait: string | null, before: Flow, cur: Flow): Flow {
+  const gave = (r: string) => wait === null || r === wait;
+  const was = latestOf(before);
   const row = before.items.find((w) => w.id === task);
-  if (!row) return cur;
   const at = cur.items.findIndex((w) => w.id === task);
-  let items: typeof cur.items;
+  let items = cur.items;
   let order = cur.order;
-  if (at >= 0) items = cur.items.map((w) => (w.id === task ? row : w));
-  else {
-    const was = latestOf(before);
+  if (row && at < 0) {
     const next = was.slice(was.indexOf(task) + 1).find((id) => cur.items.some((w) => w.id === id) || cur.order?.includes(id));
     const i = next === undefined ? -1 : cur.items.findIndex((w) => w.id === next);
     items = i < 0 ? [...cur.items, row] : [...cur.items.slice(0, i), row, ...cur.items.slice(i)];
-    if (cur.order) {
-      const j = next === undefined ? -1 : cur.order.indexOf(next);
-      order = j < 0 ? [...cur.order, task] : [...cur.order.slice(0, j), task, ...cur.order.slice(j)];
-    }
+    if (cur.order && !cur.order.includes(task)) order = placedIn(cur.order, task, was);
+  } else if (row) {
+    const now = cur.items[at]!;
+    // the row stood for the refused approval: it does again, with what was read since
+    const stood = !!row.ask?.requirement && gave(row.ask.requirement);
+    const asked = row.questions?.filter((q) => gave(q.id)) ?? [];
+    const questions = asked.length ? putBack(now.questions ?? [], row.questions ?? [], (q) => gave(q.id), (x, y) => x.id === y.id) : now.questions;
+    // the ❓'s line, taken from the row with it
+    const reason = now.reason ?? (asked.some((q) => q.line === row.reason) ? row.reason : undefined);
+    const back = { ...now, ...(stood && { ask: row.ask, about: row.about }), ...(questions && { questions }), ...(reason !== undefined && { reason }) };
+    items = cur.items.map((w, i) => (i === at ? back : w));
   }
-  // in a list of ids, before the first that followed it then
-  const placed = (ids: readonly string[]) => {
-    const was = latestOf(before);
-    const next = was.slice(was.indexOf(task) + 1).find((id) => ids.includes(id));
-    const j = next === undefined ? -1 : ids.indexOf(next);
-    return j < 0 ? [...ids, task] : [...ids.slice(0, j), task, ...ids.slice(j)];
+  const waits = cur.waits && before.waits?.[task] && {
+    ...cur.waits,
+    [task]: putBack(cur.waits[task] ?? [], before.waits[task], gave, (x, y) => x === y),
   };
-  const mine = <T,>(list: readonly T[] | undefined, of: (x: T) => boolean) => [...(list ?? []).filter((x) => !of(x))];
   return {
     ...cur,
     items,
-    count: items.length + (cur.requests?.length ?? 0),
+    count: items === cur.items ? cur.count : items.length + (cur.requests?.length ?? 0),
     ...(order && { order }),
-    ...(cur.task_ids && { task_ids: cur.task_ids.includes(task) ? cur.task_ids : placed(cur.task_ids) }),
-    ...(cur.waits && before.waits?.[task] && { waits: { ...cur.waits, [task]: before.waits[task] } }),
-    ...(cur.approvals && { approvals: [...mine(cur.approvals, (a) => a.id === task), ...(before.approvals ?? []).filter((a) => a.id === task)] }),
-    ...(cur.asks && { asks: [...mine(cur.asks, (a) => a.task === task), ...(before.asks ?? []).filter((a) => a.task === task)] }),
+    ...(cur.task_ids && !cur.task_ids.includes(task) && (row || before.task_ids?.includes(task)) && { task_ids: placedIn(cur.task_ids, task, before.task_ids ?? was) }),
+    ...(waits && { waits }),
+    ...(cur.approvals && { approvals: putBack(cur.approvals, before.approvals ?? [], (a) => a.id === task && gave(a.ask.requirement), (x, y) => x.id === y.id && x.ask.requirement === y.ask.requirement) }),
+    ...(cur.asks && { asks: putBack(cur.asks, before.asks ?? [], (a) => a.task === task && gave(a.wait), (x, y) => x.task === y.task && x.wait === y.wait) }),
   };
 }
 
@@ -204,7 +228,7 @@ export function leaveNeedsYou(task: string, wait: string | null = null, how?: 'o
     READS.forEach((k, i) => {
       const cur = queryClient.getQueryData(k);
       if (cur === now[i]) queryClient.setQueryData(k, was[i]);
-      else if (i === 0 && cur && was[0] && isNeedsYouRead(was[0])) queryClient.setQueryData(k, needsYouWith(task, was[0] as Flow, cur as Flow));
+      else if (i === 0 && cur && was[0] && isNeedsYouRead(was[0])) queryClient.setQueryData(k, needsYouWith(task, wait, was[0] as Flow, cur as Flow));
     });
   };
 }

@@ -27,7 +27,7 @@ import { FilterItems, FilterMenu } from './FilterMenu';
 import { SelectBar, StageMenu } from './many';
 import { useNeedsYou, yoursFirst } from './needs';
 import { NewTask } from './NewTask';
-import { Blocks, Face, isPending, markOf, Movable, StoppedMark, taskHref, waitsOnMe } from './parts';
+import { Answering, Blocks, Face, isPending, markOf, Movable, StoppedMark, taskHref, waitsOnMe } from './parts';
 import {
   isFiltered,
   listParams,
@@ -397,22 +397,16 @@ function Card({ t, p, me, waits, picked, onPick }: { t: TaskItem; p: Pipeline; m
   );
 }
 
-/** An answer on the task being sent, in its status line's place. */
-const Answering = ({ how }: { how: 'ok' | 'no' }) => (
-  <span className="answering" role="status">
-    {how === 'ok' ? 'Approving…' : 'Sending back…'}
-  </span>
-);
-
-/** A list row with an answer on its task being sent: said in its mark's place, and not a link until its reply. */
-function ListRow({ t, p, mark, ...rest }: { t: TaskItem; p: Pipeline; mark: ReactNode } & Omit<ComponentProps<typeof TaskRow>, 'title' | 'href' | 'mark'>) {
+/** A list row with an answer on its task being sent: said first among its pills (the mark's track is one icon wide,
+    and hidden on a phone), and not a link until its reply. */
+function ListRow({ t, p, pills, ...rest }: { t: TaskItem; p: Pipeline } & Omit<ComponentProps<typeof TaskRow>, 'title' | 'href'>) {
   const sending = useSendingAnswer(t.id);
   return (
     <TaskRow
       {...rest}
       title={t.title}
       href={isPending(t) || sending ? undefined : taskHref(p.id, t)}
-      mark={sending ? <Answering how={sending} /> : mark}
+      pills={<>{sending && <Answering how={sending} />}{pills}</>}
       aria-busy={sending ? true : undefined}
       aria-disabled={sending ? true : undefined}
     />
