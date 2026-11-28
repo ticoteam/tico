@@ -16,6 +16,7 @@ from backend import task_engine as E
 from backend import task_requirements as R
 from backend.store import H
 from backend.tests.helpers import engine as X
+from backend.tests.helpers.pipeline_settings import ops as _ops
 
 
 def _made(c):
@@ -42,68 +43,6 @@ def c(company):
 
 def _refused(rule, words=""):
     return pytest.raises(H.Refused, match=rule if not words else f"(?s){rule}.*{words}|{words}.*{rule}")
-
-
-def _ops(**fields):
-    """A two-stage pipeline record with every field set, as a caller sends it."""
-    record = {
-        "name": "Operations",
-        "goal": "Keep the office running",
-        "prefix": "OP",
-        "manager_id": "bot:manager",
-        "owner_id": CARA,
-        "private": False,
-        "factory_id": None,
-        "preset": None,
-        "stages": [
-            {
-                "name": "Intake",
-                "purpose": "Sort what came in",
-                "owner": "bot:builder",
-                "side": False,
-                "by_hand": False,
-                "requests_move_on": False,
-                "task_limit": None,
-                "on_enter": {},
-                "requirements": [
-                    {
-                        "kind": "owner_done",
-                        "source": None,
-                        "condition": None,
-                        "settings": {},
-                        "can_push_past": True,
-                        "who_oks": "none",
-                        "person_id": None,
-                        "line": "Say it is sorted",
-                    }
-                ],
-            },
-            {
-                "name": "Sign off",
-                "purpose": "",
-                "owner": "assignee",
-                "side": False,
-                "by_hand": False,
-                "requests_move_on": False,
-                "task_limit": 2,
-                "on_enter": {},
-                "requirements": [
-                    {
-                        "kind": "ok",
-                        "source": None,
-                        "condition": None,
-                        "settings": {},
-                        "can_push_past": True,
-                        "who_oks": "people_only",
-                        "person_id": BEN,
-                        "line": "Ben OKs it",
-                    }
-                ],
-            },
-        ],
-    }
-    record.update(fields)
-    return record
 
 
 def _without_ids(value):

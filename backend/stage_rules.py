@@ -991,7 +991,9 @@ def add(conn: Any, by: str, fields: Any, *, suggests: str = "", retiring: bool =
         f"VALUES (?, {', '.join('?' * len(cols))}, ?, ?, ?, ?, ?)",
         (rid, *cols.values(), status, suggests, by, ts, ts),
     )
-    return get(conn, rid) or {}
+    out = get(conn, rid) or {}
+    _logged(conn, by, None, out)
+    return out
 
 
 def edit(conn: Any, by: str, rule_id: str, fields: Any, revision: int | None = None) -> dict[str, Any]:
@@ -1009,7 +1011,9 @@ def edit(conn: Any, by: str, rule_id: str, fields: Any, revision: int | None = N
         f"UPDATE stage_rules SET {', '.join(f'{k}=?' for k in cols)}, updated_at=?, revision=revision+1 WHERE id=?",
         (*cols.values(), _h().now(), rule_id),
     )
-    return get(conn, rule_id) or {}
+    out = get(conn, rule_id) or {}
+    _logged(conn, by, rule, out)
+    return out
 
 
 def retire(conn: Any, by: str, rule_id: str, why: str = "") -> dict[str, Any]:
@@ -1027,7 +1031,17 @@ def retire(conn: Any, by: str, rule_id: str, why: str = "") -> dict[str, Any]:
             retiring=True,
         )
     conn.execute("UPDATE stage_rules SET retired_at=?, updated_at=? WHERE id=?", (_h().now(), _h().now(), rule_id))
-    return get(conn, rule_id) or {}
+    out = get(conn, rule_id) or {}
+    _logged(conn, by, rule, out)
+    return out
+
+
+def _logged(conn: Any, by: str, before: dict[str, Any] | None, after: dict[str, Any]) -> None:
+    """A change to a rule in force on a pipeline goes in its Log and to its owner and manager
+    (pipeline_settings.rule_changed): a stage's Late time is part of the board."""
+    from . import pipeline_settings as _pipeline_settings
+
+    _pipeline_settings.rule_changed(conn, by, before, after)
 
 
 def accept(conn: Any, person: str, rule_id: str) -> dict[str, Any]:
@@ -1048,7 +1062,9 @@ def accept(conn: Any, person: str, rule_id: str) -> dict[str, Any]:
         return out
     _check(_fields(rule))  # a suggestion saved before a check came in goes live only if it would save today
     conn.execute("UPDATE stage_rules SET status='active', updated_at=? WHERE id=?", (ts, rule_id))
-    return get(conn, rule_id) or {}
+    out = get(conn, rule_id) or {}
+    _logged(conn, person, rule, out)
+    return out
 
 
 def skip(conn: Any, person: str, rule_id: str) -> dict[str, Any]:
