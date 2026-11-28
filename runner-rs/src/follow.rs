@@ -108,10 +108,11 @@ fn etc() -> PathBuf {
 
 /// Which package starts this runner, sent beside the release so Computers shows which computers still start through
 /// the legacy `runner/` package before it is deleted. "runner" when this start came through it (runner_support/__main__.py
-/// sets TICO_RUNNER_ENTRY from runner/__main__.py's word), when this cloud machine's last boot did, or when its boot unit
-/// still names the old module (its next boot needs it). On a cloud machine whose boot did not record a clear
-/// "runner_support" (a failed write, or no boot since this release), None: the server shows it as not reported, never as
-/// clear. Anywhere else, "runner_support".
+/// sets TICO_RUNNER_ENTRY from runner/__main__.py's word), when this cloud machine's boot record says so, or when its
+/// boot unit still names the old module (its next boot needs it). The record is written by each boot and, once the unit
+/// names runner_support, by the runner's start (runner_support/cloud_machine.py move_at_start). On a cloud machine with
+/// no clear "runner_support" record (a failed write or move), None: the server shows it as not reported, never as clear.
+/// Anywhere else, "runner_support".
 pub fn entry() -> Option<&'static str> {
     if std::env::var("TICO_RUNNER_ENTRY").as_deref() == Ok("runner") {
         return Some("runner");

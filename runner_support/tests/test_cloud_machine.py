@@ -516,3 +516,145 @@ def test_each_boot_records_whether_it_came_through_the_old_runner_package(machin
     monkeypatch.setattr(cm, "load", lambda: m)
     assert cm.main(["boot"]) == 0
     assert (machine.etc / "tico" / "boot-entry").read_text() == "runner\n" and "TICO_RUNNER_SHIM" not in os.environ
+
+
+# -- the move at the runner's start (machines that have not booted since the boot unit could move) -------------------
+
+
+def entry_file(etc):
+    return etc / "tico" / "boot-entry"
+
+
+@pytest.mark.parametrize("last_boot", ["runner\n", None])
+def test_a_runner_start_moves_the_boot_unit_and_records_that_the_next_boot_uses_runner_support(
+    machine, tmp_path, last_boot
+):
+    # A machine booted through `python -m runner.cloud_machine` (or before boots wrote a record) and never since: its
+    # runner's start moves the unit, reloads systemd and records runner_support, so it reports clear with no reboot.
+    m, fake = machine()
+    units = tmp_path / "units"
+    old_boot_unit(m, units)
+    if last_boot:
+        entry_file(machine.etc).parent.mkdir(parents=True)
+        entry_file(machine.etc).write_text(last_boot)
+    assert cm.move_unit_now(m, units) == 0
+    assert (units / cm.UNIT).read_text() == cm.unit_text(m)
+    assert fake.calls.count(["systemctl", "daemon-reload"]) == 1
+    assert entry_file(machine.etc).read_text() == "runner_support\n"
+    assert oct(entry_file(machine.etc).stat().st_mode & 0o777) == "0o644"
+
+
+@pytest.mark.parametrize("how", ["reload fails", "write fails"])
+def test_a_failed_move_at_the_runner_start_keeps_the_old_unit_and_the_old_record(machine, tmp_path, monkeypatch, how):
+    m, fake = machine()
+    units = tmp_path / "units"
+    text = old_boot_unit(m, units)
+    entry_file(machine.etc).parent.mkdir(parents=True)
+    entry_file(machine.etc).write_text("runner\n")
+    if how == "reload fails":
+        m.run = lambda command, **kw: subprocess.CompletedProcess(command, 1, "", "")
+    else:
+        from runner_support import release_update
+
+        def full(path, content, mode):
+            raise OSError(28, "No space left on device")
+
+        monkeypatch.setattr(release_update, "replace_file", full)
+    assert cm.move_unit_now(m, units) == 1
+    assert (units / cm.UNIT).read_text() == text
+    assert entry_file(machine.etc).read_text() == "runner\n"
+
+
+def test_a_runner_start_records_runner_support_when_the_unit_already_moved(machine, tmp_path):
+    # The boot that came through the old package moved the unit: the next boot uses runner_support, so say so now.
+    m, fake = machine()
+    units = tmp_path / "units"
+    units.mkdir()
+    (units / cm.UNIT).write_text(cm.unit_text(m))
+    entry_file(machine.etc).parent.mkdir(parents=True)
+    entry_file(machine.etc).write_text("runner\n")
+    assert cm.move_unit_now(m, units) == 0
+    assert entry_file(machine.etc).read_text() == "runner_support\n"
+    assert ["systemctl", "daemon-reload"] not in fake.calls
+
+
+def test_a_machine_with_no_boot_unit_records_nothing(machine, tmp_path):
+    m, _ = machine()
+    assert cm.move_unit_now(m, tmp_path / "units") == 1
+    assert not entry_file(machine.etc).exists()
+
+
+def test_the_move_unit_command_runs_as_root_on_the_marked_machine(machine, monkeypatch):
+    m, _ = machine()
+    moved = []
+    monkeypatch.setattr(cm, "load", lambda: m)
+    monkeypatch.setattr(cm, "move_unit_now", lambda mm: moved.append(mm) or 0)
+    monkeypatch.setattr(cm.os, "geteuid", lambda: 1000)
+    assert cm.main(["move-unit"]) == 2 and moved == []
+    monkeypatch.setattr(cm.os, "geteuid", lambda: 0)
+    assert cm.main(["move-unit"]) == 0 and moved == [m]
+    monkeypatch.setattr(cm, "load", lambda: None)
+    assert cm.main(["move-unit"]) == 0  # not a cloud machine: nothing to do
+
+
+class Sudo:
+    def __init__(self, code=0, raises=None):
+        self.calls, self.code, self.raises = [], code, raises
+
+    def __call__(self, command, **kw):
+        self.calls.append((command, kw))
+        if self.raises:
+            raise self.raises
+        return subprocess.CompletedProcess(command, self.code, "", "systemctl daemon-reload failed\n")
+
+
+UNIT_ENV = {"TICO_SYSTEMD_UNIT": "tico-bot.service"}  # scripts/tico-computer install's unit runs the runner
+
+
+def cloud_etc(tmp_path, unit, entry):
+    etc = tmp_path / "etc"
+    (etc / "tico").mkdir(parents=True)
+    (etc / "systemd" / "system").mkdir(parents=True)
+    (etc / "tico" / "cloud-machine.json").write_text("{}")
+    (etc / "systemd" / "system" / cm.UNIT).write_text(f"[Service]\nExecStart=/py -m {unit} boot\n")
+    if entry:
+        (etc / "tico" / "boot-entry").write_text(entry)
+    return etc
+
+
+@pytest.mark.parametrize(
+    "unit, entry",
+    [
+        ("runner.cloud_machine", "runner\n"),
+        ("runner.cloud_machine", None),
+        ("runner_support.cloud_machine", "runner\n"),
+        ("runner_support.cloud_machine", None),
+    ],
+)
+def test_the_runners_start_asks_root_to_move_whatever_is_still_old(tmp_path, unit, entry):
+    etc, run, said = cloud_etc(tmp_path, unit, entry), Sudo(), []
+    cm.move_at_start(UNIT_ENV, etc=etc, run=run, python="/py", root=tmp_path, say=said.append)
+    [(command, kw)] = run.calls
+    assert command == ["sudo", "-n", "/py", "-m", "runner_support.cloud_machine", "move-unit"]
+    assert kw["cwd"] == str(tmp_path) and kw["timeout"] > 0
+
+
+def test_the_runners_start_asks_nothing_when_all_is_moved_unsupervised_or_off_a_cloud_machine(tmp_path):
+    etc, run = cloud_etc(tmp_path, "runner_support.cloud_machine", "runner_support\n"), Sudo()
+    cm.move_at_start(UNIT_ENV, etc=etc, run=run, python="/py", root=tmp_path, say=print)
+    etc = cloud_etc(tmp_path / "by-hand", "runner.cloud_machine", None)
+    cm.move_at_start({}, etc=etc, run=run, python="/py", root=tmp_path, say=print)  # started by hand or by a test
+    (etc / "tico" / "cloud-machine.json").unlink()
+    (etc / "systemd" / "system" / cm.UNIT).write_text("ExecStart=/py -m runner.cloud_machine boot\n")
+    cm.move_at_start(UNIT_ENV, etc=etc, run=run, python="/py", root=tmp_path, say=print)
+    assert run.calls == []
+
+
+@pytest.mark.parametrize(
+    "run", [Sudo(code=1), Sudo(raises=subprocess.TimeoutExpired("sudo", 60)), Sudo(raises=FileNotFoundError("sudo"))]
+)
+def test_a_failed_move_at_the_runners_start_is_said_and_the_runner_still_starts(tmp_path, run):
+    etc, said = cloud_etc(tmp_path, "runner.cloud_machine", "runner\n"), []
+    cm.move_at_start(UNIT_ENV, etc=etc, run=run, python="/py", root=tmp_path, say=said.append)  # never raises
+    assert any("boot unit" in line for line in said)
+    assert (etc / "tico" / "boot-entry").read_text() == "runner\n"

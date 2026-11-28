@@ -58,9 +58,11 @@ MARKER = Path("/etc/tico/cloud-machine.json")
 SUDOERS = Path("/etc/sudoers.d/tico-runner")
 UNIT = "tico-cloud-machine.service"
 UNIT_DIR = Path("/etc/systemd/system")
-# Whether this boot came through the old `python -m runner.cloud_machine boot` (runner/cloud_machine.py sets SHIM):
-# "runner" or "runner_support", under the machine's etc. The runner reads it (runner-rs/src/follow.rs BOOT_ENTRY) and
-# reports it beside its release, so Computers shows which computers still start through the old package.
+# Which package this machine's boot uses, "runner" or "runner_support", under the machine's etc. Each boot writes how
+# it came (the old `python -m runner.cloud_machine boot`, runner/cloud_machine.py, sets SHIM); a runner's start writes
+# runner_support once the boot unit names it (move_unit_now), so a machine that has not rebooted is clear too. The
+# runner reads it (runner-rs/src/follow.rs entry) and reports it beside its release, so Computers shows which computers
+# still start through the old package.
 SHIM, ENTRY_FILE = "TICO_RUNNER_SHIM", Path("tico") / "boot-entry"
 APT = Path("/etc/apt")
 # The computer screen's programs (runner-rs/src/screen.rs, docs/install.md): the same packages, so one set of tools.
@@ -388,6 +390,69 @@ def move_boot_unit(m: Machine, unit_dir: Path = UNIT_DIR) -> bool:
     return False
 
 
+OLD_EXEC, NEW_EXEC = "-m runner.cloud_machine", "-m runner_support.cloud_machine"
+
+
+def unit_moved(text: str) -> bool:
+    """Whether a boot unit's next start goes through runner_support, never the old package."""
+    return NEW_EXEC in text and OLD_EXEC not in text
+
+
+def move_unit_now(m: Machine, unit_dir: Path | None = None) -> int:
+    """`move-unit`, as root, from a runner's start (move_at_start): move the boot unit with this release's code, reload
+    systemd, and once the unit names runner_support record that the next boot uses it. 0 when it does; 1 when the unit
+    is missing or still old, and then the record stays as it was (the runner keeps reporting the old package)."""
+    unit_dir = UNIT_DIR if unit_dir is None else unit_dir
+    move_boot_unit(m, unit_dir)
+    try:
+        if not unit_moved((unit_dir / UNIT).read_text()):
+            return 1
+        write_root_file(m.etc / ENTRY_FILE, "runner_support\n", 0o644)
+    except (OSError, ValueError) as exc:
+        m.say(f"could not record that the next boot uses runner_support: {type(exc).__name__}")
+        return 1
+    m.say("the next boot starts through runner_support")
+    return 0
+
+
+def move_at_start(
+    env=None,
+    *,
+    etc: Path = Path("/etc"),
+    run=subprocess.run,
+    python: str | None = None,
+    root: Path = ROOT,
+    say=print,
+) -> None:
+    """At a runner's start (runner_support/__main__.py `run`), on a cloud machine whose boot unit or boot record still
+    says the old package: run this release's `move-unit` as root (the runner's user has sudo there, sudoers_text). A
+    machine that has not rebooted since the move became available gets it now, not at a boot it might not survive
+    once the old package is gone. Only for the runner its systemd unit started (TICO_SYSTEMD_UNIT), never a runner
+    started by hand or by a test. Never raises: the runner starts either way."""
+    from runner_support import release_update
+
+    try:
+        if not release_update.systemd_unit(os.environ if env is None else env) or not marker_path(etc).exists():
+            return
+        try:
+            unit = (etc / "systemd" / "system" / UNIT).read_text()
+        except FileNotFoundError:
+            return
+        try:
+            recorded = (etc / ENTRY_FILE).read_text().strip()
+        except FileNotFoundError:
+            recorded = ""
+        if unit_moved(unit) and recorded == "runner_support":
+            return
+        command = ["sudo", "-n", python or sys.executable, "-m", "runner_support.cloud_machine", "move-unit"]
+        done = run(command, cwd=str(root), capture_output=True, text=True, timeout=120)
+        if done.returncode:
+            last = ((done.stderr or "") + (done.stdout or "")).strip().splitlines()
+            say(f"Tico runner: could not move the boot unit to runner_support: {last[-1] if last else done.returncode}")
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        say(f"Tico runner: could not move the boot unit to runner_support: {type(exc).__name__}")
+
+
 def boot(m: Machine | None, environ: dict[str, str], unit_dir: Path = UNIT_DIR) -> int:
     """One boot's work; 0 when there is nothing left to do, 1 to have systemd try again."""
     if m is None:
@@ -666,6 +731,7 @@ def main(argv=None) -> int:
     b = sub.add_parser("base", help="prepare the sandbox a base snapshot is saved from (as root, once)")
     b.add_argument("--user", default=DEFAULT_USER, help=f"the user the runner runs as (default {DEFAULT_USER})")
     sub.add_parser("boot", help="the boot service: enroll once, then start the runner")
+    sub.add_parser("move-unit", help="point the boot unit at runner_support now (a runner's start runs it)")
     args = parser.parse_args(argv)
     if os.geteuid() != 0:
         print(f"{args.cmd} runs as root (sudo python3 -m runner_support.cloud_machine {args.cmd})", file=sys.stderr)
@@ -675,6 +741,9 @@ def main(argv=None) -> int:
             m = Machine.for_user(args.user, ROOT)
             base(m, release=checkout_release(ROOT))
             return 0
+        if args.cmd == "move-unit":
+            m = load()
+            return 0 if m is None else move_unit_now(m)
         environ = dict(os.environ)
         os.environ.pop(SHIM, None)  # boot's word only: what it starts did not come through the old package
         return boot(load(), environ)
