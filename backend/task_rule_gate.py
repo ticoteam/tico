@@ -26,6 +26,7 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 from . import org_rule_check as org_rule_check_module
+from . import rule_breaks
 from .store import H as hubdb, Problem
 
 H: Any = hubdb
@@ -427,6 +428,9 @@ class TaskRules:
         )
         if gate and gate.get("moved"):
             raise Problem("task_changed", CHANGED, 409, retryable=True)
+        # A Warn rule's break is on its task, so "Yes, block" wakes the bot there: an ask for an OK has no message of
+        # its own, and a route that saves one links it to that message after (rule_breaks.link).
+        rule_breaks.link_task(c, gate, task_id)
         return gate
 
     @staticmethod

@@ -3157,7 +3157,7 @@ def _post(
     if message and (gate or made_gate):
         from . import rule_breaks
 
-        rule_breaks.link(c, gate or made_gate, message=message["id"], task=(refs or {}).get("task") or "")
+        rule_breaks.link(c, gate or made_gate, message=message["id"], task=H._task_ref((refs or {}).get("task")) or "")
     # Here and not in the upload route, so a held message released later (the replay of this post) keeps its files.
     # A picture, video or PDF the preview worker can read gets its row here too (never in blobs.register, which every
     # stored byte goes through), so its /thumb is made for the chat to draw.
@@ -4881,6 +4881,9 @@ def edit_message(c, principal, message_id, body):
     secret_drop.refuse(c, thread, actor, text)  # an edit is checked as a new message is
     H.path_mentioned(c, actor, "message", text, thread.get("task_id"))
     revision, _, warnings = _revise(c, message, actor, body=text)
+    from . import rule_breaks
+
+    rule_breaks.retire(c, message_id)  # the old words' questions go; the edit is asked about on its own
     _event(c, actor, "message.edited", message_id, {"thread": thread["id"], "revision": revision})
     _audit(c, actor, "message:" + message_id, _audited(message, message.get("revision")), _audited(text, revision))
     edited = H.message(c, message_id)

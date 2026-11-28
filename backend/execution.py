@@ -8286,6 +8286,13 @@ class Execution:
                                 )
                             if sent:
                                 self.stamp_reply(c, sent, row, aid, source)
+                                if rule_gate and rule_gate.get("breaks"):
+                                    from . import rule_breaks
+
+                                    # A Warn rule's break is asked on the reply it was about, on its task or chat.
+                                    rule_breaks.link(
+                                        c, rule_gate, message=str(sent.get("id") or ""), task=task["id"] if task else ""
+                                    )
                             return sent
 
                         # A paused or quarantined bot's full held queue withholds only this answer: the run is

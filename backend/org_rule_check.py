@@ -2142,7 +2142,9 @@ def run_late(store, primary, row):
         if gate and gate.get("warn"):
             target = json.loads(row["target"] or "{}")
             _warn_saved(c, target, gate)
-            if target.get("kind") == "message":
+            if target.get("kind") == "message" and not _current_message(c, target.get("message") or ""):
+                rule_breaks.drop(c, gate)  # words edited or deleted since: the edit is checked, and asked, on its own
+            elif target.get("kind") == "message":
                 rule_breaks.link(c, gate, message=target.get("message") or "", task=target.get("task") or "")
             elif target.get("task"):
                 c.execute(
@@ -2155,6 +2157,16 @@ def run_late(store, primary, row):
             elif H.is_human(verdict["author"]) and told:
                 H.notice(c, H.TICO_ACTOR, verdict["author"], told, refs={"org_rule": True})
         return gate
+
+
+def _current_message(c, message_id):
+    """The message a late check judged still holds those words: not edited or deleted since."""
+    return bool(
+        message_id
+        and c.execute(
+            "SELECT 1 FROM messages WHERE id=? AND edited_at IS NULL AND deleted_at IS NULL", (message_id,)
+        ).fetchone()
+    )
 
 
 def _warn_saved(c, target, gate):
