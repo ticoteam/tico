@@ -97,13 +97,13 @@ def preview(c: Any, roster: Row, pid: str) -> Row:
     )
     mailbot: Row | None = None
     if person and person.get("inbox_bot"):
-        from . import mailbox_access as mailbox_access_
+        from . import routines as routines_
 
-        mailbox: Any = mailbox_access_
+        routines: Any = routines_
 
         mailbot = {
             **_bot(c, person["inbox_bot"]),
-            "address": mailbox.message_bot_mailbox(c, person, person["inbox_bot"]),
+            "address": routines.message_bot_mailbox(c, person, person["inbox_bot"]),
         }
     org: dict[str, Row] = roster.get("org_groups") or {}
     groups = [
